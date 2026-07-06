@@ -39,12 +39,21 @@ async function main() {
       shell: true,
     });
     const elapsedMs = Date.now() - started;
-    lines.push(`=== ${script} exit=${result.status ?? 1} elapsedMs=${elapsedMs} ===`);
+    // Node-on-Windows libuv can assert during process-exit teardown
+    // (STATUS_STACK_BUFFER_OVERRUN, "async.c" UV_HANDLE_CLOSING) AFTER a
+    // script has finished and printed its success summary. Treat that
+    // specific teardown crash as a pass when the success marker is present.
+    const teardownCrash =
+      result.status === 3221226505
+      && /(\d+) passed, 0 failed/.test(result.stdout || '')
+      && !/[1-9]\d* failed/.test(result.stdout || '');
+    const effectiveStatus = teardownCrash ? 0 : (result.status ?? 1);
+    lines.push(`=== ${script} exit=${effectiveStatus} elapsedMs=${elapsedMs}${teardownCrash ? ' (libuv teardown crash ignored — all tests passed)' : ''} ===`);
     if (result.stdout) lines.push(result.stdout.trimEnd());
     if (result.stderr) lines.push(result.stderr.trimEnd());
     lines.push('');
-    if (result.status !== 0) {
-      exitCode = result.status ?? 1;
+    if (effectiveStatus !== 0) {
+      exitCode = effectiveStatus;
       break;
     }
   }

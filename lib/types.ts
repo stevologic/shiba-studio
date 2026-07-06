@@ -164,6 +164,11 @@ export interface AppConfig {
   localGrokEnabled?: boolean;
   /** Base URL for local Grok server, e.g. http://127.0.0.1:1234/v1 */
   localGrokBaseUrl?: string;
+  /**
+   * Local model ids exposed to agents and Grok Chat (plain server ids, no
+   * provider prefix). Empty or missing = every model the server offers.
+   */
+  localModelAllowlist?: string[];
   /** When both API key and OAuth are configured, which credential to use for cloud Grok */
   cloudAuthMode?: CloudAuthMode;
   /** Tool execution policy for agent runs */

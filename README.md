@@ -40,6 +40,10 @@ All intelligence routes exclusively through Grok/xAI.
 - `npm run start`
 - `npm test`
 
+## Security — credentials at rest
+
+All credentials (xAI API key, OAuth tokens, integration secrets) are **encrypted at rest with AES-256-GCM** before touching disk. The encryption key lives outside the project at `~/.grokdesk/grokdesk.key` (or supply `GROKDESK_SECRET_KEY` as 64 hex chars for headless deployments) — secrets never appear in source code, and the `data/` directory is additionally gitignored. Existing plaintext stores are migrated to encrypted form automatically on first load.
+
 ## Doge Easter Egg
 Settings → "Activate Doge Shiba Inu Page Icon" — instantly swaps favicon and persists.
 

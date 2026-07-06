@@ -164,7 +164,8 @@ export default function MultitaskSidebar({ agents, onNavigate, onAgentsChanged }
   }).slice(0, 5);
 
   return (
-    <div className="multitask-sidebar px-2 py-3 border-t border-default">
+    // Quick access owns the sidebar's leftover height and scrolls internally.
+    <div className="multitask-sidebar px-2 py-3 border-t border-default flex-1 min-h-0 overflow-y-auto">
       <div className="text-[10px] uppercase tracking-wider text-dim px-2 mb-2">Quick access</div>
 
       <div className="mb-3">

@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
 import { AlertTriangle, HelpCircle } from 'lucide-react';
 
 interface DialogOptions {
@@ -107,11 +106,8 @@ export default function ConfirmHost() {
       className="fixed inset-0 bg-black/70 flex items-center justify-center z-[90] p-4"
       onClick={dismiss}
     >
-          <motion.div
-            initial={{ scale: 0.96, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.15 }}
-            className="modal w-full max-w-sm p-5"
+          <div
+            className="modal modal-pop w-full max-w-sm p-5"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -156,7 +152,7 @@ export default function ConfirmHost() {
                 {req.confirmLabel || (req.kind === 'prompt' ? 'Save' : 'Confirm')}
               </button>
             </div>
-      </motion.div>
+      </div>
     </div>
   );
 }

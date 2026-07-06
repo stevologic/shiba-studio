@@ -22,6 +22,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, integrations: next.integrations });
   }
 
+  if (body.action === 'delete') {
+    const which = body.which as string | undefined;
+    if (!which) return NextResponse.json({ error: 'which is required' }, { status: 400 });
+    const cleared = which === 'obsidian' ? { mode: 'local' as const } : {};
+    const next = await saveConfig({ integrations: { [which]: cleared } });
+    Ints.setIntegrationCreds(next.integrations || {});
+    return NextResponse.json({ ok: true, integrations: next.integrations });
+  }
+
   if (body.action === 'test') {
     Ints.setIntegrationCreds(body.creds || cfg.integrations || {});
     const which = body.which;

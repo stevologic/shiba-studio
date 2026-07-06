@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadConfig, saveConfig } from '@/lib/persistence';
 import { getOAuthPublicStatus, resolveCloudBearer } from '@/lib/xai-oauth';
+import { secretKeyLocation } from '@/lib/secure-store';
 import type { CloudAuthMode } from '@/lib/types';
 
 export async function GET() {
@@ -16,6 +17,7 @@ export async function GET() {
     cloudAuthMode: (cfg.cloudAuthMode || 'api_key') as CloudAuthMode,
     activeCloudSource: auth.source,
     oauthStatus: oauth,
+    secretKeyLocation: secretKeyLocation(),
   };
   return NextResponse.json(safe);
 }
@@ -44,6 +46,22 @@ export async function POST(req: NextRequest) {
     const cfg = await saveConfig({ defaultGrokModel: String(body.defaultGrokModel || '') });
     return NextResponse.json({ ok: true, defaultGrokModel: cfg.defaultGrokModel });
   }
+  if (body.localModelAllowlist !== undefined) {
+    const allowlist = Array.isArray(body.localModelAllowlist)
+      ? body.localModelAllowlist.map((m: unknown) => String(m).trim()).filter(Boolean)
+      : [];
+    const cfg = await saveConfig({ localModelAllowlist: allowlist });
+    return NextResponse.json({ ok: true, localModelAllowlist: cfg.localModelAllowlist });
+  }
+  // Must run before the settings-save branch below: the test request carries
+  // localGrokBaseUrl but must never write config (it used to coerce
+  // localGrokEnabled to false via !!undefined).
+  if (body.action === 'testLocalGrok') {
+    const { listLocalGrokModels } = await import('@/lib/grok-client');
+    const base = body.localGrokBaseUrl as string | undefined;
+    const r = await listLocalGrokModels(base);
+    return NextResponse.json({ ok: r.ok, models: r.models, error: r.error });
+  }
   if (body.localGrokEnabled !== undefined || body.localGrokBaseUrl !== undefined) {
     const cfg = await saveConfig({
       localGrokEnabled: !!body.localGrokEnabled,
@@ -54,12 +72,6 @@ export async function POST(req: NextRequest) {
       localGrokEnabled: cfg.localGrokEnabled,
       localGrokBaseUrl: cfg.localGrokBaseUrl,
     });
-  }
-  if (body.action === 'testLocalGrok') {
-    const { listLocalGrokModels } = await import('@/lib/grok-client');
-    const base = body.localGrokBaseUrl as string | undefined;
-    const r = await listLocalGrokModels(base);
-    return NextResponse.json({ ok: r.ok, models: r.models, error: r.error });
   }
   if (
     body.toolApprovalMode !== undefined

@@ -3,6 +3,72 @@ import path from 'path';
 import { Agent, AppConfig, normalizeAgent } from './types';
 import { setIntegrationCreds } from './integrations';
 import { dataDir, projectRoot } from './data-paths';
+import { decryptSecret, encryptSecret, isEncryptedSecret } from './secure-store';
+
+/**
+ * Credential fields sealed with AES-256-GCM before touching disk. The machine
+ * key lives in ~/.grokdesk/grokdesk.key — outside source code and the repo.
+ * Dot-paths are relative to AppConfig.
+ */
+const SENSITIVE_CONFIG_PATHS = [
+  'xaiApiKey',
+  'integrations.github.token',
+  'integrations.slack.token',
+  'integrations.googledrive.accessToken',
+  'integrations.googledrive.serviceAccountJson',
+  'integrations.discord.token',
+  'integrations.x.apiKey',
+  'integrations.x.apiSecret',
+  'integrations.x.accessToken',
+  'integrations.x.accessTokenSecret',
+  'integrations.obsidian.restApiKey',
+] as const;
+
+function getAtPath(obj: Record<string, unknown>, dotPath: string): unknown {
+  return dotPath.split('.').reduce<unknown>((cur, seg) => {
+    if (cur && typeof cur === 'object') return (cur as Record<string, unknown>)[seg];
+    return undefined;
+  }, obj);
+}
+
+function setAtPath(obj: Record<string, unknown>, dotPath: string, value: string): void {
+  const segs = dotPath.split('.');
+  let cur = obj;
+  for (const seg of segs.slice(0, -1)) {
+    const next = cur[seg];
+    if (!next || typeof next !== 'object') return;
+    cur = next as Record<string, unknown>;
+  }
+  cur[segs[segs.length - 1]] = value;
+}
+
+/** Deep-copy cfg with every sensitive field sealed. */
+function sealConfigSecrets(cfg: AppConfig): { sealed: AppConfig; changed: boolean } {
+  const sealed = JSON.parse(JSON.stringify(cfg)) as Record<string, unknown>;
+  let changed = false;
+  for (const p of SENSITIVE_CONFIG_PATHS) {
+    const v = getAtPath(sealed, p);
+    if (typeof v === 'string' && v.trim() && !isEncryptedSecret(v)) {
+      setAtPath(sealed, p, encryptSecret(v));
+      changed = true;
+    }
+  }
+  return { sealed: sealed as unknown as AppConfig, changed };
+}
+
+/** Deep-copy raw config with every sensitive field opened for in-memory use. */
+function openConfigSecrets(raw: AppConfig): { opened: AppConfig; hadPlaintext: boolean } {
+  const opened = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
+  let hadPlaintext = false;
+  for (const p of SENSITIVE_CONFIG_PATHS) {
+    const v = getAtPath(opened, p);
+    if (typeof v === 'string' && v.trim()) {
+      if (isEncryptedSecret(v)) setAtPath(opened, p, decryptSecret(v));
+      else hadPlaintext = true;
+    }
+  }
+  return { opened: opened as unknown as AppConfig, hadPlaintext };
+}
 
 let dataDirOverride: string | null = null;
 
@@ -44,6 +110,7 @@ const DEFAULT_CONFIG: AppConfig = {
   defaultGrokModel: '',
   localGrokEnabled: false,
   localGrokBaseUrl: 'http://127.0.0.1:1234/v1',
+  localModelAllowlist: [],
   cloudAuthMode: 'api_key',
   toolApprovalMode: 'yolo',
   globalInstructions: '',
@@ -59,10 +126,16 @@ export async function loadConfig(): Promise<AppConfig> {
   await ensureData();
   try {
     const raw = await fs.readFile(configFile(), 'utf8');
-    const c = { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as AppConfig;
-    setIntegrationCreds(c.integrations || {});
-    await syncCloudAuthCache(c);
-    return c;
+    const stored = { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as AppConfig;
+    const { opened, hadPlaintext } = openConfigSecrets(stored);
+    if (hadPlaintext) {
+      // One-time migration: re-write any legacy plaintext secrets sealed.
+      const { sealed } = sealConfigSecrets(opened);
+      await fs.writeFile(configFile(), JSON.stringify(sealed, null, 2));
+    }
+    setIntegrationCreds(opened.integrations || {});
+    await syncCloudAuthCache(opened);
+    return opened;
   } catch {
     const fallback = { ...DEFAULT_CONFIG };
     setIntegrationCreds(fallback.integrations || {});
@@ -75,7 +148,8 @@ export async function saveConfig(partial: Partial<AppConfig>) {
   await ensureData();
   const cur = await loadConfig();
   const next = { ...cur, ...partial, integrations: { ...cur.integrations, ...(partial.integrations || {}) } };
-  await fs.writeFile(configFile(), JSON.stringify(next, null, 2));
+  const { sealed } = sealConfigSecrets(next);
+  await fs.writeFile(configFile(), JSON.stringify(sealed, null, 2));
   setIntegrationCreds(next.integrations);
   await syncCloudAuthCache(next);
   return next;

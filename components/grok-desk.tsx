@@ -5,26 +5,34 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { 
   Home, MessageSquare, Users, FolderOpen, FolderKanban, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
-  Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, CloudUpload,
-  CloudDownload, Command, Menu, Pencil
+  CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
+  CloudUpload, CloudDownload, Command, Menu, Pencil
 } from 'lucide-react';
-import CommandPalette, { type CommandPaletteItem } from '@/components/command-palette';
+import dynamic from 'next/dynamic';
+import type { CommandPaletteItem } from '@/components/command-palette';
 import ConfirmHost, { confirmDialog, promptDialog } from '@/components/confirm-dialog';
-import SyncModal from '@/components/sync-modal';
-import WorkspaceDiffPanel from '@/components/workspace-diff-panel';
-import WorktreePanel from '@/components/worktree-panel';
-import SkillsBrowser from '@/components/skills-browser';
-import PreviewRail from '@/components/preview-rail';
 import MultitaskSidebar from '@/components/multitask-sidebar';
-import ToolApprovalModal, { type PendingToolApproval } from '@/components/tool-approval-modal';
+import type { PendingToolApproval } from '@/components/tool-approval-modal';
 import type { ToolApprovalMode } from '@/lib/types';
-import UsageDashboard from '@/components/usage-dashboard';
-import ChatSessionsPanel from '@/components/chat-sessions-panel';
-import ProjectsPanel from '@/components/projects-panel';
 import MultimodalBadge from '@/components/multimodal-badge';
-import FolderBrowseModal from '@/components/folder-browse-modal';
-import McpPanel from '@/components/mcp-panel';
-import { motion, AnimatePresence } from 'framer-motion';
+
+// Heavy tab panels and open-on-demand modals are code-split so the first
+// paint only ships the shell — each chunk loads when its tab/modal is used.
+const panelLoading = () => (
+  <div className="data-loading-row py-6"><span className="data-spinner" /> Loading…</div>
+);
+const ChatSessionsPanel = dynamic(() => import('@/components/chat-sessions-panel'), { loading: panelLoading });
+const ProjectsPanel = dynamic(() => import('@/components/projects-panel'), { loading: panelLoading });
+const UsageDashboard = dynamic(() => import('@/components/usage-dashboard'), { loading: panelLoading });
+const McpPanel = dynamic(() => import('@/components/mcp-panel'), { loading: panelLoading });
+const SkillsBrowser = dynamic(() => import('@/components/skills-browser'), { loading: panelLoading });
+const WorkspaceDiffPanel = dynamic(() => import('@/components/workspace-diff-panel'), { loading: panelLoading });
+const WorktreePanel = dynamic(() => import('@/components/worktree-panel'), { loading: panelLoading });
+const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
+const SyncModal = dynamic(() => import('@/components/sync-modal'));
+const CommandPalette = dynamic(() => import('@/components/command-palette'));
+const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
+const ToolApprovalModal = dynamic(() => import('@/components/tool-approval-modal'));
 import { toast } from 'sonner';
 import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { THEME_IDENTITY } from '@/lib/theme';
@@ -49,7 +57,7 @@ function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?:
   const ref = parseModelRef(modelId || '');
   const cls = size === 'xs' ? 'model-provider-badge model-provider-badge-xs' : 'model-provider-badge';
   return (
-    <span className={`${cls} model-provider-${ref.provider}`} title={ref.provider === 'local' ? 'Local Grok on this machine' : 'xAI Grok cloud API'}>
+    <span className={`${cls} model-provider-${ref.provider}`} title={ref.provider === 'local' ? 'Local model on this machine — any OpenAI-compatible server' : 'xAI Grok cloud API'}>
       {providerLabel(ref.provider)}
     </span>
   );
@@ -228,6 +236,9 @@ export default function GrokDesk() {
   const [localGrokEnabled, setLocalGrokEnabled] = useState(false);
   const [localGrokBaseUrl, setLocalGrokBaseUrl] = useState('http://127.0.0.1:1234/v1');
   const [localGrokReachable, setLocalGrokReachable] = useState(false);
+  const [localModelOptions, setLocalModelOptions] = useState<string[]>([]);
+  const [localModelAllowlist, setLocalModelAllowlist] = useState<string[]>([]);
+  const [localModelsFetching, setLocalModelsFetching] = useState(false);
   const [navStats, setNavStats] = useState<NavStats>({
     chatSessions: 0,
     projects: 0,
@@ -290,7 +301,7 @@ export default function GrokDesk() {
         setAgentForm((f: any) => ({ ...f, model: pickDefaultModel(f.model) }));
       } else {
         setAvailableModels([]);
-        setModelsError(data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable Local Grok in Settings'));
+        setModelsError(data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings'));
       }
     } catch (e: any) {
       setAvailableModels([]);
@@ -304,7 +315,7 @@ export default function GrokDesk() {
     if (modelsLoading && availableModels.length === 0) {
       opts.push(<option key="_loading" value={currentValue || ''}>Loading models…</option>);
     } else if (availableModels.length === 0) {
-      opts.push(<option key="_empty" value={currentValue || ''}>{modelsError || 'Configure cloud key or local Grok in Settings'}</option>);
+      opts.push(<option key="_empty" value={currentValue || ''}>{modelsError || 'Configure a cloud key or local models in Settings'}</option>);
     } else {
       const cloud = availableModels.filter(m => m.provider === 'cloud');
       const local = availableModels.filter(m => m.provider === 'local');
@@ -345,6 +356,7 @@ export default function GrokDesk() {
       if ((cfg as any).cloudAuthMode) setCloudAuthMode((cfg as any).cloudAuthMode);
       if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(!!cfg.localGrokEnabled);
       if (cfg.localGrokBaseUrl) setLocalGrokBaseUrl(cfg.localGrokBaseUrl);
+      if (Array.isArray(cfg.localModelAllowlist)) setLocalModelAllowlist(cfg.localModelAllowlist);
       if (cfg.defaultGrokModel) {
         setDefaultModelInput(cfg.defaultGrokModel);
         setChatModel((current) => (
@@ -379,6 +391,10 @@ export default function GrokDesk() {
   useEffect(() => {
     if (tab === 'workspace') loadUploads();
   }, [tab]);
+
+  useEffect(() => {
+    if (tab === 'settings' && localGrokEnabled) void fetchLocalModelOptions({ silent: true });
+  }, [tab, localGrokEnabled]);
 
   useEffect(() => {
     if ((config as any)?.hasCloudAuth || (config as any)?.localGrokEnabled) loadModels();
@@ -942,6 +958,34 @@ export default function GrokDesk() {
     setIntSaving((s) => ({ ...s, [which]: false }));
   }
 
+  async function deleteIntegration(which: string) {
+    const label = getIntegrationMeta(which)?.label || which;
+    const ok = await confirmDialog({
+      title: `Remove ${label} credentials?`,
+      message: 'Stored credentials for this integration are deleted from this machine. Agents lose access until you reconfigure it.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch('/api/integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', which }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (data.integrations) {
+        setIntCreds({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...data.integrations });
+      }
+      setIntTest((t: any) => ({ ...t, [which]: undefined }));
+      await loadNavStats();
+      toast.success(`${label} credentials removed`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Remove failed');
+    }
+  }
+
   async function testIntegration(which: string) {
     const res = await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'test', which, creds: intCreds }) });
     const data = await res.json();
@@ -1083,29 +1127,72 @@ export default function GrokDesk() {
     });
     const data = await res.json();
     if (!data.ok) {
-      toast.error('Failed to save local Grok settings');
+      toast.error('Failed to save local model settings');
       return;
     }
     setConfig((c: any) => ({ ...c, localGrokEnabled, localGrokBaseUrl }));
-    toast.success(localGrokEnabled ? 'Local Grok enabled' : 'Local Grok disabled');
+    toast.success(localGrokEnabled ? 'Local models enabled' : 'Local models disabled');
     await loadModels();
   }
 
-  async function testLocalGrok() {
-    const res = await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'testLocalGrok', localGrokBaseUrl }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      setLocalGrokReachable(true);
-      toast.success(`Local Grok reachable — ${data.models?.length || 0} model(s) found`);
-      await loadModels();
-    } else {
+  function localIdOf(model: { id?: string; label?: string }): string {
+    return String(model.label || model.id || '').replace(/^local:/, '');
+  }
+
+  /** Ask the local server what it currently offers (raw list, before the allowlist). */
+  async function fetchLocalModelOptions(opts?: { silent?: boolean }) {
+    setLocalModelsFetching(true);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'testLocalGrok', localGrokBaseUrl }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setLocalGrokReachable(true);
+        setLocalModelOptions(((data.models || []) as Array<{ id?: string; label?: string }>).map(localIdOf).filter(Boolean));
+        if (!opts?.silent) toast.success(`Local server reachable — ${data.models?.length || 0} model(s) found`);
+      } else {
+        setLocalGrokReachable(false);
+        setLocalModelOptions([]);
+        if (!opts?.silent) toast.error(data.error || 'Local server not reachable');
+      }
+      return !!data.ok;
+    } catch {
       setLocalGrokReachable(false);
-      toast.error(data.error || 'Local Grok not reachable');
+      setLocalModelOptions([]);
+      return false;
+    } finally {
+      setLocalModelsFetching(false);
     }
+  }
+
+  async function testLocalGrok() {
+    const ok = await fetchLocalModelOptions();
+    if (ok) await loadModels();
+  }
+
+  async function saveLocalModelAllowlist(next: string[]) {
+    setLocalModelAllowlist(next);
+    try {
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ localModelAllowlist: next }),
+      });
+      await loadModels();
+    } catch {
+      toast.error('Failed to save model availability');
+    }
+  }
+
+  function toggleLocalModelAllowed(id: string) {
+    // Empty allowlist means "everything available" — expand it before editing.
+    const effective = localModelAllowlist.length ? [...localModelAllowlist] : [...localModelOptions];
+    const next = effective.includes(id) ? effective.filter((m) => m !== id) : [...effective, id];
+    const coversAll = localModelOptions.length > 0 && localModelOptions.every((m) => next.includes(m));
+    void saveLocalModelAllowlist(coversAll ? [] : next);
   }
 
   async function saveDefaultWorkspace() {
@@ -1313,7 +1400,8 @@ export default function GrokDesk() {
           </Link>
         </div>
 
-        <div className="px-2 py-3 flex-1 overflow-auto">
+        {/* Main menu — always fully visible, never scrolls */}
+        <div className="px-2 py-3 flex-shrink-0">
           {([
             { id: 'dashboard', label: 'Dashboard', icon: Home, stat: null as string | null },
             { id: 'chat', label: 'Grok Chat', icon: MessageSquare, stat: navStats.chatSessions > 0 ? String(navStats.chatSessions) : null },
@@ -1366,7 +1454,7 @@ export default function GrokDesk() {
         />
 
         <div className="p-4 border-t border-default text-xs text-dim">
-          localhost • Cloud + Local Grok
+          localhost • Cloud + local models
           <div className="mt-1 text-[10px]">SpaceX-grade focus • xAI cloud or local runtime</div>
         </div>
       </div>
@@ -1600,14 +1688,6 @@ export default function GrokDesk() {
                 {agents.length === 0 && <div className="text-sm text-muted">No agents yet. Create one to start orchestrating.</div>}
               </div>
 
-              <div className="mt-6">
-                <SkillsBrowser
-                  installed={[...new Set(agents.flatMap((a) => a.skills || []))]}
-                  compact
-                  onInstall={(skillId) => toast.info(`Edit an agent to add "${skillId}", or use New Agent → Skills Browser in the modal.`)}
-                />
-              </div>
-
               {/* Live execution trace area (agent-tab runs only — project builds show trace on Projects tab) */}
               <div className="mt-8">
                 <div className="flex items-center gap-2 mb-3">
@@ -1827,7 +1907,7 @@ export default function GrokDesk() {
                           className="grok-btn grok-btn-ghost text-xs py-1 px-2"
                           title="Edit schedule"
                         >
-                          <Edit2 size={14}/>
+                          <CalendarClock size={14}/>
                         </button>
                         <button
                           type="button"
@@ -2051,6 +2131,16 @@ export default function GrokDesk() {
                       >
                         Test Connection
                       </button>
+                      {configured && (
+                        <button
+                          type="button"
+                          onClick={() => void deleteIntegration(integration.id)}
+                          className="grok-btn grok-btn-ghost text-xs text-error ml-auto"
+                          title="Delete stored credentials for this integration"
+                        >
+                          <Trash2 size={13} /> Remove
+                        </button>
+                      )}
                     </div>
                     </div>
                     )}
@@ -2060,6 +2150,17 @@ export default function GrokDesk() {
               </div>
 
               <div className="mt-5 text-xs text-dim">Credentials are stored locally on your machine only. Never sent anywhere except to the services you authorize.</div>
+
+              <div className="mt-8">
+                <div className="text-xl font-semibold mb-1">Skills</div>
+                <div className="text-sm text-muted mb-4">
+                  Reusable capability presets for agents. Skills installed across your agents are marked — add them to a specific agent from its editor.
+                </div>
+                <SkillsBrowser
+                  installed={[...new Set(agents.flatMap((a) => a.skills || []))]}
+                  onInstall={(skillId) => toast.info(`Edit an agent to add "${skillId}" — open Agents → ✎ → Skills Browser.`)}
+                />
+              </div>
 
               <McpPanel
                 githubToken={intCreds.github?.token}
@@ -2087,6 +2188,10 @@ export default function GrokDesk() {
                     <button onClick={quickValidate} className="grok-btn grok-btn-secondary">Test</button>
                   </div>
                   <div className="text-xs mt-1 text-dim">Cloud API key for xAI-hosted Grok models. Local models run separately on your machine.</div>
+                  <div className="text-[10px] mt-1.5 text-dim">
+                    🔒 Credentials are encrypted at rest (AES-256-GCM). The encryption key is stored outside this project
+                    {(config as any)?.secretKeyLocation ? <> at <span className="font-mono">{(config as any).secretKeyLocation}</span></> : null} — never in source code.
+                  </div>
                 </div>
 
                 <div className="mt-6 pt-6 border-t border-default">
@@ -2144,10 +2249,10 @@ export default function GrokDesk() {
                 </div>
 
                 <div className="mt-6 pt-6 border-t border-default">
-                  <div className="grok-label">Local Grok Models</div>
+                  <div className="grok-label">Local Models — LM Studio, Ollama, llama.cpp</div>
                   <label className="flex items-center gap-2 text-sm mt-2">
                     <input type="checkbox" checked={localGrokEnabled} onChange={e => setLocalGrokEnabled(e.target.checked)} />
-                    Enable local Grok (OpenAI-compatible server)
+                    Enable local models (any OpenAI-compatible server — Grok, Llama, Qwen, Mistral…)
                   </label>
                   <div className="text-xs text-dim mt-1 mb-2">Run Grok locally via LM Studio, Ollama, or any OpenAI-compatible endpoint. Select <strong>Local</strong> models in chat and agents.</div>
                   <input
@@ -2163,6 +2268,64 @@ export default function GrokDesk() {
                   {localGrokEnabled && (
                     <div className={`text-xs mt-2 ${localGrokReachable ? 'text-success' : 'text-warning'}`}>
                       {localGrokReachable ? 'Local server reachable' : 'Local server not detected — start LM Studio/Ollama and test again'}
+                    </div>
+                  )}
+                  {localGrokEnabled && (
+                    <div className="mt-4">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="grok-label mb-0">Model availability — agents &amp; Grok Chat</div>
+                        <div className="flex items-center gap-1">
+                          {localModelAllowlist.length > 0 && localModelOptions.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => void saveLocalModelAllowlist([])}
+                              className="grok-btn grok-btn-ghost text-xs py-0.5"
+                              title="Make every model the server offers available"
+                            >
+                              Allow all
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void fetchLocalModelOptions({ silent: true })}
+                            disabled={localModelsFetching}
+                            className="grok-btn grok-btn-ghost text-xs py-0.5"
+                            title="Reload the model list from the local server"
+                          >
+                            <RefreshCw size={12} className={localModelsFetching ? 'animate-spin' : ''} /> Refresh
+                          </button>
+                        </div>
+                      </div>
+                      {localModelsFetching && localModelOptions.length === 0 ? (
+                        <div className="data-loading-row mt-2"><span className="data-spinner" /> Loading models from local server…</div>
+                      ) : localModelOptions.length === 0 ? (
+                        <div className="text-xs text-dim mt-2">
+                          No models reported yet — start your local server and click Test Connection.
+                        </div>
+                      ) : (
+                        <>
+                          <div className="local-model-list mt-2">
+                            {localModelOptions.map((id) => {
+                              const allowed = localModelAllowlist.length === 0 || localModelAllowlist.includes(id);
+                              return (
+                                <label key={id} className={`local-model-item ${allowed ? '' : 'local-model-item-off'}`}>
+                                  <input
+                                    type="checkbox"
+                                    checked={allowed}
+                                    onChange={() => toggleLocalModelAllowed(id)}
+                                  />
+                                  <span className="font-mono text-xs truncate">{id}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                          <div className="text-[10px] text-dim mt-1.5">
+                            {localModelAllowlist.length === 0
+                              ? `All ${localModelOptions.length} model(s) from the server are selectable in chat and agents.`
+                              : `${localModelAllowlist.length} of ${localModelOptions.length} model(s) selectable — unchecked models are hidden from chat and agent pickers.`}
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2277,7 +2440,7 @@ export default function GrokDesk() {
                   </div>
                 </div>
 
-                <div className="mt-6 text-[11px] text-dim">Use Cloud Grok (xAI API) or Local Grok (on your machine). Agents, chat, and usage tracking reflect which provider each model uses.</div>
+                <div className="mt-6 text-[11px] text-dim">Use cloud Grok (xAI API) or local models served on your machine — any model your local server offers is selectable. Agents, chat, and usage tracking reflect which provider each model uses.</div>
               </div>
             </div>
           )}
@@ -2290,6 +2453,7 @@ export default function GrokDesk() {
         </div>
       </div>
 
+      {folderBrowseFor !== null && (
       <FolderBrowseModal
         open={folderBrowseFor !== null}
         title={
@@ -2321,20 +2485,16 @@ export default function GrokDesk() {
           setFolderBrowseFor(null);
         }}
       />
+      )}
 
       {/* Run agent — text prompt modal */}
-      <AnimatePresence>
-        {showRunModal && runModalAgent && (
+      {showRunModal && runModalAgent && (
           <div
             className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
             onClick={() => { setShowRunModal(false); setRunModalAgent(null); }}
           >
-            <motion.div
-              initial={{ scale: 0.96, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ opacity: 0, scale: 0.98 }}
-              transition={{ duration: 0.15 }}
-              className="modal w-full max-w-lg p-6"
+            <div
+              className="modal modal-pop w-full max-w-lg p-6"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-3 mb-3">
@@ -2373,19 +2533,17 @@ export default function GrokDesk() {
                   <Play size={14} /> Run
                 </button>
               </div>
-            </motion.div>
+            </div>
           </div>
         )}
-      </AnimatePresence>
 
       {/* Agent create/edit modal — rich form */}
-      <AnimatePresence>
-        {showAgentModal && (
+      {showAgentModal && (
           <div
             className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
             onClick={() => { setShowAgentModal(false); setEditingAgent(null); setHighlightScheduleIdx(null); }}
           >
-            <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity:0, scale:0.98 }} transition={{ duration: 0.15 }} className="modal w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="modal modal-pop w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="text-xl font-semibold mb-4">{editingAgent ? 'Edit Agent' : 'Create New Agent'}</div>
 
               <div className="grid grid-cols-1 gap-y-4">
@@ -2457,7 +2615,7 @@ export default function GrokDesk() {
                   <div className="text-xs text-dim mt-0.5">
                     {availableModels.length > 0
                       ? `${availableModels.length} models — Cloud (xAI) and/or Local (this machine).`
-                      : modelsError || 'Add xAI API key, sign in with X (OAuth), or enable Local Grok in Settings.'}
+                      : modelsError || 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings.'}
                   </div>
                   {agentForm.model && (
                     <div className="text-[10px] text-dim mt-1">
@@ -2615,29 +2773,34 @@ export default function GrokDesk() {
                 </span>
               </div>
               <div className="text-[10px] text-center mt-3 text-dim">Agents run exclusively via Grok tool calling + your local tools.</div>
-            </motion.div>
+            </div>
           </div>
         )}
-      </AnimatePresence>
 
-      <CommandPalette
-        open={showCommandPalette}
-        onClose={() => setShowCommandPalette(false)}
-        commands={paletteCommands}
-      />
+      {showCommandPalette && (
+        <CommandPalette
+          open={showCommandPalette}
+          onClose={() => setShowCommandPalette(false)}
+          commands={paletteCommands}
+        />
+      )}
 
-      <ToolApprovalModal
-        pending={pendingToolApproval}
-        onApprove={(id) => void resolveToolApproval(id, true)}
-        onDeny={(id) => void resolveToolApproval(id, false)}
-      />
+      {pendingToolApproval && (
+        <ToolApprovalModal
+          pending={pendingToolApproval}
+          onApprove={(id) => void resolveToolApproval(id, true)}
+          onDeny={(id) => void resolveToolApproval(id, false)}
+        />
+      )}
 
-      <SyncModal
-        open={showSyncModal}
-        onClose={() => setShowSyncModal(false)}
-        localModelInUse={!!(config as any)?.localGrokEnabled}
-        onSynced={() => { void loadAll(); void loadNavStats(); }}
-      />
+      {showSyncModal && (
+        <SyncModal
+          open={showSyncModal}
+          onClose={() => setShowSyncModal(false)}
+          localModelInUse={!!(config as any)?.localGrokEnabled}
+          onSynced={() => { void loadAll(); void loadNavStats(); }}
+        />
+      )}
 
       <ConfirmHost />
     </div>

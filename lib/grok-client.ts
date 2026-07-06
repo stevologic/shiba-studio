@@ -245,9 +245,15 @@ export async function listAllSelectableModels(cfg?: {
   if (config.localGrokEnabled) {
     const local = await listLocalGrokModels(config.localGrokBaseUrl);
     localReachable = local.ok;
-    if (local.ok) models.push(...local.models);
+    // Respect the user's per-model availability selection from Settings.
+    // Empty allowlist = every model the server offers.
+    const allow = (config.localModelAllowlist || []).filter(Boolean);
+    const permitted = allow.length
+      ? local.models.filter((m) => allow.includes(parseModelRef(m.id).id) || allow.includes(m.label))
+      : local.models;
+    if (local.ok) models.push(...permitted);
     else localError = local.error;
-    if (!local.ok && local.models.length) models.push(...local.models);
+    if (!local.ok && permitted.length) models.push(...permitted);
   }
 
   return {
@@ -279,7 +285,7 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
     const { loadConfig } = await import('./persistence');
     const cfg = await loadConfig();
     if (!cfg.localGrokEnabled) {
-      throw new Error('Local Grok models are disabled. Enable them in Settings.');
+      throw new Error('Local models are disabled. Enable them in Settings.');
     }
     base = normalizeLocalBase(cfg.localGrokBaseUrl);
   }
@@ -301,7 +307,7 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
 
   if (!res.ok) {
     const txt = await res.text();
-    const src = ref.provider === 'local' ? 'Local Grok' : 'Grok API';
+    const src = ref.provider === 'local' ? 'Local server' : 'Grok API';
     throw new Error(`${src} error ${res.status}: ${txt}`);
   }
   const data: GrokChatResponse = await res.json();

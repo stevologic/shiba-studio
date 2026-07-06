@@ -147,7 +147,7 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
     const { loadConfig } = await import('./persistence');
     const cfg = await loadConfig();
     if (!cfg.localGrokEnabled) {
-      yield { type: 'error', message: 'Local Grok models are disabled. Enable them in Settings.' };
+      yield { type: 'error', message: 'Local models are disabled. Enable them in Settings.' };
       return;
     }
     base = normalizeLocalBase(cfg.localGrokBaseUrl);
@@ -213,7 +213,7 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
 
   if (!res.ok) {
     const txt = await res.text();
-    const src = ref.provider === 'local' ? 'Local Grok' : 'Grok API';
+    const src = ref.provider === 'local' ? 'Local server' : 'Grok API';
     yield { type: 'error', message: `${src} error ${res.status}: ${txt}` };
     return;
   }

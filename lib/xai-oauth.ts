@@ -196,12 +196,29 @@ export function maskEmail(email?: string): string | undefined {
   return `${user.slice(0, 2)}***@${domain}`;
 }
 
+/** OAuth token fields sealed at rest via the machine key (see lib/secure-store.ts). */
+const OAUTH_SECRET_FIELDS = ['accessToken', 'refreshToken', 'idToken'] as const;
+
 export async function loadOAuthSession(): Promise<XaiOAuthSession | null> {
   await ensureData();
   try {
     const raw = await fs.readFile(sessionFile(), 'utf8');
     const parsed = JSON.parse(raw);
     if (!parsed?.accessToken || !parsed?.refreshToken) return null;
+    const { decryptSecret, isEncryptedSecret } = await import('./secure-store');
+    let hadPlaintext = false;
+    for (const field of OAUTH_SECRET_FIELDS) {
+      const v = parsed[field];
+      if (typeof v === 'string' && v) {
+        if (isEncryptedSecret(v)) parsed[field] = decryptSecret(v);
+        else hadPlaintext = true;
+      }
+    }
+    if (!parsed.accessToken || !parsed.refreshToken) return null;
+    if (hadPlaintext) {
+      // One-time migration: re-write legacy plaintext tokens sealed.
+      await saveOAuthSession(parsed as XaiOAuthSession);
+    }
     return parsed as XaiOAuthSession;
   } catch {
     return null;
@@ -218,7 +235,13 @@ export async function saveOAuthSession(session: XaiOAuthSession | null): Promise
     }
     return;
   }
-  await fs.writeFile(sessionFile(), JSON.stringify(session, null, 2));
+  const { encryptSecret } = await import('./secure-store');
+  const sealed: Record<string, unknown> = { ...session };
+  for (const field of OAUTH_SECRET_FIELDS) {
+    const v = sealed[field];
+    if (typeof v === 'string' && v) sealed[field] = encryptSecret(v);
+  }
+  await fs.writeFile(sessionFile(), JSON.stringify(sealed, null, 2));
 }
 
 export async function clearOAuthSession(): Promise<void> {

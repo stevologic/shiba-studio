@@ -6,9 +6,8 @@ import {
   Send, Sparkles, Square, Terminal, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import ChatMarkdown from '@/components/chat-markdown';
+import ChatMarkdown from '@/components/chat-markdown-lazy';
 import { confirmDialog } from '@/components/confirm-dialog';
-import MultimodalBadge from '@/components/multimodal-badge';
 import type { ChatAttachment, ChatMessagePayload, ReasoningEffort } from '@/lib/chat-types';
 import { buildAgentChatSystem } from '@/lib/chat-skill';
 import { modelDisplayName, parseModelRef, providerLabel } from '@/lib/model-providers';
@@ -29,7 +28,7 @@ function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?:
   return (
     <span
       className={`${cls} model-provider-${ref.provider}`}
-      title={ref.provider === 'local' ? 'Local Grok on this machine' : 'xAI Grok cloud API'}
+      title={ref.provider === 'local' ? 'Local model on this machine — any OpenAI-compatible server' : 'xAI Grok cloud API'}
     >
       {providerLabel(ref.provider)}
     </span>
@@ -1073,12 +1072,6 @@ export default function GrokChatPanel({
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
       >
-        {supportsMultimodal && !useGrokCli && (
-          <div className="grok-chat-composer-multimodal-hint">
-            <MultimodalBadge compact />
-            <span>Drop, paste, or attach images &amp; files</span>
-          </div>
-        )}
         {useGrokCli && grokCliInstalled && (
           <div className="grok-chat-composer-multimodal-hint">
             <Terminal size={12} className="opacity-70" />
@@ -1092,6 +1085,21 @@ export default function GrokChatPanel({
           accept="image/*,.pdf,.txt,.md,.json,.csv,.doc,.docx"
           className="hidden"
           onChange={(e) => e.target.files && uploadFiles(e.target.files)}
+        />
+        <textarea
+          ref={textareaRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              void sendChat();
+            }
+          }}
+          onPaste={onPaste}
+          rows={1}
+          className="grok-input grok-chat-textarea grok-chat-textarea-lead"
+          placeholder={project ? 'Ask about this project — uploads are carried into context…' : 'Ask Grok anything — Shift+Enter for a new line, drop or paste files…'}
         />
         <button
           type="button"
@@ -1193,26 +1201,11 @@ export default function GrokChatPanel({
             <Terminal size={15} />
           </button>
         )}
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void sendChat();
-            }
-          }}
-          onPaste={onPaste}
-          rows={1}
-          className="grok-input grok-chat-textarea flex-1"
-          placeholder={project ? 'Ask about this project — uploads are carried into context…' : 'Ask Grok anything — Shift+Enter for a new line…'}
-        />
         {streaming ? (
           <button
             type="button"
             onClick={stopStreaming}
-            className="grok-btn grok-btn-secondary"
+            className="grok-btn grok-btn-secondary ml-auto"
             title="Stop generating"
           >
             <Square size={14} />
@@ -1223,7 +1216,7 @@ export default function GrokChatPanel({
             type="button"
             onClick={sendChat}
             disabled={uploading || (!input.trim() && pendingAttachments.length === 0)}
-            className="grok-btn grok-btn-primary"
+            className="grok-btn grok-btn-primary ml-auto"
           >
             <Send size={15} />
             Send
@@ -1245,7 +1238,7 @@ export default function GrokChatPanel({
             : selectedAgent
               ? `Chatting as ${selectedAgent.name}${selectedAgent.chatSkill ? ' · Skill active' : ' · add a Skill in agent settings'} · global uploads included`
               : parseModelRef(chatModel).provider === 'local'
-                ? 'Local Grok — streaming + vision · global workspace uploads included'
+                ? 'Local model — served from this machine · global workspace uploads included'
                 : 'Cloud Grok — streaming, reasoning, images & files · global workspace uploads included'}
       </div>
     </div>
