@@ -1,0 +1,48 @@
+{
+  "name": "grokdesktop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "tsx scripts/verify-all.ts",
+    "test:xai-oauth": "tsx scripts/verify-xai-oauth.ts",
+    "test:oauth-launch": "tsx scripts/verify-oauth-launch.ts",
+    "test:theme": "tsx scripts/verify-theme.ts",
+    "generate:avatars": "tsx scripts/generate-alien-avatars.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@slack/web-api": "^7.17.0",
+    "date-fns": "^4.4.0",
+    "framer-motion": "^12.42.0",
+    "googleapis": "^173.0.0",
+    "highlight.js": "^11.11.1",
+    "lucide-react": "^1.22.0",
+    "next": "16.2.9",
+    "node-cron": "^4.5.0",
+    "octokit": "^5.0.5",
+    "puppeteer": "^25.2.1",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "sonner": "^2.0.7",
+    "uuid": "^14.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.9",
+    "tailwindcss": "^4",
+    "tsx": "^4.22.4",
+    "typescript": "^5"
+  }
+}

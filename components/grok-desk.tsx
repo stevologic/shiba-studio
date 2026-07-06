@@ -1,0 +1,2645 @@
+"use client";
+
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { 
+  Home, MessageSquare, Users, FolderOpen, FolderKanban, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
+  Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, CloudUpload,
+  CloudDownload, Command, Menu, Pencil
+} from 'lucide-react';
+import CommandPalette, { type CommandPaletteItem } from '@/components/command-palette';
+import ConfirmHost, { confirmDialog, promptDialog } from '@/components/confirm-dialog';
+import SyncModal from '@/components/sync-modal';
+import WorkspaceDiffPanel from '@/components/workspace-diff-panel';
+import WorktreePanel from '@/components/worktree-panel';
+import SkillsBrowser from '@/components/skills-browser';
+import PreviewRail from '@/components/preview-rail';
+import MultitaskSidebar from '@/components/multitask-sidebar';
+import ToolApprovalModal, { type PendingToolApproval } from '@/components/tool-approval-modal';
+import type { ToolApprovalMode } from '@/lib/types';
+import UsageDashboard from '@/components/usage-dashboard';
+import ChatSessionsPanel from '@/components/chat-sessions-panel';
+import ProjectsPanel from '@/components/projects-panel';
+import MultimodalBadge from '@/components/multimodal-badge';
+import FolderBrowseModal from '@/components/folder-browse-modal';
+import McpPanel from '@/components/mcp-panel';
+import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'sonner';
+import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
+import { THEME_IDENTITY } from '@/lib/theme';
+import { ALIEN_AVATARS, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
+import {
+  SCHEDULE_PRESETS,
+  SchedulePresetId,
+  describeCron,
+  enrichScheduleForForm,
+  defaultScheduleEntry,
+  presetToCron,
+  schedulesForSave,
+} from '@/lib/schedule-presets';
+import { INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/integration-catalog';
+import { modelDisplayName, parseModelRef, providerLabel, type ModelProvider } from '@/lib/model-providers';
+import { AppTab, chatSessionPath, isKnownAppPath, pathToChatSessionId, pathToTab, tabToPath } from '@/lib/app-navigation';
+import { formatUsageCostUsd, type NavStats } from '@/lib/nav-stats-types';
+
+type ModelOption = { id: string; label: string; provider?: ModelProvider };
+
+function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
+  const ref = parseModelRef(modelId || '');
+  const cls = size === 'xs' ? 'model-provider-badge model-provider-badge-xs' : 'model-provider-badge';
+  return (
+    <span className={`${cls} model-provider-${ref.provider}`} title={ref.provider === 'local' ? 'Local Grok on this machine' : 'xAI Grok cloud API'}>
+      {providerLabel(ref.provider)}
+    </span>
+  );
+}
+
+function ModelLine({ modelId, mono = true }: { modelId: string; mono?: boolean }) {
+  const ref = parseModelRef(modelId);
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-wrap">
+      <ModelProviderBadge modelId={modelId} size="xs" />
+      <span className={mono ? 'font-mono' : ''}>{ref.id}</span>
+    </span>
+  );
+}
+
+function IntegrationIcon({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' | 'lg' }) {
+  const meta = getIntegrationMeta(id);
+  if (!meta) return null;
+  const dim = size === 'sm' ? 14 : size === 'lg' ? 28 : 22;
+  const cls = size === 'sm' ? 'integration-icon-sm' : size === 'lg' ? 'integration-icon-lg' : 'integration-icon';
+  return <img src={meta.icon} alt="" className={cls} width={dim} height={dim} />;
+}
+
+const OAUTH_POLL_MS = 2000;
+const OAUTH_POLL_MAX_MS = 5 * 60_000;
+
+export default function GrokDesk() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const tab = pathToTab(pathname);
+  const oauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const oauthPollStartedRef = useRef<number | null>(null);
+
+  const navigateToTab = useCallback((next: AppTab) => {
+    const path = tabToPath(next);
+    if (pathname !== path) router.push(path);
+  }, [pathname, router]);
+
+  const navigateToChatSession = useCallback((id: string) => {
+    const path = chatSessionPath(id);
+    if (pathname !== path) router.push(path);
+  }, [pathname, router]);
+
+  useEffect(() => {
+    if (!isKnownAppPath(pathname)) router.replace('/');
+  }, [pathname, router]);
+
+  const stopOAuthPolling = useCallback(() => {
+    if (oauthPollRef.current) {
+      clearInterval(oauthPollRef.current);
+      oauthPollRef.current = null;
+    }
+    oauthPollStartedRef.current = null;
+  }, []);
+
+  const handleOAuthConnected = useCallback(async (message?: string) => {
+    stopOAuthPolling();
+    toast.success(message || 'Signed in with X (OAuth)');
+    await loadAll();
+    await loadModels();
+    await refreshOAuthStatus();
+  }, [stopOAuthPolling]);
+
+  useEffect(() => {
+    return () => stopOAuthPolling();
+  }, [stopOAuthPolling]);
+
+  useEffect(() => {
+    if (tab === 'settings') void refreshOAuthStatus();
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab !== 'settings') return;
+    const oauth = searchParams.get('oauth');
+    if (!oauth) return;
+
+    const message = searchParams.get('message') || undefined;
+    if (oauth === 'connected') {
+      void handleOAuthConnected();
+    } else if (oauth === 'error') {
+      toast.error(message || 'OAuth sign-in failed');
+      void refreshOAuthStatus();
+    }
+    router.replace('/settings');
+  }, [tab, searchParams, router, handleOAuthConnected]);
+
+  useEffect(() => {
+    if (tab !== 'settings' && tab !== 'chat') return;
+    fetch('/api/grok-cli/status')
+      .then((r) => r.json())
+      .then((data) => setGrokCliStatus({ installed: !!data.installed, version: data.version, path: data.path }))
+      .catch(() => setGrokCliStatus({ installed: false }));
+  }, [tab]);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
+  const [liveTrace, setLiveTrace] = useState<any[]>([]);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [previewSelectedIdx, setPreviewSelectedIdx] = useState<number | null>(null);
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null);
+  const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>('yolo');
+  const [globalInstructionsInput, setGlobalInstructionsInput] = useState('');
+  const [useAgentsMd, setUseAgentsMd] = useState(true);
+
+  // Direct Grok Chat
+  const [chatModel, setChatModel] = useState<GrokModel>('grok-4');
+  const chatModelRef = useRef(chatModel);
+  useEffect(() => { chatModelRef.current = chatModel; }, [chatModel]);
+
+  // Run agent prompt modal
+  const [showRunModal, setShowRunModal] = useState(false);
+  const [runModalAgent, setRunModalAgent] = useState<Agent | null>(null);
+  const [runModalPrompt, setRunModalPrompt] = useState(
+    'Explore the workspace and summarize what we can build here. Then propose next steps.',
+  );
+
+  // Agent form
+  const [showAgentModal, setShowAgentModal] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [highlightScheduleIdx, setHighlightScheduleIdx] = useState<number | null>(null);
+  const [agentForm, setAgentForm] = useState<any>({
+    name: 'Builder Agent', avatar: 'alien-01', origin: 'local', model: 'grok-4', workspace: { path: '', useWorktree: true },
+    integrations: { ...EMPTY_INTEGRATION_SCOPE },
+    peers: [], skills: [], chatSkill: '', schedules: [defaultScheduleEntry()]
+  });
+
+  // Workspace
+  const [wsFiles, setWsFiles] = useState<any[]>([]);
+  const [selectedFile, setSelectedFile] = useState<string>('');
+  const [fileContent, setFileContent] = useState('');
+  const [wsPath, setWsPath] = useState(process.cwd ? process.cwd() : '');
+  const [wsUploads, setWsUploads] = useState<any[]>([]);
+  const [wsUploadsPath, setWsUploadsPath] = useState('');
+  const [cloudFiles, setCloudFiles] = useState<any[]>([]);
+  const [wsLastSync, setWsLastSync] = useState<string | null>(null);
+  const [wsDragging, setWsDragging] = useState(false);
+  const [wsUploading, setWsUploading] = useState(false);
+  const [wsSyncing, setWsSyncing] = useState<'upload' | 'download' | null>(null);
+
+  // Integrations form state
+  const [intCreds, setIntCreds] = useState<any>({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' } });
+  const [intTest, setIntTest] = useState<any>({});
+  const [intSaving, setIntSaving] = useState<Record<string, boolean>>({});
+  const [expandedIntegration, setExpandedIntegration] = useState<string | null>(null);
+
+  function integrationConfigured(id: string): boolean {
+    const creds = (intCreds as Record<string, Record<string, string>>)[id] || {};
+    if (id === 'obsidian') return !!(creds.vaultPath?.trim() || creds.restApiUrl?.trim());
+    return Object.entries(creds).some(([k, v]) => k !== 'mode' && typeof v === 'string' && v.trim().length > 0);
+  }
+  const [folderBrowseFor, setFolderBrowseFor] = useState<'obsidian' | 'workspace' | 'mcp' | null>(null);
+  const [mcpBrowsePath, setMcpBrowsePath] = useState<string | null>(null);
+  const [grokCliStatus, setGrokCliStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(null);
+
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [oauthStatus, setOauthStatus] = useState<{
+    connected: boolean;
+    expired: boolean;
+    email?: string;
+    displayName?: string;
+    error?: string;
+  }>({ connected: false, expired: false });
+  const [cloudAuthMode, setCloudAuthMode] = useState<'api_key' | 'oauth'>('api_key');
+  const [oauthCallbackInput, setOauthCallbackInput] = useState('');
+  const [oauthStarting, setOauthStarting] = useState(false);
+  const [defaultModelInput, setDefaultModelInput] = useState('');
+  const [defaultWorkspaceInput, setDefaultWorkspaceInput] = useState('');
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [localGrokEnabled, setLocalGrokEnabled] = useState(false);
+  const [localGrokBaseUrl, setLocalGrokBaseUrl] = useState('http://127.0.0.1:1234/v1');
+  const [localGrokReachable, setLocalGrokReachable] = useState(false);
+  const [navStats, setNavStats] = useState<NavStats>({
+    chatSessions: 0,
+    projects: 0,
+    workspaceFiles: 0,
+    automationsScheduled: 0,
+    integrationsConfigured: 0,
+    usageCostUsd: 0,
+  });
+  const [navStatsLoaded, setNavStatsLoaded] = useState(false);
+
+  async function loadNavStats() {
+    try {
+      const res = await fetch('/api/nav-stats');
+      const data = await res.json();
+      if (data.ok) {
+        setNavStats({
+          chatSessions: data.chatSessions ?? 0,
+          projects: data.projects ?? 0,
+          workspaceFiles: data.workspaceFiles ?? 0,
+          automationsScheduled: data.automationsScheduled ?? 0,
+          integrationsConfigured: data.integrationsConfigured ?? 0,
+          usageCostUsd: data.usageCostUsd ?? 0,
+        });
+        setNavStatsLoaded(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function pickDefaultModel(current?: string): string {
+    if (current && availableModels.some(m => m.id === current)) return current;
+    const configured = config?.defaultGrokModel || defaultModelInput;
+    if (configured && availableModels.some(m => m.id === configured)) return configured;
+    const preferred = availableModels.find(m => /grok-4(?!.*fast)/i.test(m.id))
+      || availableModels.find(m => m.id.includes('grok-4'))
+      || availableModels.find(m => m.id.includes('grok-3'))
+      || availableModels.find(m => m.id.includes('grok'))
+      || availableModels[0];
+    return preferred?.id || current || configured || 'cloud:grok-4';
+  }
+
+  async function loadModels() {
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const res = await fetch('/api/models');
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.models) && data.models.length > 0) {
+        setAvailableModels(data.models.map((m: ModelOption) => ({
+          id: m.id,
+          label: m.label || modelDisplayName(m.id),
+          provider: m.provider || (m.id.startsWith('local:') ? 'local' : 'cloud'),
+        })));
+        setLocalGrokReachable(!!data.localReachable);
+        setChatModel((current) => pickDefaultModel(current));
+        const resolvedDefault = pickDefaultModel(config?.defaultGrokModel || defaultModelInput || undefined);
+        if (config?.defaultGrokModel) setDefaultModelInput(config.defaultGrokModel);
+        else if (!defaultModelInput) setDefaultModelInput(resolvedDefault);
+        setAgentForm((f: any) => ({ ...f, model: pickDefaultModel(f.model) }));
+      } else {
+        setAvailableModels([]);
+        setModelsError(data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable Local Grok in Settings'));
+      }
+    } catch (e: any) {
+      setAvailableModels([]);
+      setModelsError(e.message);
+    }
+    setModelsLoading(false);
+  }
+
+  function renderModelOptions(currentValue?: string) {
+    const opts: React.ReactNode[] = [];
+    if (modelsLoading && availableModels.length === 0) {
+      opts.push(<option key="_loading" value={currentValue || ''}>Loading models…</option>);
+    } else if (availableModels.length === 0) {
+      opts.push(<option key="_empty" value={currentValue || ''}>{modelsError || 'Configure cloud key or local Grok in Settings'}</option>);
+    } else {
+      const cloud = availableModels.filter(m => m.provider === 'cloud');
+      const local = availableModels.filter(m => m.provider === 'local');
+      if (cloud.length > 0) {
+        opts.push(<optgroup key="cloud" label="Cloud — xAI API">{cloud.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>);
+      }
+      if (local.length > 0) {
+        opts.push(<optgroup key="local" label="Local — this machine">{local.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>);
+      }
+      const other = availableModels.filter(m => m.provider !== 'cloud' && m.provider !== 'local');
+      other.forEach(m => opts.push(<option key={m.id} value={m.id}>{m.label}</option>));
+    }
+    if (currentValue && !availableModels.some(m => m.id === currentValue)) {
+      const ref = parseModelRef(currentValue);
+      opts.push(<option key="_saved" value={currentValue}>[{providerLabel(ref.provider)}] {ref.id} (saved)</option>);
+    }
+    return opts;
+  }
+
+  // Load everything
+  async function loadAll() {
+    try {
+      const [aRes, rRes, cRes, intRes] = await Promise.all([
+        fetch('/api/agents').then(r => r.json()),
+        fetch('/api/runs').then(r => r.json()),
+        fetch('/api/config').then(r => r.json()),
+        fetch('/api/integrations').then(r => r.json()),
+      ]);
+      setAgents(aRes.agents || []);
+      setRuns(rRes.runs || []);
+      const cfg = cRes;
+      setConfig(cfg as any);
+      if (intRes.integrations) {
+        setIntCreds({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...intRes.integrations });
+      }
+      if ((cfg as any).hasKey) setApiKeyInput('••••••••'); // masked
+      if ((cfg as any).oauthStatus) setOauthStatus((cfg as any).oauthStatus);
+      if ((cfg as any).cloudAuthMode) setCloudAuthMode((cfg as any).cloudAuthMode);
+      if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(!!cfg.localGrokEnabled);
+      if (cfg.localGrokBaseUrl) setLocalGrokBaseUrl(cfg.localGrokBaseUrl);
+      if (cfg.defaultGrokModel) {
+        setDefaultModelInput(cfg.defaultGrokModel);
+        setChatModel((current) => (
+          current === 'grok-4' || current === 'cloud:grok-4' || current === 'grok-3' || current === 'cloud:grok-3'
+            ? cfg.defaultGrokModel
+            : current
+        ) as GrokModel);
+      }
+      if (cfg.defaultWorkspace) {
+        setDefaultWorkspaceInput(cfg.defaultWorkspace);
+        setWsPath(cfg.defaultWorkspace);
+      }
+      if (cfg.toolApprovalMode) setToolApprovalMode(cfg.toolApprovalMode);
+      if (cfg.globalInstructions != null) setGlobalInstructionsInput(cfg.globalInstructions);
+      if (cfg.useAgentsMd != null) setUseAgentsMd(!!cfg.useAgentsMd);
+      // trigger scheduler + boot
+      fetch('/api/boot').catch(() => {});
+      fetch('/api/scheduler', { method: 'POST', body: JSON.stringify({ agentId: '__boot__' }) }).catch(() => {});
+      void loadNavStats();
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  useEffect(() => { loadAll(); }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => { void loadNavStats(); }, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'workspace') loadUploads();
+  }, [tab]);
+
+  useEffect(() => {
+    if ((config as any)?.hasCloudAuth || (config as any)?.localGrokEnabled) loadModels();
+  }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled]);
+
+  // Agents CRUD
+  async function refreshAgents() {
+    const res = await fetch('/api/agents').then(r => r.json());
+    setAgents(res.agents || []);
+  }
+
+  const [cloudAgentSyncing, setCloudAgentSyncing] = useState(false);
+
+  async function syncCloudAgents() {
+    setCloudAgentSyncing(true);
+    try {
+      const res = await fetch('/api/agents/cloud-sync', { method: 'POST' });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Cloud agent sync failed');
+      toast.success(data.message || 'Cloud agents synced');
+      await refreshAgents();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Cloud agent sync failed');
+    }
+    setCloudAgentSyncing(false);
+  }
+
+  async function createOrUpdateAgent() {
+    setLoading(true);
+    try {
+      const payload = {
+        ...agentForm,
+        schedules: schedulesForSave(agentForm.schedules || []),
+      };
+      const isEdit = !!editingAgent;
+      const res = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isEdit ? { action: 'update', agent: { ...editingAgent, ...payload } } : payload),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      toast.success(isEdit ? 'Agent updated' : 'Agent created');
+      setShowAgentModal(false);
+      setEditingAgent(null);
+      setHighlightScheduleIdx(null);
+      await refreshAgents();
+      await loadAll();
+    } catch (e: any) { toast.error(e.message); }
+    setLoading(false);
+  }
+
+  function openCreateAgent() {
+    setEditingAgent(null);
+    setAgentForm({
+      name: 'Code Agent ' + (agents.length + 1),
+      avatar: ALIEN_AVATARS[agents.length % ALIEN_AVATARS.length].id,
+      origin: 'local',
+      model: pickDefaultModel(),
+      workspace: { path: config?.defaultWorkspace || process.cwd?.() || '', useWorktree: true },
+      integrations: { ...EMPTY_INTEGRATION_SCOPE },
+      peers: [],
+      skills: [],
+      chatSkill: '',
+      schedules: [enrichScheduleForForm({ ...defaultScheduleEntry(), instructions: 'Perform the scheduled task using your skills.' })],
+    });
+    setShowAgentModal(true);
+  }
+
+  function patchSchedule(idx: number, patch: Record<string, unknown>) {
+    const news = [...(agentForm.schedules || [])];
+    news[idx] = { ...news[idx], ...patch };
+    setAgentForm({ ...agentForm, schedules: news });
+  }
+
+  function onSchedulePresetChange(idx: number, presetId: SchedulePresetId) {
+    const sch = agentForm.schedules[idx];
+    const time = sch._time || '09:00';
+    const customCron = sch._customCron || sch.cron;
+    patchSchedule(idx, {
+      _preset: presetId,
+      cron: presetToCron(presetId, time, customCron),
+    });
+  }
+
+  function onScheduleTimeChange(idx: number, time: string) {
+    const sch = agentForm.schedules[idx];
+    const preset: SchedulePresetId = sch._preset || 'daily';
+    patchSchedule(idx, {
+      _time: time,
+      cron: presetToCron(preset, time, sch._customCron),
+    });
+  }
+
+  function agentSchedules(agent: Agent) {
+    return agent.schedules?.length
+      ? agent.schedules
+      : agent.schedule
+        ? [{ ...agent.schedule, id: 'legacy', instructions: agent.schedule.description || agent.description || 'Scheduled task' }]
+        : [];
+  }
+
+  function resolveScheduledPrompt(agent: Agent, scheduleIndex?: number) {
+    const scheds = agentSchedules(agent);
+    const entry =
+      scheduleIndex != null && scheds[scheduleIndex]
+        ? scheds[scheduleIndex]
+        : scheds.find((s) => s.enabled) || scheds[0];
+    const instructions = entry?.instructions?.trim();
+    return {
+      prompt: instructions || agent.description?.trim() || `Run scheduled task for ${agent.name}.`,
+      scheduleId: entry?.id,
+      scheduleInstructions: instructions,
+    };
+  }
+
+  function scheduleStats(agent: Agent) {
+    const scheds = agentSchedules(agent);
+    return {
+      configured: scheds.length,
+      active: scheds.filter((s) => s.enabled).length,
+    };
+  }
+
+  function formatScheduleSummary(agent: Agent): string {
+    const { configured, active } = scheduleStats(agent);
+    const scheduleWord = configured === 1 ? 'schedule' : 'schedules';
+    const sessionWord = active === 1 ? 'session' : 'sessions';
+    return `${configured} configured ${scheduleWord}, ${active} active ${sessionWord}`;
+  }
+
+  function openEditAgent(a: Agent) {
+    setEditingAgent(a);
+    const norm = { ...a };
+    if (!norm.skills) norm.skills = [];
+    if (!norm.schedules || norm.schedules.length === 0) {
+      norm.schedules = norm.schedule ? [{ id: 'legacy', enabled: norm.schedule.enabled, cron: norm.schedule.cron, instructions: norm.schedule.description || norm.description || 'Scheduled task' }] : [];
+    }
+    setAgentForm({
+      ...norm,
+      avatar: resolveAgentAvatar(norm),
+      origin: norm.origin === 'cloud' ? 'cloud' : 'local',
+      workspace: { ...norm.workspace },
+      integrations: { ...norm.integrations },
+      peers: [...(norm.peers || [])],
+      schedules: (norm.schedules || []).map((s: any) => enrichScheduleForForm(s)),
+    });
+    setShowAgentModal(true);
+  }
+
+  function openEditAgentSchedule(a: Agent, scheduleIndex = 0) {
+    openEditAgent(a);
+    setHighlightScheduleIdx(scheduleIndex);
+  }
+
+  useEffect(() => {
+    if (!showAgentModal || highlightScheduleIdx === null) return;
+    const scrollTimer = window.setTimeout(() => {
+      const target = document.getElementById(`agent-schedule-${highlightScheduleIdx}`)
+        || document.getElementById('agent-schedules-section');
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    const clearTimer = window.setTimeout(() => setHighlightScheduleIdx(null), 2800);
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [showAgentModal, highlightScheduleIdx]);
+
+  async function deleteAgent(id: string) {
+    const agent = agents.find((a) => a.id === id);
+    const ok = await confirmDialog({
+      title: `Delete ${agent?.name || 'this agent'}?`,
+      message: 'The agent and its automations are removed. Stored run history is kept.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    await fetch('/api/agents', { method: 'POST', body: JSON.stringify({ action: 'delete', id }) });
+    await refreshAgents();
+    await loadNavStats();
+    toast('Agent deleted');
+  }
+
+  async function renameAgent(agent: Agent, nextName: string) {
+    const name = nextName.trim();
+    if (!name || name === agent.name) return;
+    await fetch('/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update', agent: { ...agent, name } }),
+    });
+    await refreshAgents();
+    toast.success(`Renamed to ${name}`);
+  }
+
+  async function removeAgentAutomations(agent: Agent) {
+    const ok = await confirmDialog({
+      title: `Remove automations for ${agent.name}?`,
+      message: 'All schedules are deleted. The agent itself is kept and can still be run manually.',
+      confirmLabel: 'Remove automations',
+      danger: true,
+    });
+    if (!ok) return;
+    await fetch('/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update', agent: { ...agent, schedules: [], schedule: undefined } }),
+    });
+    await refreshAgents();
+    await loadNavStats();
+    toast('Automations removed');
+  }
+
+  type RunAgentOptions = {
+    prompt?: string;
+    /** Use configured schedule instructions — no popup (automations). */
+    useScheduleInstructions?: boolean;
+    scheduleIndex?: number;
+  };
+
+  function openRunModal(agent: Agent) {
+    setRunModalAgent(agent);
+    setRunModalPrompt('Explore the workspace and summarize what we can build here. Then propose next steps.');
+    setShowRunModal(true);
+  }
+
+  type ExecuteRunScope = {
+    stayOnTab?: boolean;
+    projectId?: string;
+  };
+
+  function clearProjectRunTrace() {
+    setActiveRun(null);
+    setLiveTrace([]);
+    setPreviewSelectedIdx(null);
+    setPendingToolApproval(null);
+  }
+
+  async function executeAgentRun(
+    agent: Agent,
+    p: string,
+    scheduled: boolean,
+    scheduleId?: string,
+    scheduleInstructions?: string,
+    scope?: ExecuteRunScope,
+  ) {
+    if (!scope?.stayOnTab) navigateToTab('agents');
+    const runProjectId = scope?.projectId;
+    setActiveRun(null);
+    setLiveTrace([{
+      ts: new Date().toISOString(),
+      type: 'think',
+      content: `Starting ${agent.name} on "${p}"...`,
+    }]);
+    setPreviewSelectedIdx(null);
+    setPendingToolApproval(null);
+
+    try {
+      const res = await fetch('/api/execute/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: agent.id,
+          prompt: p,
+          scheduled,
+          scheduleId,
+          scheduleInstructions,
+          projectId: runProjectId,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error('No response stream');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let run: AgentRun | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+
+        for (const part of parts) {
+          for (const line of part.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload) continue;
+            let event: {
+              type: string;
+              step?: any;
+              run?: AgentRun;
+              message?: string;
+              approvalId?: string;
+              toolName?: string;
+              args?: Record<string, unknown>;
+            };
+            try {
+              event = JSON.parse(payload);
+            } catch {
+              continue;
+            }
+
+            if (event.type === 'trace' && event.step) {
+              setLiveTrace((prev) => [...prev, event.step]);
+              setActiveRun((prev) => {
+                const base: AgentRun = prev || {
+                  id: 'streaming',
+                  agentId: agent.id,
+                  agentName: agent.name,
+                  prompt: p,
+                  model: agent.model,
+                  startedAt: new Date().toISOString(),
+                  status: 'running',
+                  trace: [],
+                  sideEffects: [],
+                  ...(runProjectId ? { projectId: runProjectId } : {}),
+                };
+                return {
+                  ...base,
+                  status: 'running',
+                  projectId: runProjectId || base.projectId,
+                  trace: [...(base.trace || []), event.step],
+                };
+              });
+            } else if (event.type === 'approval_required' && event.approvalId) {
+              setPendingToolApproval({
+                approvalId: event.approvalId,
+                toolName: event.toolName || 'tool',
+                args: event.args || {},
+              });
+            } else if (event.type === 'run' && event.run) {
+              run = event.run;
+              setActiveRun(run);
+              setLiveTrace(run.trace || []);
+              setPendingToolApproval(null);
+            } else if (event.type === 'error') {
+              throw new Error(event.message || 'Stream error');
+            }
+          }
+        }
+      }
+
+      if (!run) throw new Error('Agent run did not complete');
+      await loadAll();
+      toast.success(`Agent "${agent.name}" finished — ${run.status}`);
+    } catch (e: any) {
+      toast.error(e.message);
+      setLiveTrace((prev) => [...prev, { type: 'error', content: e.message }]);
+    }
+  }
+
+  async function runAgent(agent: Agent, options?: RunAgentOptions | string) {
+    const opts: RunAgentOptions = typeof options === 'string' ? { prompt: options } : (options || {});
+    let scheduled = false;
+    let scheduleId: string | undefined;
+    let scheduleInstructions: string | undefined;
+
+    let p = opts.prompt?.trim();
+    if (!p && opts.useScheduleInstructions) {
+      const resolved = resolveScheduledPrompt(agent, opts.scheduleIndex);
+      p = resolved.prompt;
+      scheduleId = resolved.scheduleId;
+      scheduleInstructions = resolved.scheduleInstructions;
+      scheduled = true;
+      if (!resolved.scheduleInstructions) {
+        toast.error(`${agent.name} has no schedule instructions — add a schedule first.`);
+        return;
+      }
+    }
+    if (!p) {
+      openRunModal(agent);
+      return;
+    }
+
+    await executeAgentRun(agent, p, scheduled, scheduleId, scheduleInstructions);
+  }
+
+  async function executeProjectBuild(project: import('@/lib/project-types').Project, agentId: string, prompt: string) {
+    const agent = agents.find((a) => a.id === agentId);
+    if (!agent) {
+      toast.error('Agent not found');
+      return;
+    }
+    await executeAgentRun(agent, prompt, false, undefined, undefined, {
+      stayOnTab: true,
+      projectId: project.id,
+    });
+  }
+
+  async function submitRunModal() {
+    if (!runModalAgent) return;
+    const p = runModalPrompt.trim();
+    if (!p) {
+      toast.error('Enter instructions for the agent.');
+      return;
+    }
+    setShowRunModal(false);
+    const agent = runModalAgent;
+    setRunModalAgent(null);
+    await executeAgentRun(agent, p, false);
+  }
+
+  // Workspace explorer
+  async function loadWorkspace(dir?: string) {
+    const p = dir || wsPath || '';
+    const res = await fetch(`/api/workspace?dir=${encodeURIComponent(p)}`);
+    const data = await res.json();
+    setWsFiles(data.files || []);
+    if (data.resolved) setWsPath(data.resolved);
+    await loadUploads();
+  }
+
+  async function loadUploads() {
+    try {
+      const res = await fetch('/api/workspace/sync');
+      const data = await res.json();
+      if (data.ok) {
+        setWsUploads(data.uploads || []);
+        setWsUploadsPath(data.uploadsPath || '');
+        setCloudFiles(data.cloudFiles || []);
+        setWsLastSync(data.lastSyncAt || null);
+      }
+      void loadNavStats();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function deleteWorkspaceUpload(name: string) {
+    const ok = await confirmDialog({
+      title: `Remove "${name}" from global uploads?`,
+      message: 'It will no longer be included in chat context.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/workspace/upload?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      toast.success(`Removed ${name}`);
+      await loadUploads();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+  }
+
+  async function uploadWorkspaceFiles(fileList: FileList | File[]) {
+    const files = Array.from(fileList);
+    if (!files.length) return;
+    setWsUploading(true);
+    try {
+      const fd = new FormData();
+      files.forEach((f) => fd.append('files', f));
+      const res = await fetch('/api/workspace/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (data.errors?.length) toast.error(data.errors.join('; '));
+      toast.success(`Uploaded ${data.saved?.length || 0} file(s) to global uploads`);
+      await loadUploads();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+    setWsUploading(false);
+  }
+
+  function onWorkspaceDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setWsDragging(false);
+    if (e.dataTransfer.files?.length) uploadWorkspaceFiles(e.dataTransfer.files);
+  }
+
+  async function syncToCloud() {
+    setWsSyncing('upload');
+    try {
+      const res = await fetch('/api/workspace/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'upload' }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error);
+      toast.success(`Synced ${data.uploaded?.length || 0} file(s) to Grok cloud`);
+      if (data.errors?.length) toast.error(data.errors.join('; '));
+      await loadUploads();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+    setWsSyncing(null);
+  }
+
+  async function syncFromCloud() {
+    setWsSyncing('download');
+    try {
+      const res = await fetch('/api/workspace/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'download' }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error);
+      toast.success(`Downloaded ${data.downloaded?.length || 0} file(s) from Grok cloud`);
+      if (data.errors?.length) toast.error(data.errors.join('; '));
+      await loadUploads();
+      await loadWorkspace();
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+    setWsSyncing(null);
+  }
+
+  async function openFile(fpath: string) {
+    setSelectedFile(fpath);
+    try {
+      const res = await fetch('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'read', path: fpath })
+      });
+      const data = await res.json();
+      setFileContent(data.content || JSON.stringify(data));
+    } catch {
+      setFileContent('(Preview) ' + fpath + '\n\n(Use agent tools or paste + Save)');
+    }
+  }
+
+  async function saveWorkspaceFile() {
+    if (!selectedFile) return;
+    await fetch('/api/workspace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: selectedFile, content: fileContent }) });
+    toast.success('File saved');
+  }
+
+  // Integrations
+  async function saveIntegration(which: string) {
+    setIntSaving((s) => ({ ...s, [which]: true }));
+    try {
+      const res = await fetch('/api/integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save', which, creds: intCreds }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (data.integrations) {
+        setIntCreds({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...data.integrations });
+      }
+      const label = getIntegrationMeta(which)?.label || which;
+      toast.success(`${label} credentials saved`);
+    } catch (e: any) {
+      toast.error(e.message);
+    }
+    setIntSaving((s) => ({ ...s, [which]: false }));
+  }
+
+  async function testIntegration(which: string) {
+    const res = await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'test', which, creds: intCreds }) });
+    const data = await res.json();
+    setIntTest((t: any) => ({ ...t, [which]: data }));
+    if (data.ok) toast.success(`${which} connected`); else toast.error(`${which}: ${data.error || 'failed'}`);
+  }
+
+  // API Key
+  async function saveApiKey() {
+    if (!apiKeyInput || apiKeyInput.startsWith('••••')) return;
+    const res = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'validate', key: apiKeyInput }) });
+    const data = await res.json();
+    if (data.ok) {
+      toast.success('Grok API key validated & saved');
+      await loadAll();
+      await loadModels();
+    } else {
+      toast.error('Key validation failed: ' + (data.error || 'bad key'));
+    }
+  }
+
+  async function quickValidate() {
+    const res = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'validate', key: apiKeyInput }) });
+    const data = await res.json();
+    toast(data.ok ? 'Valid Grok key!' : 'Invalid: ' + data.error);
+  }
+
+  async function refreshOAuthStatus() {
+    try {
+      const res = await fetch('/api/xai-oauth/status');
+      const data = await res.json();
+      if (data.ok) {
+        setOauthStatus({
+          connected: !!data.connected,
+          expired: !!data.expired,
+          email: data.email,
+          displayName: data.displayName,
+          error: data.error,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function startOAuthStatusPolling() {
+    stopOAuthPolling();
+    oauthPollStartedRef.current = Date.now();
+    oauthPollRef.current = setInterval(async () => {
+      const started = oauthPollStartedRef.current;
+      if (!started || Date.now() - started > OAUTH_POLL_MAX_MS) {
+        stopOAuthPolling();
+        return;
+      }
+      try {
+        const res = await fetch('/api/xai-oauth/status');
+        const data = await res.json();
+        if (data.ok && data.connected) {
+          await handleOAuthConnected('Signed in with X (OAuth)');
+        }
+      } catch {
+        /* keep polling */
+      }
+    }, OAUTH_POLL_MS);
+  }
+
+  async function startOAuthLogin() {
+    setOauthStarting(true);
+    try {
+      const res = await fetch('/api/xai-oauth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.authorizeUrl) throw new Error(data.error || 'Failed to start OAuth');
+      window.open(data.authorizeUrl, '_blank', 'noopener,noreferrer');
+      startOAuthStatusPolling();
+      toast.success('Sign in at accounts.x.ai — this tab will update when connected');
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'OAuth start failed');
+    }
+    setOauthStarting(false);
+  }
+
+  async function exchangeOAuthCallback() {
+    if (!oauthCallbackInput.trim()) return;
+    try {
+      const res = await fetch('/api/xai-oauth/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback: oauthCallbackInput.trim() }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Exchange failed');
+      setOauthCallbackInput('');
+      await handleOAuthConnected();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'OAuth exchange failed');
+    }
+  }
+
+  async function disconnectOAuth() {
+    const ok = await confirmDialog({
+      title: 'Disconnect OAuth with X?',
+      message: 'Cloud features will fall back to your API key if one is configured.',
+      confirmLabel: 'Disconnect',
+      danger: true,
+    });
+    if (!ok) return;
+    stopOAuthPolling();
+    await fetch('/api/xai-oauth/logout', { method: 'POST' });
+    setOauthStatus({ connected: false, expired: false });
+    toast.success('OAuth disconnected');
+    await loadAll();
+    await loadModels();
+  }
+
+  async function saveCloudAuthMode(mode: 'api_key' | 'oauth') {
+    setCloudAuthMode(mode);
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cloudAuthMode: mode }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setConfig((c: any) => ({ ...c, cloudAuthMode: mode, activeCloudSource: data.activeCloudSource }));
+      toast.success(mode === 'oauth' ? 'Using OAuth for cloud Grok' : 'Using API key for cloud Grok');
+      await loadModels();
+    }
+  }
+
+  async function saveLocalGrokSettings() {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ localGrokEnabled, localGrokBaseUrl }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      toast.error('Failed to save local Grok settings');
+      return;
+    }
+    setConfig((c: any) => ({ ...c, localGrokEnabled, localGrokBaseUrl }));
+    toast.success(localGrokEnabled ? 'Local Grok enabled' : 'Local Grok disabled');
+    await loadModels();
+  }
+
+  async function testLocalGrok() {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'testLocalGrok', localGrokBaseUrl }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setLocalGrokReachable(true);
+      toast.success(`Local Grok reachable — ${data.models?.length || 0} model(s) found`);
+      await loadModels();
+    } else {
+      setLocalGrokReachable(false);
+      toast.error(data.error || 'Local Grok not reachable');
+    }
+  }
+
+  async function saveDefaultWorkspace() {
+    const path = defaultWorkspaceInput.trim();
+    if (!path) {
+      toast.error('Enter or browse to a workspace folder');
+      return;
+    }
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultWorkspace: path }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      toast.error('Failed to save default workspace');
+      return;
+    }
+    setConfig((c: any) => ({ ...c, defaultWorkspace: path }));
+    setWsPath(path);
+    toast.success('Default workspace saved');
+    await loadUploads();
+  }
+
+  async function resolveToolApproval(approvalId: string, approved: boolean) {
+    try {
+      await fetch('/api/execute/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalId, approved }),
+      });
+      setPendingToolApproval(null);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Approval failed');
+    }
+  }
+
+  async function saveAgentBehaviorSettings() {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolApprovalMode, globalInstructions: globalInstructionsInput, useAgentsMd }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      toast.error('Failed to save agent behavior settings');
+      return;
+    }
+    setConfig((c: any) => ({ ...c, toolApprovalMode, globalInstructions: globalInstructionsInput, useAgentsMd }));
+    toast.success('Agent behavior settings saved');
+  }
+
+  async function saveDefaultModel() {
+    if (!defaultModelInput) {
+      toast.error('Select a default model first');
+      return;
+    }
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultGrokModel: defaultModelInput }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      toast.error('Failed to save default model');
+      return;
+    }
+    setConfig((c: any) => ({ ...c, defaultGrokModel: defaultModelInput }));
+    setChatModel(defaultModelInput);
+    toast.success(`Default model set to ${defaultModelInput}`);
+  }
+
+  // Schedule run from UI
+  async function toggleSchedule(agent: Agent) {
+    // Support new multi-schedules: toggle first enabled entry or legacy
+    const scheds = agent.schedules && agent.schedules.length ? agent.schedules : (agent.schedule ? [{...agent.schedule, id: 'legacy'}] : []);
+    const first = scheds[0] || { cron: '*/30 * * * *', enabled: false };
+    const newEnabled = !first.enabled;
+    const cron = first.cron;
+    await fetch('/api/scheduler', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId: agent.id, cron, enabled: newEnabled }) });
+    await refreshAgents();
+    toast(newEnabled ? 'Scheduled' : 'Schedule disabled');
+  }
+
+  // Seed a sample agent if none
+  useEffect(() => {
+    if (agents.length === 0 && config) {
+      // seed one demo
+      (async () => {
+        await fetch('/api/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          name: 'Explorer Agent', model: config?.defaultGrokModel || pickDefaultModel(), description: 'Default exploration + automation agent',
+          workspace: { path: config.defaultWorkspace || '.', useWorktree: true },
+          integrations: { ...EMPTY_INTEGRATION_SCOPE },
+          peers: [], schedule: { enabled: true, cron: '0 */2 * * *' }
+        }) });
+        await refreshAgents();
+      })();
+    }
+  }, [agents.length, config]);
+
+  // Poll runs occasionally
+  useEffect(() => {
+    const t = setInterval(() => { loadAll(); }, 22000);
+    return () => clearInterval(t);
+  }, []);
+
+  const currentAgent = agents[0];
+
+  const paletteCommands = useMemo((): CommandPaletteItem[] => {
+    const nav: CommandPaletteItem[] = ([
+      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'chat', label: 'Grok Chat' },
+      { id: 'projects', label: 'Projects' },
+      { id: 'agents', label: 'Agents' },
+      { id: 'workspace', label: 'Workspace' },
+      { id: 'automations', label: 'Automations' },
+      { id: 'integrations', label: 'Integrations' },
+      { id: 'usage', label: 'Usage' },
+      { id: 'settings', label: 'Settings' },
+    ] as const).map((t) => ({
+      id: `nav-${t.id}`,
+      label: `Go to ${t.label}`,
+      group: 'Navigate',
+      keywords: [t.id, t.label],
+      run: () => navigateToTab(t.id),
+    }));
+
+    const agentCmds: CommandPaletteItem[] = agents.flatMap((a) => [
+      {
+        id: `run-${a.id}`,
+        label: `Run ${a.name}`,
+        hint: 'Execute agent',
+        group: 'Agents',
+        keywords: ['run', 'execute', a.name],
+        run: () => void runAgent(a),
+      },
+      {
+        id: `edit-${a.id}`,
+        label: `Edit ${a.name}`,
+        group: 'Agents',
+        keywords: ['edit', a.name],
+        run: () => openEditAgent(a),
+      },
+    ]);
+
+    return [
+      ...nav,
+      {
+        id: 'new-agent',
+        label: 'New Agent',
+        group: 'Actions',
+        keywords: ['create', 'agent'],
+        run: () => openCreateAgent(),
+      },
+      {
+        id: 'new-chat',
+        label: 'New Chat Session',
+        group: 'Actions',
+        keywords: ['chat', 'session'],
+        run: () => navigateToTab('chat'),
+      },
+      {
+        id: 'sync',
+        label: 'Sync Data',
+        hint: 'Reload agents, runs, config',
+        group: 'Actions',
+        keywords: ['refresh', 'reload'],
+        run: () => void loadAll(),
+      },
+      ...agentCmds,
+    ];
+  }, [agents, navigateToTab]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setShowCommandPalette((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  return (
+    <div className="app-root flex h-screen overflow-hidden bg-shell text-primary">
+      {/* Sidebar — fixed on desktop, slide-over drawer on mobile */}
+      {mobileNavOpen && (
+        <div className="sidebar-backdrop" onClick={() => setMobileNavOpen(false)} aria-hidden />
+      )}
+      <div
+        className={`sidebar w-64 flex-shrink-0 flex flex-col ${mobileNavOpen ? 'sidebar-open' : ''}`}
+        onClickCapture={(e) => {
+          const el = e.target as HTMLElement;
+          if (el.closest('a, .multitask-item, .multitask-section-head')) setMobileNavOpen(false);
+        }}
+      >
+        <div className="px-5 py-5 border-b border-default">
+          <Link href="/" className="flex items-center gap-3 brand-home-link" title="Go to Dashboard">
+            <img src={THEME_IDENTITY.logoPath} alt={THEME_IDENTITY.logoAlt} className="brand-logo" width={36} height={36} />
+            <div>
+              <div className="font-semibold tracking-tighter text-xl logo-text">{THEME_IDENTITY.brandName}</div>
+              <div className="text-[10px] text-dim -mt-1">{THEME_IDENTITY.sidebarTagline}</div>
+            </div>
+          </Link>
+        </div>
+
+        <div className="px-2 py-3 flex-1 overflow-auto">
+          {([
+            { id: 'dashboard', label: 'Dashboard', icon: Home, stat: null as string | null },
+            { id: 'chat', label: 'Grok Chat', icon: MessageSquare, stat: navStats.chatSessions > 0 ? String(navStats.chatSessions) : null },
+            { id: 'projects', label: 'Projects', icon: FolderKanban, stat: navStats.projects > 0 ? String(navStats.projects) : null },
+            { id: 'agents', label: 'Agents', icon: Users, stat: agents.length > 0 ? String(agents.length) : null },
+            { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
+            { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
+            { id: 'integrations', label: 'Integrations', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
+            { id: 'usage', label: 'Usage', icon: BarChart3, stat: navStats.usageCostUsd > 0 ? formatUsageCostUsd(navStats.usageCostUsd) : null },
+            { id: 'settings', label: 'Settings', icon: Settings, stat: null },
+          ] as const).map(item => {
+            const Icon = item.icon;
+            const active = tab === item.id;
+            const linkHref = item.id === 'chat' ? tabToPath('chat') : tabToPath(item.id as AppTab);
+            return (
+              <Link
+                key={item.id}
+                href={linkHref}
+                className={`nav-item ${active ? 'active' : ''}`}
+              >
+                <Icon size={16} /> {item.label}
+                {!navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && (
+                  <span className="data-spinner ml-auto" aria-label={`Loading ${item.label} count`} />
+                )}
+                {item.stat != null && (
+                  <span className={`nav-stat-badge ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
+                    item.id === 'chat' ? `${item.stat} open session(s)`
+                    : item.id === 'projects' ? `${item.stat} project(s)`
+                    : item.id === 'workspace' ? `${item.stat} file(s) in workspace`
+                    : item.id === 'automations' ? `${item.stat} scheduled automation(s)`
+                    : item.id === 'integrations' ? `${item.stat} configured integration(s)`
+                    : item.id === 'usage' ? `${formatUsageCostUsd(navStats.usageCostUsd)} consumed`
+                    : undefined
+                  }>
+                    {item.stat}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+        </div>
+
+        <MultitaskSidebar
+          agents={agents}
+          onNavigate={(next, extra) => {
+            navigateToTab(next);
+            if (extra?.sessionId) navigateToChatSession(extra.sessionId);
+          }}
+          onAgentsChanged={() => { void refreshAgents(); void loadNavStats(); }}
+        />
+
+        <div className="p-4 border-t border-default text-xs text-dim">
+          localhost • Cloud + Local Grok
+          <div className="mt-1 text-[10px]">SpaceX-grade focus • xAI cloud or local runtime</div>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top bar */}
+        <div className="top-bar h-14 px-3 sm:px-5 flex items-center justify-between">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button
+              type="button"
+              className="grok-btn grok-btn-ghost sidebar-toggle p-1.5"
+              onClick={() => setMobileNavOpen(true)}
+              title="Open navigation"
+              aria-label="Open navigation"
+            >
+              <Menu size={18} />
+            </button>
+            <div className="font-medium text-sm tracking-tight">{tab.charAt(0).toUpperCase() + tab.slice(1)}</div>
+            {(config as any)?.hasCloudAuth && (
+              <div className="status-pill text-success">
+                CLOUD READY{(config as any)?.activeCloudSource === 'oauth' ? ' · OAUTH' : (config as any)?.hasKey ? ' · API' : ''}
+              </div>
+            )}
+            {(config as any)?.localGrokEnabled && (
+              <div className={`status-pill ${localGrokReachable ? 'text-success' : 'text-warning'}`}>
+                LOCAL {localGrokReachable ? 'READY' : 'OFFLINE'}
+              </div>
+            )}
+            {!(config as any)?.hasCloudAuth && !(config as any)?.localGrokEnabled && <div className="status-pill text-warning">NO MODEL SOURCE</div>}
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => setShowCommandPalette(true)}
+              className="grok-btn grok-btn-ghost hidden sm:inline-flex items-center gap-1.5"
+              title="Command palette (Ctrl+K)"
+            >
+              <Command size={14} /> <span className="text-dim text-xs">Ctrl+K</span>
+            </button>
+            <button onClick={() => setShowSyncModal(true)} className="grok-btn grok-btn-ghost"><RefreshCw size={14}/> <span className="hidden sm:inline">Sync</span></button>
+            <button onClick={openCreateAgent} className="grok-btn grok-btn-primary"><Plus size={15}/> <span className="hidden sm:inline">New Agent</span></button>
+          </div>
+        </div>
+
+        {/* Content surfaces */}
+        <div className="flex-1 overflow-auto p-3 sm:p-5 space-y-5">
+          {/* DASHBOARD */}
+          {tab === 'dashboard' && (
+            <div className="space-y-5">
+              <div className="flex flex-col lg:flex-row gap-4">
+                <div className="grok-card p-6 flex-1">
+                  <div className="hero-eyebrow">{THEME_IDENTITY.heroEyebrow}</div>
+                  <div className="mt-2 text-4xl font-semibold tracking-tighter">{THEME_IDENTITY.heroTitle}</div>
+                  <div className="mt-3 text-muted">{THEME_IDENTITY.heroSubtitle}</div>
+                  <div className="mt-5 flex gap-3">
+                    <button onClick={() => navigateToTab('agents')} className="grok-btn grok-btn-primary">Open Agents</button>
+                    <button onClick={() => navigateToTab('chat')} className="grok-btn grok-btn-secondary">Talk to Grok</button>
+                  </div>
+                </div>
+                <div className="grok-card p-5 w-full lg:w-80 text-sm">
+                  <div className="font-semibold mb-3">Quick Stats</div>
+                  <div className="grid grid-cols-2 gap-y-3 text-xs">
+                    <div>Agents</div><div className="font-mono text-right">{agents.length}</div>
+                    <div>Runs (stored)</div><div className="font-mono text-right">{runs.length}</div>
+                    <div>Active schedules</div><div className="font-mono text-right">{agents.filter(a => (a.schedules||[]).some((s:any)=>s.enabled) || (a.schedule && a.schedule.enabled)).length}</div>
+                    <div>Connected</div><div className="font-mono text-right text-success">Grok only</div>
+                  </div>
+                  <div className="mt-4 pt-4 border-t border-default text-[11px] text-dim">{THEME_IDENTITY.sidebarTagline} — local agents with git worktrees.</div>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-2"><div className="font-medium">Recent Agent Runs</div><button onClick={() => navigateToTab('agents')} className="text-xs link-accent">All agents →</button></div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {runs.slice(0, 4).map(r => {
+                    const runAgent = agents.find(a => a.id === r.agentId);
+                    return (
+                    <div key={r.id} onClick={() => { setActiveRun(r); setLiveTrace(r.trace); navigateToTab('agents'); }} className="grok-card grok-card-interactive p-3 cursor-pointer text-sm">
+                      <div className="flex justify-between items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {runAgent && <img src={resolveAgentAvatarPath(runAgent)} alt="" className="agent-avatar-sm" width={28} height={28} />}
+                          <span className="font-medium truncate">{r.agentName}</span>
+                        </div>
+                        <span className="badge">{r.status}</span>
+                      </div>
+                      <div className="truncate text-muted mt-1">{r.prompt}</div>
+                      <div className="text-[10px] text-dim mt-2 flex items-center justify-between gap-2 flex-wrap">
+                        <span>{new Date(r.startedAt).toLocaleString()}</span>
+                        <ModelLine modelId={r.model} />
+                      </div>
+                    </div>
+                  );})}
+                  {runs.length === 0 && <div className="text-dim">No runs yet — create an agent and press Run.</div>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* GROK CHAT — direct interaction like Grok Desktop */}
+          {tab === 'chat' && (
+            <ChatSessionsPanel
+              sessionId={pathToChatSessionId(pathname)}
+              onSessionChange={navigateToChatSession}
+              onStatsChange={loadNavStats}
+              defaultChatModel={chatModel}
+              availableModels={availableModels}
+              modelsLoading={modelsLoading}
+              modelsError={modelsError}
+              onRefreshModels={loadModels}
+              agents={agents}
+            />
+          )}
+
+          {tab === 'projects' && (
+            <ProjectsPanel
+              chatModel={chatModel}
+              onChatModelChange={(m) => setChatModel(m as GrokModel)}
+              availableModels={availableModels}
+              modelsLoading={modelsLoading}
+              modelsError={modelsError}
+              onRefreshModels={loadModels}
+              agents={agents}
+              defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''}
+              activeRun={activeRun}
+              liveTrace={liveTrace}
+              previewSelectedIdx={previewSelectedIdx}
+              onPreviewSelect={setPreviewSelectedIdx}
+              onBuildWithAgent={executeProjectBuild}
+              onProjectSelect={(id) => {
+                if (activeRun?.projectId && id !== activeRun.projectId) {
+                  clearProjectRunTrace();
+                }
+              }}
+            />
+          )}
+
+          {/* AGENTS + RUNS + TRACE — the heart */}
+          {tab === 'agents' && (
+            <div>
+              <div className="flex justify-between mb-4 flex-wrap gap-2">
+                <div className="text-xl font-semibold tracking-tighter">Your Grok Agents</div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={syncCloudAgents}
+                    disabled={cloudAgentSyncing}
+                    className="grok-btn grok-btn-secondary"
+                    title="Import heavy Grok cloud agents from your xAI account"
+                  >
+                    <CloudDownload size={15} className={cloudAgentSyncing ? 'animate-pulse' : ''} />
+                    {cloudAgentSyncing ? 'Syncing…' : 'Sync cloud agents'}
+                  </button>
+                  <button onClick={openCreateAgent} className="grok-btn grok-btn-primary"><Plus size={15}/> Create Agent</button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                {agents.map(agent => (
+                  <div key={agent.id} className="grok-card p-4">
+                    <div className="flex justify-between items-start">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <img src={resolveAgentAvatarPath(agent)} alt="" className="agent-avatar" width={40} height={40} />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-lg truncate flex items-center gap-2">
+                            <span className="truncate">{agent.name}</span>
+                            <span
+                              className={`agent-origin-badge ${agent.origin === 'cloud' ? 'agent-origin-cloud' : 'agent-origin-local'}`}
+                              title={agent.origin === 'cloud'
+                                ? 'Cloud agent — runs in the Grok cloud, no local system access'
+                                : 'Local agent — full access to this machine plus cloud services'}
+                            >
+                              {agent.origin === 'cloud' ? 'CLOUD AGENT' : 'LOCAL'}
+                            </span>
+                          </div>
+                          <div className="text-xs text-dim flex flex-wrap items-center gap-1.5">
+                            <ModelLine modelId={agent.model} />
+                            <span>• {agent.origin === 'cloud' ? 'Grok cloud services' : (agent.workspace.useWorktree ? 'worktree' : 'workspace')}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => runAgent(agent)} className="grok-btn grok-btn-primary text-xs py-1"><Play size={14}/> Run</button>
+                        <button onClick={() => openEditAgent(agent)} className="grok-btn grok-btn-ghost text-xs py-1"><Edit2 size={14}/></button>
+                        <button onClick={() => deleteAgent(agent.id)} className="grok-btn grok-btn-ghost text-xs py-1 text-error"><Trash2 size={14}/></button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 text-xs space-y-2">
+                      {(Object.entries(agent.integrations).some(([, v]) => v) || agent.peers.length > 0) && (
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className="text-dim shrink-0 w-20">Integrations</span>
+                          {Object.entries(agent.integrations).filter(([, v]) => v).map(([k]) => (
+                            <span key={k} className="badge badge-accent integration-badge">
+                              <IntegrationIcon id={k} size="sm" />
+                              {getIntegrationMeta(k)?.shortLabel ?? k}
+                            </span>
+                          ))}
+                          {agent.peers.length > 0 && <span className="badge badge-muted">{agent.peers.length} peers</span>}
+                        </div>
+                      )}
+                      {agent.chatSkill?.trim() && (
+                        <div className="flex items-start gap-1">
+                          <span className="text-dim shrink-0 w-20">Skill</span>
+                          <span className="text-xs text-muted line-clamp-2">{agent.chatSkill.trim()}</span>
+                        </div>
+                      )}
+                      {(agent.skills || []).length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className="text-dim shrink-0 w-20">Capabilities</span>
+                          {(agent.skills || []).map((skill) => (
+                            <span key={skill} className="badge badge-accent">{skill}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-between text-xs gap-2">
+                      <div className="text-dim font-mono truncate min-w-0">{agent.workspace.path}</div>
+                      <button
+                        onClick={() => toggleSchedule(agent)}
+                        className={`text-xs px-2 py-0.5 rounded border shrink-0 ${scheduleStats(agent).active > 0 ? 'border-success text-success' : 'border-default'}`}
+                      >
+                        {scheduleStats(agent).active > 0 ? 'SCHEDULED' : 'schedule off'}
+                      </button>
+                    </div>
+
+                    <div className="text-xs mt-2 text-muted italic truncate">{agent.description || 'No description'}</div>
+                    <div className="text-[10px] mt-1 text-dim">{formatScheduleSummary(agent)}</div>
+                  </div>
+                ))}
+                {agents.length === 0 && <div className="text-sm text-muted">No agents yet. Create one to start orchestrating.</div>}
+              </div>
+
+              <div className="mt-6">
+                <SkillsBrowser
+                  installed={[...new Set(agents.flatMap((a) => a.skills || []))]}
+                  compact
+                  onInstall={(skillId) => toast.info(`Edit an agent to add "${skillId}", or use New Agent → Skills Browser in the modal.`)}
+                />
+              </div>
+
+              {/* Live execution trace area (agent-tab runs only — project builds show trace on Projects tab) */}
+              <div className="mt-8">
+                <div className="flex items-center gap-2 mb-3">
+                  <Terminal size={16}/> <div className="font-medium">Execution Trace</div>
+                  {activeRun && !activeRun.projectId && <span className="badge">{activeRun.status}</span>}
+                </div>
+                <div className="grok-card p-4 font-mono text-xs overflow-auto max-h-[380px] bg-black/40">
+                  {liveTrace.length > 0 && !activeRun?.projectId ? liveTrace.map((step, idx) => (
+                    <div key={idx} className={`trace-step mb-3 ${step.type}`}>
+                      <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {step.type.toUpperCase()}</div>
+                      <div className="mt-0.5">{step.content}</div>
+                      {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
+                      {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="browser" /></div>}
+                    </div>
+                  )) : <div className="text-dim">Run any agent to see live detailed traces here (tools, thoughts, screenshots, side effects).</div>}
+                </div>
+                {activeRun && !activeRun.projectId && (
+                  <div className="text-xs text-muted mt-1 flex flex-wrap items-center gap-2">
+                    <span>Final: {activeRun.finalOutput?.slice(0,200)}</span>
+                    <ModelLine modelId={activeRun.model} />
+                  </div>
+                )}
+                {!activeRun?.projectId && (
+                  <PreviewRail
+                    trace={liveTrace}
+                    selectedIdx={previewSelectedIdx}
+                    onSelect={setPreviewSelectedIdx}
+                  />
+                )}
+                {activeRun && !activeRun.projectId && activeRun.status !== 'running' && (
+                  <WorkspaceDiffPanel
+                    workspaceDir={activeRun?.workspaceSnapshot}
+                    runId={activeRun?.id}
+                  />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* WORKSPACE + FILE TREE */}
+          {tab === 'workspace' && (
+            <div className="workspace-page space-y-4">
+              <div className="grok-card p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+                  <div>
+                    <div className="font-semibold text-lg">Global Uploads</div>
+                    <div className="text-xs text-dim mt-1">Shared by all agents · stored in <span className="font-mono">{wsUploadsPath || '…/uploads'}</span></div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={syncToCloud} disabled={wsSyncing !== null || !(config as any)?.hasCloudAuth} className="grok-btn grok-btn-secondary text-xs">
+                      <CloudUpload size={14} className={wsSyncing === 'upload' ? 'animate-pulse' : ''} /> Sync to Grok Cloud
+                    </button>
+                    <button onClick={syncFromCloud} disabled={wsSyncing !== null || !(config as any)?.hasCloudAuth} className="grok-btn grok-btn-secondary text-xs">
+                      <CloudDownload size={14} className={wsSyncing === 'download' ? 'animate-pulse' : ''} /> Sync from Grok Cloud
+                    </button>
+                    <label className="grok-btn grok-btn-primary text-xs cursor-pointer">
+                      <Upload size={14} /> Choose files
+                      <input type="file" multiple className="hidden" onChange={e => e.target.files && uploadWorkspaceFiles(e.target.files)} />
+                    </label>
+                  </div>
+                </div>
+
+                <div
+                  className={`workspace-dropzone ${wsDragging ? 'workspace-dropzone-active' : ''}`}
+                  onDragEnter={(e) => { e.preventDefault(); setWsDragging(true); }}
+                  onDragOver={(e) => { e.preventDefault(); setWsDragging(true); }}
+                  onDragLeave={(e) => { e.preventDefault(); setWsDragging(false); }}
+                  onDrop={onWorkspaceDrop}
+                >
+                  <Upload size={28} className="opacity-40 mb-2" />
+                  <div className="text-sm font-medium">{wsUploading ? 'Uploading…' : 'Drop files here'}</div>
+                  <div className="text-xs text-dim mt-1">PDF, code, markdown, CSV, JSON — up to 48 MB each</div>
+                  {wsLastSync && <div className="text-[10px] text-dim mt-2">Last cloud sync: {new Date(wsLastSync).toLocaleString()}</div>}
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {wsUploads.length === 0 && <div className="text-xs text-dim col-span-full">No uploads yet — drag files above or use Choose files.</div>}
+                  {wsUploads.map((u) => (
+                    <div
+                      key={u.path}
+                      className="workspace-upload-item"
+                      onClick={() => openFile(u.path)}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="font-mono text-xs truncate min-w-0 flex-1">{u.name}</div>
+                        <button
+                          type="button"
+                          className="workspace-upload-delete grok-btn grok-btn-ghost text-error p-0.5 shrink-0"
+                          title="Remove from global uploads"
+                          onClick={(e) => { e.stopPropagation(); deleteWorkspaceUpload(u.name); }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-dim mt-1 flex justify-between gap-2">
+                        <span>{(u.size / 1024).toFixed(1)} KB</span>
+                        {u.cloud ? (
+                          <a
+                            href={u.cloud.url || u.cloud.cloudUrl || `/api/workspace/cloud-file?fileId=${encodeURIComponent(u.cloud.xaiFileId)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="workspace-cloud-link text-success shrink-0"
+                            title="Open file in Grok cloud"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            ☁ synced
+                          </a>
+                        ) : (
+                          <span className="shrink-0">local</span>
+                        )}
+                      </div>
+                      {u.uploadedAt && (
+                        <div className="text-[10px] text-dim mt-1">
+                          Uploaded {new Date(u.uploadedAt).toLocaleString()}
+                        </div>
+                      )}
+                      {u.checksum && (
+                        <div
+                          className="text-[10px] text-dim mt-0.5 font-mono truncate"
+                          title={`SHA-256: ${u.checksum}`}
+                        >
+                          sha256:{u.checksum.slice(0, 12)}…
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {cloudFiles.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-default text-xs text-dim">
+                    {cloudFiles.length} file(s) in your xAI Grok cloud storage
+                  </div>
+                )}
+              </div>
+
+              <WorktreePanel workspace={wsPath || config?.defaultWorkspace || ''} agents={agents} />
+
+              <div className="workspace-editor-row">
+                <div className="workspace-explorer-panel grok-card p-4 flex flex-col min-h-0">
+                  <div className="flex justify-between mb-2 shrink-0">
+                    <div className="font-semibold text-sm">Workspace Explorer</div>
+                    <button onClick={() => loadWorkspace()} className="grok-btn grok-btn-secondary text-xs">Refresh</button>
+                  </div>
+                  <input value={wsPath} onChange={e=>setWsPath(e.target.value)} className="grok-input mb-2 text-xs shrink-0" placeholder="Workspace path" />
+                  <button onClick={() => loadWorkspace()} className="grok-btn grok-btn-primary mb-3 text-xs shrink-0">Load</button>
+                  <div className="workspace-file-tree flex-1 min-h-0 overflow-auto text-sm border border-default rounded p-1">
+                    {wsFiles.length === 0 && <div className="p-2 text-xs text-dim">Load a path above (e.g. your project folder)</div>}
+                    {wsFiles.map((f, idx) => (
+                      <div key={idx} onClick={() => openFile(f.path)} className={`file-tree-item ${selectedFile === f.path ? 'active' : ''}`}>
+                        {f.isDir ? '📁' : '📄'} {f.name}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="workspace-file-viewer grok-card p-4 flex flex-col min-h-0">
+                  <div className="workspace-file-viewer-header shrink-0">
+                    <div className="font-semibold">View File Contents</div>
+                    <button
+                      onClick={saveWorkspaceFile}
+                      disabled={!selectedFile}
+                      className="grok-btn grok-btn-primary text-xs"
+                    >
+                      Save File
+                    </button>
+                  </div>
+                  <div className="workspace-file-path text-xs text-muted shrink-0" title={selectedFile || undefined}>
+                    {selectedFile || 'No file selected — click a file in the explorer or global uploads'}
+                  </div>
+                  <textarea
+                    value={fileContent}
+                    onChange={e => setFileContent(e.target.value)}
+                    className="workspace-file-editor grok-input flex-1 min-h-0 font-mono text-xs"
+                    placeholder={selectedFile ? 'File contents…' : 'Select a file to view and edit its contents'}
+                    spellCheck={false}
+                  />
+                  <div className="text-[10px] text-dim mt-2 shrink-0">
+                    Agents read/write via tools. Global uploads are available to every agent.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* AUTOMATIONS — schedules & orchestration */}
+          {tab === 'automations' && (
+            <div>
+              <div className="mb-3 font-medium">Scheduled &amp; Orchestrated Agents</div>
+              <div className="space-y-3">
+                {agents.map(a => {
+                  const scheds = agentSchedules(a);
+                  const first = scheds[0];
+                  const isActive = !!(first?.enabled);
+                  return (
+                  <div key={a.id} className="grok-card p-4 automation-card">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img src={resolveAgentAvatarPath(a)} alt="" className="agent-avatar-sm" width={28} height={28} />
+                        <div className="min-w-0">
+                          <div className="truncate flex flex-wrap items-center gap-1.5">
+                            <span>{a.name}</span>
+                            <ModelLine modelId={a.model} />
+                          </div>
+                          {(a.skills||[]).length > 0 && <span className="text-xs badge badge-accent mt-1 inline-block">skills: {(a.skills||[]).join(', ')}</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => toggleSchedule(a)}
+                          className={`automation-status-tag ${isActive ? 'automation-status-active' : 'automation-status-paused'}`}
+                          title={isActive ? 'Pause schedule' : 'Activate schedule'}
+                        >
+                          {isActive ? 'Active' : 'Paused'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openEditAgentSchedule(a, 0)}
+                          className="grok-btn grok-btn-ghost text-xs py-1 px-2"
+                          title="Edit schedule"
+                        >
+                          <Edit2 size={14}/>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const name = await promptDialog({ title: 'Rename agent', defaultValue: a.name, confirmLabel: 'Rename' });
+                            if (name) await renameAgent(a, name);
+                          }}
+                          className="grok-btn grok-btn-ghost text-xs py-1 px-2"
+                          title="Rename agent"
+                        >
+                          <Pencil size={14}/>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removeAgentAutomations(a)}
+                          className="grok-btn grok-btn-ghost text-xs py-1 px-2 text-error"
+                          title="Remove all automations for this agent"
+                        >
+                          <Trash2 size={14}/>
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs space-y-1">
+                      {scheds.length === 0 && <div className="text-dim">No schedule configured — click edit to add one.</div>}
+                      {scheds.map((s: any, i: number) => (
+                        <div key={s.id || i} className="text-muted flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-mono text-[11px]">{describeCron(s.cron)}</span>
+                          {s.instructions && <span className="text-dim truncate max-w-full">· {s.instructions.slice(0, 60)}{s.instructions.length > 60 ? '…' : ''}</span>}
+                          {scheds.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => openEditAgentSchedule(a, i)}
+                              className="text-[10px] link-accent"
+                            >
+                              edit
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <button onClick={() => runAgent(a, { useScheduleInstructions: true })} className="grok-btn grok-btn-primary text-xs"><Play size={14}/> Run now</button>
+                    </div>
+                  </div>
+                )})}
+                {agents.length === 0 && <div>No agents. Create agents with schedules.</div>}
+              </div>
+              <div className="mt-6 text-xs text-dim">Agents can schedule themselves via the schedule_task tool and message other agents using send_to_peer. Everything is scoped per agent.</div>
+            </div>
+          )}
+
+          {/* INTEGRATIONS */}
+          {tab === 'integrations' && (
+            <div className="integrations-page">
+              <div className="text-xl font-semibold mb-1">Core Integrations</div>
+              <div className="text-sm text-muted mb-5">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, and Obsidian during runs.</div>
+
+              <div className="integrations-grid">
+                {INTEGRATION_CATALOG.map((integration) => {
+                  const connected = !!intTest[integration.id]?.ok;
+                  const configured = integrationConfigured(integration.id);
+                  const expanded = expandedIntegration === integration.id;
+                  return (
+                  <div key={integration.id} className="grok-card p-5 integration-card">
+                    <div
+                      className="integration-card-header integration-card-header-clickable"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setExpandedIntegration(expanded ? null : integration.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setExpandedIntegration(expanded ? null : integration.id);
+                        }
+                      }}
+                    >
+                      <IntegrationIcon id={integration.id} size="lg" />
+                      <div className="integration-card-meta min-w-0">
+                        <div className="font-semibold flex items-center gap-2 flex-wrap">
+                          {integration.label}
+                          <span className={`integration-status-chip ${connected ? 'integration-chip-connected' : configured ? 'integration-chip-configured' : 'integration-chip-unset'}`}>
+                            {connected ? 'Connected' : configured ? 'Configured' : 'Not set up'}
+                          </span>
+                        </div>
+                        <div className="text-xs text-dim">{integration.description}</div>
+                        {integration.id === 'github' && intTest.github?.ok && (
+                          <span className="integration-card-status text-success">connected as {intTest.github.login}</span>
+                        )}
+                        {integration.id === 'slack' && intTest.slack?.ok && (
+                          <span className="integration-card-status text-success">connected to {intTest.slack.team}</span>
+                        )}
+                        {integration.id === 'discord' && intTest.discord?.ok && (
+                          <span className="integration-card-status text-success">connected as {intTest.discord.username}</span>
+                        )}
+                        {integration.id === 'x' && intTest.x?.ok && (
+                          <span className="integration-card-status text-success">connected as @{intTest.x.username}</span>
+                        )}
+                        {integration.id === 'obsidian' && intTest.obsidian?.ok && (
+                          <span className="integration-card-status text-success">
+                            {intTest.obsidian.mode === 'cloud' ? 'cloud REST' : 'local vault'}
+                            {intTest.obsidian.noteCount != null ? ` · ${intTest.obsidian.noteCount} notes` : ''}
+                          </span>
+                        )}
+                      </div>
+                      <span className="integration-card-chevron" aria-hidden>
+                        {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </span>
+                    </div>
+                    {expanded && (
+                    <div className="integration-card-body">
+                    {integration.id === 'github' && (
+                      <input className="grok-input mb-2" placeholder="GitHub Personal Access Token (ghp_...)" value={intCreds.github?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, github: {...(c.github||{}), token: e.target.value}}))} />
+                    )}
+                    {integration.id === 'slack' && (
+                      <>
+                        <input className="grok-input mb-2" placeholder="Slack Bot Token (xoxb-...)" value={intCreds.slack?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, slack: {...(c.slack||{}), token: e.target.value}}))} />
+                        <input className="grok-input" placeholder="Default channel (#general)" value={intCreds.slack?.defaultChannel || ''} onChange={e => setIntCreds((c:any)=>({...c, slack: {...(c.slack||{}), defaultChannel: e.target.value}}))} />
+                      </>
+                    )}
+                    {integration.id === 'googledrive' && (
+                      <>
+                        <input className="grok-input mb-2" placeholder="OAuth Access Token (optional)" value={intCreds.googledrive?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), accessToken: e.target.value}}))} />
+                        <textarea className="grok-input h-24 font-mono text-xs" placeholder="Paste full Service Account JSON here for server-side auth" value={intCreds.googledrive?.serviceAccountJson || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), serviceAccountJson: e.target.value}}))} />
+                      </>
+                    )}
+                    {integration.id === 'discord' && (
+                      <>
+                        <input className="grok-input mb-2" placeholder="Discord Bot Token" value={intCreds.discord?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, discord: {...(c.discord||{}), token: e.target.value}}))} />
+                        <input className="grok-input" placeholder="Default channel ID (snowflake, optional)" value={intCreds.discord?.defaultChannelId || ''} onChange={e => setIntCreds((c:any)=>({...c, discord: {...(c.discord||{}), defaultChannelId: e.target.value}}))} />
+                      </>
+                    )}
+                    {integration.id === 'x' && (
+                      <>
+                        <input className="grok-input mb-2" placeholder="API Key (Consumer Key)" value={intCreds.x?.apiKey || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), apiKey: e.target.value}}))} />
+                        <input className="grok-input mb-2" placeholder="API Secret (Consumer Secret)" value={intCreds.x?.apiSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), apiSecret: e.target.value}}))} />
+                        <input className="grok-input mb-2" placeholder="Access Token" value={intCreds.x?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessToken: e.target.value}}))} />
+                        <input className="grok-input" placeholder="Access Token Secret" value={intCreds.x?.accessTokenSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessTokenSecret: e.target.value}}))} />
+                        <div className="mt-2 text-xs text-dim">Create an app at developer.x.com with Read and Write permissions, then generate user access tokens.</div>
+                      </>
+                    )}
+                    {integration.id === 'obsidian' && (() => {
+                      const obsidianMode = intCreds.obsidian?.mode || 'local';
+                      const isCloud = obsidianMode === 'cloud';
+                      return (
+                      <>
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <span className="text-xs text-dim">Mode</span>
+                          <select
+                            className="grok-select text-xs flex-1 min-w-[120px]"
+                            value={obsidianMode}
+                            onChange={e => setIntCreds((c: any) => ({ ...c, obsidian: { ...(c.obsidian || {}), mode: e.target.value } }))}
+                          >
+                            <option value="local">Local — vault on this machine</option>
+                            <option value="cloud">Cloud — remote REST API</option>
+                          </select>
+                        </div>
+                        {!isCloud && (
+                          <div className="flex gap-2 mb-2">
+                            <input
+                              className="grok-input flex-1 min-w-0"
+                              placeholder="Vault path (e.g. C:\Users\you\Documents\MyVault)"
+                              value={intCreds.obsidian?.vaultPath || ''}
+                              onChange={e => setIntCreds((c: any) => ({ ...c, obsidian: { ...(c.obsidian || { mode: 'local' }), vaultPath: e.target.value } }))}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setFolderBrowseFor('obsidian')}
+                              className="grok-btn grok-btn-secondary text-xs shrink-0"
+                              title="Browse for vault folder"
+                            >
+                              <FolderOpen size={14} /> Browse
+                            </button>
+                          </div>
+                        )}
+                        {isCloud && (
+                          <>
+                            <input
+                              className="grok-input mb-2"
+                              placeholder="REST API URL (required, e.g. https://your-tunnel:27124)"
+                              value={intCreds.obsidian?.restApiUrl || ''}
+                              onChange={e => setIntCreds((c: any) => ({ ...c, obsidian: { ...(c.obsidian || { mode: 'cloud' }), restApiUrl: e.target.value } }))}
+                            />
+                            <input
+                              className="grok-input"
+                              type="password"
+                              placeholder="REST API key (from Local REST API plugin)"
+                              value={intCreds.obsidian?.restApiKey || ''}
+                              onChange={e => setIntCreds((c: any) => ({ ...c, obsidian: { ...(c.obsidian || { mode: 'cloud' }), restApiKey: e.target.value } }))}
+                            />
+                          </>
+                        )}
+                        <div className="mt-2 text-xs text-dim">
+                          {isCloud ? (
+                            <>
+                              Cloud mode uses the{' '}
+                              <a href="https://github.com/coddingtonbear/obsidian-local-rest-api" className="link-accent" target="_blank" rel="noreferrer">Local REST API</a>{' '}
+                              plugin exposed via tunnel or remote host — URL and API key required.
+                            </>
+                          ) : (
+                            <>
+                              Local mode reads notes directly from your vault folder on this machine. Use Browse to pick the vault directory.
+                            </>
+                          )}
+                        </div>
+                      </>
+                      );
+                    })()}
+                    <div className="integration-card-actions">
+                      <button
+                        type="button"
+                        onClick={() => saveIntegration(integration.id)}
+                        disabled={!!intSaving[integration.id]}
+                        className="grok-btn grok-btn-primary text-xs"
+                      >
+                        {intSaving[integration.id] ? 'Saving…' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => testIntegration(integration.id)}
+                        className="grok-btn grok-btn-secondary text-xs"
+                      >
+                        Test Connection
+                      </button>
+                    </div>
+                    </div>
+                    )}
+                  </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-5 text-xs text-dim">Credentials are stored locally on your machine only. Never sent anywhere except to the services you authorize.</div>
+
+              <McpPanel
+                githubToken={intCreds.github?.token}
+                defaultWorkspace={defaultWorkspaceInput || config?.defaultWorkspace}
+                externalAllowedPath={mcpBrowsePath}
+                onBrowsePath={() => setFolderBrowseFor('mcp')}
+              />
+            </div>
+          )}
+
+          {tab === 'usage' && (
+            <UsageDashboard />
+          )}
+
+          {tab === 'settings' && (
+            <div className="max-w-xl">
+              <div className="grok-card p-6">
+                <div className="font-semibold text-lg mb-4">GrokDesk Settings</div>
+
+                <div>
+                  <div className="grok-label">xAI Grok API Key</div>
+                  <input value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder="xai-..." className="grok-input mb-2 font-mono" />
+                  <div className="flex gap-2">
+                    <button onClick={saveApiKey} className="grok-btn grok-btn-primary">Save &amp; Validate Key</button>
+                    <button onClick={quickValidate} className="grok-btn grok-btn-secondary">Test</button>
+                  </div>
+                  <div className="text-xs mt-1 text-dim">Cloud API key for xAI-hosted Grok models. Local models run separately on your machine.</div>
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-default">
+                  <div className="grok-label">OAuth with X (SuperGrok / X Premium+)</div>
+                  <div className="text-xs text-dim mt-1 mb-3">
+                    Sign in via <span className="font-mono">accounts.x.ai</span> to use cloud Grok without an API key.
+                    SuperGrok or X Premium+ may be required; some tiers can return HTTP 403 after login — keep the API key as fallback.
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    {oauthStatus.connected ? (
+                      <span className="status-pill text-success">Connected{oauthStatus.displayName ? ` · ${oauthStatus.displayName}` : ''}{oauthStatus.email ? ` · ${oauthStatus.email}` : ''}</span>
+                    ) : oauthStatus.expired ? (
+                      <span className="status-pill text-warning">OAuth expired — sign in again</span>
+                    ) : (
+                      <span className="status-pill text-dim">Not connected</span>
+                    )}
+                    <button onClick={startOAuthLogin} disabled={oauthStarting} className="grok-btn grok-btn-primary text-xs">
+                      {oauthStarting ? 'Starting…' : 'Sign in with X'}
+                    </button>
+                    {oauthStatus.connected && (
+                      <button onClick={disconnectOAuth} className="grok-btn grok-btn-ghost text-xs text-error">Disconnect</button>
+                    )}
+                  </div>
+                  <input
+                    value={oauthCallbackInput}
+                    onChange={(e) => setOauthCallbackInput(e.target.value)}
+                    placeholder="Paste callback URL or authorization code (manual fallback)"
+                    className="grok-input mb-2 text-xs font-mono"
+                  />
+                  <button onClick={exchangeOAuthCallback} disabled={!oauthCallbackInput.trim()} className="grok-btn grok-btn-secondary text-xs">
+                    Complete OAuth
+                  </button>
+                  {(config as any)?.hasKey && oauthStatus.connected && (
+                    <div className="mt-4">
+                      <div className="grok-label text-xs">Cloud auth preference (both configured)</div>
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={() => saveCloudAuthMode('api_key')}
+                          className={`grok-btn text-xs ${cloudAuthMode === 'api_key' ? 'grok-btn-primary' : 'grok-btn-secondary'}`}
+                        >
+                          Prefer API key
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => saveCloudAuthMode('oauth')}
+                          className={`grok-btn text-xs ${cloudAuthMode === 'oauth' ? 'grok-btn-primary' : 'grok-btn-secondary'}`}
+                        >
+                          Prefer OAuth
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {oauthStatus.error && <div className="text-xs text-warning mt-2">{oauthStatus.error}</div>}
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-default">
+                  <div className="grok-label">Local Grok Models</div>
+                  <label className="flex items-center gap-2 text-sm mt-2">
+                    <input type="checkbox" checked={localGrokEnabled} onChange={e => setLocalGrokEnabled(e.target.checked)} />
+                    Enable local Grok (OpenAI-compatible server)
+                  </label>
+                  <div className="text-xs text-dim mt-1 mb-2">Run Grok locally via LM Studio, Ollama, or any OpenAI-compatible endpoint. Select <strong>Local</strong> models in chat and agents.</div>
+                  <input
+                    className="grok-input font-mono text-xs mb-2"
+                    value={localGrokBaseUrl}
+                    onChange={e => setLocalGrokBaseUrl(e.target.value)}
+                    placeholder="http://127.0.0.1:1234/v1"
+                  />
+                  <div className="flex gap-2 flex-wrap">
+                    <button onClick={saveLocalGrokSettings} className="grok-btn grok-btn-primary text-sm">Save Local Settings</button>
+                    <button onClick={testLocalGrok} className="grok-btn grok-btn-secondary text-sm">Test Connection</button>
+                  </div>
+                  {localGrokEnabled && (
+                    <div className={`text-xs mt-2 ${localGrokReachable ? 'text-success' : 'text-warning'}`}>
+                      {localGrokReachable ? 'Local server reachable' : 'Local server not detected — start LM Studio/Ollama and test again'}
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-default">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="grok-label mb-0">Default Grok Model</div>
+                    <button type="button" onClick={loadModels} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5">
+                      <RefreshCw size={12} className={modelsLoading ? 'animate-spin' : ''} /> Refresh list
+                    </button>
+                  </div>
+                  <select
+                    className="grok-select w-full mt-1"
+                    value={defaultModelInput}
+                    onChange={e => setDefaultModelInput(e.target.value)}
+                    disabled={modelsLoading && availableModels.length === 0}
+                  >
+                    {renderModelOptions(defaultModelInput)}
+                  </select>
+                  <div className="flex gap-2 mt-2">
+                    <button onClick={saveDefaultModel} className="grok-btn grok-btn-primary text-sm">Save Default Model</button>
+                  </div>
+                  <div className="text-xs mt-1 text-dim">
+                    Used for Grok Chat and new agents. Pick Cloud (xAI) or Local (this machine) — the badge shows which is active.
+                    {availableModels.length > 0 && ` ${availableModels.length} model(s) available.`}
+                  </div>
+                  {defaultModelInput && (
+                    <div className="mt-2 flex items-center gap-2 text-xs">
+                      <span className="text-dim">Current default:</span>
+                      <ModelLine modelId={defaultModelInput} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-default">
+                  <div className="grok-label">Grok Build CLI</div>
+                  <div className="text-xs mt-2 flex items-center gap-2 flex-wrap">
+                    <Terminal size={14} className="opacity-70" />
+                    {grokCliStatus?.installed ? (
+                      <span className="text-success">
+                        Installed{grokCliStatus.version ? ` · ${grokCliStatus.version}` : ''}
+                        {grokCliStatus.path ? ` · ${grokCliStatus.path}` : ''}
+                      </span>
+                    ) : (
+                      <span className="text-dim">Not detected on PATH — install with: curl -fsSL https://x.ai/cli/install.sh | bash</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-dim mt-1">
+                    When installed, Grok Chat can route through the CLI (API/CLI toggle) and agents gain a <span className="font-mono">grok_cli</span> tool.
+                  </div>
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-default">
+                  <div className="grok-label">Agent Behavior</div>
+                  <div className="text-xs text-dim mt-1 mb-3">Tool approval, global instructions, and AGENTS.md injection for all agents and chat.</div>
+                  <div className="flex gap-2 mb-3">
+                    <button
+                      type="button"
+                      onClick={() => setToolApprovalMode('yolo')}
+                      className={`grok-btn text-xs ${toolApprovalMode === 'yolo' ? 'grok-btn-primary' : 'grok-btn-secondary'}`}
+                    >
+                      YOLO (auto-run tools)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setToolApprovalMode('ask')}
+                      className={`grok-btn text-xs ${toolApprovalMode === 'ask' ? 'grok-btn-primary' : 'grok-btn-secondary'}`}
+                    >
+                      Ask before act
+                    </button>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm mb-2">
+                    <input type="checkbox" checked={useAgentsMd} onChange={(e) => setUseAgentsMd(e.target.checked)} />
+                    Inject AGENTS.md / CLAUDE.md from workspace
+                  </label>
+                  <textarea
+                    className="grok-input text-xs font-mono min-h-[100px] mb-2"
+                    placeholder="Global instructions for every agent and chat session…"
+                    value={globalInstructionsInput}
+                    onChange={(e) => setGlobalInstructionsInput(e.target.value)}
+                  />
+                  <button type="button" onClick={() => void saveAgentBehaviorSettings()} className="grok-btn grok-btn-primary text-sm">
+                    Save Agent Behavior
+                  </button>
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-default">
+                  <div className="grok-label">Default Workspace</div>
+                  <div className="flex gap-2 mt-1">
+                    <input
+                      className="grok-input flex-1 min-w-0 font-mono text-xs"
+                      value={defaultWorkspaceInput}
+                      onChange={(e) => setDefaultWorkspaceInput(e.target.value)}
+                      placeholder="C:\Users\you\Projects\my-repo"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFolderBrowseFor('workspace')}
+                      className="grok-btn grok-btn-secondary text-xs shrink-0"
+                      title="Browse for workspace folder"
+                    >
+                      <FolderOpen size={14} /> Browse
+                    </button>
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    <button type="button" onClick={saveDefaultWorkspace} className="grok-btn grok-btn-primary text-sm">
+                      Save Workspace
+                    </button>
+                  </div>
+                  <div className="text-xs text-dim mt-1">
+                    Root folder for global uploads, new agents, and workspace explorer. Use Browse to pick a directory on this machine.
+                  </div>
+                </div>
+
+                <div className="mt-6 text-[11px] text-dim">Use Cloud Grok (xAI API) or Local Grok (on your machine). Agents, chat, and usage tracking reflect which provider each model uses.</div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer bar */}
+        <div className="footer-bar h-9 px-4 text-[10px] flex items-center text-dim justify-between">
+          <div>GrokDesk — xAI Grok agent studio • SpaceX-inspired mission control</div>
+          <Link href="/settings" className="cursor-pointer hover:text-primary">Settings</Link>
+        </div>
+      </div>
+
+      <FolderBrowseModal
+        open={folderBrowseFor !== null}
+        title={
+          folderBrowseFor === 'workspace'
+            ? 'Select default workspace folder'
+            : folderBrowseFor === 'mcp'
+              ? 'Select allowed directory for MCP filesystem'
+              : 'Select Obsidian vault folder'
+        }
+        initialPath={
+          folderBrowseFor === 'workspace'
+            ? defaultWorkspaceInput || config?.defaultWorkspace || ''
+            : folderBrowseFor === 'mcp'
+              ? mcpBrowsePath || defaultWorkspaceInput || config?.defaultWorkspace || ''
+              : intCreds.obsidian?.vaultPath || ''
+        }
+        onClose={() => setFolderBrowseFor(null)}
+        onSelect={(path) => {
+          if (folderBrowseFor === 'workspace') {
+            setDefaultWorkspaceInput(path);
+          } else if (folderBrowseFor === 'mcp') {
+            setMcpBrowsePath(path);
+          } else {
+            setIntCreds((c: any) => ({
+              ...c,
+              obsidian: { ...(c.obsidian || { mode: 'local' }), vaultPath: path },
+            }));
+          }
+          setFolderBrowseFor(null);
+        }}
+      />
+
+      {/* Run agent — text prompt modal */}
+      <AnimatePresence>
+        {showRunModal && runModalAgent && (
+          <div
+            className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+            onClick={() => { setShowRunModal(false); setRunModalAgent(null); }}
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.15 }}
+              className="modal w-full max-w-lg p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div>
+                  <div className="text-lg font-semibold">Run {runModalAgent.name}</div>
+                  <div className="text-xs text-dim mt-1">Text instructions for this autonomous agent run.</div>
+                </div>
+                <span className="multimodal-badge multimodal-badge-muted shrink-0">Text only</span>
+              </div>
+              <textarea
+                className="grok-input schedule-instructions-input text-sm w-full"
+                value={runModalPrompt}
+                onChange={(e) => setRunModalPrompt(e.target.value)}
+                placeholder="What should this agent do?"
+                autoFocus
+              />
+              <div className="modal-multimodal-note mt-3">
+                <MultimodalBadge compact />
+                <span>
+                  Images &amp; files → use{' '}
+                  <button type="button" className="link-accent" onClick={() => { setShowRunModal(false); navigateToTab('chat'); }}>
+                    Grok Chat
+                  </button>
+                  {' '}(multimodal submissions).
+                </span>
+              </div>
+              <div className="flex gap-3 mt-5">
+                <button
+                  type="button"
+                  onClick={() => { setShowRunModal(false); setRunModalAgent(null); }}
+                  className="grok-btn grok-btn-secondary flex-1"
+                >
+                  Cancel
+                </button>
+                <button type="button" onClick={submitRunModal} className="grok-btn grok-btn-primary flex-1">
+                  <Play size={14} /> Run
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Agent create/edit modal — rich form */}
+      <AnimatePresence>
+        {showAgentModal && (
+          <div
+            className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+            onClick={() => { setShowAgentModal(false); setEditingAgent(null); setHighlightScheduleIdx(null); }}
+          >
+            <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity:0, scale:0.98 }} transition={{ duration: 0.15 }} className="modal w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="text-xl font-semibold mb-4">{editingAgent ? 'Edit Agent' : 'Create New Agent'}</div>
+
+              <div className="grid grid-cols-1 gap-y-4">
+                <div>
+                  <div className="grok-label">Agent Name</div>
+                  <input className="grok-input" value={agentForm.name} onChange={e => setAgentForm({ ...agentForm, name: e.target.value })} />
+                </div>
+                <div>
+                  <div className="grok-label">Alien Avatar</div>
+                  <div className="flex items-center gap-3 mb-2">
+                    <img
+                      src={ALIEN_AVATARS.find(a => a.id === agentForm.avatar)?.path || ALIEN_AVATARS[0].path}
+                      alt="Selected avatar"
+                      className="agent-avatar"
+                      width={40}
+                      height={40}
+                    />
+                    <span className="text-xs text-dim">{ALIEN_AVATARS.find(a => a.id === agentForm.avatar)?.label || 'Alien 1'} — pick from 50 aliens below</span>
+                  </div>
+                  <div className="avatar-picker">
+                    {ALIEN_AVATARS.map(av => (
+                      <button
+                        key={av.id}
+                        type="button"
+                        className={`avatar-option ${agentForm.avatar === av.id ? 'selected' : ''}`}
+                        onClick={() => setAgentForm({ ...agentForm, avatar: av.id })}
+                        title={av.label}
+                      >
+                        <img src={av.path} alt={av.label} width={32} height={32} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="grok-label mb-1">Runs on</div>
+                  <div className="sync-direction">
+                    <button
+                      type="button"
+                      onClick={() => setAgentForm({ ...agentForm, origin: 'local' })}
+                      className={`sync-direction-option ${agentForm.origin !== 'cloud' ? 'sync-direction-active' : ''}`}
+                    >
+                      <Terminal size={14} /> Local machine
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAgentForm({ ...agentForm, origin: 'cloud' })}
+                      className={`sync-direction-option ${agentForm.origin === 'cloud' ? 'sync-direction-active' : ''}`}
+                    >
+                      <Globe size={14} /> Grok cloud
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-dim mt-1">
+                    {agentForm.origin === 'cloud'
+                      ? 'Cloud agent — works through Grok cloud services and connected integrations only. No local files, shell, or browser access.'
+                      : 'Local agent — full system access on this machine: files, shell, Chrome browser, git worktrees, MCP tools, plus all cloud services.'}
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="grok-label mb-0">Grok Model</div>
+                    {agentForm.model && <ModelProviderBadge modelId={agentForm.model} />}
+                    <button type="button" onClick={loadModels} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5">
+                      <RefreshCw size={12} className={modelsLoading ? 'animate-spin' : ''} /> Refresh
+                    </button>
+                  </div>
+                  <select className="grok-select w-full mt-1" value={agentForm.model || ''} onChange={e=>setAgentForm({...agentForm, model: e.target.value})} disabled={modelsLoading && availableModels.length === 0}>
+                    {renderModelOptions(agentForm.model)}
+                  </select>
+                  <div className="text-xs text-dim mt-0.5">
+                    {availableModels.length > 0
+                      ? `${availableModels.length} models — Cloud (xAI) and/or Local (this machine).`
+                      : modelsError || 'Add xAI API key, sign in with X (OAuth), or enable Local Grok in Settings.'}
+                  </div>
+                  {agentForm.model && (
+                    <div className="text-[10px] text-dim mt-1">
+                      This agent will use <strong>{providerLabel(parseModelRef(agentForm.model).provider)}</strong> inference: {modelDisplayName(agentForm.model)}
+                    </div>
+                  )}
+                </div>
+                {agentForm.origin !== 'cloud' ? (
+                  <>
+                    <div>
+                      <div className="grok-label">Workspace Path</div>
+                      <input className="grok-input" value={agentForm.workspace?.path || ''} onChange={e => setAgentForm({ ...agentForm, workspace: { ...agentForm.workspace, path: e.target.value } })} />
+                    </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={agentForm.workspace?.useWorktree} onChange={e => setAgentForm({ ...agentForm, workspace: { ...agentForm.workspace, useWorktree: e.target.checked } })} /> Use isolated git worktree (recommended)
+                    </label>
+                  </>
+                ) : (
+                  <div className="text-[11px] text-dim border border-default rounded p-3">
+                    Cloud agents have no local workspace — they act through Grok cloud services and the integrations you enable below.
+                  </div>
+                )}
+
+                <div>
+                  <div className="grok-label mb-1">Integrations Scope (what this agent can access)</div>
+                  <div className="flex flex-wrap gap-2 text-sm">
+                    {INTEGRATION_IDS.map(key => {
+                      const meta = getIntegrationMeta(key)!;
+                      return (
+                        <label key={key} className="integration-scope-label">
+                          <input type="checkbox" checked={!!agentForm.integrations?.[key]} onChange={e => setAgentForm({ ...agentForm, integrations: { ...agentForm.integrations, [key]: e.target.checked } })} />
+                          <IntegrationIcon id={key} size="sm" />
+                          <span>{meta.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="grok-label">Peer Agents (inter-agent messaging)</div>
+                  <select multiple className="grok-select w-full h-20" value={agentForm.peers || []} onChange={e => {
+                    const sel = Array.from(e.target.selectedOptions).map(o => o.value);
+                    setAgentForm({ ...agentForm, peers: sel });
+                  }}>
+                    {agents.filter(a => !editingAgent || a.id !== editingAgent.id).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                  <div className="text-[10px] text-dim">Selected agents can receive messages from this one via the send_to_peer tool.</div>
+                </div>
+
+                <div>
+                  <div className="grok-label">Skill — chat personality</div>
+                  <textarea
+                    className="grok-input schedule-instructions-input text-xs"
+                    placeholder="You are a sharp, encouraging builder who explains trade-offs clearly and celebrates small wins…"
+                    value={agentForm.chatSkill || ''}
+                    onChange={(e) => setAgentForm({ ...agentForm, chatSkill: e.target.value })}
+                  />
+                  <div className="text-[10px] text-dim mt-1">Defines how this agent speaks when selected in Grok Chat. This is the conversational persona users interact with.</div>
+                </div>
+
+                <div>
+                  <div className="grok-label">Capabilities (comma separated tags)</div>
+                  <input className="grok-input" placeholder="research, coder, browser-automation" value={(agentForm.skills || []).join(', ')} onChange={e => {
+                    const arr = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                    setAgentForm({ ...agentForm, skills: arr });
+                  }} />
+                  <div className="text-[10px] text-dim">Tool-running specialties injected into autonomous agent runs (separate from chat Skill above).</div>
+                  <div className="mt-3">
+                    <SkillsBrowser
+                      compact
+                      installed={agentForm.skills || []}
+                      onInstall={(skillId) => {
+                        const cur = agentForm.skills || [];
+                        if (cur.includes(skillId)) return;
+                        setAgentForm({ ...agentForm, skills: [...cur, skillId] });
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div id="agent-schedules-section" className={highlightScheduleIdx !== null ? 'schedule-section-focus' : ''}>
+                  <div className="grok-label">Automations — when should this agent run?</div>
+                  <div className="space-y-3">
+                    {(agentForm.schedules || []).map((sch: any, idx: number) => {
+                      const preset: SchedulePresetId = sch._preset || 'every_30m';
+                      const presetMeta = SCHEDULE_PRESETS.find(p => p.id === preset);
+                      return (
+                      <div
+                        key={sch.id || idx}
+                        id={`agent-schedule-${idx}`}
+                        className={`border border-default p-3 rounded text-sm space-y-2 schedule-entry ${highlightScheduleIdx === idx ? 'schedule-entry-highlight' : ''}`}
+                      >
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <select
+                            className="grok-select flex-1 min-w-[180px] text-xs"
+                            value={preset}
+                            onChange={e => onSchedulePresetChange(idx, e.target.value as SchedulePresetId)}
+                          >
+                            {SCHEDULE_PRESETS.map(p => (
+                              <option key={p.id} value={p.id}>{p.label}</option>
+                            ))}
+                          </select>
+                          {(preset === 'daily' || preset === 'weekdays') && (
+                            <input
+                              type="time"
+                              className="grok-input w-auto text-xs"
+                              value={sch._time || '09:00'}
+                              onChange={e => onScheduleTimeChange(idx, e.target.value)}
+                            />
+                          )}
+                          <label className="flex items-center gap-1 text-xs whitespace-nowrap">
+                            <input type="checkbox" checked={!!sch.enabled} onChange={e => patchSchedule(idx, { enabled: e.target.checked })} />
+                            Active
+                          </label>
+                          <button type="button" onClick={() => {
+                            const news = (agentForm.schedules || []).filter((_: any, i: number) => i !== idx);
+                            setAgentForm({ ...agentForm, schedules: news.length ? news : [] });
+                          }} className="text-xs text-red-400">Remove</button>
+                        </div>
+                        {preset === 'custom' ? (
+                          <input
+                            className="grok-input text-xs font-mono"
+                            placeholder="*/15 * * * *"
+                            value={sch._customCron ?? sch.cron ?? ''}
+                            onChange={e => patchSchedule(idx, { _customCron: e.target.value, cron: e.target.value, _preset: 'custom' })}
+                          />
+                        ) : (
+                          <div className="text-[10px] text-dim">{presetMeta?.hint} · saves as <span className="font-mono">{sch.cron}</span></div>
+                        )}
+                        <textarea
+                          className="grok-input schedule-instructions-input text-xs"
+                          placeholder="What should the agent do each time? (This becomes the prompt.)"
+                          value={sch.instructions || ''}
+                          onChange={e => patchSchedule(idx, { instructions: e.target.value })}
+                        />
+                      </div>
+                    );})}
+                    <button type="button" onClick={() => {
+                      setAgentForm({ ...agentForm, schedules: [...(agentForm.schedules || []), defaultScheduleEntry()] });
+                    }} className="grok-btn grok-btn-ghost text-xs">+ Add another schedule</button>
+                  </div>
+                  <div className="text-[10px] text-dim mt-1">Pick a plain-English frequency — no cron knowledge needed. Use Custom only if you know cron syntax.</div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button onClick={() => { setShowAgentModal(false); setEditingAgent(null); setHighlightScheduleIdx(null); }} className="grok-btn grok-btn-secondary flex-1">Cancel</button>
+                <button onClick={createOrUpdateAgent} disabled={loading} className="grok-btn grok-btn-primary flex-1">Save Agent</button>
+              </div>
+              <div className="modal-multimodal-note mt-4">
+                <MultimodalBadge compact />
+                <span>
+                  Grok Chat supports multimodal submissions (images &amp; files). Agent runs here are text-only prompts.
+                </span>
+              </div>
+              <div className="text-[10px] text-center mt-3 text-dim">Agents run exclusively via Grok tool calling + your local tools.</div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <CommandPalette
+        open={showCommandPalette}
+        onClose={() => setShowCommandPalette(false)}
+        commands={paletteCommands}
+      />
+
+      <ToolApprovalModal
+        pending={pendingToolApproval}
+        onApprove={(id) => void resolveToolApproval(id, true)}
+        onDeny={(id) => void resolveToolApproval(id, false)}
+      />
+
+      <SyncModal
+        open={showSyncModal}
+        onClose={() => setShowSyncModal(false)}
+        localModelInUse={!!(config as any)?.localGrokEnabled}
+        onSynced={() => { void loadAll(); void loadNavStats(); }}
+      />
+
+      <ConfirmHost />
+    </div>
+  );
+}
