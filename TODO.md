@@ -14,7 +14,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 ## 2. Legal & branding (ship-blockers)
 
-- [ ] **Add a LICENSE file** (MIT/Apache-2.0 recommended). The repo currently has none — nobody can legally use or contribute to it.
+- [x] **Add a LICENSE file** — done: MIT ([LICENSE](LICENSE)).
 - [ ] **Naming review.** "GrokDesk"/"Grok Desktop" uses xAI's trademark. Rename or confirm compliance with xAI brand guidelines before publishing.
 - [ ] **Asset licensing.** Confirm the doge logo, alien avatars, and integration icons are original/licensed for redistribution.
 - [ ] **xAI API ToS check** — automated agent traffic, scheduled runs, and multi-agent fan-out must comply with rate/usage terms.

@@ -565,6 +565,24 @@ export default function GrokDesk() {
   // "View answer" quick look on run rows (final output without the full trace)
   const [answerRun, setAnswerRun] = useState<RunSummaryLite | null>(null);
 
+  // Full run-details modal (automations run log) — prompt, trace, outcome,
+  // tools, skills, side effects in one place.
+  const [runDetail, setRunDetail] = useState<AgentRun | null>(null);
+  const [runDetailLoading, setRunDetailLoading] = useState(false);
+
+  async function openRunDetails(runId: string) {
+    setRunDetailLoading(true);
+    try {
+      const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
+      const data = await res.json();
+      if (!data.ok || !data.run) throw new Error(data.error || 'Run not found');
+      setRunDetail(data.run);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not load run');
+    }
+    setRunDetailLoading(false);
+  }
+
   // Automations tab: what has actually run (scheduled executions), per agent
   const [scheduledRuns, setScheduledRuns] = useState<RunSummaryLite[] | null>(null);
   useEffect(() => {
@@ -1578,6 +1596,9 @@ export default function GrokDesk() {
         setFolderBrowseFor(null);
       } else if (answerRun) {
         setAnswerRun(null);
+      } else if (runDetail || runDetailLoading) {
+        setRunDetail(null);
+        setRunDetailLoading(false);
       } else if (historyAgent) {
         setHistoryAgent(null);
         setHistoryRuns(null);
@@ -1587,7 +1608,7 @@ export default function GrokDesk() {
     };
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
-  }, [showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen, answerRun, historyAgent]);
+  }, [showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen, answerRun, historyAgent, runDetail, runDetailLoading]);
 
   // Dynamic document titles (C7) — tabs are distinguishable in the browser.
   useEffect(() => {
@@ -2317,9 +2338,9 @@ export default function GrokDesk() {
                               <button
                                 key={r.id}
                                 type="button"
-                                onClick={() => openRunTrace(r.id)}
+                                onClick={() => void openRunDetails(r.id)}
                                 className="automation-run-row"
-                                title="Open the full execution log"
+                                title="Open run details — prompt, trace, outcome, tools"
                               >
                                 <span className={`run-status run-status-${r.status} shrink-0`}>{r.status}</span>
                                 <span className="text-dim shrink-0">
@@ -3226,6 +3247,133 @@ export default function GrokDesk() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Run details — prompt, trace, outcome, tools, skills, side effects */}
+      {(runDetail || runDetailLoading) && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center z-[65] p-4"
+          onClick={() => { setRunDetail(null); setRunDetailLoading(false); }}
+        >
+          <div className="modal modal-pop w-full max-w-3xl p-6 max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {runDetailLoading || !runDetail ? (
+              <div className="data-loading-row py-10 justify-center"><span className="data-spinner data-spinner-lg" /> Loading run…</div>
+            ) : (() => {
+              const detailAgent = agents.find((a) => a.id === runDetail.agentId) || agents.find((a) => a.name === runDetail.agentName);
+              const toolCounts = new Map<string, number>();
+              for (const s of runDetail.trace || []) {
+                if (s.tool?.name) toolCounts.set(s.tool.name, (toolCounts.get(s.tool.name) || 0) + 1);
+              }
+              return (
+                <>
+                  <div className="flex items-start justify-between gap-3 mb-1">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={detailAgent ? resolveAgentAvatarPath(detailAgent) : MISSING_AGENT_AVATAR_PATH}
+                        alt=""
+                        className="agent-avatar-sm shrink-0"
+                        width={28}
+                        height={28}
+                        title={detailAgent ? undefined : 'This agent has since been deleted'}
+                      />
+                      <div className="text-lg font-semibold truncate">{runDetail.agentName}</div>
+                      <span className={`run-status run-status-${runDetail.status} shrink-0`}>{runDetail.status}</span>
+                    </div>
+                    <button type="button" className="grok-btn grok-btn-ghost p-1.5 shrink-0" onClick={() => setRunDetail(null)} title="Close">
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <div className="text-xs text-dim mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <ModelLine modelId={runDetail.model} />
+                    <span>started {new Date(runDetail.startedAt).toLocaleString()}</span>
+                    {runDetail.completedAt && <span>· finished {new Date(runDetail.completedAt).toLocaleString()}</span>}
+                    {runDetail.scheduleId && <span className="badge badge-muted">scheduled</span>}
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto min-h-0 space-y-4 pr-1">
+                    <div>
+                      <div className="run-detail-label">Prompt</div>
+                      <div className="grok-card p-3 text-sm text-muted whitespace-pre-wrap">{runDetail.prompt || '—'}</div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-4">
+                      <div className="flex-1 min-w-[220px]">
+                        <div className="run-detail-label">Tools used</div>
+                        {toolCounts.size === 0 ? (
+                          <div className="text-xs text-dim">No tool calls in this run.</div>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {[...toolCounts.entries()].map(([name, n]) => (
+                              <span key={name} className="badge badge-accent font-mono text-[11px]">{name}{n > 1 ? ` ×${n}` : ''}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-[220px]">
+                        <div className="run-detail-label">Skills</div>
+                        {detailAgent && (detailAgent.skills || []).length > 0 ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {(detailAgent.skills || []).map((s) => <span key={s} className="badge badge-accent text-[11px]">{s}</span>)}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-dim">{detailAgent ? 'No skills assigned.' : 'Agent deleted — skills unknown.'}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {(runDetail.sideEffects || []).length > 0 && (
+                      <div>
+                        <div className="run-detail-label">Side effects</div>
+                        <ul className="text-xs text-muted space-y-1">
+                          {(runDetail.sideEffects || []).map((s, i) => <li key={i} className="flex gap-2"><span className="text-dim shrink-0">•</span><span>{String(s)}</span></li>)}
+                        </ul>
+                      </div>
+                    )}
+
+                    {runDetail.finalOutput && (
+                      <div>
+                        <div className="run-detail-label">Outcome</div>
+                        <div className="grok-card p-3 bg-black/30">
+                          <ChatMarkdown content={runDetail.finalOutput} />
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="run-detail-label">Execution trace · {(runDetail.trace || []).length} steps</div>
+                      <div className="grok-card p-3 font-mono text-xs bg-black/40 max-h-[300px] overflow-auto">
+                        {(runDetail.trace || []).length === 0 ? (
+                          <div className="text-dim">No trace recorded.</div>
+                        ) : (runDetail.trace || []).map((step, idx) => (
+                          <div key={idx} className={`trace-step mb-3 ${step.type}`}>
+                            <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {String(step.type).toUpperCase()}</div>
+                            <div className="mt-0.5">{step.content}</div>
+                            {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
+                            {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="capture" /></div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 mt-4">
+                    <button
+                      type="button"
+                      className="grok-btn grok-btn-ghost text-xs"
+                      onClick={() => { const id = runDetail.id; setRunDetail(null); openRunTrace(id); }}
+                      title="Open in the full-page trace view (with preview rail and workspace diff)"
+                    >
+                      <Terminal size={13} /> Open in trace view
+                    </button>
+                    <button type="button" onClick={() => setRunDetail(null)} className="grok-btn grok-btn-secondary">
+                      Close
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

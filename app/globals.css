@@ -1228,6 +1228,16 @@ body::before {
   filter: brightness(1.1);
 }
 
+/* Run-details modal section labels */
+.run-detail-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
 /* Run log rows — automations cards + agent run-history modal */
 .automation-run-row,
 .run-history-row {
