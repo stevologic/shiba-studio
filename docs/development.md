@@ -10,9 +10,9 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 wi
 | --- | --- |
 | `app/[[...section]]/page.tsx` | Single catch-all route rendering the whole shell — every tab is a URL segment |
 | `app/api/*` | ~30 API routes: agents, runs, chat sessions/streaming, git, obsidian, sub-browser, tools, sync, usage, logs, … |
-| `components/grok-desk.tsx` | The shell: nav, top bar, dashboard/agents/automations/capabilities/settings tabs, modals |
-| `components/grok-chat-panel.tsx` | Chat: streaming, slash commands + autocomplete, attachments, annotation hand-off |
-| `components/sub-browser.tsx` | The annotation sub-browser modal |
+| `components/shiba-studio.tsx` | The shell: nav, top bar, dashboard/agents/automations/capabilities/settings tabs, modals |
+| `components/grok-chat-panel.tsx` | Chat: streaming, slash commands + autocomplete, attachments, workspace binding, annotation hand-off |
+| `components/sub-browser.tsx`, `components/workspace-picker.tsx` | The annotation sub-browser and chat-workspace folder picker modals |
 | `lib/agent-runtime.ts` | The heart: tool definitions + the Grok tool-calling run loop |
 | `lib/agent-tool-exec.ts` | Tool execution (files, shell, browser, integrations, MCP, power tools) |
 | `lib/agent-power-tools.ts` | Web search/fetch, workspace grep, persistent memory, image generation |
