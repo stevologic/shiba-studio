@@ -158,6 +158,60 @@ export interface InspectedElement {
   text: string;
 }
 
+/** Whole-page screenshot (height-capped) — the sub-browser renders it as one
+ *  tall image, so scrolling is native and instant on the client with zero
+ *  round-trips. JPEG keeps long pages shippable. */
+export async function browserFullShot(runId?: string): Promise<{ dataUrl: string; width: number; height: number; url: string; title: string }> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  const viewport = page.viewport() || { width: 1280, height: 800 };
+  const fullHeight = await page.evaluate(() => Math.max(
+    document.documentElement?.scrollHeight || 0,
+    document.body?.scrollHeight || 0,
+    window.innerHeight,
+  )).catch(() => viewport.height);
+  const height = Math.min(Math.max(fullHeight, viewport.height), 6000);
+  const buf = await page.screenshot({
+    encoding: 'base64',
+    type: 'jpeg',
+    quality: 72,
+    captureBeyondViewport: true,
+    clip: { x: 0, y: 0, width: viewport.width, height },
+  });
+  return {
+    dataUrl: `data:image/jpeg;base64,${buf}`,
+    width: viewport.width,
+    height,
+    url: page.url(),
+    title: await page.title().catch(() => ''),
+  };
+}
+
+/** Scroll the real page so a full-page Y coordinate is on screen; returns the
+ *  matching viewport Y for elementFromPoint / mouse events. behavior:'instant'
+ *  overrides any CSS scroll-behavior:smooth — a smooth scroll would still be
+ *  animating when scrollY is read back, throwing the coordinate off screen. */
+async function alignFullCoord(page: Page, yFull: number): Promise<number> {
+  return page.evaluate((y) => {
+    window.scrollTo({ top: Math.max(0, y - window.innerHeight / 2), left: 0, behavior: 'instant' as ScrollBehavior });
+    return y - (window.scrollY ?? window.pageYOffset ?? 0);
+  }, yFull);
+}
+
+/** DevTools-style pick addressed in FULL-PAGE coordinates (from the tall shot). */
+export async function browserInspectAtFull(x: number, yFull: number, runId?: string): Promise<InspectedElement | null> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  const vy = await alignFullCoord(page, yFull);
+  return browserInspectAt(x, Math.round(vy), runId);
+}
+
+/** Forward a real click addressed in FULL-PAGE coordinates. */
+export async function browserClickAtFull(x: number, yFull: number, runId?: string): Promise<void> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  const vy = await alignFullCoord(page, yFull);
+  await page.mouse.click(x, Math.max(0, Math.round(vy)));
+  await page.waitForNetworkIdle({ idleTime: 400, timeout: 4000 }).catch(() => {});
+}
+
 /** Full current-viewport screenshot at natural size, with dimensions for
  *  client-side coordinate mapping. */
 export async function browserViewportShot(runId?: string): Promise<{ dataUrl: string; width: number; height: number; url: string; title: string }> {

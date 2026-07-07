@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  browserClickAt,
+  browserClickAtFull,
+  browserFullShot,
   browserHighlight,
-  browserInspectAt,
+  browserInspectAtFull,
   browserNavigate,
-  browserScroll,
-  browserScrollBy,
-  browserViewportShot,
   SUBBROWSER_RUN_ID,
 } from '@/lib/browser';
 
@@ -15,13 +13,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const action = String(body.action || '');
 
+    // All shots are FULL-PAGE: the client renders one tall image and scrolling
+    // is native in the frame. x/y for inspect/click are full-page coordinates.
     if (action === 'navigate') {
       const url = String(body.url || '').trim();
       if (!/^https?:\/\//i.test(url)) {
         return NextResponse.json({ ok: false, error: 'Enter a full http(s) URL, e.g. http://localhost:5173' }, { status: 400 });
       }
       await browserNavigate(url, SUBBROWSER_RUN_ID);
-      const shot = await browserViewportShot(SUBBROWSER_RUN_ID);
+      const shot = await browserFullShot(SUBBROWSER_RUN_ID);
       const { audit } = await import('@/lib/audit-log');
       audit('workspace', 'sub-browser navigate', shot.url);
       return NextResponse.json({ ok: true, ...shot });
@@ -33,10 +33,10 @@ export async function POST(req: NextRequest) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) {
         return NextResponse.json({ ok: false, error: 'inspect needs x/y coordinates' }, { status: 400 });
       }
-      const element = await browserInspectAt(Math.round(x), Math.round(y), SUBBROWSER_RUN_ID);
+      const element = await browserInspectAtFull(Math.round(x), Math.round(y), SUBBROWSER_RUN_ID);
       if (!element) return NextResponse.json({ ok: false, error: 'No element at that point' }, { status: 404 });
       await browserHighlight(element.selector, SUBBROWSER_RUN_ID);
-      const shot = await browserViewportShot(SUBBROWSER_RUN_ID);
+      const shot = await browserFullShot(SUBBROWSER_RUN_ID);
       return NextResponse.json({ ok: true, element, ...shot });
     }
 
@@ -46,27 +46,13 @@ export async function POST(req: NextRequest) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) {
         return NextResponse.json({ ok: false, error: 'click needs x/y coordinates' }, { status: 400 });
       }
-      await browserClickAt(Math.round(x), Math.round(y), SUBBROWSER_RUN_ID);
-      const shot = await browserViewportShot(SUBBROWSER_RUN_ID);
-      return NextResponse.json({ ok: true, ...shot });
-    }
-
-    if (action === 'scroll') {
-      const dir = ['up', 'down', 'top', 'bottom'].includes(body.direction) ? body.direction : 'down';
-      await browserScroll(dir, SUBBROWSER_RUN_ID);
-      const shot = await browserViewportShot(SUBBROWSER_RUN_ID);
-      return NextResponse.json({ ok: true, ...shot });
-    }
-
-    if (action === 'scrollby') {
-      const dy = Math.max(-2000, Math.min(2000, Number(body.dy) || 0));
-      await browserScrollBy(dy, SUBBROWSER_RUN_ID);
-      const shot = await browserViewportShot(SUBBROWSER_RUN_ID);
+      await browserClickAtFull(Math.round(x), Math.round(y), SUBBROWSER_RUN_ID);
+      const shot = await browserFullShot(SUBBROWSER_RUN_ID);
       return NextResponse.json({ ok: true, ...shot });
     }
 
     if (action === 'shot') {
-      const shot = await browserViewportShot(SUBBROWSER_RUN_ID);
+      const shot = await browserFullShot(SUBBROWSER_RUN_ID);
       return NextResponse.json({ ok: true, ...shot });
     }
 

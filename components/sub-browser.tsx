@@ -5,8 +5,8 @@
 // note, and send the whole annotation (selector + HTML + highlighted
 // screenshot) into Grok Chat for code refinement.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Crosshair, Globe, Loader2, MousePointer, RefreshCw, Send, X } from 'lucide-react';
+import React, { useCallback, useRef, useState } from 'react';
+import { Crosshair, Globe, Loader2, MousePointer, RefreshCw, Send, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface InspectedElement {
@@ -50,8 +50,6 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
   // buttons); Annotate = clicks select the element under the cursor.
   const [mode, setMode] = useState<'interact' | 'annotate'>('annotate');
   const imgRef = useRef<HTMLImageElement | null>(null);
-  const wheelAccum = useRef(0);
-  const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const call = useCallback(async (payload: Record<string, unknown>) => {
     const res = await fetch('/api/subbrowser', {
@@ -79,16 +77,6 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
     setBusy(null);
   }
 
-  async function scroll(direction: 'up' | 'down') {
-    if (!shot) return;
-    setBusy('Scrolling…');
-    try {
-      const data = await call({ action: 'scroll', direction });
-      if (data.ok) setShot(data);
-    } catch { /* keep view */ }
-    setBusy(null);
-  }
-
   async function refreshShot() {
     if (!shot) return;
     setBusy('Refreshing…');
@@ -99,35 +87,8 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
     setBusy(null);
   }
 
-  // Mouse wheel scrolls the live page (works in both modes). Bound as a native
-  // non-passive listener — React registers wheel handlers passively, so a
-  // synthetic onWheel can't preventDefault() and the modal scrolls instead of
-  // the rendered page. Deltas accumulate and flush once the gesture settles,
-  // so a scroll is one round-trip instead of dozens.
-  const hasShot = !!shot;
-  useEffect(() => {
-    const img = imgRef.current;
-    if (!open || !hasShot || !img) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      wheelAccum.current += e.deltaY;
-      if (wheelTimer.current) clearTimeout(wheelTimer.current);
-      wheelTimer.current = setTimeout(async () => {
-        const dy = Math.round(wheelAccum.current);
-        wheelAccum.current = 0;
-        if (!dy) return;
-        try {
-          const data = await call({ action: 'scrollby', dy });
-          if (data.ok) setShot(data);
-        } catch { /* keep view */ }
-      }, 140);
-    };
-    img.addEventListener('wheel', onWheel, { passive: false });
-    return () => {
-      img.removeEventListener('wheel', onWheel);
-      if (wheelTimer.current) clearTimeout(wheelTimer.current);
-    };
-  }, [open, hasShot, call]);
+  // The shot is the WHOLE page as one tall image, so scrolling is native and
+  // instant inside the stage — no wheel round-trips, no scroll buttons.
 
   async function pick(e: React.MouseEvent<HTMLImageElement>) {
     if (!shot || !imgRef.current || busy) return;
@@ -197,9 +158,9 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
               <Crosshair size={17} className="opacity-70" /> Annotate a page
             </div>
             <div className="text-xs text-dim mt-0.5">
-              Load the app you&apos;re building — use <strong>Interact</strong> to click around and navigate
-              (scroll with your mouse wheel), then switch to <strong>Annotate</strong> to select an element
-              (outlined orange) and send it to chat.
+              Load the app you&apos;re building — the whole page is live in the frame, scroll it like any page.
+              Use <strong>Interact</strong> to click around and navigate, then switch to <strong>Annotate</strong> to
+              select an element (outlined orange) and send it to chat.
             </div>
           </div>
           <button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={onClose} title="Close">
@@ -239,13 +200,7 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
                   <Crosshair size={12} /> Annotate
                 </button>
               </div>
-              <button type="button" onClick={() => void scroll('up')} disabled={!!busy} className="grok-btn grok-btn-ghost text-xs p-1.5 shrink-0" title="Scroll up">
-                <ArrowUp size={13} />
-              </button>
-              <button type="button" onClick={() => void scroll('down')} disabled={!!busy} className="grok-btn grok-btn-ghost text-xs p-1.5 shrink-0" title="Scroll down">
-                <ArrowDown size={13} />
-              </button>
-              <button type="button" onClick={() => void refreshShot()} disabled={!!busy} className="grok-btn grok-btn-ghost text-xs p-1.5 shrink-0" title="Refresh screenshot">
+              <button type="button" onClick={() => void refreshShot()} disabled={!!busy} className="grok-btn grok-btn-ghost text-xs p-1.5 shrink-0" title="Refresh the page capture">
                 <RefreshCw size={13} />
               </button>
             </>

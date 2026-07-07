@@ -65,7 +65,7 @@ The killer workflow for building web apps: refine code by *pointing at the page*
 
 1. Click the **crosshair button** in the composer (or type `/annotate`).
 2. Enter your dev server's URL (e.g. `http://localhost:5173`).
-3. **Interact mode** — clicks pass through to the real page: follow links, press buttons, navigate to the screen you care about.
+3. **Interact mode** — the whole page is live in the frame: scroll it natively like any page, follow links, and press buttons to reach the screen you care about.
 4. **Annotate mode** — click any element; it's selected DevTools-style and outlined orange in a fresh screenshot.
 5. Add a note ("make this container a responsive 2-column grid") and **Send to chat** — the composer receives the element's selector, size, and HTML excerpt, plus the highlighted screenshot as an image attachment.
 6. Send. Grok sees exactly what you selected and refines the code.
