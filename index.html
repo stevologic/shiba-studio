@@ -65,11 +65,12 @@
   /* ── Nav ── */
   nav {
     display: flex; align-items: center; gap: 12px; padding: 22px 0;
+    flex-wrap: wrap; row-gap: 10px;
   }
   nav img { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border-light); }
-  nav .brand { font-weight: 700; letter-spacing: -.03em; font-size: 19px; }
-  nav .links { margin-left: auto; display: flex; gap: 18px; font-size: 13.5px; }
-  nav a { color: var(--muted); text-decoration: none; }
+  nav .brand { font-weight: 700; letter-spacing: -.03em; font-size: 19px; white-space: nowrap; }
+  nav .links { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13.5px; }
+  nav a { color: var(--muted); text-decoration: none; white-space: nowrap; }
   nav a:hover { color: var(--text); }
 
   /* ── Hero ── */
@@ -252,8 +253,48 @@
   footer .row { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between; }
   footer a { color: var(--muted); text-decoration: none; }
   footer a:hover { color: #fff; }
+  .foot-brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .foot-logo { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border-light); flex-shrink: 0; }
+  .foot-mit a { text-decoration: underline; text-underline-offset: 3px; }
   .doge { border: 1px solid var(--border-light); border-radius: 999px; padding: 4px 13px; font-size: 12px; cursor: pointer; background: transparent; color: var(--muted); font-family: inherit; }
   .doge:hover { color: #fff; }
+
+  /* Full command deck inside the "Chat that acts" card */
+  .card-wide { grid-column: 1 / -1; }
+  .cmds {
+    list-style: none; margin-top: 16px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px 22px;
+  }
+  .cmds li { font-size: 12.5px; color: var(--dim); line-height: 1.5; }
+  .cmds code {
+    display: inline-block; margin-bottom: 1px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #e5e5e5;
+    background: rgba(255,255,255,.06); padding: 1px 7px; border-radius: 6px;
+  }
+
+  /* ── Mobile ── */
+  @media (max-width: 640px) {
+    .wrap { padding: 0 18px; }
+    nav { padding: 16px 0 8px; }
+    nav .links { margin-left: 0; flex-basis: 100%; }
+    .hero { padding: 52px 0 32px; }
+    .eyebrow { font-size: 10px; letter-spacing: .12em; padding: 5px 12px; }
+    .hero p.tag { font-size: 16px; }
+    .cta { flex-direction: column; align-items: center; }
+    .cta .btn { width: 100%; max-width: 320px; justify-content: center; }
+    .quick-install { padding: 11px 12px 11px 14px; }
+    .term { margin-top: 44px; }
+    .term-body { padding: 16px; font-size: 11.5px; }
+    section { padding: 64px 0 0; }
+    .stats { margin-top: 56px; grid-template-columns: 1fr 1fr; }
+    .stat b { font-size: 21px; }
+    .ad { margin-top: 64px; padding: 40px 20px; }
+    .tab { font-size: 13px; padding: 12px 6px; }
+    .pane { padding: 18px 14px; }
+    pre.cmd { font-size: 11.5px; padding: 14px 12px; }
+    .cmds { grid-template-columns: 1fr; }
+    footer .row { flex-direction: column; align-items: flex-start; }
+  }
 </style>
 </head>
 <body>
@@ -267,6 +308,7 @@
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
       <a href="#download">Download</a>
+      <a href="docs.html">Docs</a>
       <a href="https://github.com/stevologic/shiba-studio">GitHub</a>
     </div>
   </nav>
@@ -294,14 +336,16 @@
 
     <!-- The commands you'll live in -->
     <div class="chips" aria-label="Chat commands">
-      <span class="chip">/git pr</span><span class="chip">/annotate</span><span class="chip">/search</span>
-      <span class="chip">/fetch</span><span class="chip">/remember</span><span class="chip">/recall</span>
-      <span class="chip">/note</span><span class="chip">/git checkout</span><span class="chip">/help</span>
+      <span class="chip">/git pr</span><span class="chip">/annotate</span><span class="chip">/workspace</span>
+      <span class="chip">/search</span><span class="chip">/fetch</span><span class="chip">/remember</span>
+      <span class="chip">/recall</span><span class="chip">/note</span><span class="chip">/x</span><span class="chip">/help</span>
     </div>
 
     <div class="term">
       <div class="term-bar"><span></span><span></span><span></span></div>
       <div class="term-body">
+        <span class="ln"><span class="p">you ▸</span> /workspace C:\dev\pricing-app <span class="c"># bind this chat to the repo</span></span>
+        <span class="ln"><span class="ok">📁 Chat workspace set — file tools and /git now run there</span></span>
         <span class="ln"><span class="p">you ▸</span> /git checkout feat/pricing-page</span>
         <span class="ln"><span class="ok">✓ Created and switched to new branch feat/pricing-page</span></span>
         <span class="ln"><span class="p">you ▸</span> /annotate <span class="c"># highlight the hero div on localhost:5173</span></span>
@@ -347,8 +391,23 @@
     <h2>An engineering copilot with hands</h2>
     <p class="sub">Everything a frontier chat client does — plus the ability to actually do things.</p>
     <div class="grid">
-      <div class="card"><div class="ico">💬</div><h3>Chat that acts</h3>
-        <p>Streaming reasoning, markdown & code, inline images, multimodal attachments — and slash commands with autocomplete: <code>/git pr</code>, <code>/search</code>, <code>/fetch</code>, <code>/note</code>, <code>/remember</code>.</p></div>
+      <div class="card card-wide"><div class="ico">💬</div><h3>Chat that acts</h3>
+        <p>Streaming reasoning, markdown &amp; code, inline images, multimodal attachments, per-chat workspace folders — and the full slash-command deck with autocomplete:</p>
+        <ul class="cmds">
+          <li><code>/git status</code> branch, changed files, recent commits</li>
+          <li><code>/git checkout &lt;branch&gt;</code> switch to a branch, or create it</li>
+          <li><code>/git commit &lt;message&gt;</code> stage everything and commit</li>
+          <li><code>/git pr &lt;title&gt; | &lt;body&gt;</code> push and open a GitHub PR</li>
+          <li><code>/annotate</code> highlight an element for refinement</li>
+          <li><code>/workspace &lt;path&gt;</code> bind the chat to a repo/folder</li>
+          <li><code>/search &lt;query&gt;</code> web search into the conversation</li>
+          <li><code>/fetch &lt;url&gt;</code> read any page as clean text</li>
+          <li><code>/remember &lt;key&gt; | &lt;content&gt;</code> save a persistent memory</li>
+          <li><code>/recall [keyword]</code> list saved memories</li>
+          <li><code>/note &lt;path&gt; | &lt;content&gt;</code> create an Obsidian note</li>
+          <li><code>/x &lt;text&gt;</code> post to X through the integration</li>
+          <li><code>/help</code> the full reference, in chat</li>
+        </ul></div>
       <div class="card"><div class="ico">🎯</div><h3>Annotation sub-browser</h3>
         <p>Load the app you're building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot into chat for pinpoint code refinement.</p></div>
       <div class="card"><div class="ico">🤖</div><h3>Autonomous agents</h3>
@@ -442,11 +501,15 @@ npm run dev</pre>
 
   <footer>
     <div class="row">
-      <div>🐕 Shiba Studio — the localhost Grok agent studio. <span style="opacity:.7">Formerly GrokDesk.</span></div>
-      <div style="display:flex; gap:16px; align-items:center;">
+      <div class="foot-brand">
+        <img class="foot-logo" src="logo.svg" alt="Shiba Studio logo" />
+        <span>Shiba Studio — the localhost Grok agent studio.<br/>
+        <span class="foot-mit">Free and open source under the <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE">MIT license</a>.</span></span>
+      </div>
+      <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+        <a href="docs.html">Docs</a>
         <a href="https://github.com/stevologic/shiba-studio">GitHub</a>
         <a href="https://github.com/stevologic/shiba-studio/issues/new">Request a feature</a>
-        <a href="https://github.com/stevologic/shiba-studio/tree/main/docs">Docs</a>
         <button class="doge" id="doge">Ð Donate Dogecoin</button>
       </div>
     </div>

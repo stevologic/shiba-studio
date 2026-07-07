@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Shiba Studio Docs — install, chat, agents, automations, configuration</title>
+<meta name="description" content="Complete documentation for Shiba Studio: installation on Windows/macOS/Linux, Grok Chat with slash commands and workspaces, the annotation sub-browser, agents, automations, capabilities, sync, and configuration." />
+<link rel="icon" type="image/svg+xml" href="logo.svg" />
+<style>
+  :root {
+    --bg: #000; --card: #111; --border: #262626; --border-light: #404040;
+    --text: #f5f5f5; --muted: #a3a3a3; --dim: #737373; --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.65; font-size: 15px;
+  }
+  ::selection { background: rgba(255,255,255,.25); }
+  a { color: #e5e5e5; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border-light); }
+  a:hover { text-decoration-color: #fff; }
+
+  .layout { max-width: 1180px; margin: 0 auto; padding: 0 24px; display: grid; grid-template-columns: 230px 1fr; gap: 44px; }
+
+  /* Top bar */
+  .top { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 20px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; row-gap: 10px; }
+  .top img { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border-light); }
+  .top .brand { font-weight: 700; letter-spacing: -.02em; font-size: 17px; white-space: nowrap; }
+  .top .brand a { text-decoration: none; color: var(--text); }
+  .top .crumb { color: var(--dim); font-size: 13px; }
+  .top .links { margin-left: auto; display: flex; gap: 16px; font-size: 13px; flex-wrap: wrap; }
+  .top .links a { color: var(--muted); text-decoration: none; white-space: nowrap; }
+  .top .links a:hover { color: #fff; }
+
+  /* Sidebar */
+  .side { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto; padding: 26px 0 40px; }
+  .side .group { font-size: 11px; letter-spacing: .14em; color: var(--dim); margin: 20px 0 8px; }
+  .side .group:first-child { margin-top: 0; }
+  .side a { display: block; padding: 4px 0; font-size: 13.5px; color: var(--muted); text-decoration: none; }
+  .side a:hover { color: #fff; }
+
+  /* Content */
+  main { padding: 26px 0 90px; min-width: 0; }
+  h1 { font-size: 34px; letter-spacing: -.03em; line-height: 1.15; }
+  .lead { color: var(--muted); margin: 12px 0 8px; max-width: 640px; }
+  section { margin-top: 58px; scroll-margin-top: 20px; }
+  h2 { font-size: 24px; letter-spacing: -.02em; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 17px; margin-top: 26px; }
+  p, ul, ol { margin-top: 12px; color: #d4d4d4; }
+  ul, ol { padding-left: 22px; }
+  li { margin-top: 5px; }
+  li::marker { color: var(--dim); }
+  strong { color: #fff; }
+  code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 13px;
+    background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 5px; color: #eee;
+  }
+  pre {
+    margin-top: 14px; background: #0a0a0a; border: 1px solid var(--border); border-radius: 10px;
+    padding: 15px 17px; overflow-x: auto; line-height: 1.65;
+  }
+  pre code { background: none; padding: 0; font-size: 12.5px; color: #e5e5e5; }
+  .cmt { color: var(--dim); }
+
+  .tablewrap { overflow-x: auto; margin-top: 14px; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--dim); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; }
+
+  .callout {
+    margin-top: 16px; border: 1px solid var(--border-light); border-left: 3px solid #fff; border-radius: 8px;
+    padding: 12px 16px; font-size: 13.5px; color: var(--muted); background: rgba(255,255,255,.03);
+  }
+
+  footer { border-top: 1px solid var(--border); margin-top: 70px; padding: 26px 0 40px; font-size: 13px; color: var(--dim); }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 0; padding: 0 18px; }
+    .side { position: static; max-height: none; padding: 20px 0 4px; border-bottom: 1px solid var(--border); }
+    .side .group { margin-top: 12px; }
+    .side a { display: inline-block; margin-right: 16px; }
+    main { padding-top: 8px; }
+    h1 { font-size: 27px; }
+    .top .links { margin-left: 0; flex-basis: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <div class="top">
+    <img src="logo.svg" alt="Shiba Studio logo" />
+    <span class="brand"><a href="index.html">Shiba Studio</a></span>
+    <span class="crumb">/ Documentation</span>
+    <div class="links">
+      <a href="index.html#download">Download</a>
+      <a href="https://github.com/stevologic/shiba-studio">GitHub</a>
+      <a href="https://github.com/stevologic/shiba-studio/issues/new">Request a feature</a>
+    </div>
+  </div>
+
+  <nav class="side" aria-label="Docs navigation">
+    <div class="group">START HERE</div>
+    <a href="#getting-started">Getting started</a>
+    <a href="#connect">Connect a model</a>
+    <div class="group">USING IT</div>
+    <a href="#chat">Grok Chat</a>
+    <a href="#commands">Slash commands</a>
+    <a href="#workspaces">Chat workspaces</a>
+    <a href="#annotate">Annotation sub-browser</a>
+    <a href="#agents">Agents</a>
+    <a href="#automations">Automations</a>
+    <a href="#capabilities">Capabilities</a>
+    <a href="#sync">Cloud sync</a>
+    <div class="group">REFERENCE</div>
+    <a href="#configuration">Configuration</a>
+    <a href="#security">Security</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+  </nav>
+
+  <main>
+    <h1>Shiba Studio documentation</h1>
+    <p class="lead">
+      Everything you need to install, drive, and configure the localhost Grok agent studio —
+      from your first chat to headless scheduled agents.
+    </p>
+
+    <section id="getting-started">
+      <h2>Getting started</h2>
+      <p><strong>Requirements:</strong> Node.js ≥ 22.5 and Git. The runs/audit database uses Node's built-in <code>node:sqlite</code> — nothing to compile on any platform. Runs on Windows, macOS, and Linux.</p>
+
+      <h3>Windows (PowerShell)</h3>
+      <pre><code><span class="cmt"># prerequisites</span>
+winget install OpenJS.NodeJS.LTS
+winget install Git.Git
+
+<span class="cmt"># install &amp; run</span>
+git clone https://github.com/stevologic/shiba-studio.git
+cd shiba-studio
+npm install
+npm run dev</code></pre>
+
+      <h3>macOS (Terminal)</h3>
+      <pre><code>brew install node git
+git clone https://github.com/stevologic/shiba-studio.git
+cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
+
+      <h3>Linux (any distro, via nvm)</h3>
+      <pre><code>curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+nvm install 22
+git clone https://github.com/stevologic/shiba-studio.git
+cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
+
+      <p>Open <code>http://localhost:3000</code>. For production mode, run <code>npm run build &amp;&amp; npm run start</code> — scheduled automations keep firing as long as the server is up, no browser needed.</p>
+    </section>
+
+    <section id="connect">
+      <h2>Connect a model source</h2>
+      <p>Open <strong>Settings</strong> and connect any one of the four routes. The top bar shows a live readiness badge for each.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Source</th><th>How</th></tr>
+        <tr><td><strong>xAI API key</strong></td><td>Paste your <code>xai-…</code> key from <a href="https://console.x.ai">console.x.ai</a> → <em>Save &amp; Validate</em></td></tr>
+        <tr><td><strong>OAuth 2.0 with X</strong></td><td><em>Sign in with X</em> → complete login at accounts.x.ai (SuperGrok / X Premium+)</td></tr>
+        <tr><td><strong>Grok CLI</strong></td><td>Install the <code>grok</code> CLI — detected automatically from PATH, with an in-app update checker</td></tr>
+        <tr><td><strong>Local models</strong></td><td>Enable local models and point at any OpenAI-compatible server (LM Studio, Ollama, llama.cpp); a per-model allowlist filters every picker</td></tr>
+      </table></div>
+      <p>Set a <strong>default model</strong> and a <strong>default workspace</strong> in Settings, then press <em>New Chat</em>.</p>
+    </section>
+
+    <section id="chat">
+      <h2>Grok Chat</h2>
+      <p>Chat is a working surface, not just a conversation: it streams reasoning, renders markdown with syntax highlighting, shows images inline (click for a lightbox), accepts drag-and-drop / pasted attachments, and can act on your repo, your vault, and the web.</p>
+      <ul>
+        <li><strong>Sessions</strong> live in a collapsible, searchable rail on the left; each keeps its own model, target, reasoning effort, workspace, and history. New chats are <strong>auto-titled</strong> by a low-cost model after the first exchange.</li>
+        <li><strong>Chat targets</strong> — talk to plain Grok, to a specific agent (with its personality and live integration context), or to <em>all agents</em> at once with a synthesized answer.</li>
+        <li><strong>Models &amp; reasoning</strong> — switch cloud/local models per session from the composer pill; reasoning-capable models get an effort selector (off/low/med/high). A terminal toggle routes the session through the local Grok CLI instead of the API.</li>
+        <li><strong>Quota</strong> — the QUOTA pill reports live spend against your monthly budget from Settings.</li>
+        <li><strong>Housekeeping</strong> — export any conversation as Markdown (with reasoning and token counts), edit-and-resend your messages, regenerate the last answer.</li>
+      </ul>
+    </section>
+
+    <section id="commands">
+      <h2>Slash commands</h2>
+      <p>Type <code>/</code> in the composer for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dismiss). Commands run instantly and post their result into the chat:</p>
+      <div class="tablewrap"><table>
+        <tr><th>Command</th><th>What it does</th></tr>
+        <tr><td><code>/git status</code></td><td>Branch, changed files, and recent commits of the workspace</td></tr>
+        <tr><td><code>/git checkout &lt;branch&gt;</code></td><td>Switch to a branch, or create it from HEAD</td></tr>
+        <tr><td><code>/git commit &lt;message&gt;</code></td><td>Stage everything and commit</td></tr>
+        <tr><td><code>/git pr &lt;title&gt; | &lt;body&gt;</code></td><td>Push the branch and open a GitHub pull request</td></tr>
+        <tr><td><code>/annotate</code></td><td>Open the annotation sub-browser</td></tr>
+        <tr><td><code>/workspace</code></td><td>Open the folder picker — bind this chat to a repo/folder</td></tr>
+        <tr><td><code>/workspace &lt;path&gt;</code></td><td>Bind directly to a path; <code>/workspace off</code> detaches</td></tr>
+        <tr><td><code>/search &lt;query&gt;</code></td><td>Web search (keyless) — results with links</td></tr>
+        <tr><td><code>/fetch &lt;url&gt;</code></td><td>Read a page as clean text into the conversation</td></tr>
+        <tr><td><code>/remember &lt;key&gt; | &lt;content&gt;</code></td><td>Save a fact that persists across every chat</td></tr>
+        <tr><td><code>/recall [keyword]</code></td><td>List saved memories</td></tr>
+        <tr><td><code>/note &lt;path&gt; | &lt;content&gt;</code></td><td>Create an Obsidian note in your vault</td></tr>
+        <tr><td><code>/x &lt;text&gt;</code></td><td>Post to X through the configured integration</td></tr>
+        <tr><td><code>/help</code></td><td>The full reference, in chat</td></tr>
+      </table></div>
+      <p>Git commands run against the chat's bound workspace when one is set, otherwise the linked project's workspace or the default workspace. PRs use your GitHub token from Capabilities.</p>
+    </section>
+
+    <section id="workspaces">
+      <h2>Chat workspaces — give a conversation a folder</h2>
+      <p>Bind a chat to any folder on disk — typically a cloned GitHub repo — and the conversation gains hands:</p>
+      <ol>
+        <li>Click the <strong>Workspace</strong> button in the chat top bar (or type <code>/workspace</code>).</li>
+        <li>Browse to the folder — git repositories are badged and sorted first — or type its path, then <strong>Use this folder</strong>.</li>
+        <li>Grok in that chat now has real filesystem tools (<code>fs_list</code>, <code>fs_read</code>, <code>fs_write</code>, <code>fs_search</code>) rooted in that folder, and <code>/git</code> commands run against it.</li>
+      </ol>
+      <p>Ask things like <em>"read src/api.ts and explain the auth flow"</em>, <em>"find every usage of the deprecated helper"</em>, or <em>"fix the typo in the README and commit it"</em> — the model explores and edits the actual files instead of guessing. The binding persists with the session, shows in the top-bar chip, and detaches with one click (or <code>/workspace off</code>).</p>
+      <div class="callout">File access is granted per-chat and only to the folder you selected. Every tool call the model makes is recorded in the audit log.</div>
+    </section>
+
+    <section id="annotate">
+      <h2>Annotation sub-browser</h2>
+      <p>Refine code by <em>pointing at the page</em>:</p>
+      <ol>
+        <li>Type <code>/annotate</code> (or click the crosshair in the composer) and enter your dev server's URL, e.g. <code>http://localhost:5173</code>.</li>
+        <li><strong>Interact mode</strong> — clicks pass through to the live page: follow links, press buttons, and scroll with your mouse wheel to reach the screen you care about.</li>
+        <li><strong>Annotate mode</strong> — click any element; it's selected DevTools-style and outlined orange in a fresh screenshot.</li>
+        <li>Add a note ("make this container a responsive 2-column grid") and <strong>Send to chat</strong> — the composer receives the element's selector, size, and HTML excerpt plus the highlighted screenshot.</li>
+      </ol>
+      <p>It drives a real headless Chrome (no window ever appears), so it works with any URL — cross-origin dev servers included.</p>
+    </section>
+
+    <section id="agents">
+      <h2>Agents</h2>
+      <p>Agents are autonomous workers, each with its own model, workspace, git worktree, integration scopes, skills, peers, and persistent memory.</p>
+      <ul>
+        <li><strong>Local agents</strong> run on your machine with the full toolbelt: files, shell, a controlled headless Chrome, web research, image generation, Obsidian, GitHub PRs, and 30+ tools total (browse the live catalog on the Capabilities page).</li>
+        <li><strong>Cloud agents</strong> run against Grok cloud services and connected cloud integrations only — no access to this machine.</li>
+        <li><strong>Skills</strong> shape personality and procedure; custom skills are authored in-app and injected into prompts.</li>
+        <li><strong>Peers</strong> let agents message each other and fan out work.</li>
+        <li><strong>Memory</strong> — agents persist facts in SQLite and recall them in later runs; chat shares the mechanism via <code>/remember</code>.</li>
+      </ul>
+      <p>The Agents page is where you create, edit, and view agents; running them and reading execution traces happens on the Automations page. Every run — prompt, tool calls, side effects, outcome — is stored with full provenance, and clicking a run-log entry opens a detail modal.</p>
+    </section>
+
+    <section id="automations">
+      <h2>Automations</h2>
+      <ul>
+        <li><strong>Cron schedules</strong> per agent, with plain-language descriptions and per-schedule instructions.</li>
+        <li><strong>Headless operation</strong> — schedules arm at server start and fire as long as the server is up; the browser can stay closed.</li>
+        <li><strong>Live execution traces</strong> — watch each step (thought → tool call → result) stream as the agent works; run history is browsable per schedule.</li>
+        <li><strong>Self-cleaning</strong> — deleting an agent retires its schedules automatically; runs from deleted agents show a 🛸 avatar in logs.</li>
+      </ul>
+    </section>
+
+    <section id="capabilities">
+      <h2>Capabilities</h2>
+      <ul>
+        <li><strong>Integrations:</strong> GitHub (repos, issues, PRs), Slack, Google Drive, Discord, X (post + read timeline), and Obsidian (vault-aware notes). Scopes are granted per-agent.</li>
+        <li><strong>Custom skills:</strong> reusable prompt procedures you author once and attach to any agent.</li>
+        <li><strong>MCP servers:</strong> connect Model Context Protocol servers from curated presets or your own commands; their tools join the agent toolbelt.</li>
+        <li><strong>Tool catalog:</strong> the Capabilities page lists every built-in tool with its description — what agents can actually do, no guessing.</li>
+      </ul>
+      <div class="callout">Reading an X timeline requires at least X's Basic API tier; the Free tier allows posting and identity only. The tool reports this clearly instead of failing silently.</div>
+    </section>
+
+    <section id="sync">
+      <h2>Cloud sync</h2>
+      <p>Sync pushes/pulls your entities through <strong>your own xAI account's private file storage</strong> — nothing touches any third-party server.</p>
+      <ul>
+        <li><strong>What syncs:</strong> agents, automations, projects, chats, workspace uploads, and local-model settings — each category as one JSON snapshot named <code>shiba-sync-&lt;category&gt;.json</code>.</li>
+        <li><strong>Push</strong> replaces the previous snapshot; <strong>pull</strong> merges by id — local items are updated, new ones added, nothing deleted.</li>
+        <li>Credentials are <strong>never</strong> included in snapshots.</li>
+      </ul>
+    </section>
+
+    <section id="configuration">
+      <h2>Configuration</h2>
+      <h3>Environment variables</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+        <tr><td><code>SHIBA_DATA_DIR</code></td><td><code>~/.shiba-studio/data</code></td><td>Where all runtime data lives (config, SQLite, uploads, screenshots)</td></tr>
+        <tr><td><code>SHIBA_SECRET_KEY</code></td><td>key file</td><td>64-hex-char AES key for headless deployments (overrides the key file)</td></tr>
+        <tr><td><code>SHIBA_GIT_COMMIT</code></td><td>via <code>git rev-parse</code></td><td>Overrides the commit shown in the footer for non-git installs</td></tr>
+      </table></div>
+      <h3>Data locations</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Path</th><th>Contents</th></tr>
+        <tr><td><code>~/.shiba-studio/shiba-studio.key</code></td><td>Machine encryption key — <strong>back this up</strong>; without it encrypted credentials can't be read</td></tr>
+        <tr><td><code>~/.shiba-studio/data/config.json</code></td><td>Settings; credential fields stored as <code>enc:v1:…</code> ciphertext</td></tr>
+        <tr><td><code>~/.shiba-studio/data/shiba-studio.db</code></td><td>SQLite (WAL): agent runs with full traces, audit log, agent memory</td></tr>
+        <tr><td><code>~/.shiba-studio/data/</code></td><td>Agents, chat sessions, projects, uploads, screenshots</td></tr>
+      </table></div>
+      <p>Upgrades are automatic: a legacy <code>~/.grokdesk</code> directory from pre-rebrand installs (including its key and database) is renamed to <code>~/.shiba-studio</code> on first start, and the old <code>GROKDESK_*</code> env names still work as fallbacks.</p>
+    </section>
+
+    <section id="security">
+      <h2>Security</h2>
+      <ul>
+        <li><strong>Local-first:</strong> zero telemetry; outbound traffic goes only to xAI and the integrations you configure.</li>
+        <li><strong>Secrets:</strong> AES-256-GCM at rest (<code>enc:v1:</code> prefix); the machine key lives outside the project; plaintext stores migrate to encrypted form on load; secrets are excluded from sync snapshots.</li>
+        <li><strong>Audit:</strong> every consequential action — runs, chats, config changes, integrations, git, sub-browser — lands in the Logs page with agent/model provenance and CSV/JSON export.</li>
+        <li><strong>Know the limits:</strong> the dev server has no auth of its own. Treat Shiba Studio as single-user on a trusted machine, or bind <code>127.0.0.1</code> and front it with your own auth before exposing it beyond localhost.</li>
+      </ul>
+    </section>
+
+    <section id="troubleshooting">
+      <h2>Troubleshooting</h2>
+      <ul>
+        <li><strong>"Shiba Studio needs Node.js 22.5+"</strong> — upgrade Node (<code>node --version</code> to check). No native modules are involved on any platform.</li>
+        <li><strong>No models in the picker</strong> — connect a model source in Settings; the top-bar readiness badges show what's live.</li>
+        <li><strong>X posting returns 403 <code>oauth1-permissions</code></strong> — set your X app to <em>Read and write</em>, then <strong>regenerate</strong> the access token &amp; secret (tokens freeze the permission level they were created with).</li>
+        <li><strong>Timeline reads fail on X</strong> — reading requires at least the Basic API tier; the Free tier only permits posting.</li>
+        <li><strong>Stale styles in dev</strong> — stop the server, delete <code>.next</code>, restart.</li>
+        <li>Anything else — <a href="https://github.com/stevologic/shiba-studio/issues/new">open an issue</a>.</li>
+      </ul>
+    </section>
+
+    <footer>
+      <span>Shiba Studio — free and open source under the <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE">MIT license</a>. <a href="index.html">Home</a> · <a href="https://github.com/stevologic/shiba-studio">GitHub</a></span>
+    </footer>
+  </main>
+</div>
+</body>
+</html>
