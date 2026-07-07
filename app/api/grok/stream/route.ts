@@ -33,11 +33,13 @@ export async function POST(req: NextRequest) {
   // (e.g. the Obsidian vault index + contents) so the conversation carries the
   // same knowledge the agent gets during autonomous runs.
   let agentName: string | null = null;
+  let chatAgent: import('@/lib/types').Agent | null = null;
   if (body.agentId) {
     try {
       const { loadAgents } = await import('@/lib/persistence');
       const agent = (await loadAgents()).find((a) => a.id === String(body.agentId));
       if (agent) {
+        chatAgent = agent;
         agentName = agent.name;
         const { buildIntegrationContext } = await import('@/lib/integration-context');
         const integrationContext = await buildIntegrationContext(agent.integrations);
@@ -76,7 +78,80 @@ export async function POST(req: NextRequest) {
     model, agent: agentName, agentId: body.agentId || null, turns: messages.length,
   });
 
-  const stream = new ReadableStream({
+  // Chatting AS an agent: give the model that agent's cloud-safe toolbelt so
+  // "post this to X" actually posts instead of the model pretending it did.
+  // Machine tools (files/shell/browser) stay run-only; attachments fall back
+  // to the plain vision stream.
+  const hasAttachments = messages.some((m) => m.attachments?.length);
+  const useAgentTools = !!chatAgent && !hasAttachments && parseModelRef(model).provider !== 'local';
+
+  const stream = useAgentTools
+    ? new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          const send = (event: Parameters<typeof encodeSseEvent>[0]) =>
+            controller.enqueue(encoder.encode(encodeSseEvent(event)));
+          try {
+            const { grokChat } = await import('@/lib/grok-client');
+            const { getToolDefinitions } = await import('@/lib/agent-runtime');
+            const { executeAgentTool } = await import('@/lib/agent-tool-exec');
+            const { resolveWorkspace } = await import('@/lib/workspace');
+
+            const agent = chatAgent!;
+            const tools = getToolDefinitions(agent.integrations, false, 'cloud');
+            const workDir = resolveWorkspace(agent.workspace.path);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const msgs: any[] = messages.map((m) => ({ role: m.role, content: m.content }));
+            const toolsUsed: string[] = [];
+
+            for (let turn = 0; turn < 6; turn++) {
+              const resp = await grokChat({
+                model,
+                messages: msgs,
+                tools,
+                tool_choice: 'auto',
+                temperature: body.temperature,
+                max_tokens: body.max_tokens,
+              });
+              const msg = resp.choices?.[0]?.message;
+              if (!msg) throw new Error('Empty model response');
+
+              const toolCalls = msg.tool_calls || [];
+              if (toolCalls.length === 0) {
+                send({ type: 'content', delta: msg.content || '' });
+                if (resp.usage) send({ type: 'usage', usage: resp.usage as unknown as Record<string, unknown> });
+                break;
+              }
+
+              msgs.push({ role: 'assistant', content: msg.content ?? null, tool_calls: toolCalls });
+              for (const tc of toolCalls) {
+                const fn = tc.function;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                let args: any = {};
+                try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
+                send({ type: 'thinking', delta: `⚙ ${fn.name}(${JSON.stringify(args).slice(0, 160)})\n` });
+                const out = await executeAgentTool(fn.name, args, agent, {}, workDir);
+                toolsUsed.push(fn.name);
+                send({ type: 'thinking', delta: `→ ${JSON.stringify(out.result).slice(0, 200)}\n` });
+                msgs.push({ role: 'tool', tool_call_id: tc.id, name: fn.name, content: JSON.stringify(out.result).slice(0, 8000) });
+              }
+            }
+
+            if (toolsUsed.length) {
+              audit('chat', 'agent chat used tools', toolsUsed.join(', '), {
+                model, agent: agentName, agentId: agent.id, tools: toolsUsed,
+              });
+            }
+            send({ type: 'done', model });
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : 'Stream failed';
+            controller.enqueue(encoder.encode(encodeSseEvent({ type: 'error', message: msg })));
+          } finally {
+            controller.close();
+          }
+        },
+      })
+    : new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
       try {
