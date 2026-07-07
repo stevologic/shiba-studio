@@ -1,6 +1,6 @@
 # Automations
 
-The Automations page is mission control for everything that *runs*: schedules, live execution traces, and per-schedule run logs.
+The Automations page is where everything that *runs* lives: schedules, live execution traces, and per-schedule run logs.
 
 ## Schedules
 
@@ -8,9 +8,9 @@ Each agent can have multiple schedule entries, each with:
 
 - a **cron expression** (with human-readable presets — hourly, daily, weekdays, …),
 - its **own instructions** — the prompt used for that scheduled run,
-- an **enabled** switch (the Active/Paused pill on the card).
+- its own row on the automation card, with an **Active/Paused pill** and **edit/delete** controls right next to the cron.
 
-Add or edit schedules from the agent's editor (Agents → Edit → Schedules) or the calendar button on an automation card. Only agents that actually have schedules appear on the page.
+Add a schedule with the card's calendar button (or Agents → Edit → Schedules); pause, edit, or delete any individual automation from its row. Only agents that actually have schedules appear on the page.
 
 ## Headless operation
 

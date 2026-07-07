@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
-import ConfirmHost, { confirmDialog, promptDialog } from '@/components/confirm-dialog';
+import ConfirmHost, { confirmDialog } from '@/components/confirm-dialog';
 import MultitaskSidebar from '@/components/multitask-sidebar';
 import type { PendingToolApproval } from '@/components/tool-approval-modal';
 import type { ToolApprovalMode } from '@/lib/types';
@@ -781,36 +781,6 @@ export default function ShibaStudio() {
     toast('Agent deleted');
   }
 
-  async function renameAgent(agent: Agent, nextName: string) {
-    const name = nextName.trim();
-    if (!name || name === agent.name) return;
-    await fetch('/api/agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', agent: { ...agent, name } }),
-    });
-    await refreshAgents();
-    toast.success(`Renamed to ${name}`);
-  }
-
-  async function removeAgentAutomations(agent: Agent) {
-    const ok = await confirmDialog({
-      title: `Remove automations for ${agent.name}?`,
-      message: 'All schedules are deleted. The agent itself is kept and can still be run manually.',
-      confirmLabel: 'Remove automations',
-      danger: true,
-    });
-    if (!ok) return;
-    await fetch('/api/agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', agent: { ...agent, schedules: [], schedule: undefined } }),
-    });
-    await refreshAgents();
-    await loadNavStats();
-    toast('Automations removed');
-  }
-
   type RunAgentOptions = {
     prompt?: string;
     /** Use configured schedule instructions — no popup (automations). */
@@ -1469,15 +1439,39 @@ export default function ShibaStudio() {
   }
 
   // Schedule run from UI
-  async function toggleSchedule(agent: Agent) {
-    // Support new multi-schedules: toggle first enabled entry or legacy
-    const scheds = agent.schedules && agent.schedules.length ? agent.schedules : (agent.schedule ? [{...agent.schedule, id: 'legacy'}] : []);
-    const first = scheds[0] || { cron: '*/30 * * * *', enabled: false };
-    const newEnabled = !first.enabled;
-    const cron = first.cron;
-    await fetch('/api/scheduler', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId: agent.id, cron, enabled: newEnabled }) });
+  /** Flip one schedule entry's Active/Paused state — each cron row has its own pill. */
+  async function toggleScheduleEntry(agent: Agent, index: number) {
+    const current = agentSchedules(agent);
+    const nextEnabled = !current[index]?.enabled;
+    const scheds = current.map((s, i) => (i === index ? { ...s, enabled: nextEnabled } : s));
+    await fetch('/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update', agent: { ...agent, schedules: scheds, schedule: undefined } }),
+    });
     await refreshAgents();
-    toast(newEnabled ? 'Scheduled' : 'Schedule disabled');
+    toast(nextEnabled ? 'Schedule activated' : 'Schedule paused');
+  }
+
+  /** Delete a single schedule entry; the agent and its other automations stay. */
+  async function deleteScheduleEntry(agent: Agent, index: number) {
+    const entry = agentSchedules(agent)[index];
+    const ok = await confirmDialog({
+      title: 'Delete this automation?',
+      message: `${describeCron(entry?.cron || '')} — ${agent.name} keeps any other schedules and can still be run manually.`,
+      confirmLabel: 'Delete automation',
+      danger: true,
+    });
+    if (!ok) return;
+    const scheds = agentSchedules(agent).filter((_, i) => i !== index);
+    await fetch('/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update', agent: { ...agent, schedules: scheds, schedule: undefined } }),
+    });
+    await refreshAgents();
+    await loadNavStats();
+    toast('Automation deleted');
   }
 
   // Seed a sample agent if none
@@ -2056,7 +2050,7 @@ export default function ShibaStudio() {
                           {agent.origin === 'cloud' ? 'Grok cloud services' : agent.workspace.path}
                         </div>
                         <button
-                          onClick={() => toggleSchedule(agent)}
+                          onClick={() => void toggleScheduleEntry(agent, 0)}
                           className={`text-[10px] px-2 py-0.5 rounded border shrink-0 ${scheduleStats(agent).active > 0 ? 'border-success text-success' : 'border-default text-dim'}`}
                         >
                           {scheduleStats(agent).active > 0 ? 'SCHEDULED' : 'schedule off'}
@@ -2251,8 +2245,6 @@ export default function ShibaStudio() {
                 {/* Only agents with actual schedules — no placeholder cards */}
                 {agents.filter((a) => agentSchedules(a).length > 0).map(a => {
                   const scheds = agentSchedules(a);
-                  const first = scheds[0];
-                  const isActive = !!(first?.enabled);
                   return (
                   <div key={a.id} className="grok-card p-4 automation-card">
                     <div className="flex items-start justify-between gap-3">
@@ -2266,59 +2258,49 @@ export default function ShibaStudio() {
                           {(a.skills||[]).length > 0 && <span className="text-xs badge badge-accent mt-1 inline-block">skills: {(a.skills||[]).join(', ')}</span>}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => toggleSchedule(a)}
-                          className={`automation-status-tag ${isActive ? 'automation-status-active' : 'automation-status-paused'}`}
-                          title={isActive ? 'Pause schedule' : 'Activate schedule'}
-                        >
-                          {isActive ? 'Active' : 'Paused'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openEditAgentSchedule(a, 0)}
-                          className="grok-btn grok-btn-ghost text-xs py-1 px-2"
-                          title="Edit schedule"
-                        >
-                          <CalendarClock size={14}/>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const name = await promptDialog({ title: 'Rename agent', defaultValue: a.name, confirmLabel: 'Rename' });
-                            if (name) await renameAgent(a, name);
-                          }}
-                          className="grok-btn grok-btn-ghost text-xs py-1 px-2"
-                          title="Rename agent"
-                        >
-                          <Pencil size={14}/>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void removeAgentAutomations(a)}
-                          className="grok-btn grok-btn-ghost text-xs py-1 px-2 text-error"
-                          title="Remove all automations for this agent"
-                        >
-                          <Trash2 size={14}/>
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openEditAgentSchedule(a, scheds.length)}
+                        className="grok-btn grok-btn-ghost text-xs py-1 px-2 shrink-0"
+                        title="Add a schedule in the agent editor"
+                      >
+                        <CalendarClock size={14}/> Add
+                      </button>
                     </div>
+                    {/* One row per automation — its own status pill + edit/delete */}
                     <div className="mt-2 text-xs space-y-1">
-                      {scheds.length === 0 && <div className="text-dim">No schedule configured — click edit to add one.</div>}
                       {scheds.map((s: any, i: number) => (
-                        <div key={s.id || i} className="text-muted flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-mono text-[11px]">{describeCron(s.cron)}</span>
-                          {s.instructions && <span className="text-dim truncate max-w-full">· {s.instructions.slice(0, 60)}{s.instructions.length > 60 ? '…' : ''}</span>}
-                          {scheds.length > 1 && (
+                        <div key={s.id || i} className="text-muted flex items-center gap-x-2 gap-y-1 min-w-0">
+                          <button
+                            type="button"
+                            onClick={() => void toggleScheduleEntry(a, i)}
+                            className={`automation-status-tag shrink-0 ${s.enabled ? 'automation-status-active' : 'automation-status-paused'}`}
+                            title={s.enabled ? 'Pause this automation' : 'Activate this automation'}
+                          >
+                            {s.enabled ? 'Active' : 'Paused'}
+                          </button>
+                          <span className="font-mono text-[11px] shrink-0">{describeCron(s.cron)}</span>
+                          {s.instructions && <span className="text-dim truncate min-w-0">· {s.instructions.slice(0, 60)}{s.instructions.length > 60 ? '…' : ''}</span>}
+                          <span className="ml-auto flex items-center gap-1 shrink-0">
                             <button
                               type="button"
                               onClick={() => openEditAgentSchedule(a, i)}
-                              className="text-[10px] link-accent"
+                              className="grok-btn grok-btn-ghost text-xs p-1"
+                              title="Edit this automation (cron + instructions)"
+                              aria-label="Edit automation"
                             >
-                              edit
+                              <Pencil size={12}/>
                             </button>
-                          )}
+                            <button
+                              type="button"
+                              onClick={() => void deleteScheduleEntry(a, i)}
+                              className="grok-btn grok-btn-ghost text-xs p-1 text-error"
+                              title="Delete this automation"
+                              aria-label="Delete automation"
+                            >
+                              <Trash2 size={12}/>
+                            </button>
+                          </span>
                         </div>
                       ))}
                     </div>
