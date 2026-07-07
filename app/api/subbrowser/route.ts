@@ -5,6 +5,7 @@ import {
   browserInspectAt,
   browserNavigate,
   browserScroll,
+  browserScrollBy,
   browserViewportShot,
 } from '@/lib/browser';
 
@@ -56,6 +57,13 @@ export async function POST(req: NextRequest) {
     if (action === 'scroll') {
       const dir = ['up', 'down', 'top', 'bottom'].includes(body.direction) ? body.direction : 'down';
       await browserScroll(dir, SUBBROWSER_RUN_ID);
+      const shot = await browserViewportShot(SUBBROWSER_RUN_ID);
+      return NextResponse.json({ ok: true, ...shot });
+    }
+
+    if (action === 'scrollby') {
+      const dy = Math.max(-2000, Math.min(2000, Number(body.dy) || 0));
+      await browserScrollBy(dy, SUBBROWSER_RUN_ID);
       const shot = await browserViewportShot(SUBBROWSER_RUN_ID);
       return NextResponse.json({ ok: true, ...shot });
     }

@@ -9,16 +9,22 @@ const runPageMap = new Map<string, Page>();
 
 async function getBrowser(): Promise<Browser> {
   if (browser && (browser as any).connected) return browser;
-  browser = await puppeteer.launch({
-    headless: true, // set false for visible during debug on desktop
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--disable-gpu',
-    ],
-  });
+  const args = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--disable-gpu',
+  ];
+  // `headless: 'shell'` uses chrome-headless-shell — genuinely windowless, so
+  // no Chrome window flashes on screen (the newer `headless: true` launches a
+  // real Chrome that can pop a visible window on Windows). Fall back to the
+  // standard headless mode if the shell binary isn't present.
+  try {
+    browser = await puppeteer.launch({ headless: 'shell', args });
+  } catch {
+    browser = await puppeteer.launch({ headless: true, args });
+  }
   return browser;
 }
 
@@ -216,6 +222,12 @@ export async function browserClickAt(x: number, y: number, runId?: string): Prom
   await page.mouse.click(x, y);
   // Give any resulting navigation/render a moment to settle.
   await page.waitForNetworkIdle({ idleTime: 400, timeout: 4000 }).catch(() => {});
+}
+
+/** Scroll the page by a pixel delta — powers the sub-browser's mouse wheel. */
+export async function browserScrollBy(pixels: number, runId?: string): Promise<void> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  await page.evaluate((dy) => window.scrollBy(0, dy), pixels);
 }
 
 /** Outline one element (orange) so annotated screenshots show the selection. */

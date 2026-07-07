@@ -50,6 +50,8 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
   // buttons); Annotate = clicks select the element under the cursor.
   const [mode, setMode] = useState<'interact' | 'annotate'>('annotate');
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const wheelAccum = useRef(0);
+  const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const call = useCallback(async (payload: Record<string, unknown>) => {
     const res = await fetch('/api/subbrowser', {
@@ -95,6 +97,25 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
       if (data.ok) setShot(data);
     } catch { /* keep view */ }
     setBusy(null);
+  }
+
+  // Mouse wheel scrolls the live page (works in both modes). Accumulate the
+  // deltas and flush once the wheel settles, so a scroll gesture is one
+  // round-trip instead of dozens.
+  function onWheel(e: React.WheelEvent<HTMLImageElement>) {
+    if (!shot) return;
+    e.preventDefault();
+    wheelAccum.current += e.deltaY;
+    if (wheelTimer.current) clearTimeout(wheelTimer.current);
+    wheelTimer.current = setTimeout(async () => {
+      const dy = Math.round(wheelAccum.current);
+      wheelAccum.current = 0;
+      if (!dy) return;
+      try {
+        const data = await call({ action: 'scrollby', dy });
+        if (data.ok) setShot(data);
+      } catch { /* keep view */ }
+    }, 140);
   }
 
   async function pick(e: React.MouseEvent<HTMLImageElement>) {
@@ -165,8 +186,9 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
               <Crosshair size={17} className="opacity-70" /> Annotate a page
             </div>
             <div className="text-xs text-dim mt-0.5">
-              Load the app you&apos;re building — use <strong>Interact</strong> to click around and navigate,
-              then switch to <strong>Annotate</strong> to select an element (outlined orange) and send it to chat.
+              Load the app you&apos;re building — use <strong>Interact</strong> to click around and navigate
+              (scroll with your mouse wheel), then switch to <strong>Annotate</strong> to select an element
+              (outlined orange) and send it to chat.
             </div>
           </div>
           <button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={onClose} title="Close">
@@ -228,6 +250,7 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
               alt={shot.title || 'page'}
               className={`subbrowser-shot ${mode === 'interact' ? 'subbrowser-shot-interact' : ''}`}
               onClick={(e) => void pick(e)}
+              onWheel={onWheel}
             />
           ) : (
             <div className="text-sm text-dim text-center py-16">
