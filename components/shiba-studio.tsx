@@ -107,7 +107,7 @@ const APP_VERSION = pkg.version;
 const GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT || 'unreleased';
 const DOGE_DONATION_ADDRESS = 'DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK';
 
-export default function GrokDesk() {
+export default function ShibaStudio() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -3046,6 +3046,15 @@ export default function GrokDesk() {
             Shiba Studio <span className="font-mono">{GIT_COMMIT}</span> — xAI Grok agent studio • SpaceX-inspired mission control
           </div>
           <div className="flex items-center gap-3 shrink-0">
+            <a
+              href="https://shiba-studio.io/docs.html"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-primary"
+              title="Full documentation — getting started, chat, agents, automations, configuration"
+            >
+              Docs
+            </a>
             <a
               href="https://github.com/stevologic/shiba-studio/issues/new"
               target="_blank"

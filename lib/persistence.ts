@@ -7,7 +7,7 @@ import { decryptSecret, encryptSecret, isEncryptedSecret } from './secure-store'
 
 /**
  * Credential fields sealed with AES-256-GCM before touching disk. The machine
- * key lives in ~/.grokdesk/grokdesk.key — outside source code and the repo.
+ * key lives in ~/.shiba-studio/shiba-studio.key — outside source code and the repo.
  * Dot-paths are relative to AppConfig.
  */
 const SENSITIVE_CONFIG_PATHS = [

@@ -40,7 +40,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# GrokDesk runtime state — never commit (contains API keys, OAuth tokens, chat history)
+# Shiba Studio runtime state — never commit (contains API keys, OAuth tokens, chat history)
 /data/
 /uploads/
 /terminals/

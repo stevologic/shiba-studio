@@ -1,4 +1,4 @@
-/** Curated one-click MCP server presets for GrokDesk. */
+/** Curated one-click MCP server presets for Shiba Studio. */
 
 export interface McpPresetEnvField {
   key: string;

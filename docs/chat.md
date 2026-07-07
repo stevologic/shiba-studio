@@ -35,6 +35,8 @@ Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dism
 | `/git commit <message>` | Stage everything and commit |
 | `/git pr <title> \| <body>` | Push the branch and open a GitHub pull request |
 | `/annotate` | Open the annotation sub-browser (below) |
+| `/workspace` | Open the folder picker — bind this chat to a repo/folder (below) |
+| `/workspace <path>` | Bind directly to a path; `/workspace off` detaches |
 | `/search <query>` | Web search (DuckDuckGo, keyless) — results with links |
 | `/fetch <url>` | Read a page as clean text into the conversation |
 | `/remember <key> \| <content>` | Save a fact that persists across every chat |
@@ -43,7 +45,19 @@ Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dism
 | `/x <text>` | Post to X through the configured integration (agents with the X scope can post too, via `x_post`) |
 | `/help` | The full reference, in chat |
 
-Git commands run against the linked project's workspace (or the default workspace); PRs use your GitHub token from Capabilities.
+Git commands run against the chat's bound workspace folder when one is set, otherwise the linked project's workspace (or the default workspace); PRs use your GitHub token from Capabilities.
+
+## Chat workspaces — give a conversation a folder
+
+Bind a chat to any folder on disk — typically a cloned GitHub repo — and the conversation gains hands:
+
+1. Click the **Workspace** button in the chat top bar (or type `/workspace`).
+2. Browse to the folder (git repositories are badged and sorted first) or type its path, then **Use this folder**.
+3. From then on, Grok in that chat has real filesystem tools — `fs_list`, `fs_read`, `fs_write`, `fs_search` — rooted in that folder, and `/git status|checkout|commit|pr` run against it.
+
+Ask things like *"read src/api.ts and explain the auth flow"*, *"find every usage of the deprecated helper"*, or *"fix the typo in the README and commit it"* — the model explores, edits, and answers from the actual files rather than guessing. The binding persists with the session; the active folder shows in the top bar chip, and **Detach** (or `/workspace off`) removes access.
+
+Workspace file access is granted per-chat and only to the folder you selected. Every tool call is recorded in the audit log.
 
 ## The annotation sub-browser
 

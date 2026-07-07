@@ -1,14 +1,14 @@
 // Encrypted-at-rest storage for credentials (xAI API key, OAuth tokens,
 // integration secrets). Values are sealed with AES-256-GCM using a machine
-// key that lives OUTSIDE the project directory (~/.grokdesk/grokdesk.key),
+// key that lives OUTSIDE the project directory (~/.shiba-studio/shiba-studio.key),
 // so neither source code nor the repo's data files ever contain usable
-// plaintext secrets. Set GROKDESK_SECRET_KEY (64 hex chars) to override the
+// plaintext secrets. Set SHIBA_SECRET_KEY (64 hex chars) to override the
 // key file, e.g. for headless or containerized deployments.
 
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import * as fsSync from 'fs';
-import os from 'os';
 import path from 'path';
+import { shibaHome } from './data-paths';
 
 const PREFIX = 'enc:v1:';
 const ALGO = 'aes-256-gcm';
@@ -18,13 +18,24 @@ const TAG_LEN = 16;
 let cachedKey: Buffer | null = null;
 
 function keyFilePath(): string {
-  return path.join(os.homedir(), '.grokdesk', 'grokdesk.key');
+  const file = path.join(shibaHome(), 'shiba-studio.key');
+  // Pre-rebrand installs named the key grokdesk.key — carry it over so
+  // credentials sealed under the old name stay readable.
+  const legacy = path.join(shibaHome(), 'grokdesk.key');
+  if (!fsSync.existsSync(file) && fsSync.existsSync(legacy)) {
+    try {
+      fsSync.renameSync(legacy, file);
+    } catch {
+      return legacy;
+    }
+  }
+  return file;
 }
 
 function loadOrCreateKeySync(): Buffer {
   if (cachedKey) return cachedKey;
 
-  const envKey = process.env.GROKDESK_SECRET_KEY?.trim();
+  const envKey = (process.env.SHIBA_SECRET_KEY || process.env.GROKDESK_SECRET_KEY)?.trim();
   if (envKey && /^[0-9a-f]{64}$/i.test(envKey)) {
     cachedKey = Buffer.from(envKey, 'hex');
     return cachedKey;
@@ -89,5 +100,7 @@ export function decryptSecret(value: string): string {
 
 /** Where the machine key lives — surfaced in Settings so users know what to back up. */
 export function secretKeyLocation(): string {
-  return process.env.GROKDESK_SECRET_KEY ? 'GROKDESK_SECRET_KEY environment variable' : keyFilePath();
+  if (process.env.SHIBA_SECRET_KEY) return 'SHIBA_SECRET_KEY environment variable';
+  if (process.env.GROKDESK_SECRET_KEY) return 'GROKDESK_SECRET_KEY environment variable (legacy name — prefer SHIBA_SECRET_KEY)';
+  return keyFilePath();
 }

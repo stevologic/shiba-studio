@@ -20,7 +20,7 @@ export default class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error('GrokDesk crashed:', error, info.componentStack);
+    console.error('Shiba Studio crashed:', error, info.componentStack);
   }
 
   render() {

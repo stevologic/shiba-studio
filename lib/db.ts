@@ -66,10 +66,26 @@ function migrateRunsFromJson(database: DatabaseSync): void {
   }
 }
 
+/** Pre-rebrand databases were named grokdesk.db — rename (with WAL sidecars)
+ *  before opening so run history and the audit log survive the upgrade. */
+function dbPath(): string {
+  const file = dataDir('shiba-studio.db');
+  const legacy = dataDir('grokdesk.db');
+  if (!fs.existsSync(file) && fs.existsSync(legacy)) {
+    for (const ext of ['', '-wal', '-shm']) {
+      try {
+        if (fs.existsSync(legacy + ext)) fs.renameSync(legacy + ext, file + ext);
+      } catch { /* sidecar in use — handled below */ }
+    }
+    if (!fs.existsSync(file)) return legacy; // rename blocked (old server still holds it)
+  }
+  return file;
+}
+
 export function getDb(): DatabaseSync {
   if (db) return db;
   const { DatabaseSync } = loadSqlite();
-  db = new DatabaseSync(dataDir('grokdesk.db'));
+  db = new DatabaseSync(dbPath());
   db.exec('PRAGMA journal_mode = WAL');
   db.exec(`
     CREATE TABLE IF NOT EXISTS runs (

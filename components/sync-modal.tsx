@@ -194,12 +194,12 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
               {direction === 'push' ? (
                 <>
                   Each category below is serialized into one JSON snapshot
-                  (<span className="font-mono">grokdesk-sync-&lt;category&gt;.json</span>) and uploaded to your
+                  (<span className="font-mono">shiba-sync-&lt;category&gt;.json</span>) and uploaded to your
                   xAI account&apos;s private file storage via the Files API, replacing the previous snapshot.
                 </>
               ) : (
                 <>
-                  The latest <span className="font-mono">grokdesk-sync-&lt;category&gt;.json</span> snapshots are
+                  The latest <span className="font-mono">shiba-sync-&lt;category&gt;.json</span> snapshots are
                   downloaded from your xAI account&apos;s file storage and merged into this machine —
                   existing local items with the same id are updated, nothing else is deleted.
                 </>

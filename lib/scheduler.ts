@@ -1,4 +1,4 @@
-// Scheduler + inter-agent orchestration for GrokDesk agents.
+// Scheduler + inter-agent orchestration for Shiba Studio agents.
 // Scoped schedules per agent. Runs in-process using node-cron.
 
 import * as cron from 'node-cron';

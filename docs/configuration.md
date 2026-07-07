@@ -19,20 +19,22 @@ Settings is a card grid; each card maps to a concern:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GROKDESK_DATA_DIR` | `~/.grokdesk/data` | Where all runtime data lives (config, SQLite, uploads, screenshots) |
-| `GROKDESK_SECRET_KEY` | `~/.grokdesk/grokdesk.key` file | 64-hex-char AES key for headless deployments (overrides the key file) |
+| `SHIBA_DATA_DIR` | `~/.shiba-studio/data` | Where all runtime data lives (config, SQLite, uploads, screenshots) |
+| `SHIBA_SECRET_KEY` | `~/.shiba-studio/shiba-studio.key` file | 64-hex-char AES key for headless deployments (overrides the key file) |
 | `SHIBA_GIT_COMMIT` | resolved via `git rev-parse` | Overrides the commit shown in the sidebar/footer for non-git installs |
+
+The pre-rebrand names `GROKDESK_DATA_DIR` / `GROKDESK_SECRET_KEY` are still honored as fallbacks so older deployments keep working.
 
 ## Data locations
 
 | Path | Contents |
 | --- | --- |
-| `~/.grokdesk/grokdesk.key` | Machine encryption key — **back this up**; without it encrypted credentials can't be read |
-| `~/.grokdesk/data/config.json` | Settings; credential fields stored as `enc:v1:…` ciphertext |
-| `~/.grokdesk/data/grokdesk.db` | SQLite (WAL): agent runs with full traces, audit log, agent memory |
-| `~/.grokdesk/data/` | Agents, chat sessions, projects, global uploads, screenshots |
+| `~/.shiba-studio/shiba-studio.key` | Machine encryption key — **back this up**; without it encrypted credentials can't be read |
+| `~/.shiba-studio/data/config.json` | Settings; credential fields stored as `enc:v1:…` ciphertext |
+| `~/.shiba-studio/data/shiba-studio.db` | SQLite (WAL): agent runs with full traces, audit log, agent memory |
+| `~/.shiba-studio/data/` | Agents, chat sessions, projects, global uploads, screenshots |
 
-Legacy in-repo `data/` directories migrate to `~/.grokdesk/data` automatically on first start.
+Upgrades are automatic: a legacy `~/.grokdesk` directory (including its key and database) is renamed to `~/.shiba-studio` on first start, and legacy in-repo `data/` directories migrate the same way.
 
 ## Security model
 

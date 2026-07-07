@@ -34,7 +34,7 @@ async function mockGrokChat(params: any): Promise<any> {
           tool_calls: [{
             id: 'tc1',
             type: 'function',
-            function: { name: 'fs_write', arguments: JSON.stringify({ path: 'data/grokdesk-verify.txt', content: 'GrokDesk verification run at ' + new Date().toISOString() }) }
+            function: { name: 'fs_write', arguments: JSON.stringify({ path: 'data/shiba-verify.txt', content: 'Shiba Studio verification run at ' + new Date().toISOString() }) }
           }]
         },
         finish_reason: 'tool_calls'
@@ -120,7 +120,7 @@ async function mockGrokChat(params: any): Promise<any> {
           tool_calls: [{
             id: 'tc6',
             type: 'function',
-            function: { name: 'slack_post', arguments: JSON.stringify({ channel: '#verify', text: 'GrokDesk verify run posted to slack (dummy token)' }) }
+            function: { name: 'slack_post', arguments: JSON.stringify({ channel: '#verify', text: 'Shiba Studio verify run posted to slack (dummy token)' }) }
           }]
         },
         finish_reason: 'tool_calls'
@@ -142,7 +142,7 @@ async function mockGrokChat(params: any): Promise<any> {
 }
 
 async function main() {
-  console.log('=== FULL GROKDESK VERIFICATION (DRIVING SHIPPED CODE) ===');
+  console.log('=== FULL SHIBA STUDIO VERIFICATION (DRIVING SHIPPED CODE) ===');
   await ensureEvidenceDir();
   await fs.mkdir(TEST_DATA, { recursive: true }).catch(() => {});
 

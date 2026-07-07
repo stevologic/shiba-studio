@@ -58,16 +58,16 @@ Open **http://localhost:3000**. For a production build: `npm run build && npm ru
 
 ## Where your data lives
 
-Everything persists under `~/.grokdesk/`:
+Everything persists under `~/.shiba-studio/` (a legacy `~/.grokdesk/` from older installs is migrated there automatically):
 
 | Path | Contents |
 | --- | --- |
-| `~/.grokdesk/grokdesk.key` | AES-256-GCM machine key (keep safe; never commit) |
-| `~/.grokdesk/data/config.json` | Settings + encrypted credentials |
-| `~/.grokdesk/data/grokdesk.db` | SQLite: agent runs, audit log, agent memory |
-| `~/.grokdesk/data/…` | Agents, chats, projects, uploads, screenshots |
+| `~/.shiba-studio/shiba-studio.key` | AES-256-GCM machine key (keep safe; never commit) |
+| `~/.shiba-studio/data/config.json` | Settings + encrypted credentials |
+| `~/.shiba-studio/data/shiba-studio.db` | SQLite: agent runs, audit log, agent memory |
+| `~/.shiba-studio/data/…` | Agents, chats, projects, uploads, screenshots |
 
-Override the data directory with `GROKDESK_DATA_DIR`, the key with `GROKDESK_SECRET_KEY`. See [Configuration](configuration.md).
+Override the data directory with `SHIBA_DATA_DIR`, the key with `SHIBA_SECRET_KEY`. See [Configuration](configuration.md).
 
 ## Troubleshooting
 

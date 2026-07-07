@@ -32,7 +32,7 @@ export async function connectMcpServer(
     env: { ...process.env, ...server.env } as Record<string, string>,
   });
 
-  const client = new Client({ name: 'grokdesk', version: '1.0.0' });
+  const client = new Client({ name: 'shiba-studio', version: '1.0.0' });
 
   const connectPromise = client.connect(transport);
   const timeout = new Promise<never>((_, reject) => {

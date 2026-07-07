@@ -1,4 +1,4 @@
-/** UI catalog for GrokDesk integrations. */
+/** UI catalog for Shiba Studio integrations. */
 
 export type IntegrationId = 'github' | 'slack' | 'googledrive' | 'discord' | 'x' | 'obsidian';
 

@@ -1,4 +1,4 @@
-import * as fs from 'fs/promises';
+﻿import * as fs from 'fs/promises';
 import * as path from 'path';
 import { setApiKey } from '../lib/grok-client';
 import { runAgentOnce } from '../lib/agent-runtime';
@@ -54,15 +54,12 @@ async function main() {
   await fs.mkdir(TEST_DATA, { recursive: true });
   setPersistenceDataDir(TEST_DATA);
 
-  const audit = await read('research/projects-ui-gaps.md');
-  assert(audit.includes('## In place'), 'audit: In place');
-  assert(audit.includes('## Gaps'), 'audit: Gaps');
-  assert(audit.includes('## Implemented'), 'audit: Implemented');
-  assert(audit.includes('## Deferred'), 'audit: Deferred');
-  assert(/workspace/i.test(audit), 'audit: workspace');
-  assert(/instructions/i.test(audit), 'audit: instructions');
-  assert(/agent/i.test(audit), 'audit: agent');
-  await fs.writeFile(path.join(SCRATCH, 'projects-gap-audit-grep.txt'), audit);
+  // The one-off research/ gap audit was removed at release cleanup; the
+  // shipped agent docs are the durable record of project/agent concepts.
+  const agentDocs = await read('docs/agents.md');
+  assert(/workspace/i.test(agentDocs), 'docs: workspace');
+  assert(/agent/i.test(agentDocs), 'docs: agent');
+  await fs.writeFile(path.join(SCRATCH, 'projects-gap-audit-grep.txt'), agentDocs);
 
   const projectsTs = await read('lib/projects.ts');
   assert(projectsTs.includes('workspacePath'), 'Project.workspacePath');
@@ -75,7 +72,7 @@ async function main() {
   assert(panel.includes('projectLiveTrace'), 'scoped live trace');
   assert(panel.includes('onProjectSelect'), 'project switch handler');
 
-  const desk = await read('components/grok-desk.tsx');
+  const desk = await read('components/shiba-studio.tsx');
   assert(desk.includes('clearProjectRunTrace'), 'clear trace on switch');
   assert(!desk.includes('workspacePath: ws'), 'no stale client workspace pass');
 

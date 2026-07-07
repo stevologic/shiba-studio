@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🐕 Shiba Studio
+<img src="public/shiba-logo.svg" alt="Shiba Studio — shiba with sunglasses logo" width="96" />
+
+# Shiba Studio
 
 **The localhost agent studio powered exclusively by Grok / xAI.**
 
@@ -17,7 +19,7 @@ Build, orchestrate, and schedule AI agents with full computer use — chat, code
 
 *Grok Chat in action — an element annotated in the sub-browser, refactored with reasoning, code, and a one-command PR.*
 
-*Formerly "GrokDesk" — internal paths (`~/.grokdesk/`, `GROKDESK_*` env vars) keep the old name so existing data keeps working.*
+*Upgrading from an older install? Legacy `~/.grokdesk` data (key, credentials, runs, chats) migrates to `~/.shiba-studio` automatically on first start.*
 
 </div>
 
@@ -27,7 +29,7 @@ Build, orchestrate, and schedule AI agents with full computer use — chat, code
 
 Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok into a hands-on engineering copilot:
 
-- **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …).
+- **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Bind any chat to a **workspace folder** (a cloned repo, say) and Grok reads, writes, and searches its files directly.
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, peers, and schedules. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Automations** — cron-scheduled agent runs with live execution traces, per-schedule run logs, and headless operation (schedules fire as long as the server is up — no browser required).
 - **Annotation sub-browser** — load the web app *you're* building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot straight into chat for code refinement.
@@ -80,7 +82,8 @@ The top bar shows a readiness badge for each source.
 
 ## Highlights
 
-- **Slash commands with autocomplete** — type `/` in chat: `/git status|checkout|commit|pr`, `/annotate`, `/search`, `/fetch`, `/remember`, `/recall`, `/note`, `/help`.
+- **Slash commands with autocomplete** — type `/` in chat: `/git status|checkout|commit|pr`, `/annotate`, `/workspace`, `/search`, `/fetch`, `/remember`, `/recall`, `/note`, `/x`, `/help`.
+- **Chat workspaces** — point a chat at any folder with `/workspace` (or the topbar folder button); file reads/writes/searches and `/git` commands run inside it, so "fix the failing test in this repo" just works.
 - **Auto-titled chats** — a low-end model summarizes each new conversation into a title after the first exchange.
 - **Run provenance everywhere** — dashboard runs, agent history, and the audit log all deep-link to full execution traces; deleted agents show a 🛸 and their automations retire themselves.
 - **Usage quota** — spend is metered live from xAI responses and reported against a configurable monthly budget.
@@ -89,7 +92,7 @@ The top bar shows a readiness badge for each source.
 
 ## Security — credentials at rest
 
-All credentials (xAI API key, OAuth tokens, integration secrets) are **encrypted with AES-256-GCM** before touching disk. The machine key lives outside the project at `~/.grokdesk/grokdesk.key` (or supply `GROKDESK_SECRET_KEY` as 64 hex chars for headless deployments). Secrets never appear in source code; plaintext stores migrate to encrypted form automatically on first load. See [Configuration](docs/configuration.md) for the full model and current limitations before exposing the server beyond localhost.
+All credentials (xAI API key, OAuth tokens, integration secrets) are **encrypted with AES-256-GCM** before touching disk. The machine key lives outside the project at `~/.shiba-studio/shiba-studio.key` (or supply `SHIBA_SECRET_KEY` as 64 hex chars for headless deployments). Secrets never appear in source code; plaintext stores migrate to encrypted form automatically on first load. See [Configuration](docs/configuration.md) for the full model and current limitations before exposing the server beyond localhost.
 
 ## Commands
 
@@ -102,10 +105,11 @@ All credentials (xAI API key, OAuth tokens, integration secrets) are **encrypted
 
 ## Contributing & support
 
+- 🌐 **Website & docs** → [shiba-studio.io](http://shiba-studio.io)
 - 🐛 **Bugs / feature requests** → [open an issue](https://github.com/stevologic/shiba-studio/issues/new)
 - 🗺️ **Roadmap to public release** → [TODO.md](TODO.md)
 - Ð **Donate Dogecoin** → `DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK` (much thanks, very wow)
 
-## Doge easter egg
+## License
 
-Settings → *Activate Doge Shiba Inu Page Icon* — instantly swaps the favicon and persists. 🐶
+[MIT](LICENSE) — free to use, fork, and ship. Much freedom. Very open source.

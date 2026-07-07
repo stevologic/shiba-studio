@@ -1,4 +1,4 @@
-import * as fs from 'fs/promises';
+﻿import * as fs from 'fs/promises';
 import * as path from 'path';
 
 const ROOT = path.resolve(__dirname, '..');
@@ -28,12 +28,12 @@ async function main() {
   assert(palette.includes('CommandPaletteItem'), 'command palette types');
   assert(palette.includes('Command palette search'), 'command palette a11y');
 
-  const desk = await read('components/grok-desk.tsx');
-  assert(desk.includes('CommandPalette'), 'grok-desk imports command palette');
-  assert(desk.includes('showCommandPalette'), 'grok-desk palette state');
-  assert(desk.includes("e.key.toLowerCase() === 'k'"), 'grok-desk Ctrl+K handler');
-  assert(desk.includes('/api/execute/stream'), 'grok-desk uses streaming execute');
-  assert(desk.includes('WorkspaceDiffPanel'), 'grok-desk diff panel');
+  const desk = await read('components/shiba-studio.tsx');
+  assert(desk.includes('CommandPalette'), 'shiba-studio imports command palette');
+  assert(desk.includes('showCommandPalette'), 'shiba-studio palette state');
+  assert(desk.includes("e.key.toLowerCase() === 'k'"), 'shiba-studio Ctrl+K handler');
+  assert(desk.includes('/api/execute/stream'), 'shiba-studio uses streaming execute');
+  assert(desk.includes('WorkspaceDiffPanel'), 'shiba-studio diff panel');
 
   // Streaming API
   const streamRoute = await read('app/api/execute/stream/route.ts');
@@ -58,9 +58,11 @@ async function main() {
   const diffPanel = await read('components/workspace-diff-panel.tsx');
   assert(diffPanel.includes('/api/workspace/diff'), 'diff panel API calls');
 
-  const research = await read('research/competitor-top10.md');
-  assert(research.includes('Command palette'), 'top10 doc lists palette');
-  assert(research.includes('All 10 implemented') || research.includes('implemented'), 'top10 doc updated');
+  // The one-off research/ notes were removed at release cleanup; the shipped
+  // docs are the durable record that these features exist.
+  const chatDocs = await read('docs/chat.md');
+  assert(chatDocs.includes('/annotate'), 'docs cover annotation');
+  assert(chatDocs.includes('/workspace'), 'docs cover chat workspaces');
 
   await log('PASS: all competitor feature structural checks');
   process.exit(0);

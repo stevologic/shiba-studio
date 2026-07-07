@@ -1,6 +1,6 @@
-// Entity-level cloud sync — push/pull GrokDesk entities (agents, automations, projects,
+// Entity-level cloud sync — push/pull Shiba Studio entities (agents, automations, projects,
 // chats, workspace uploads, local-model settings) to/from the xAI cloud file store.
-// Each entity kind is serialized as one JSON snapshot file so any GrokDesk install
+// Each entity kind is serialized as one JSON snapshot file so any Shiba Studio install
 // connected to the same xAI account can pull it down.
 
 import { loadAgents, saveAgents, loadConfig, saveConfig } from './persistence';
@@ -23,7 +23,9 @@ export interface SyncKindResult {
   error?: string;
 }
 
-const SNAPSHOT_PREFIX = 'grokdesk-sync-';
+const SNAPSHOT_PREFIX = 'shiba-sync-';
+// Snapshots pushed before the rebrand still sit in xAI storage under this name.
+const LEGACY_SNAPSHOT_PREFIX = 'grokdesk-sync-';
 
 function snapshotName(kind: SyncKind): string {
   return `${SNAPSHOT_PREFIX}${kind}.json`;
@@ -51,10 +53,14 @@ async function pushSnapshot(kind: SyncKind, payload: unknown): Promise<string> {
 }
 
 async function pullSnapshot<T>(kind: SyncKind): Promise<T | null> {
-  const name = snapshotName(kind);
-  const files = (await listXaiFiles())
-    .filter((f) => f.filename === name)
-    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  const all = await listXaiFiles();
+  const latestNamed = (name: string) =>
+    all.filter((f) => f.filename === name).sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  // Prefer current snapshots; fall back to pre-rebrand ones so a fresh install
+  // can still pull entities pushed by an older version.
+  const files = latestNamed(snapshotName(kind)).length
+    ? latestNamed(snapshotName(kind))
+    : latestNamed(`${LEGACY_SNAPSHOT_PREFIX}${kind}.json`);
   if (!files.length) return null;
   const buf = await downloadXaiFileContent(files[0].id);
   const parsed = JSON.parse(buf.toString('utf8'));

@@ -1,4 +1,4 @@
-// Core types for GrokDesk - fully Grok/xAI powered agent platform
+// Core types for Shiba Studio - fully Grok/xAI powered agent platform
 
 /** xAI model id — loaded dynamically from GET /v1/language-models */
 export type GrokModel = string;

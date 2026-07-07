@@ -1,4 +1,4 @@
-// The heart of GrokDesk: agent runtime with full Grok tool-calling loop.
+// The heart of Shiba Studio: agent runtime with full Grok tool-calling loop.
 // Every intelligence step uses Grok exclusively. Tools execute locally + integrations + browser + worktree.
 
 import { v4 as uuidv4 } from 'uuid';

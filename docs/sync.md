@@ -8,7 +8,7 @@ Agents, automations, projects, chats, workspace uploads, and (when a local model
 
 ## Where snapshots live
 
-Each category is serialized to a single file named `grokdesk-sync-<category>.json` and uploaded to **your xAI account's private file storage** via the Files API, replacing the previous snapshot. Nothing goes anywhere except your own xAI account — inspect or delete the files any time at [console.x.ai](https://console.x.ai).
+Each category is serialized to a single file named `shiba-sync-<category>.json` and uploaded to **your xAI account's private file storage** via the Files API, replacing the previous snapshot. (Snapshots pushed by pre-rebrand versions as `grokdesk-sync-<category>.json` are still found on pull.) Nothing goes anywhere except your own xAI account — inspect or delete the files any time at [console.x.ai](https://console.x.ai).
 
 ## Push vs pull
 

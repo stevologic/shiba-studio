@@ -1,4 +1,4 @@
-import * as fs from 'fs/promises';
+﻿import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { NextRequest } from 'next/server';
@@ -49,7 +49,7 @@ function assert(cond: unknown, msg: string) {
 }
 
 async function withTempDataDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'grokdesk-oauth-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'shiba-oauth-'));
   setOAuthDataDir(dir);
   setPersistenceDataDir(dir);
   try {
@@ -306,7 +306,7 @@ async function runModelsRouteCheck() {
 
 async function runUiStructuralCheck() {
   console.log('\n=== settings UI structural check ===');
-  const src = await fs.readFile(path.join(process.cwd(), 'components', 'grok-desk.tsx'), 'utf8');
+  const src = await fs.readFile(path.join(process.cwd(), 'components', 'shiba-studio.tsx'), 'utf8');
   assert(src.includes('xAI Grok API Key'), 'settings has API key section');
   assert(src.includes('OAuth with X'), 'settings has OAuth section');
   assert(src.includes('accounts.x.ai'), 'settings references accounts.x.ai');

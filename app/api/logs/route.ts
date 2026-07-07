@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
         return new NextResponse(JSON.stringify(entries, null, 2), {
           headers: {
             'Content-Type': 'application/json',
-            'Content-Disposition': `attachment; filename="grokdesk-logs${suffix}-${stamp}.json"`,
+            'Content-Disposition': `attachment; filename="shiba-studio-logs${suffix}-${stamp}.json"`,
           },
         });
       }
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
       return new NextResponse(rows.join('\r\n'), {
         headers: {
           'Content-Type': 'text/csv; charset=utf-8',
-          'Content-Disposition': `attachment; filename="grokdesk-logs${suffix}-${stamp}.csv"`,
+          'Content-Disposition': `attachment; filename="shiba-studio-logs${suffix}-${stamp}.csv"`,
         },
       });
     }
