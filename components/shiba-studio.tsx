@@ -200,6 +200,8 @@ export default function ShibaStudio() {
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Donate button briefly shows its own "copied" state instead of a toast.
+  const [dogeCopied, setDogeCopied] = useState(false);
   // Desktop sidebar collapse to an icon rail — remembered across visits.
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() =>
     typeof window !== 'undefined' && window.localStorage.getItem('shiba-nav') === 'collapsed');
@@ -3066,15 +3068,18 @@ export default function ShibaStudio() {
             </a>
             <button
               type="button"
-              className="donate-doge-btn"
+              className={`donate-doge-btn ${dogeCopied ? 'donate-doge-copied' : ''}`}
               onClick={() => {
                 navigator.clipboard.writeText(DOGE_DONATION_ADDRESS)
-                  .then(() => toast.success('Dogecoin address copied — much thanks, very wow 🐕'))
+                  .then(() => {
+                    setDogeCopied(true);
+                    setTimeout(() => setDogeCopied(false), 2200);
+                  })
                   .catch(() => toast.error(`Could not copy — address: ${DOGE_DONATION_ADDRESS}`));
               }}
               title={`Support the creator with Dogecoin — click to copy the wallet address\n${DOGE_DONATION_ADDRESS}`}
             >
-              Ð Donate Dogecoin
+              {dogeCopied ? 'Ð Address copied — much thanks, very wow 🐕' : 'Ð Donate Dogecoin'}
             </button>
             <Link href="/settings" className="cursor-pointer hover:text-primary">Settings</Link>
           </div>

@@ -262,6 +262,15 @@ body::before {
   box-shadow: 0 0 14px rgba(249, 115, 22, 0.18);
 }
 
+/* Transient in-button confirmation after the wallet address is copied */
+.donate-doge-copied,
+.donate-doge-copied:hover {
+  color: var(--success);
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.1);
+  box-shadow: 0 0 14px rgba(34, 197, 94, 0.15);
+}
+
 .brand-logo {
   width: 36px;
   height: 36px;
