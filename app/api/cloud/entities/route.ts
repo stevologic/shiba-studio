@@ -23,6 +23,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'action must be "push" or "pull"' }, { status: 400 });
     }
     const result = action === 'push' ? await pushKind(kind) : await pullKind(kind);
+    const { audit } = await import('@/lib/audit-log');
+    audit('sync', `${action} ${kind}`, result.ok ? result.detail : result.error, { ok: result.ok });
     return NextResponse.json({ ok: result.ok, result });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Sync failed';

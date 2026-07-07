@@ -19,6 +19,8 @@ export async function POST(req: NextRequest) {
 
     await exchangeOAuthCode(code, state);
     const status = await getOAuthPublicStatus();
+    const { audit } = await import('@/lib/audit-log');
+    audit('auth', 'oauth connected', 'Signed in with X (accounts.x.ai)');
     return NextResponse.json({ ok: true, status });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'OAuth exchange failed';

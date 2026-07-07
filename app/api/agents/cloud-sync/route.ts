@@ -95,6 +95,8 @@ export async function POST() {
   }
 
   await saveAgents(agents);
+  const { audit } = await import('@/lib/audit-log');
+  audit('agent', 'cloud agents synced', `${created.length} added, ${updated.length} refreshed`);
   return NextResponse.json({
     ok: true,
     created,

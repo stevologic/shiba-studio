@@ -2164,6 +2164,282 @@ body::before {
   border-radius: var(--radius-sm);
 }
 
+/* ── Dashboard layout + tables ── */
+.dashboard-page {
+  /* Stable canvas height so the space scene never shifts as content loads. */
+  min-height: calc(100vh - 9.5rem);
+}
+
+.runs-table th,
+.logs-table th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+
+.runs-table td,
+.logs-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(38, 38, 38, 0.55);
+  vertical-align: middle;
+}
+
+.runs-table tbody tr:last-child td,
+.logs-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.runs-table tbody tr {
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.runs-table tbody tr:hover td,
+.logs-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.run-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.run-status-completed { color: var(--success); border-color: rgba(34, 197, 94, 0.3); }
+.run-status-error { color: var(--error); border-color: rgba(239, 68, 68, 0.3); }
+.run-status-running { color: var(--warning); border-color: rgba(234, 179, 8, 0.3); }
+
+/* ── Logs section ── */
+.log-filter-chip {
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+
+.log-filter-chip:hover { color: var(--text); border-color: var(--border-light); }
+
+.log-filter-chip-active {
+  color: var(--text);
+  background: var(--bg-card);
+  border-color: var(--accent-2);
+}
+
+.log-cat-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.log-cat-run { color: #93c5fd; border-color: rgba(147, 197, 253, 0.3); }
+.log-cat-chat { color: #86efac; border-color: rgba(134, 239, 172, 0.3); }
+.log-cat-agent { color: #c4b5fd; border-color: rgba(196, 181, 253, 0.3); }
+.log-cat-config { color: #fdba74; border-color: rgba(253, 186, 116, 0.3); }
+.log-cat-integration { color: #67e8f9; border-color: rgba(103, 232, 249, 0.3); }
+.log-cat-skill { color: #f9a8d4; border-color: rgba(249, 168, 212, 0.3); }
+.log-cat-sync { color: #fde047; border-color: rgba(253, 224, 71, 0.3); }
+.log-cat-auth { color: #fca5a5; border-color: rgba(252, 165, 165, 0.3); }
+
+/* ── Dashboard deep-space scene — subtle, elaborate, GPU-only animations ── */
+.space-scene {
+  position: absolute;
+  inset: -20px;
+  overflow: hidden;
+  border-radius: var(--radius);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.space-stars {
+  position: absolute;
+  inset: -100% -100% 0 0;
+  width: 200%;
+  height: 200%;
+  background-repeat: repeat;
+  will-change: transform;
+}
+
+.space-stars-far {
+  background-image:
+    radial-gradient(1px 1px at 13% 21%, rgba(255,255,255,0.5), transparent),
+    radial-gradient(1px 1px at 47% 63%, rgba(255,255,255,0.35), transparent),
+    radial-gradient(1px 1px at 71% 34%, rgba(255,255,255,0.4), transparent),
+    radial-gradient(1px 1px at 89% 79%, rgba(255,255,255,0.3), transparent),
+    radial-gradient(1px 1px at 29% 88%, rgba(255,255,255,0.35), transparent);
+  background-size: 340px 340px;
+  opacity: 0.5;
+  animation: space-drift 240s linear infinite;
+}
+
+.space-stars-mid {
+  background-image:
+    radial-gradient(1.4px 1.4px at 22% 42%, rgba(199,222,255,0.6), transparent),
+    radial-gradient(1.2px 1.2px at 64% 17%, rgba(255,255,255,0.5), transparent),
+    radial-gradient(1.4px 1.4px at 83% 58%, rgba(255,240,214,0.5), transparent),
+    radial-gradient(1px 1px at 38% 76%, rgba(255,255,255,0.4), transparent);
+  background-size: 460px 460px;
+  opacity: 0.55;
+  animation: space-drift 150s linear infinite;
+}
+
+.space-stars-near {
+  background-image:
+    radial-gradient(1.8px 1.8px at 31% 29%, rgba(255,255,255,0.85), transparent),
+    radial-gradient(1.6px 1.6px at 76% 71%, rgba(214,230,255,0.75), transparent),
+    radial-gradient(2px 2px at 55% 48%, rgba(255,255,255,0.7), transparent);
+  background-size: 620px 620px;
+  opacity: 0.6;
+  animation: space-drift 90s linear infinite, space-twinkle 4.5s ease-in-out infinite;
+}
+
+@keyframes space-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-25%, 12%, 0); }
+}
+
+@keyframes space-twinkle {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 0.3; }
+}
+
+.space-nebula {
+  position: absolute;
+  inset: -30%;
+  background:
+    radial-gradient(38% 30% at 22% 30%, rgba(99, 102, 241, 0.10), transparent 70%),
+    radial-gradient(30% 26% at 78% 62%, rgba(56, 189, 248, 0.07), transparent 70%),
+    radial-gradient(26% 22% at 55% 18%, rgba(217, 70, 239, 0.06), transparent 70%);
+  filter: blur(28px);
+  animation: space-nebula-swirl 90s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+@keyframes space-nebula-swirl {
+  from { transform: rotate(0deg) scale(1); }
+  to { transform: rotate(12deg) scale(1.12); }
+}
+
+.space-comet {
+  position: absolute;
+  top: 12%;
+  left: -12%;
+  width: 130px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(214, 234, 255, 0.9));
+  box-shadow: 0 0 8px rgba(180, 215, 255, 0.6);
+  transform: rotate(16deg);
+  opacity: 0;
+  animation: space-comet-fly 11s ease-in 2s infinite;
+  will-change: transform, opacity;
+}
+
+.space-comet-2 {
+  top: 58%;
+  width: 90px;
+  animation: space-comet-fly 17s ease-in 9s infinite;
+}
+
+@keyframes space-comet-fly {
+  0% { transform: translate3d(0, 0, 0) rotate(16deg); opacity: 0; }
+  4% { opacity: 0.9; }
+  12% { transform: translate3d(120vw, 34vh, 0) rotate(16deg); opacity: 0; }
+  100% { transform: translate3d(120vw, 34vh, 0) rotate(16deg); opacity: 0; }
+}
+
+.space-planet {
+  position: absolute;
+  right: 6%;
+  bottom: 8%;
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 30%, #3d4b63, #171d2a 62%, #0a0d14 100%);
+  box-shadow:
+    inset -10px -8px 22px rgba(0, 0, 0, 0.75),
+    0 0 26px rgba(120, 160, 255, 0.10);
+  opacity: 0.85;
+  animation: space-planet-float 26s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+.space-planet-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 132px;
+  height: 34px;
+  border: 1.5px solid rgba(170, 190, 230, 0.28);
+  border-radius: 50%;
+  transform: translate(-50%, -50%) rotate(-18deg);
+  box-shadow: 0 0 10px rgba(150, 180, 255, 0.08);
+}
+
+@keyframes space-planet-float {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-8px, -12px, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .space-stars, .space-nebula, .space-comet, .space-planet { animation: none; }
+  .space-comet { display: none; }
+}
+
+/* ── Integration card states — consistent configured vs not ── */
+.integration-card-connected {
+  border-color: rgba(34, 197, 94, 0.45);
+  box-shadow: inset 3px 0 0 rgba(34, 197, 94, 0.55);
+}
+
+.integration-card-configured {
+  border-color: var(--border-light);
+  box-shadow: inset 3px 0 0 var(--border-light);
+}
+
+.integration-card-unset .integration-icon-lg {
+  opacity: 0.45;
+  filter: grayscale(0.7);
+}
+
+.integration-card-unset .integration-card-meta .font-semibold {
+  color: var(--text-muted);
+}
+
+.integration-card-header { min-height: 52px; }
+
+/* ── Skills section — mirrors MCP preset cards ── */
+.skill-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-muted);
+}
+
 /* ── Local model availability list (Settings) ── */
 .local-model-list {
   display: flex;
@@ -2189,6 +2465,34 @@ body::before {
 
 .local-model-item:hover { background: var(--bg-hover); }
 .local-model-item-off span { color: var(--text-dim); text-decoration: line-through; }
+
+/* ── Jump-to-latest — floats over the chat while scrolled up ── */
+.chat-jump-latest {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  z-index: 5;
+  animation: modal-pop 0.15s ease;
+  transition: background .12s ease, border-color .12s ease;
+}
+
+.chat-jump-latest:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent-2);
+}
 
 /* ── Chat suggestion chips — shown on empty conversations ── */
 .chat-suggestions {

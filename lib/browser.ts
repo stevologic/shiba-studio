@@ -1,4 +1,5 @@
 // Chrome / Browser control powered by Puppeteer for agents.
+import { dataDir } from './data-paths';
 // Provides navigate, click, type, screenshot, extract, scroll.
 
 import puppeteer, { Browser, Page } from 'puppeteer';
@@ -103,7 +104,7 @@ export async function browserScreenshot(name = 'capture', runId?: string): Promi
   const { ensureDir } = await import('./workspace');
   const pathMod = await import('path');
   const { writeFile } = await import('fs/promises');
-  const shotsDir = pathMod.join(process.cwd(), 'data/screenshots');
+  const shotsDir = dataDir('screenshots');
   await ensureDir(shotsDir);
   const file = pathMod.join(shotsDir, `${name}-${Date.now()}.png`);
   await page.screenshot({ path: file, fullPage: true });

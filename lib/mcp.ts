@@ -1,9 +1,10 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
 import { buildServerFromPreset, getMcpPreset, MCP_PRESETS } from './mcp-catalog';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = dataDir();
 const MCP_FILE = path.join(DATA_DIR, 'mcp-servers.json');
 
 export interface McpServerRecord {

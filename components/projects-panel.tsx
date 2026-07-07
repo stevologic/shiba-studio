@@ -30,6 +30,8 @@ interface ProjectsPanelProps {
   onPreviewSelect: (idx: number) => void;
   onBuildWithAgent: (project: Project, agentId: string, prompt: string) => Promise<void>;
   onProjectSelect?: (projectId: string | null) => void;
+  /** Notifies the shell that the project count changed (nav badges are load-once). */
+  onStatsChange?: () => void;
 }
 
 export default function ProjectsPanel({
@@ -47,6 +49,7 @@ export default function ProjectsPanel({
   onPreviewSelect,
   onBuildWithAgent,
   onProjectSelect,
+  onStatsChange,
 }: ProjectsPanelProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -134,6 +137,7 @@ export default function ProjectsPanel({
       await loadProjects();
       setSelectedId(data.project.id);
       toast.success(`Project "${data.project.name}" created`);
+      onStatsChange?.();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to create project');
     }
@@ -242,6 +246,7 @@ export default function ProjectsPanel({
       }
       await loadProjects();
       toast.success('Project deleted');
+      onStatsChange?.();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Delete failed');
     }

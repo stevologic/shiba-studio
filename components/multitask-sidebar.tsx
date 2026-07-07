@@ -10,7 +10,7 @@ import type { Agent } from '@/lib/types';
 interface MultitaskSidebarProps {
   agents: Agent[];
   onNavigate: (tab: AppTab, extra?: { sessionId?: string; projectId?: string }) => void;
-  onAgentsChanged?: () => void;
+  onDataChanged?: () => void;
 }
 
 function QuickItem({
@@ -43,7 +43,7 @@ function QuickItem({
   );
 }
 
-export default function MultitaskSidebar({ agents, onNavigate, onAgentsChanged }: MultitaskSidebarProps) {
+export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: MultitaskSidebarProps) {
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
   const [loaded, setLoaded] = useState(false);
@@ -97,6 +97,7 @@ export default function MultitaskSidebar({ agents, onNavigate, onAgentsChanged }
       body: JSON.stringify({ action: 'delete', id }),
     });
     await load();
+    onDataChanged?.();
     toast.success('Project deleted');
   }
 
@@ -126,6 +127,7 @@ export default function MultitaskSidebar({ agents, onNavigate, onAgentsChanged }
       body: JSON.stringify({ action: 'delete', id }),
     });
     await load();
+    onDataChanged?.();
     toast.success('Chat deleted');
   }
 
@@ -137,7 +139,7 @@ export default function MultitaskSidebar({ agents, onNavigate, onAgentsChanged }
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'update', agent: { ...agent, name } }),
     });
-    onAgentsChanged?.();
+    onDataChanged?.();
     toast.success('Agent renamed');
   }
 
@@ -154,7 +156,7 @@ export default function MultitaskSidebar({ agents, onNavigate, onAgentsChanged }
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'update', agent: { ...agent, schedules: [], schedule: undefined } }),
     });
-    onAgentsChanged?.();
+    onDataChanged?.();
     toast.success('Automations removed');
   }
 

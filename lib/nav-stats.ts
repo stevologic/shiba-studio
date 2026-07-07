@@ -22,14 +22,28 @@ import type { NavStats } from './nav-stats-types';
 export type { NavStats } from './nav-stats-types';
 export { formatUsageCostUsd } from './nav-stats-types';
 
+// Usage aggregation scans the full usage ledger — cache it for 15 minutes.
+// Entity counts stay live (they're cheap directory/JSON reads).
+const USAGE_CACHE_MS = 15 * 60_000;
+let usageCostCache: { at: number; costUsd: number } | null = null;
+
+async function getCachedUsageCost(): Promise<number> {
+  if (usageCostCache && Date.now() - usageCostCache.at < USAGE_CACHE_MS) {
+    return usageCostCache.costUsd;
+  }
+  const usage = await getUsageSummary();
+  usageCostCache = { at: Date.now(), costUsd: usage.estimatedCostUsd };
+  return usageCostCache.costUsd;
+}
+
 export async function getNavStats(integrations: IntegrationCreds): Promise<NavStats> {
-  const [sessions, projects, uploads, agents, mcpServers, usage] = await Promise.all([
+  const [sessions, projects, uploads, agents, mcpServers, usageCostUsd] = await Promise.all([
     listChatSessions(),
     listProjects(),
     listGlobalUploadFiles(),
     loadAgents(),
     listMcpServers(),
-    getUsageSummary(),
+    getCachedUsageCost(),
   ]);
 
   let automationsScheduled = 0;
@@ -50,6 +64,6 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
     workspaceFiles: uploads.length,
     automationsScheduled,
     integrationsConfigured: countConfiguredIntegrations(integrations) + mcpConfigured,
-    usageCostUsd: usage.estimatedCostUsd,
+    usageCostUsd,
   };
 }

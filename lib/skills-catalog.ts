@@ -1,5 +1,8 @@
 /** Curated agent skills — installable capability tags injected into system prompts. */
 
+export const SKILL_CATEGORIES = ['coding', 'research', 'automation', 'communication', 'creative'] as const;
+export type SkillCategory = typeof SKILL_CATEGORIES[number];
+
 export interface SkillPreset {
   id: string;
   name: string;
@@ -86,10 +89,15 @@ export function skillPresetById(id: string): SkillPreset | undefined {
   return SKILL_PRESETS.find((s) => s.id === id);
 }
 
-export function buildSkillsPrompt(skills: string[]): string {
+/**
+ * Build the skills section of an agent's system prompt. Pass a merged catalog
+ * (built-ins + user-created skills from lib/custom-skills) so custom skill
+ * guidance is injected too; defaults to the built-in presets.
+ */
+export function buildSkillsPrompt(skills: string[], catalog: SkillPreset[] = SKILL_PRESETS): string {
   const ids = skills?.length ? skills : ['general-purpose'];
   const hints = ids
-    .map((id) => skillPresetById(id)?.promptHint)
+    .map((id) => catalog.find((s) => s.id === id)?.promptHint)
     .filter(Boolean);
   const base = `Your specialized skills: ${ids.join(', ')}. Use these to guide tool selection and behavior.`;
   if (!hints.length) return base;

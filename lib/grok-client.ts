@@ -4,9 +4,9 @@
 import {
   DEFAULT_LOCAL_GROK_BASE,
   encodeModelRef,
-  FALLBACK_LOCAL_GROK_MODELS,
   parseModelRef,
   SelectableModel,
+  supportsReasoning,
 } from './model-providers';
 
 export const XAI_BASE = 'https://api.x.ai/v1';
@@ -83,6 +83,8 @@ export interface XaiModelInfo {
   contextLength?: number;
   inputModalities?: string[];
   outputModalities?: string[];
+  /** Derived from the PRIMARY id and propagated to aliases. */
+  reasoning?: boolean;
 }
 
 /** Parse xAI language-models or models list into selectable chat model entries. */
@@ -103,6 +105,7 @@ export function parseXaiModelList(data: unknown): XaiModelInfo[] {
       contextLength: m.context_length ?? m.long_context_threshold ?? undefined,
       inputModalities: m.input_modalities,
       outputModalities: m.output_modalities,
+      reasoning: supportsReasoning(id),
     });
   }
 
@@ -171,18 +174,22 @@ function normalizeLocalBase(url?: string): string {
   return raw.endsWith('/v1') ? raw : `${raw}/v1`;
 }
 
+/**
+ * Local models come exclusively from querying the server's /models endpoint —
+ * nothing is listed that the server did not report (no static fallbacks).
+ */
 export async function listLocalGrokModels(baseUrl?: string): Promise<{ ok: boolean; models: SelectableModel[]; error?: string }> {
   const base = normalizeLocalBase(baseUrl);
   try {
     const res = await fetch(`${base}/models`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
       const txt = await res.text();
-      return { ok: false, models: FALLBACK_LOCAL_GROK_MODELS, error: `${res.status} ${txt}` };
+      return { ok: false, models: [], error: `${res.status} ${txt}` };
     }
     const data = await res.json();
     const raw = (data as any)?.data ?? (data as any)?.models ?? [];
     if (!Array.isArray(raw) || raw.length === 0) {
-      return { ok: true, models: FALLBACK_LOCAL_GROK_MODELS };
+      return { ok: true, models: [], error: 'Local server reported no models' };
     }
     const models: SelectableModel[] = raw
       .map((m: any) => {
@@ -195,9 +202,9 @@ export async function listLocalGrokModels(baseUrl?: string): Promise<{ ok: boole
         };
       })
       .filter(Boolean) as SelectableModel[];
-    return { ok: true, models: models.length ? models : FALLBACK_LOCAL_GROK_MODELS };
+    return { ok: true, models };
   } catch (e: any) {
-    return { ok: false, models: FALLBACK_LOCAL_GROK_MODELS, error: e.message };
+    return { ok: false, models: [], error: e.message };
   }
 }
 
@@ -231,6 +238,7 @@ export async function listAllSelectableModels(cfg?: {
           id: encodeModelRef('cloud', m.id),
           label: m.label || m.id,
           provider: 'cloud' as const,
+          reasoning: m.reasoning,
         })),
       );
     } else {
@@ -253,7 +261,6 @@ export async function listAllSelectableModels(cfg?: {
       : local.models;
     if (local.ok) models.push(...permitted);
     else localError = local.error;
-    if (!local.ok && permitted.length) models.push(...permitted);
   }
 
   return {

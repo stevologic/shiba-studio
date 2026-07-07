@@ -313,10 +313,12 @@ function buildSystem(
   mcpServers: Array<{ id: string; name: string; presetId?: string }>,
   globalInstructionsText?: string,
   projectContext?: string,
+  skillCatalog?: import('./skills-catalog').SkillPreset[],
+  integrationContext?: string,
 ): string {
   const peers = agent.peers.length ? `You can communicate with peer agents: ${agent.peers.join(', ')}.` : '';
   const integ = Object.entries(agent.integrations).filter(([,v])=>v).map(([k])=>k).join(', ') || 'none';
-  const skills = buildSkillsPrompt(agent.skills || []);
+  const skills = buildSkillsPrompt(agent.skills || [], skillCatalog);
   const chatPersonality = agent.chatSkill?.trim()
     ? `Chat personality (Skill): ${agent.chatSkill.trim()}`
     : '';
@@ -335,6 +337,7 @@ ${skills}
 ${chatPersonality}
 ${globalInstructionsText ? `\n${globalInstructionsText}\n` : ''}
 ${projectContext ? `\n${projectContext}\n` : ''}
+${integrationContext ? `\n${integrationContext}\n` : ''}
 ${peers}
 ${actionLine}
 ${!isCloud && grokCliAvailable ? `Grok Build CLI is installed on this machine (${grokCliVersion || 'grok'}). Use grok_cli to delegate coding tasks to the local Grok CLI agent in headless mode.` : ''}
@@ -369,6 +372,10 @@ async function* agentRunGenerator(
   const runId = uuidv4();
   const startedAt = new Date().toISOString();
   const trace: TraceStep[] = [];
+  const { audit } = await import('./audit-log');
+  audit('run', opts.scheduled ? 'scheduled run started' : 'run started', `${agent.name}: ${prompt.slice(0, 120)}`, {
+    runId, agentId: agent.id, model: agent.model, origin: agent.origin || 'local',
+  });
 
   const emit = (step: TraceStep) => {
     trace.push(step);
@@ -396,6 +403,7 @@ async function* agentRunGenerator(
       startedAt, status: 'error', trace, sideEffects: [],
     };
     await persistAgentRun(r);
+    audit('run', 'run failed', `${agent.name}: ${modelError.slice(0, 120)}`, { runId, agentId: agent.id });
     yield { kind: 'done', run: r };
     return;
   }
@@ -461,6 +469,10 @@ async function* agentRunGenerator(
         mcpServers.map((s) => ({ id: s.id, name: s.name, presetId: s.presetId })),
         globalInstructionsText,
         opts.projectContext,
+        await (await import('./custom-skills')).getAllSkillPresets(),
+        await (await import('./integration-context'))
+          .buildIntegrationContext(agent.integrations)
+          .catch(() => ''),
       ),
     },
     { role: 'user', content: effectivePrompt },
@@ -590,6 +602,9 @@ async function* agentRunGenerator(
   } as any;
 
   await persistAgentRun(run);
+  audit('run', `run ${run.status}`, `${agent.name}: ${(run.finalOutput || prompt).slice(0, 120)}`, {
+    runId, agentId: agent.id, steps: trace.length, sideEffects: run.sideEffects?.length || 0,
+  });
   yield { kind: 'done', run };
 }
 

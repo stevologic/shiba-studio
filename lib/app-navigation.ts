@@ -7,6 +7,7 @@ export const APP_TABS = [
   'automations',
   'integrations',
   'usage',
+  'logs',
   'settings',
 ] as const;
 

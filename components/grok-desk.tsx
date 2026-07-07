@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { 
   Home, MessageSquare, Users, FolderOpen, FolderKanban, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
-  CloudUpload, CloudDownload, Command, Menu, Pencil
+  CloudUpload, CloudDownload, Command, Menu, Pencil, ScrollText
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -24,6 +24,7 @@ const panelLoading = () => (
 const ChatSessionsPanel = dynamic(() => import('@/components/chat-sessions-panel'), { loading: panelLoading });
 const ProjectsPanel = dynamic(() => import('@/components/projects-panel'), { loading: panelLoading });
 const UsageDashboard = dynamic(() => import('@/components/usage-dashboard'), { loading: panelLoading });
+const LogsPanel = dynamic(() => import('@/components/logs-panel'), { loading: panelLoading });
 const McpPanel = dynamic(() => import('@/components/mcp-panel'), { loading: panelLoading });
 const SkillsBrowser = dynamic(() => import('@/components/skills-browser'), { loading: panelLoading });
 const WorkspaceDiffPanel = dynamic(() => import('@/components/workspace-diff-panel'), { loading: panelLoading });
@@ -50,8 +51,9 @@ import { INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/
 import { modelDisplayName, parseModelRef, providerLabel, type ModelProvider } from '@/lib/model-providers';
 import { AppTab, chatSessionPath, isKnownAppPath, pathToChatSessionId, pathToTab, tabToPath } from '@/lib/app-navigation';
 import { formatUsageCostUsd, type NavStats } from '@/lib/nav-stats-types';
+import pkg from '@/package.json';
 
-type ModelOption = { id: string; label: string; provider?: ModelProvider };
+type ModelOption = { id: string; label: string; provider?: ModelProvider; reasoning?: boolean };
 
 function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
   const ref = parseModelRef(modelId || '');
@@ -83,6 +85,7 @@ function IntegrationIcon({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' |
 
 const OAUTH_POLL_MS = 2000;
 const OAUTH_POLL_MAX_MS = 5 * 60_000;
+const APP_VERSION = pkg.version;
 
 export default function GrokDesk() {
   const pathname = usePathname();
@@ -292,6 +295,7 @@ export default function GrokDesk() {
           id: m.id,
           label: m.label || modelDisplayName(m.id),
           provider: m.provider || (m.id.startsWith('local:') ? 'local' : 'cloud'),
+          reasoning: m.reasoning,
         })));
         setLocalGrokReachable(!!data.localReachable);
         setChatModel((current) => pickDefaultModel(current));
@@ -375,16 +379,32 @@ export default function GrokDesk() {
       // trigger scheduler + boot
       fetch('/api/boot').catch(() => {});
       fetch('/api/scheduler', { method: 'POST', body: JSON.stringify({ agentId: '__boot__' }) }).catch(() => {});
-      void loadNavStats();
     } catch (e) {
       console.error(e);
     }
   }
 
-  useEffect(() => { loadAll(); }, []);
-
+  // Nav counts load ONCE at startup; afterwards only mutation sites refresh
+  // them (delete/create/sync handlers call loadNavStats directly).
   useEffect(() => {
-    const t = setInterval(() => { void loadNavStats(); }, 30000);
+    loadAll();
+    void loadNavStats();
+  }, []);
+
+  // The usage badge alone refreshes on a 15-minute cadence (server caches the
+  // ledger aggregation for the same window).
+  useEffect(() => {
+    const t = setInterval(async () => {
+      try {
+        const res = await fetch('/api/nav-stats');
+        const data = await res.json();
+        if (data.ok) {
+          setNavStats((prev) => ({ ...prev, usageCostUsd: data.usageCostUsd ?? prev.usageCostUsd }));
+        }
+      } catch {
+        /* keep previous figure */
+      }
+    }, 15 * 60_000);
     return () => clearInterval(t);
   }, []);
 
@@ -399,6 +419,20 @@ export default function GrokDesk() {
   useEffect(() => {
     if ((config as any)?.hasCloudAuth || (config as any)?.localGrokEnabled) loadModels();
   }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled]);
+
+  /** Runs list holds lightweight summaries — fetch the full trace on demand. */
+  async function openRunTrace(runId: string) {
+    try {
+      const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
+      const data = await res.json();
+      if (!data.ok || !data.run) throw new Error(data.error || 'Run not found');
+      setActiveRun(data.run);
+      setLiveTrace(data.run.trace || []);
+      navigateToTab('agents');
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not load run');
+    }
+  }
 
   // Agents CRUD
   async function refreshAgents() {
@@ -1311,6 +1345,7 @@ export default function GrokDesk() {
       { id: 'automations', label: 'Automations' },
       { id: 'integrations', label: 'Integrations' },
       { id: 'usage', label: 'Usage' },
+      { id: 'logs', label: 'Logs' },
       { id: 'settings', label: 'Settings' },
     ] as const).map((t) => ({
       id: `nav-${t.id}`,
@@ -1377,6 +1412,39 @@ export default function GrokDesk() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Escape closes the topmost open surface (C3 — keyboard parity with backdrop click).
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (showAgentModal) {
+        setShowAgentModal(false);
+        setEditingAgent(null);
+        setHighlightScheduleIdx(null);
+      } else if (showRunModal) {
+        setShowRunModal(false);
+        setRunModalAgent(null);
+      } else if (showSyncModal) {
+        setShowSyncModal(false);
+      } else if (folderBrowseFor !== null) {
+        setFolderBrowseFor(null);
+      } else if (mobileNavOpen) {
+        setMobileNavOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onEsc);
+    return () => window.removeEventListener('keydown', onEsc);
+  }, [showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen]);
+
+  // Dynamic document titles (C7) — tabs are distinguishable in the browser.
+  useEffect(() => {
+    const labels: Record<string, string> = {
+      dashboard: 'Dashboard', chat: 'Chat', projects: 'Projects', agents: 'Agents',
+      workspace: 'Workspace', automations: 'Automations', integrations: 'Integrations',
+      usage: 'Usage', logs: 'Logs', settings: 'Settings',
+    };
+    document.title = `${labels[tab] || 'GrokDesk'} — GrokDesk`;
+  }, [tab]);
+
   return (
     <div className="app-root flex h-screen overflow-hidden bg-shell text-primary">
       {/* Sidebar — fixed on desktop, slide-over drawer on mobile */}
@@ -1411,6 +1479,7 @@ export default function GrokDesk() {
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
             { id: 'integrations', label: 'Integrations', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
             { id: 'usage', label: 'Usage', icon: BarChart3, stat: navStats.usageCostUsd > 0 ? formatUsageCostUsd(navStats.usageCostUsd) : null },
+            { id: 'logs', label: 'Logs', icon: ScrollText, stat: null },
             { id: 'settings', label: 'Settings', icon: Settings, stat: null },
           ] as const).map(item => {
             const Icon = item.icon;
@@ -1423,7 +1492,7 @@ export default function GrokDesk() {
                 className={`nav-item ${active ? 'active' : ''}`}
               >
                 <Icon size={16} /> {item.label}
-                {!navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && (
+                {!navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
                   <span className="data-spinner ml-auto" aria-label={`Loading ${item.label} count`} />
                 )}
                 {item.stat != null && (
@@ -1450,7 +1519,7 @@ export default function GrokDesk() {
             navigateToTab(next);
             if (extra?.sessionId) navigateToChatSession(extra.sessionId);
           }}
-          onAgentsChanged={() => { void refreshAgents(); void loadNavStats(); }}
+          onDataChanged={() => { void refreshAgents(); void loadNavStats(); }}
         />
 
         <div className="p-4 border-t border-default text-xs text-dim">
@@ -1502,9 +1571,21 @@ export default function GrokDesk() {
 
         {/* Content surfaces */}
         <div className="flex-1 overflow-auto p-3 sm:p-5 space-y-5">
-          {/* DASHBOARD */}
+          {/* DASHBOARD — min-height keeps the space scene (and its planet)
+              anchored bottom-right from first paint, before runs load in. */}
           {tab === 'dashboard' && (
-            <div className="space-y-5">
+            <div className="relative dashboard-page">
+              {/* Animated deep-space scene — pure CSS, GPU-friendly, honors reduced-motion */}
+              <div className="space-scene" aria-hidden>
+                <div className="space-stars space-stars-far" />
+                <div className="space-stars space-stars-mid" />
+                <div className="space-stars space-stars-near" />
+                <div className="space-nebula" />
+                <div className="space-comet" />
+                <div className="space-comet space-comet-2" />
+                <div className="space-planet"><span className="space-planet-ring" /></div>
+              </div>
+            <div className="space-y-5 relative z-[1]">
               <div className="flex flex-col lg:flex-row gap-4">
                 <div className="grok-card p-6 flex-1">
                   <div className="hero-eyebrow">{THEME_IDENTITY.heroEyebrow}</div>
@@ -1529,28 +1610,48 @@ export default function GrokDesk() {
 
               <div>
                 <div className="flex justify-between items-center mb-2"><div className="font-medium">Recent Agent Runs</div><button onClick={() => navigateToTab('agents')} className="text-xs link-accent">All agents →</button></div>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {runs.slice(0, 4).map(r => {
-                    const runAgent = agents.find(a => a.id === r.agentId);
-                    return (
-                    <div key={r.id} onClick={() => { setActiveRun(r); setLiveTrace(r.trace); navigateToTab('agents'); }} className="grok-card grok-card-interactive p-3 cursor-pointer text-sm">
-                      <div className="flex justify-between items-center gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          {runAgent && <img src={resolveAgentAvatarPath(runAgent)} alt="" className="agent-avatar-sm" width={28} height={28} />}
-                          <span className="font-medium truncate">{r.agentName}</span>
-                        </div>
-                        <span className="badge">{r.status}</span>
-                      </div>
-                      <div className="truncate text-muted mt-1">{r.prompt}</div>
-                      <div className="text-[10px] text-dim mt-2 flex items-center justify-between gap-2 flex-wrap">
-                        <span>{new Date(r.startedAt).toLocaleString()}</span>
-                        <ModelLine modelId={r.model} />
-                      </div>
-                    </div>
-                  );})}
-                  {runs.length === 0 && <div className="text-dim">No runs yet — create an agent and press Run.</div>}
-                </div>
+                {runs.length === 0 ? (
+                  <div className="text-dim text-sm">No runs yet — create an agent and press Run.</div>
+                ) : (
+                  <div className="grok-card overflow-hidden">
+                    <table className="runs-table w-full text-xs">
+                      <thead>
+                        <tr>
+                          <th className="w-[180px]">Agent</th>
+                          <th>Prompt</th>
+                          <th className="w-[92px]">Status</th>
+                          <th className="w-[150px]">Model</th>
+                          <th className="w-[130px]">Started</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {runs.slice(0, 10).map(r => {
+                          const runAgent = agents.find(a => a.id === r.agentId);
+                          return (
+                            <tr
+                              key={r.id}
+                              onClick={() => void openRunTrace(r.id)}
+                              title="Open run trace"
+                            >
+                              <td>
+                                <span className="flex items-center gap-2 min-w-0">
+                                  {runAgent && <img src={resolveAgentAvatarPath(runAgent)} alt="" className="agent-avatar-xs" width={18} height={18} />}
+                                  <span className="truncate font-medium">{r.agentName}</span>
+                                </span>
+                              </td>
+                              <td className="text-muted"><span className="line-clamp-1">{r.prompt}</span></td>
+                              <td><span className={`run-status run-status-${r.status}`}>{r.status}</span></td>
+                              <td className="text-dim font-mono truncate">{modelDisplayName(r.model)}</td>
+                              <td className="text-dim whitespace-nowrap">{new Date(r.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
+            </div>
             </div>
           )}
 
@@ -1589,6 +1690,7 @@ export default function GrokDesk() {
                   clearProjectRunTrace();
                 }
               }}
+              onStatsChange={loadNavStats}
             />
           )}
 
@@ -1971,7 +2073,12 @@ export default function GrokDesk() {
                   const configured = integrationConfigured(integration.id);
                   const expanded = expandedIntegration === integration.id;
                   return (
-                  <div key={integration.id} className="grok-card p-5 integration-card">
+                  <div
+                    key={integration.id}
+                    className={`grok-card p-5 integration-card ${
+                      connected ? 'integration-card-connected' : configured ? 'integration-card-configured' : 'integration-card-unset'
+                    }`}
+                  >
                     <div
                       className="integration-card-header integration-card-header-clickable"
                       role="button"
@@ -2151,16 +2258,33 @@ export default function GrokDesk() {
 
               <div className="mt-5 text-xs text-dim">Credentials are stored locally on your machine only. Never sent anywhere except to the services you authorize.</div>
 
-              <div className="mt-8">
-                <div className="text-xl font-semibold mb-1">Skills</div>
-                <div className="text-sm text-muted mb-4">
-                  Reusable capability presets for agents. Skills installed across your agents are marked — add them to a specific agent from its editor.
-                </div>
-                <SkillsBrowser
-                  installed={[...new Set(agents.flatMap((a) => a.skills || []))]}
-                  onInstall={(skillId) => toast.info(`Edit an agent to add "${skillId}" — open Agents → ✎ → Skills Browser.`)}
-                />
-              </div>
+              <SkillsBrowser
+                installed={[...new Set(agents.flatMap((a) => a.skills || []))]}
+                installedCounts={agents.reduce<Record<string, number>>((acc, a) => {
+                  for (const s of a.skills || []) acc[s] = (acc[s] || 0) + 1;
+                  return acc;
+                }, {})}
+                agents={agents.map((a) => ({ id: a.id, name: a.name, skills: a.skills }))}
+                onToggleAgentSkill={async (agentId, skillId, enabled) => {
+                  const agent = agents.find((a) => a.id === agentId);
+                  if (!agent) return;
+                  const skills = enabled
+                    ? [...new Set([...(agent.skills || []), skillId])]
+                    : (agent.skills || []).filter((s) => s !== skillId);
+                  const res = await fetch('/api/agents', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'update', agent: { ...agent, skills } }),
+                  });
+                  const data = await res.json();
+                  if (data.error) {
+                    toast.error(data.error);
+                    return;
+                  }
+                  await refreshAgents();
+                }}
+                onInstall={(skillId) => toast.info(`Manage "${skillId}" from an agent's editor — open Agents → ✎ → Skills Browser.`)}
+              />
 
               <McpPanel
                 githubToken={intCreds.github?.token}
@@ -2173,6 +2297,10 @@ export default function GrokDesk() {
 
           {tab === 'usage' && (
             <UsageDashboard />
+          )}
+
+          {tab === 'logs' && (
+            <LogsPanel />
           )}
 
           {tab === 'settings' && (
@@ -2448,7 +2576,7 @@ export default function GrokDesk() {
 
         {/* Footer bar */}
         <div className="footer-bar h-9 px-4 text-[10px] flex items-center text-dim justify-between">
-          <div>GrokDesk — xAI Grok agent studio • SpaceX-inspired mission control</div>
+          <div>GrokDesk v{APP_VERSION} — xAI Grok agent studio • SpaceX-inspired mission control</div>
           <Link href="/settings" className="cursor-pointer hover:text-primary">Settings</Link>
         </div>
       </div>

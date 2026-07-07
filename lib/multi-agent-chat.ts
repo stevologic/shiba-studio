@@ -49,10 +49,18 @@ export async function* multiAgentChatStream(params: MultiAgentChatParams): Async
   await Promise.all(
     agents.map(async (agent) => {
       try {
+        // Each agent answers with live context from its own enabled integrations.
+        const { buildIntegrationContext } = await import('./integration-context');
+        const integrationContext = await buildIntegrationContext(agent.integrations).catch(() => '');
         const resp = await grokChat({
           model: agent.model || model,
           messages: [
-            { role: 'system', content: buildAgentChatSystem(agent) },
+            {
+              role: 'system',
+              content: integrationContext
+                ? `${buildAgentChatSystem(agent)}\n\n${integrationContext}`
+                : buildAgentChatSystem(agent),
+            },
             ...context.map((m) => ({ role: m.role, content: m.content })),
             { role: 'user', content: userMessage },
           ],

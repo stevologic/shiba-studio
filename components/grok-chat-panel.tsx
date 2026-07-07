@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Brain, Check, ChevronDown, ChevronUp, Copy, Eraser, Paperclip, Pencil, RefreshCw, RotateCcw,
+  Brain, Check, ChevronDown, ChevronUp, Copy, Download, Eraser, Paperclip, Pencil, RefreshCw, RotateCcw,
   Send, Sparkles, Square, Terminal, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -10,7 +10,7 @@ import ChatMarkdown from '@/components/chat-markdown-lazy';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { ChatAttachment, ChatMessagePayload, ReasoningEffort } from '@/lib/chat-types';
 import { buildAgentChatSystem } from '@/lib/chat-skill';
-import { modelDisplayName, parseModelRef, providerLabel } from '@/lib/model-providers';
+import { modelDisplayName, parseModelRef, providerLabel, supportsReasoning } from '@/lib/model-providers';
 import type { Agent } from '@/lib/types';
 import type { Project, ProjectChatMessage } from '@/lib/project-types';
 import type { ChatSession } from '@/lib/chat-session-types';
@@ -20,7 +20,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 export type ChatTarget = 'grok' | 'all' | string;
 
-type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' };
+type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local'; reasoning?: boolean };
 
 function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
   const ref = parseModelRef(modelId || '');
@@ -218,7 +218,12 @@ export default function GrokChatPanel({
   const init = sessionToInitialState(session, project, agents);
   const [chatTarget, setChatTarget] = useState<ChatTarget>(init.target);
   const [messages, setMessages] = useState<UiMessage[]>(init.messages);
-  const [input, setInput] = useState('');
+  // Drafts survive tab switches and reloads (C6). Scoped per session/project;
+  // the panel remounts per session via its key prop, so lazy init is enough.
+  const draftKey = `grokdesk-draft:${session?.id || project?.id || 'direct'}`;
+  const [input, setInput] = useState(() =>
+    (typeof window !== 'undefined' ? window.localStorage.getItem(draftKey) || '' : ''),
+  );
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(init.reasoningEffort);
@@ -273,6 +278,59 @@ export default function GrokChatPanel({
   useEffect(() => {
     if (!streaming && !editingMsgId) textareaRef.current?.focus();
   }, [streaming, editingMsgId]);
+
+  // Persist the draft (debounced); cleared automatically when input empties on send.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      try {
+        if (input) window.localStorage.setItem(draftKey, input);
+        else window.localStorage.removeItem(draftKey);
+      } catch {
+        /* storage full/unavailable — drafts are best-effort */
+      }
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [input, draftKey]);
+
+  // "Jump to latest" appears when the reader scrolls away from the tail (C5).
+  const [awayFromLatest, setAwayFromLatest] = useState(false);
+  const onMessagesScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setAwayFromLatest(el.scrollHeight - el.scrollTop - el.clientHeight > 220);
+  }, []);
+
+  /** Export the conversation as Markdown — roles, models, reasoning, tokens (C4). */
+  function exportChatMarkdown() {
+    const real = messages.filter((m) => m.id !== 'welcome' && m.content);
+    if (!real.length) return;
+    const title = session?.title || project?.name || 'Grok Chat';
+    const lines: string[] = [
+      `# ${title}`,
+      '',
+      `_Exported ${new Date().toLocaleString()} from GrokDesk_`,
+      '',
+    ];
+    for (const m of real) {
+      const who = m.role === 'user' ? 'You' : (m.agentName || 'Grok');
+      const model = m.model ? ` · ${modelDisplayName(m.model)}` : '';
+      lines.push(`## ${who}${model}`, '');
+      if (m.thinking?.trim()) {
+        lines.push('<details><summary>Reasoning</summary>', '', m.thinking.trim(), '', '</details>', '');
+      }
+      lines.push(m.content, '');
+      if (m.usage) {
+        lines.push(`_${m.usage.promptTokens.toLocaleString()} in · ${m.usage.completionTokens.toLocaleString()} out tokens_`, '');
+      }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${title.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'grok-chat'}.md`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast.success('Chat exported as Markdown');
+  }
 
   // Resync from the stored session only when the session itself actually changes.
   // Guarded by a key so unrelated re-renders (e.g. the 22s agents poll upstream
@@ -399,6 +457,14 @@ export default function GrokChatPanel({
 
   const supportsMultimodal = chatTarget !== 'all';
   const hasChatHistory = messages.some((m) => m.id !== 'welcome');
+
+  /** Live catalog flag when available; id heuristic for saved/fallback models. */
+  const modelSupportsReasoning = useCallback((modelRef: string): boolean => {
+    if (parseModelRef(modelRef).provider !== 'cloud') return false;
+    const found = availableModels.find((m) => m.id === modelRef);
+    if (found?.reasoning !== undefined) return found.reasoning;
+    return supportsReasoning(modelRef);
+  }, [availableModels]);
 
   const chatSuggestions = project
     ? [
@@ -638,10 +704,16 @@ export default function GrokChatPanel({
       const body: Record<string, unknown> = {
         model: useModel,
         messages: payloadMessages,
-        reasoningEffort: parseModelRef(useModel).provider === 'cloud' ? reasoningEffort : undefined,
+        // Only send reasoning effort to models that accept it (CLI keeps its
+        // own flag handling; non-reasoning API models get no arg at all).
+        reasoningEffort: useCli
+          ? reasoningEffort
+          : (modelSupportsReasoning(useModel) ? reasoningEffort : undefined),
       };
       if (!isMulti && selectedAgent) {
         body.system = buildAgentChatSystem(selectedAgent);
+        // Server injects live integration context (Obsidian vault, GitHub repos…)
+        body.agentId = selectedAgent.id;
       }
 
       if (project) {
@@ -843,9 +915,19 @@ export default function GrokChatPanel({
         </select>
         <button
           type="button"
+          onClick={exportChatMarkdown}
+          disabled={!hasChatHistory}
+          className="grok-btn grok-btn-ghost text-xs py-1 ml-auto"
+          title="Download this conversation as Markdown (includes reasoning and token counts)"
+        >
+          <Download size={14} />
+          Export
+        </button>
+        <button
+          type="button"
           onClick={clearChatContext}
           disabled={streaming || (!hasChatHistory && !pendingAttachments.length && !input.trim())}
-          className="grok-btn grok-btn-ghost text-xs py-1 ml-auto"
+          className="grok-btn grok-btn-ghost text-xs py-1"
           title="Clear chat history (workspace and project uploads stay in context)"
         >
           <Eraser size={14} />
@@ -853,7 +935,8 @@ export default function GrokChatPanel({
         </button>
       </div>
 
-      <div ref={scrollRef} className="grok-chat-messages flex-1 grok-card overflow-auto p-5 space-y-4 text-[15px] leading-relaxed bg-elev">
+      <div className="relative flex-1 min-h-0 flex flex-col">
+      <div ref={scrollRef} onScroll={onMessagesScroll} className="grok-chat-messages flex-1 grok-card overflow-auto p-5 space-y-4 text-[15px] leading-relaxed bg-elev">
         {messages.map((m, idx) => {
           const isUser = m.role === 'user';
           const showThinking = !isUser && (m.thinking || (m.streaming && !m.content));
@@ -1047,6 +1130,21 @@ export default function GrokChatPanel({
         )}
         <div ref={bottomRef} className="grok-chat-scroll-anchor" aria-hidden />
       </div>
+      {awayFromLatest && (
+        <button
+          type="button"
+          className="chat-jump-latest"
+          onClick={() => {
+            scrollToBottom();
+            setAwayFromLatest(false);
+          }}
+          title="Scroll to the newest message"
+        >
+          <ChevronDown size={14} />
+          {streaming ? 'Streaming below — jump to latest' : 'Jump to latest'}
+        </button>
+      )}
+      </div>
 
       {pendingAttachments.length > 0 && (
         <div className="grok-chat-pending-attachments mt-2 px-1">
@@ -1174,7 +1272,7 @@ export default function GrokChatPanel({
             <RefreshCw size={14} />
           </button>
         )}
-        {!useGrokCli && parseModelRef(chatModel).provider === 'cloud' && (
+        {!useGrokCli && modelSupportsReasoning(chatModel) && (
           <select
             value={reasoningEffort}
             onChange={(e) => updateReasoningEffort(e.target.value as ReasoningEffort)}

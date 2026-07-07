@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
 import {
   buildProjectContextHeader,
@@ -20,7 +21,7 @@ export {
 
 import { readFileSmart, sanitizeUploadName, sha256Checksum, recordUploadMeta, removeUploadMeta } from './workspace';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = dataDir();
 const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
 const PROJECT_FILES_ROOT = path.join(DATA_DIR, 'project-files');
 const MAX_UPLOAD_BYTES = 48 * 1024 * 1024;

@@ -14,6 +14,28 @@ export interface SelectableModel {
   id: string;
   label: string;
   provider: ModelProvider;
+  /** Whether the model accepts reasoning-effort controls. Undefined = unknown. */
+  reasoning?: boolean;
+}
+
+/**
+ * Heuristic reasoning capability from a model id — used when the live catalog
+ * flag is unavailable (fallback catalogs, saved models no longer listed).
+ * The xAI catalog encodes capability in the id: explicit `non-reasoning`
+ * variants exist, grok-4+ generations and grok-code stream reasoning,
+ * grok-3-mini accepts reasoning_effort; older/image models do not.
+ */
+export function supportsReasoning(modelIdOrRef: string): boolean {
+  const id = parseModelRef(modelIdOrRef).id.toLowerCase();
+  if (!id) return false;
+  if (id.includes('non-reasoning')) return false;
+  if (id.includes('image') || id.includes('vision')) return false;
+  if (id.includes('reasoning')) return true;
+  if (/grok-(?:[4-9]|\d{2,})/.test(id)) return true;
+  if (id.includes('grok-code')) return true;
+  if (id.includes('grok-3-mini')) return true;
+  if (id === 'grok-latest') return true;
+  return false;
 }
 
 export function encodeModelRef(provider: ModelProvider, id: string): string {
@@ -58,17 +80,12 @@ export function modelOptionLabel(m: SelectableModel): string {
  * usable — chat requests still validate against the real API.
  */
 export const FALLBACK_CLOUD_GROK_MODELS: SelectableModel[] = [
-  { id: 'cloud:grok-4.3-latest', label: 'grok-4.3-latest', provider: 'cloud' },
-  { id: 'cloud:grok-latest', label: 'grok-latest', provider: 'cloud' },
-  { id: 'cloud:grok-4.20-reasoning-latest', label: 'grok-4.20-reasoning-latest', provider: 'cloud' },
-  { id: 'cloud:grok-code-fast-1', label: 'grok-code-fast-1', provider: 'cloud' },
-  { id: 'cloud:grok-4', label: 'grok-4 (legacy)', provider: 'cloud' },
+  { id: 'cloud:grok-4.3-latest', label: 'grok-4.3-latest', provider: 'cloud', reasoning: true },
+  { id: 'cloud:grok-latest', label: 'grok-latest', provider: 'cloud', reasoning: true },
+  { id: 'cloud:grok-4.20-reasoning-latest', label: 'grok-4.20-reasoning-latest', provider: 'cloud', reasoning: true },
+  { id: 'cloud:grok-code-fast-1', label: 'grok-code-fast-1', provider: 'cloud', reasoning: true },
+  { id: 'cloud:grok-4', label: 'grok-4 (legacy)', provider: 'cloud', reasoning: true },
 ];
 
-/** Fallback local Grok ids when the local server has no /models endpoint. */
-export const FALLBACK_LOCAL_GROK_MODELS: SelectableModel[] = [
-  { id: 'local:grok-2', label: 'grok-2', provider: 'local' },
-  { id: 'local:grok-2-vision-1212', label: 'grok-2-vision-1212', provider: 'local' },
-  { id: 'local:grok-3', label: 'grok-3', provider: 'local' },
-  { id: 'local:grok-3-mini', label: 'grok-3-mini', provider: 'local' },
-];
+// NOTE: local models are never listed from a static fallback — the dropdowns
+// only offer what the local server's /models endpoint actually reported.

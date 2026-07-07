@@ -28,6 +28,23 @@ export async function POST(req: NextRequest) {
     : await buildGlobalUploadsChatContext();
   systemParts.push(globalUploadsContext);
   if (body.projectContext) systemParts.push(String(body.projectContext));
+
+  // Chatting as an agent: inject live context from its enabled integrations
+  // (e.g. the Obsidian vault index + contents) so the conversation carries the
+  // same knowledge the agent gets during autonomous runs.
+  if (body.agentId) {
+    try {
+      const { loadAgents } = await import('@/lib/persistence');
+      const agent = (await loadAgents()).find((a) => a.id === String(body.agentId));
+      if (agent) {
+        const { buildIntegrationContext } = await import('@/lib/integration-context');
+        const integrationContext = await buildIntegrationContext(agent.integrations);
+        if (integrationContext) systemParts.push(integrationContext);
+      }
+    } catch {
+      /* integration context is best-effort */
+    }
+  }
   if (systemParts.length) {
     messages.push({ role: 'system', content: systemParts.join('\n\n') });
   }
@@ -50,6 +67,12 @@ export async function POST(req: NextRequest) {
   if (messages.length === 0) {
     return new Response(JSON.stringify({ error: 'No messages provided' }), { status: 400 });
   }
+
+  const { audit } = await import('@/lib/audit-log');
+  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+  audit('chat', 'message sent', (lastUser?.content || '').slice(0, 120), {
+    model, agentId: body.agentId || null, turns: messages.length,
+  });
 
   const stream = new ReadableStream({
     async start(controller) {

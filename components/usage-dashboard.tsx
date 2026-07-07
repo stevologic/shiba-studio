@@ -314,14 +314,16 @@ export default function UsageDashboard() {
           <div className="grid md:grid-cols-2 gap-5 mb-5">
             <div className="grok-card p-5">
               <div className="font-semibold mb-4">Token share by model</div>
-              <div className="flex flex-col sm:flex-row items-center gap-6">
+              <div className="flex flex-col sm:flex-row items-center gap-6 min-w-0">
                 <DonutChart rows={summary.byModel} />
-                <div className="flex-1 w-full space-y-2">
+                <div className="flex-1 w-full space-y-2 min-w-0">
                   {summary.byModel.slice(0, 6).map((m, i) => (
-                    <div key={m.model} className="flex items-center gap-2 text-xs">
+                    <div key={m.model} className="flex items-center gap-2 text-xs min-w-0">
                       <span className="usage-legend-dot" style={{ background: ['#f5f5f5', '#d4d4d4', '#a3a3a3', '#737373', '#525252', '#404040'][i % 6] }} />
-                      <span className="flex-1 truncate font-mono">{modelDisplayName(m.model)} <span className="text-dim">({providerLabel(parseModelRef(m.model).provider)})</span></span>
-                      <span className="text-dim">{m.sharePct.toFixed(1)}%</span>
+                      <span className="flex-1 truncate font-mono min-w-0" title={modelDisplayName(m.model)}>
+                        {modelDisplayName(m.model)} <span className="text-dim">({providerLabel(parseModelRef(m.model).provider)})</span>
+                      </span>
+                      <span className="text-dim shrink-0">{m.sharePct.toFixed(1)}%</span>
                     </div>
                   ))}
                 </div>

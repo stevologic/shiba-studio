@@ -4,6 +4,7 @@ import { Agent, normalizeAgent, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { defaultAvatarIdForAgent, isValidAvatarId } from '@/lib/agent-avatars';
 import { v4 as uuidv4 } from 'uuid';
 import { loadAndScheduleAll } from '@/lib/scheduler';
+import { audit } from '@/lib/audit-log';
 
 export async function GET() {
   const raw = await loadAgents();
@@ -16,9 +17,11 @@ export async function POST(req: NextRequest) {
   const agents = await loadAgents();
 
   if (body.action === 'delete') {
+    const removed = agents.find(a => a.id === body.id);
     const filtered = agents.filter(a => a.id !== body.id);
     await saveAgents(filtered);
     await loadAndScheduleAll().catch(() => {});
+    audit('agent', 'agent deleted', removed?.name || String(body.id), { agentId: body.id });
     return NextResponse.json({ ok: true });
   }
 
@@ -30,6 +33,7 @@ export async function POST(req: NextRequest) {
     agents[idx] = normalizeAgent(merged);
     await saveAgents(agents);
     await loadAndScheduleAll().catch(() => {});
+    audit('agent', 'agent updated', agents[idx].name, { agentId: agents[idx].id });
     return NextResponse.json({ agent: agents[idx] });
   }
 
@@ -75,5 +79,6 @@ export async function POST(req: NextRequest) {
   agents.push(newAgent);
   await saveAgents(agents);
   await loadAndScheduleAll().catch(() => {});
+  audit('agent', 'agent created', newAgent.name, { agentId: newAgent.id, model: newAgent.model, origin: newAgent.origin });
   return NextResponse.json({ agent: normalizeAgent(newAgent) });
 }

@@ -24,6 +24,14 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
+  const changedKeys = [
+    'xaiApiKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel', 'localGrokEnabled',
+    'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode', 'globalInstructions', 'useAgentsMd',
+  ].filter((k) => body[k] !== undefined);
+  if (changedKeys.length) {
+    const { audit } = await import('@/lib/audit-log');
+    audit('config', 'settings updated', changedKeys.join(', '));
+  }
   if (body.xaiApiKey !== undefined) {
     const cfg = await saveConfig({ xaiApiKey: body.xaiApiKey });
     const auth = await resolveCloudBearer(cfg);

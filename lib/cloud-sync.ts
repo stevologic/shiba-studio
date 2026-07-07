@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import { dataDir } from './data-paths';
 import { setApiKey } from './grok-client';
 import { loadConfig } from './persistence';
 import { resolveCloudBearer } from './xai-oauth';
@@ -21,7 +22,7 @@ import {
   writeBinaryFile,
 } from './workspace';
 
-const SYNC_FILE = path.join(process.cwd(), 'data', 'cloud-sync.json');
+const SYNC_FILE = dataDir('cloud-sync.json');
 
 export interface CloudSyncEntry {
   localName: string;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { saveConfig, loadConfig } from '@/lib/persistence';
 import * as Ints from '@/lib/integrations';
+import { audit } from '@/lib/audit-log';
 
 export async function GET() {
   const cfg = await loadConfig();
@@ -19,6 +20,7 @@ export async function POST(req: NextRequest) {
         ? { [which]: creds[which] }
         : creds;
     const next = await saveConfig({ integrations: partial });
+    audit('integration', 'credentials saved', which || Object.keys(partial).join(', '));
     return NextResponse.json({ ok: true, integrations: next.integrations });
   }
 
@@ -28,6 +30,7 @@ export async function POST(req: NextRequest) {
     const cleared = which === 'obsidian' ? { mode: 'local' as const } : {};
     const next = await saveConfig({ integrations: { [which]: cleared } });
     Ints.setIntegrationCreds(next.integrations || {});
+    audit('integration', 'credentials removed', which);
     return NextResponse.json({ ok: true, integrations: next.integrations });
   }
 

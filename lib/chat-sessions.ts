@@ -1,12 +1,13 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
 import type { ChatSession } from './chat-session-types';
 
 export type { ChatSession } from './chat-session-types';
 export { deriveSessionTitle } from './chat-session-types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = dataDir();
 const SESSIONS_FILE = path.join(DATA_DIR, 'chat-sessions.json');
 
 interface ChatSessionStore {

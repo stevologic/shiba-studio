@@ -1,9 +1,10 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
 import { parseModelRef } from './model-providers';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = dataDir();
 const USAGE_FILE = path.join(DATA_DIR, 'usage.json');
 const MAX_RECORDS = 10_000;
 

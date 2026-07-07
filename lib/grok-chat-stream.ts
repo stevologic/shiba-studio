@@ -1,6 +1,6 @@
 import { getApiKey, XAI_BASE } from './grok-client';
 import type { ChatMessagePayload, ChatStreamEvent, ReasoningEffort } from './chat-types';
-import { parseModelRef } from './model-providers';
+import { parseModelRef, supportsReasoning } from './model-providers';
 
 const DEFAULT_LOCAL_GROK_BASE = 'http://127.0.0.1:1234/v1';
 
@@ -169,10 +169,15 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
         max_tokens: params.max_tokens ?? 4096,
       };
 
-  if (useResponses && params.reasoningEffort) {
-    if (params.reasoningEffort !== 'low') body.reasoning = { effort: params.reasoningEffort };
-  } else if (!useResponses && isReasoningModel(ref.id) && params.reasoningEffort) {
-    body.reasoning_effort = params.reasoningEffort;
+  // Reasoning params are only attached for models that actually accept them
+  // (explicit non-reasoning variants and legacy models get none, regardless
+  // of what the client sent).
+  if (params.reasoningEffort && supportsReasoning(ref.id)) {
+    if (useResponses) {
+      if (params.reasoningEffort !== 'low') body.reasoning = { effort: params.reasoningEffort };
+    } else if (isReasoningModel(ref.id)) {
+      body.reasoning_effort = params.reasoningEffort;
+    }
   }
 
   const doFetch = async (): Promise<Response> => {
