@@ -7,11 +7,8 @@ import {
   browserScroll,
   browserScrollBy,
   browserViewportShot,
+  SUBBROWSER_RUN_ID,
 } from '@/lib/browser';
-
-// The annotation sub-browser shares one persistent puppeteer page, separate
-// from agent-run pages, so navigation state survives between actions.
-const SUBBROWSER_RUN_ID = '__subbrowser__';
 
 export async function POST(req: NextRequest) {
   try {

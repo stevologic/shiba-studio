@@ -59,6 +59,17 @@ export async function POST(req: NextRequest) {
       if (requested && fs.statSync(requested).isDirectory()) workspaceDir = requested;
     } catch { /* stale/unreachable folder — chat continues without it */ }
   }
+  // Local agents browse for real in chat: tell the model how that works so it
+  // neither refuses nor invents results.
+  if (chatAgent && chatAgent.origin !== 'cloud') {
+    systemParts.push([
+      '## Browser',
+      'Your browser tools (browser_navigate, browser_click, browser_type, browser_extract, browser_screenshot) drive a real headless Chrome — no window appears on screen by design.',
+      'A screenshot of the final page is automatically appended to your reply after you use them, and the user can watch or take over the same page at any time by typing /annotate.',
+      'Never claim a page was opened without actually calling the tools.',
+    ].join('\n'));
+  }
+
   if (workspaceDir) {
     systemParts.push([
       '## Chat workspace',
@@ -98,12 +109,12 @@ export async function POST(req: NextRequest) {
     workspace: workspaceDir || null,
   });
 
-  // Chatting AS an agent: give the model that agent's cloud-safe toolbelt so
-  // "post this to X" actually posts instead of the model pretending it did.
-  // Machine tools (files/shell/browser) stay run-only — EXCEPT the fs tools
-  // when the user bound this chat to a workspace folder, which is an explicit
-  // grant of file access to that folder. Attachments fall back to the plain
-  // vision stream.
+  // Chatting AS an agent: give the model the same toolbelt the agent has in
+  // autonomous runs — LOCAL agents get their machine tools (files, shell,
+  // browser) so "open a browser" actually browses instead of the model
+  // pretending it did; cloud agents stay restricted to cloud capabilities.
+  // A bound chat workspace additionally roots fs tools in that folder.
+  // Attachments fall back to the plain vision stream.
   const hasAttachments = messages.some((m) => m.attachments?.length);
   const useAgentTools = (!!chatAgent || !!workspaceDir) && !hasAttachments && parseModelRef(model).provider !== 'local';
 
@@ -124,8 +135,11 @@ export async function POST(req: NextRequest) {
             // fs tools run as this synthetic local "agent" so a cloud-origin
             // chat agent can still touch the user-granted workspace folder.
             const WORKSPACE_TOOL_NAMES = new Set(['fs_list', 'fs_read', 'fs_write', 'fs_search']);
+            const BROWSER_TOOL_NAMES = new Set(['browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract']);
             const workspaceAgent = normalizeAgent({ id: '__chat__', name: 'Grok Chat', origin: 'local' });
-            const tools = agent ? getToolDefinitions(agent.integrations, false, 'cloud') : [];
+            const tools = agent
+              ? getToolDefinitions(agent.integrations, false, agent.origin === 'cloud' ? 'cloud' : 'local')
+              : [];
             if (workspaceDir) {
               const fsTools = getToolDefinitions(workspaceAgent.integrations, false, 'local')
                 .filter((t) => WORKSPACE_TOOL_NAMES.has(t.function.name));
@@ -133,9 +147,13 @@ export async function POST(req: NextRequest) {
               tools.push(...fsTools.filter((t) => !have.has(t.function.name)));
             }
             const workDir = workspaceDir || resolveWorkspace(agent!.workspace.path);
+            // Browser tools drive the annotation sub-browser's page, so the
+            // user can watch or take over with /annotate at any time.
+            const { SUBBROWSER_RUN_ID, browserViewportShot } = await import('@/lib/browser');
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const msgs: any[] = messages.map((m) => ({ role: m.role, content: m.content }));
             const toolsUsed: string[] = [];
+            let browserUsed = false;
 
             for (let turn = 0; turn < 6; turn++) {
               const resp = await grokChat({
@@ -152,6 +170,13 @@ export async function POST(req: NextRequest) {
               const toolCalls = msg.tool_calls || [];
               if (toolCalls.length === 0) {
                 send({ type: 'content', delta: msg.content || '' });
+                // Show the page the agent ended on — proof over promises.
+                if (browserUsed) {
+                  const shot = await browserViewportShot(SUBBROWSER_RUN_ID).catch(() => null);
+                  if (shot?.dataUrl) {
+                    send({ type: 'content', delta: `\n\n![Browser view — ${shot.title || shot.url}](${shot.dataUrl})\n*Live page: ${shot.url} — open \`/annotate\` to interact.*` });
+                  }
+                }
                 if (resp.usage) send({ type: 'usage', usage: resp.usage as unknown as Record<string, unknown> });
                 break;
               }
@@ -164,8 +189,9 @@ export async function POST(req: NextRequest) {
                 try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
                 send({ type: 'thinking', delta: `⚙ ${fn.name}(${JSON.stringify(args).slice(0, 160)})\n` });
                 const execAgent = !agent || (workspaceDir && WORKSPACE_TOOL_NAMES.has(fn.name)) ? workspaceAgent : agent;
-                const out = await executeAgentTool(fn.name, args, execAgent, {}, workDir);
+                const out = await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID);
                 toolsUsed.push(fn.name);
+                if (BROWSER_TOOL_NAMES.has(fn.name)) browserUsed = true;
                 send({ type: 'thinking', delta: `→ ${JSON.stringify(out.result).slice(0, 200)}\n` });
                 msgs.push({ role: 'tool', tool_call_id: tc.id, name: fn.name, content: JSON.stringify(out.result).slice(0, 8000) });
               }

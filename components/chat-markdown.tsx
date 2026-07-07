@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
@@ -75,6 +75,12 @@ interface ChatMarkdownProps {
   className?: string;
 }
 
+/** Default sanitizer strips data: URIs — allow inline data-URI images so the
+ *  agent tool loop can embed live browser screenshots in replies. */
+function urlTransform(url: string): string {
+  return url.startsWith('data:image/') ? url : defaultUrlTransform(url);
+}
+
 /** Markdown renderer for chat messages — GFM tables/lists, highlighted code with copy buttons. */
 function ChatMarkdownInner({ content, className = '' }: ChatMarkdownProps) {
   return (
@@ -83,6 +89,7 @@ function ChatMarkdownInner({ content, className = '' }: ChatMarkdownProps) {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }]]}
         components={MARKDOWN_COMPONENTS}
+        urlTransform={urlTransform}
       >
         {content}
       </ReactMarkdown>

@@ -7,6 +7,10 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 let browser: Browser | null = null;
 const runPageMap = new Map<string, Page>();
 
+/** The annotation sub-browser's persistent page. Chat-driven browser tools
+ *  share it, so /annotate always shows what the agent is doing. */
+export const SUBBROWSER_RUN_ID = '__subbrowser__';
+
 async function getBrowser(): Promise<Browser> {
   if (browser && (browser as any).connected) return browser;
   const args = [

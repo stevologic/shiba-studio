@@ -14,7 +14,7 @@ Grok Chat is a working surface, not just a conversation: it streams reasoning, r
 The target select chooses *who* answers:
 
 - **Grok (default)** — plain Grok with your global uploads as context.
-- **A specific agent** — chats in that agent's voice with its Skill personality and live integration context (e.g. its whole Obsidian vault).
+- **A specific agent** — chats in that agent's voice with its Skill personality and live integration context (e.g. its whole Obsidian vault). Local agents keep their real toolbelt in chat — files, shell, and the browser — so *"open example.com and read the headline"* actually drives headless Chrome, appends a screenshot of the final page to the reply, and `/annotate` lets you watch or take over the same page.
 - **All agents** — every agent answers in parallel; Grok synthesizes a unified reply with per-agent perspectives. (Text-only.)
 
 ## Models, reasoning, attachments
