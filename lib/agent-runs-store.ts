@@ -77,7 +77,12 @@ export async function loadRuns(agentId?: string): Promise<AgentRun[]> {
 }
 
 /** Lightweight listing (no trace payloads) — the fast path for dashboards. */
-export async function listRunSummaries(opts: { agentId?: string; limit?: number } = {}): Promise<AgentRunSummary[]> {
+export async function listRunSummaries(opts: {
+  agentId?: string;
+  scheduleId?: string;
+  scheduledOnly?: boolean;
+  limit?: number;
+} = {}): Promise<AgentRunSummary[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const select = `
     SELECT id, agentId, agentName, model, status, prompt, startedAt, completedAt,
@@ -85,9 +90,17 @@ export async function listRunSummaries(opts: { agentId?: string; limit?: number 
            json_array_length(trace) AS traceSteps
     FROM runs
   `;
-  const rows = opts.agentId
-    ? getDb().prepare(`${select} WHERE agentId = ? ORDER BY startedAt DESC LIMIT ?`).all(opts.agentId, limit)
-    : getDb().prepare(`${select} ORDER BY startedAt DESC LIMIT ?`).all(limit);
+  const where: string[] = [];
+  const params: string[] = [];
+  if (opts.agentId) { where.push('agentId = ?'); params.push(opts.agentId); }
+  if (opts.scheduleId) {
+    where.push('scheduleId = ?');
+    params.push(opts.scheduleId);
+  } else if (opts.scheduledOnly) {
+    where.push('scheduleId IS NOT NULL');
+  }
+  const sql = `${select} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY startedAt DESC LIMIT ?`;
+  const rows = getDb().prepare(sql).all(...params, limit);
   return (rows as unknown as RunRow[]).map(rowToSummary);
 }
 

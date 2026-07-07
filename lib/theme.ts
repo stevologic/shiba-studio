@@ -28,14 +28,14 @@ export const THEME_COLORS = {
 export const THEME_IDENTITY = {
   logoPath: '/shiba-logo.svg',
   logoAlt: 'Shiba Inu logo',
-  brandName: 'GrokDesk',
+  brandName: 'Shiba Studio',
   sidebarTagline: "Powered by El0n's AI",
   footerPoweredBy: 'Grok / xAI',
   heroEyebrow: 'MISSION CONTROL — GROK × xAI',
   heroTitle: 'Aerospace-minimal agent studio.',
   heroSubtitle:
     'Orchestrate Grok agents with SpaceX-grade focus — code, browser control, integrations, and scheduling. Powered exclusively by xAI.',
-  metadataTitle: 'GrokDesk • xAI Grok Agent Platform',
+  metadataTitle: 'Shiba Studio • xAI Grok Agent Platform',
   metadataDescription:
     'SpaceX-inspired localhost Grok agent studio. Build, orchestrate, and schedule xAI-powered agents with full computer use.',
 } as const;

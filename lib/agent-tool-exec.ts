@@ -24,7 +24,7 @@ import { invokeMcpTool } from './mcp-client';
 
 /** Tools that touch this machine — never available to cloud agents. */
 const LOCAL_ONLY_TOOLS = new Set([
-  'fs_list', 'fs_read', 'fs_write', 'shell_exec',
+  'fs_list', 'fs_read', 'fs_write', 'fs_search', 'shell_exec',
   'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
   'grok_cli', 'mcp_list_tools', 'mcp_invoke',
 ]);
@@ -62,6 +62,46 @@ export async function executeAgentTool(
         const out = await shellExec(args.command, workDir, 45000);
         return { result: { stdout: out.stdout.slice(0, 4000), stderr: out.stderr.slice(0, 1200), code: out.code }, sideEffect: `shell: ${args.command}` };
       }
+      case 'fs_search': {
+        const { fsSearch } = await import('./agent-power-tools');
+        const hits = await fsSearch(workDir, String(args.pattern || ''), args.dir ? String(args.dir) : undefined);
+        return { result: hits, sideEffect: `searched workspace for "${args.pattern}" → ${hits.length} hits` };
+      }
+      case 'web_fetch': {
+        const { webFetch } = await import('./agent-power-tools');
+        const page = await webFetch(String(args.url || ''));
+        return { result: page, sideEffect: `fetched ${page.url}` };
+      }
+      case 'web_search': {
+        const { webSearch } = await import('./agent-power-tools');
+        const results = await webSearch(String(args.query || ''));
+        return { result: results, sideEffect: `web search "${args.query}" → ${results.length} results` };
+      }
+      case 'memory_save': {
+        const { memorySave } = await import('./agent-power-tools');
+        const entry = memorySave(agent.id, String(args.key || ''), String(args.content || ''));
+        return { result: { saved: entry.key }, sideEffect: `remembered "${entry.key}"` };
+      }
+      case 'memory_recall': {
+        const { memoryRecall } = await import('./agent-power-tools');
+        const entries = memoryRecall(agent.id, args.query ? String(args.query) : undefined);
+        return { result: entries, sideEffect: `recalled ${entries.length} memories` };
+      }
+      case 'generate_image': {
+        const { generateImage } = await import('./agent-power-tools');
+        const { loadConfig } = await import('./persistence');
+        const { resolveCloudBearer } = await import('./xai-oauth');
+        const auth = await resolveCloudBearer(await loadConfig());
+        if (!auth.token) {
+          return { result: { error: 'Image generation needs cloud xAI credentials (API key or OAuth) — configure them in Settings.' }, sideEffect: 'generate_image blocked: no cloud auth' };
+        }
+        const img = await generateImage(String(args.prompt || ''), auth.token, workDir);
+        return {
+          result: { path: img.path, revisedPrompt: img.revisedPrompt },
+          sideEffect: `generated image → ${img.path}`,
+          screenshot: img.dataUrl,
+        };
+      }
       case 'browser_navigate': {
         const r = await Browser.browserNavigate(args.url, runIdForBrowser);
         return { result: r, sideEffect: `navigated to ${r.url}` };
@@ -89,6 +129,11 @@ export async function executeAgentTool(
       case 'github_list_repos': {
         const r = await Ints.githubListRepos();
         return { result: r, sideEffect: `listed ${r.length} repos` };
+      }
+      case 'github_create_pr': {
+        const { gitCreatePr } = await import('./git-actions');
+        const out = await gitCreatePr(workDir, String(args.title || ''), args.body ? String(args.body) : undefined);
+        return { result: out, sideEffect: `opened GitHub PR: ${String(args.title || '').slice(0, 60)}` };
       }
       case 'slack_post': {
         const r = await Ints.slackPostMessage(args.channel, args.text);
@@ -181,6 +226,10 @@ export async function executeAgentTool(
           cwd: workDir,
           model: agent.model,
           maxTurns: args.max_turns ?? 12,
+          effort: args.effort ? String(args.effort) : undefined,
+          check: !!args.check,
+          bestOfN: args.best_of_n ? Number(args.best_of_n) : undefined,
+          jsonSchema: args.json_schema ? String(args.json_schema) : undefined,
         });
         return {
           result: {

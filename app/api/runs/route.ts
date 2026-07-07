@@ -14,7 +14,9 @@ export async function GET(req: NextRequest) {
 
   // Default: lightweight summaries (no trace payloads) — fast dashboard path.
   const agentId = searchParams.get('agentId') || undefined;
+  const scheduleId = searchParams.get('scheduleId') || undefined;
+  const scheduledOnly = searchParams.get('scheduledOnly') === '1';
   const limit = Number(searchParams.get('limit')) || 50;
-  const runs = await listRunSummaries({ agentId, limit });
+  const runs = await listRunSummaries({ agentId, scheduleId, scheduledOnly, limit });
   return NextResponse.json({ ok: true, runs });
 }

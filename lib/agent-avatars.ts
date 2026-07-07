@@ -45,3 +45,6 @@ export function resolveAgentAvatar(agent: { id: string; avatar?: string }): stri
 export function resolveAgentAvatarPath(agent: { id: string; avatar?: string }): string {
   return getAvatarPath(resolveAgentAvatar(agent));
 }
+
+/** Shown in run logs when the run's agent has since been deleted. */
+export const MISSING_AGENT_AVATAR_PATH = '/avatars/ufo.svg';

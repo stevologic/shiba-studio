@@ -33,6 +33,21 @@ export async function githubCreateIssue(owner: string, repo: string, title: stri
   return { url: res.data.html_url, number: res.data.number };
 }
 
+export async function githubCreatePr(
+  owner: string,
+  repo: string,
+  title: string,
+  head: string,
+  base: string,
+  body?: string,
+) {
+  if (!creds.github?.token) throw new Error('GitHub not configured — add a token on the Capabilities page');
+  const { Octokit } = await import('octokit');
+  const octo = new Octokit({ auth: creds.github.token });
+  const res = await octo.rest.pulls.create({ owner, repo, title, head, base, body });
+  return { url: res.data.html_url, number: res.data.number };
+}
+
 export async function githubListRepos() {
   if (!creds.github?.token) throw new Error('GitHub not configured');
   const { Octokit } = await import('octokit');

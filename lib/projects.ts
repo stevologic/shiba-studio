@@ -188,7 +188,7 @@ export async function buildProjectChatContext(project: Project, defaultWorkspace
     ? resolveProjectWorkspace(project, defaultWorkspace)
     : project.workspacePath?.trim();
   const lines: string[] = [
-    'You are assisting within a GrokDesk project.',
+    'You are assisting within a Shiba Studio project.',
     buildProjectContextHeader(project, workspaceResolved),
   ];
 

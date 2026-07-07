@@ -2,12 +2,33 @@
 // Holds agent runs and the audit log; JSON-file stores that were hot paths
 // (one file per run, full-directory scans) migrate in on first open.
 
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import * as fs from 'fs';
 import path from 'path';
 import { dataDir } from './data-paths';
 
+type DatabaseSync = DatabaseSyncType;
+
 let db: DatabaseSync | null = null;
+
+/**
+ * node:sqlite ships with Node 22.5+. Loaded via getBuiltinModule (works in
+ * ESM and every bundler) so older Node fails with an actionable message
+ * instead of a cryptic module-resolution crash — same story on macOS, Linux,
+ * and Windows: no native modules to compile.
+ */
+function loadSqlite(): { DatabaseSync: new (path: string) => DatabaseSync } {
+  const [maj, min] = process.versions.node.split('.').map(Number);
+  if (maj < 22 || (maj === 22 && min < 5)) {
+    throw new Error(
+      `Shiba Studio needs Node.js 22.5+ for its built-in SQLite store (running ${process.version}). ` +
+      'Upgrade Node — no native modules or build tools are required on any platform.',
+    );
+  }
+  const mod = process.getBuiltinModule?.('node:sqlite');
+  if (!mod) throw new Error('node:sqlite is unavailable in this runtime');
+  return mod as unknown as { DatabaseSync: new (path: string) => DatabaseSync };
+}
 
 function migrateRunsFromJson(database: DatabaseSync): void {
   try {
@@ -47,6 +68,7 @@ function migrateRunsFromJson(database: DatabaseSync): void {
 
 export function getDb(): DatabaseSync {
   if (db) return db;
+  const { DatabaseSync } = loadSqlite();
   db = new DatabaseSync(dataDir('grokdesk.db'));
   db.exec('PRAGMA journal_mode = WAL');
   db.exec(`

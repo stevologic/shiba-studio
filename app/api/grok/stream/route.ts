@@ -32,11 +32,13 @@ export async function POST(req: NextRequest) {
   // Chatting as an agent: inject live context from its enabled integrations
   // (e.g. the Obsidian vault index + contents) so the conversation carries the
   // same knowledge the agent gets during autonomous runs.
+  let agentName: string | null = null;
   if (body.agentId) {
     try {
       const { loadAgents } = await import('@/lib/persistence');
       const agent = (await loadAgents()).find((a) => a.id === String(body.agentId));
       if (agent) {
+        agentName = agent.name;
         const { buildIntegrationContext } = await import('@/lib/integration-context');
         const integrationContext = await buildIntegrationContext(agent.integrations);
         if (integrationContext) systemParts.push(integrationContext);
@@ -71,7 +73,7 @@ export async function POST(req: NextRequest) {
   const { audit } = await import('@/lib/audit-log');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   audit('chat', 'message sent', (lastUser?.content || '').slice(0, 120), {
-    model, agentId: body.agentId || null, turns: messages.length,
+    model, agent: agentName, agentId: body.agentId || null, turns: messages.length,
   });
 
   const stream = new ReadableStream({

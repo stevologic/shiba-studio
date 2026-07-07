@@ -51,7 +51,7 @@ export default class ErrorBoundary extends React.Component<
               className="grok-btn grok-btn-primary flex-1"
               onClick={() => window.location.reload()}
             >
-              Reload GrokDesk
+              Reload Shiba Studio
             </button>
           </div>
         </div>

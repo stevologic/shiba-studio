@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Fallback avatar for runs whose agent no longer exists -->
+  <defs>
+    <radialGradient id="dome" cx="50%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#bfe3ff" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#3f6ea6" stop-opacity="0.85"/>
+    </radialGradient>
+    <linearGradient id="hull" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9aa7bd"/>
+      <stop offset="55%" stop-color="#5d6a82"/>
+      <stop offset="100%" stop-color="#39424f"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="31" fill="#0b0f16"/>
+  <circle cx="14" cy="12" r="1" fill="#ffffff" opacity="0.7"/>
+  <circle cx="50" cy="9" r="0.8" fill="#ffffff" opacity="0.5"/>
+  <circle cx="55" cy="22" r="1" fill="#ffffff" opacity="0.6"/>
+  <circle cx="9" cy="27" r="0.8" fill="#ffffff" opacity="0.45"/>
+  <!-- beam -->
+  <path d="M26 40 L20 58 L44 58 L38 40 Z" fill="#8fd48a" opacity="0.22"/>
+  <!-- dome -->
+  <ellipse cx="32" cy="27" rx="10" ry="8.5" fill="url(#dome)"/>
+  <!-- pilot -->
+  <circle cx="32" cy="26" r="3.4" fill="#7ec97a"/>
+  <circle cx="30.8" cy="25.4" r="0.8" fill="#0b0f16"/>
+  <circle cx="33.2" cy="25.4" r="0.8" fill="#0b0f16"/>
+  <!-- hull -->
+  <ellipse cx="32" cy="34" rx="20" ry="7" fill="url(#hull)"/>
+  <ellipse cx="32" cy="32.4" rx="20" ry="5.4" fill="#7c8aa3" opacity="0.55"/>
+  <!-- lights -->
+  <circle cx="17" cy="35.5" r="1.5" fill="#ffd166"/>
+  <circle cx="24.5" cy="38" r="1.5" fill="#ef476f"/>
+  <circle cx="32" cy="39" r="1.5" fill="#06d6a0"/>
+  <circle cx="39.5" cy="38" r="1.5" fill="#ffd166"/>
+  <circle cx="47" cy="35.5" r="1.5" fill="#ef476f"/>
+</svg>

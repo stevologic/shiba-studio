@@ -47,5 +47,52 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, session });
   }
 
+  // After a chat's first exchange: summarize it into a short title with a
+  // low-end model (fast/cheap), so the session list reads at a glance.
+  if (body.action === 'autotitle') {
+    try {
+      const session = await getChatSession(body.id);
+      if (!session) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      const firstUser = (session.messages || []).find((m) => m.role === 'user');
+      const firstAssistant = (session.messages || []).find((m) => m.role === 'assistant');
+      if (!firstUser || !firstAssistant) {
+        return NextResponse.json({ ok: true, session, skipped: 'not enough messages' });
+      }
+
+      const { grokChat, setApiKey } = await import('@/lib/grok-client');
+      const { loadConfig } = await import('@/lib/persistence');
+      const { resolveCloudBearer } = await import('@/lib/xai-oauth');
+      const cfg = await loadConfig();
+      const auth = await resolveCloudBearer(cfg);
+      if (auth.token) setApiKey(auth.token);
+
+      const prompt = [
+        'Summarize this conversation as a title of 3 to 6 words. Reply with ONLY the title — no quotes, no punctuation at the end.',
+        `User: ${String(firstUser.content || '').slice(0, 600)}`,
+        `Assistant: ${String(firstAssistant.content || '').slice(0, 600)}`,
+      ].join('\n\n');
+
+      const cheapModel = 'grok-code-fast-1';
+      let title = '';
+      try {
+        const res = await grokChat({ model: cheapModel, messages: [{ role: 'user', content: prompt }], max_tokens: 24, temperature: 0.2 });
+        title = res.choices?.[0]?.message?.content?.trim() || '';
+      } catch {
+        // Cheap model unavailable — fall back to the configured default.
+        const res = await grokChat({ model: cfg.defaultGrokModel || 'grok-4.3-latest', messages: [{ role: 'user', content: prompt }], max_tokens: 24, temperature: 0.2 });
+        title = res.choices?.[0]?.message?.content?.trim() || '';
+      }
+      title = title.replace(/^["'`]+|["'`.]+$/g, '').slice(0, 60);
+      if (!title) return NextResponse.json({ ok: true, session, skipped: 'empty title' });
+
+      const updated = await updateChatSession(body.id, { title });
+      const { audit } = await import('@/lib/audit-log');
+      audit('chat', 'session auto-titled', title, { sessionId: body.id, model: cheapModel });
+      return NextResponse.json({ ok: true, session: updated });
+    } catch (e: unknown) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : 'autotitle failed' }, { status: 500 });
+    }
+  }
+
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
 }

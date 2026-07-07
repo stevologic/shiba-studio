@@ -22,6 +22,14 @@ export interface GrokCliRunOptions {
   timeoutMs?: number;
   outputFormat?: 'plain' | 'json' | 'streaming-json';
   signal?: AbortSignal;
+  /** Agentic effort level (low|medium|high|xhigh|max) — CLI --effort */
+  effort?: string;
+  /** Append a self-verification loop (headless) — CLI --check */
+  check?: boolean;
+  /** Run the task N ways in parallel, keep the best (headless) — CLI --best-of-n */
+  bestOfN?: number;
+  /** JSON Schema string constraining output to structured JSON — CLI --json-schema */
+  jsonSchema?: string;
 }
 
 let cachedStatus: { at: number; value: GrokCliStatus } | null = null;
@@ -152,7 +160,50 @@ function buildCliArgs(opts: GrokCliRunOptions): string[] {
   if (opts.reasoningEffort) args.push('--reasoning-effort', opts.reasoningEffort);
   if (opts.maxTurns != null) args.push('--max-turns', String(opts.maxTurns));
   if (opts.systemPrompt?.trim()) args.push('--system-prompt-override', opts.systemPrompt.trim());
+  if (opts.effort && ['low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) {
+    args.push('--effort', opts.effort);
+  }
+  if (opts.check) args.push('--check');
+  if (opts.bestOfN && opts.bestOfN >= 2) args.push('--best-of-n', String(Math.min(4, Math.floor(opts.bestOfN))));
+  if (opts.jsonSchema?.trim()) args.push('--json-schema', opts.jsonSchema.trim());
   return args;
+}
+
+export interface GrokCliUpdateInfo {
+  ok: boolean;
+  current?: string;
+  latest?: string;
+  updateAvailable?: boolean;
+  raw?: string;
+  error?: string;
+}
+
+/** `grok update --check --json` — surfaces update availability in Settings. */
+export async function checkGrokCliUpdate(): Promise<GrokCliUpdateInfo> {
+  const status = await detectGrokCli();
+  if (!status.installed || !status.path) return { ok: false, error: 'Grok CLI not installed' };
+  try {
+    const isWin = process.platform === 'win32';
+    const quote = isWin ? `"${status.path.replace(/"/g, '\\"')}"` : `"${status.path}"`;
+    const { stdout } = await runExec(`${quote} update --check --json`, 30_000);
+    try {
+      const data = JSON.parse(stdout.trim());
+      const current = data.currentVersion || data.current_version || data.current || status.version;
+      const latest = data.latestVersion || data.latest_version || data.latest || undefined;
+      return {
+        ok: true,
+        current,
+        latest,
+        updateAvailable: !!(data.updateAvailable ?? data.update_available ?? (latest && latest !== current)),
+        raw: stdout.trim().slice(0, 400),
+      };
+    } catch {
+      // Non-JSON output — pass the text through so the UI can show it.
+      return { ok: true, current: status.version, raw: stdout.trim().slice(0, 400) };
+    }
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'update check failed' };
+  }
 }
 
 export function buildCliPromptFromMessages(

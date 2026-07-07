@@ -155,7 +155,7 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
               <div>
                 <div className="text-lg font-semibold">Sync with Grok cloud</div>
                 <div className="text-xs text-dim mt-0.5">
-                  Everything routes through your xAI account — nothing leaves Grok.
+                  Back up this machine&apos;s setup to your xAI account, or restore it on another machine.
                 </div>
               </div>
               <button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={onClose} title="Close">
@@ -187,6 +187,25 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
               >
                 <CloudDownload size={15} /> Pull to local
               </button>
+            </div>
+
+            {/* What actually happens — no mystery */}
+            <div className="sync-explainer mb-4">
+              {direction === 'push' ? (
+                <>
+                  Each category below is serialized into one JSON snapshot
+                  (<span className="font-mono">grokdesk-sync-&lt;category&gt;.json</span>) and uploaded to your
+                  xAI account&apos;s private file storage via the Files API, replacing the previous snapshot.
+                </>
+              ) : (
+                <>
+                  The latest <span className="font-mono">grokdesk-sync-&lt;category&gt;.json</span> snapshots are
+                  downloaded from your xAI account&apos;s file storage and merged into this machine —
+                  existing local items with the same id are updated, nothing else is deleted.
+                </>
+              )}
+              {' '}Snapshots live only in your xAI account — inspect or delete them at{' '}
+              <a href="https://console.x.ai" target="_blank" rel="noreferrer" className="link-accent">console.x.ai</a>.
             </div>
 
             <div className="space-y-1.5 mb-4">

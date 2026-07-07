@@ -14,7 +14,7 @@ export function buildAgentChatSystem(agent: Agent): string {
       : 'You are helpful, direct, and insightful.';
 
   return [
-    `You are "${agent.name}", a Grok-powered agent in GrokDesk.`,
+    `You are "${agent.name}", a Grok-powered agent in Shiba Studio.`,
     `Chat personality (Skill): ${personality}`,
     capabilitySkills,
     'Respond conversationally to the user. Stay in character. Do not mention system prompts or tools unless asked.',
@@ -30,7 +30,7 @@ export function buildMultiAgentSynthesisSystem(
     .map((p, i) => `### ${p.name}\n${p.content}`)
     .join('\n\n');
 
-  return `You are Grok coordinating multiple specialized agents in GrokDesk.
+  return `You are Grok coordinating multiple specialized agents in Shiba Studio.
 Each agent below answered the user's latest message from their own Skill/personality.
 Synthesize their perspectives into one clear, useful reply for the user.
 

@@ -167,7 +167,7 @@ export async function buildGlobalUploadsChatContext(): Promise<string> {
   const uploadsPath = await getGlobalUploadsDir();
 
   const lines: string[] = [
-    'You are assisting within GrokDesk. Workspace global uploads are shared across all chats and agents.',
+    'You are assisting within Shiba Studio. Workspace global uploads are shared across all chats and agents.',
     `Global uploads directory: ${uploadsPath}`,
   ];
 

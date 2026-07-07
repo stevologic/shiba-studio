@@ -1,4 +1,6 @@
-# GrokDesk — Grok Agent Platform (localhost)
+# Shiba Studio — Grok Agent Platform (localhost)
+
+> Formerly "GrokDesk" — internal paths (`~/.grokdesk/`, `GROKDESK_*` env vars) keep the old name so existing data keeps working.
 
 Fully functional Claude/Cursor/Codex-style agent studio powered **exclusively** by Grok + xAI.
 
@@ -18,6 +20,15 @@ Fully functional Claude/Cursor/Codex-style agent studio powered **exclusively** 
 - Usage & Cost dashboard metered live from xAI API responses, with a live api.x.ai connection indicator
 - Beautiful professional + fun dark UI (logo click returns to Dashboard)
 - Doge Shiba Inu easter egg in Settings
+
+## Platform support
+
+Runs on **macOS, Linux, and Windows** with no native modules or build tools:
+
+- **Node.js ≥ 22.5** (enforced via `engines`) — the runs/audit database uses Node's built-in `node:sqlite`, so there is nothing to compile on any platform
+- All persistence lives under `~/.grokdesk/` (`grokdesk.key`, `data/`) via `os.homedir()`; override with `GROKDESK_DATA_DIR` / `GROKDESK_SECRET_KEY`
+- Browser automation downloads its own Chromium per-OS (puppeteer); Grok CLI detection uses `which`/`where` per-platform
+- Verified on Windows; the codebase contains no platform-specific paths or shell assumptions outside those guarded branches
 
 ## Quick Start (Fully Functional Out of Box)
 

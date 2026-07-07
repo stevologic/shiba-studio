@@ -1,10 +1,13 @@
 import { listChatSessions } from './chat-sessions';
 import { listMcpServers } from './mcp';
 import { listProjects } from './projects';
-import { loadAgents } from './persistence';
+import { loadAgents, loadConfig } from './persistence';
 import { listGlobalUploadFiles } from './workspace';
 import { getUsageSummary } from './usage';
 import type { IntegrationCreds } from './types';
+
+/** Default monthly quota (USD) when the user hasn't set one in Settings. */
+const DEFAULT_USAGE_BUDGET_USD = 25;
 
 function countConfiguredIntegrations(creds: IntegrationCreds): number {
   let n = 0;
@@ -37,13 +40,14 @@ async function getCachedUsageCost(): Promise<number> {
 }
 
 export async function getNavStats(integrations: IntegrationCreds): Promise<NavStats> {
-  const [sessions, projects, uploads, agents, mcpServers, usageCostUsd] = await Promise.all([
+  const [sessions, projects, uploads, agents, mcpServers, usageCostUsd, cfg] = await Promise.all([
     listChatSessions(),
     listProjects(),
     listGlobalUploadFiles(),
     loadAgents(),
     listMcpServers(),
     getCachedUsageCost(),
+    loadConfig(),
   ]);
 
   let automationsScheduled = 0;
@@ -65,5 +69,6 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
     automationsScheduled,
     integrationsConfigured: countConfiguredIntegrations(integrations) + mcpConfigured,
     usageCostUsd,
+    usageBudgetUsd: cfg.usageBudgetUsd ?? DEFAULT_USAGE_BUDGET_USD,
   };
 }

@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
   const changedKeys = [
     'xaiApiKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel', 'localGrokEnabled',
     'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode', 'globalInstructions', 'useAgentsMd',
+    'usageBudgetUsd',
   ].filter((k) => body[k] !== undefined);
   if (changedKeys.length) {
     const { audit } = await import('@/lib/audit-log');
@@ -53,6 +54,11 @@ export async function POST(req: NextRequest) {
   if (body.defaultGrokModel !== undefined) {
     const cfg = await saveConfig({ defaultGrokModel: String(body.defaultGrokModel || '') });
     return NextResponse.json({ ok: true, defaultGrokModel: cfg.defaultGrokModel });
+  }
+  if (body.usageBudgetUsd !== undefined) {
+    const budget = Math.max(0, Number(body.usageBudgetUsd) || 0);
+    const cfg = await saveConfig({ usageBudgetUsd: budget });
+    return NextResponse.json({ ok: true, usageBudgetUsd: cfg.usageBudgetUsd });
   }
   if (body.localModelAllowlist !== undefined) {
     const allowlist = Array.isArray(body.localModelAllowlist)

@@ -97,6 +97,21 @@ export function getToolDefinitions(
         parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: [] },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'fs_search',
+        description: 'Search all workspace files for a text pattern (case-insensitive). Returns file, line number, and matching line.',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Text to search for' },
+            dir: { type: 'string', description: 'Optional subfolder to scope the search' },
+          },
+          required: ['pattern'],
+        },
+      },
+    },
   ];
 
   const tools: GrokTool[] = [...localOnlyTools];
@@ -109,6 +124,21 @@ export function getToolDefinitions(
     tools.push({
       type: 'function',
       function: { name: 'github_list_repos', description: 'List GitHub repositories the token can access.', parameters: { type: 'object', properties: {} } },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'github_create_pr',
+        description: 'Push the current workspace branch and open a GitHub pull request against the default branch.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'PR title' },
+            body: { type: 'string', description: 'PR description (markdown)' },
+          },
+          required: ['title'],
+        },
+      },
     });
   }
   if (scope.slack) {
@@ -237,10 +267,57 @@ export function getToolDefinitions(
       parameters: { type: 'object', properties: { when: { type: 'string', description: 'e.g. "in 30m" or cron' }, prompt: { type: 'string' } }, required: ['when', 'prompt'] },
     },
   });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Fetch a URL and return its readable text content (HTML is stripped). Use for reading docs, articles, APIs.',
+      parameters: { type: 'object', properties: { url: { type: 'string', description: 'http(s) URL to fetch' } }, required: ['url'] },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the web (DuckDuckGo) and return top results with title, url, and snippet. Follow up with web_fetch to read a result.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search terms' } }, required: ['query'] },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'memory_save',
+      description: 'Persist a fact/preference/insight under a short key. Survives across runs — future runs can recall it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          key: { type: 'string', description: 'Short stable key, e.g. "user-timezone"' },
+          content: { type: 'string', description: 'The fact to remember' },
+        },
+        required: ['key', 'content'],
+      },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'memory_recall',
+      description: 'Recall previously saved memories (optionally filtered by a keyword). Check this early in a run for relevant context.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Optional keyword filter' } } },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'generate_image',
+      description: 'Generate an image from a text prompt with xAI (grok-2-image). Saves the file into the workspace and shows it in the run trace.',
+      parameters: { type: 'object', properties: { prompt: { type: 'string', description: 'Image description' } }, required: ['prompt'] },
+    },
+  });
   return tools;
 }
 
-function mcpToolDefinitions(): GrokTool[] {
+export function mcpToolDefinitions(): GrokTool[] {
   return [
     {
       type: 'function',
@@ -273,18 +350,22 @@ function mcpToolDefinitions(): GrokTool[] {
   ];
 }
 
-function grokCliToolDefinition(): GrokTool {
+export function grokCliToolDefinition(): GrokTool {
   return {
     type: 'function',
     function: {
       name: 'grok_cli',
       description:
-        'Run a prompt through the local Grok Build CLI (grok) in headless mode. Use for coding agent tasks, repo exploration, or delegating work to Grok CLI when installed on this machine.',
+        'Run a prompt through the local Grok Build CLI (grok) in headless mode. Use for coding agent tasks, repo exploration, or delegating work to Grok CLI when installed on this machine. It has its own tools including web search.',
       parameters: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'Instructions for Grok CLI' },
           max_turns: { type: 'number', description: 'Max agent turns (default 12)' },
+          effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'], description: 'Agentic effort level' },
+          check: { type: 'boolean', description: 'Append a self-verification loop so the CLI double-checks its own work' },
+          best_of_n: { type: 'number', description: 'Run the task N ways in parallel and keep the best result (2-4)' },
+          json_schema: { type: 'string', description: 'JSON Schema string — constrains the CLI output to structured JSON matching it' },
         },
         required: ['prompt'],
       },
@@ -330,7 +411,7 @@ Global shared uploads (all agents): ${globalUploadsPath} — files dropped here 
   const actionLine = isCloud
     ? 'You use tools to act through cloud services: GitHub/Slack/Drive/Discord/X/Obsidian when enabled, peer messaging, and self-scheduling.'
     : 'You use tools to take real actions: edit files, run shell, control Chrome browser, GitHub/Slack/Drive when enabled.';
-  return `You are a powerful autonomous Grok agent named "${agent.name}" running inside GrokDesk (localhost agent studio).
+  return `You are a powerful autonomous Grok agent named "${agent.name}" running inside Shiba Studio (localhost agent studio).
 ${homeLine}
 Available scoped integrations: ${integ}
 ${skills}
@@ -374,7 +455,7 @@ async function* agentRunGenerator(
   const trace: TraceStep[] = [];
   const { audit } = await import('./audit-log');
   audit('run', opts.scheduled ? 'scheduled run started' : 'run started', `${agent.name}: ${prompt.slice(0, 120)}`, {
-    runId, agentId: agent.id, model: agent.model, origin: agent.origin || 'local',
+    runId, agent: agent.name, agentId: agent.id, model: agent.model, origin: agent.origin || 'local',
   });
 
   const emit = (step: TraceStep) => {
@@ -403,7 +484,9 @@ async function* agentRunGenerator(
       startedAt, status: 'error', trace, sideEffects: [],
     };
     await persistAgentRun(r);
-    audit('run', 'run failed', `${agent.name}: ${modelError.slice(0, 120)}`, { runId, agentId: agent.id });
+    audit('run', 'run failed', `${agent.name}: ${modelError.slice(0, 120)}`, {
+      runId, agent: agent.name, agentId: agent.id, model: agent.model,
+    });
     yield { kind: 'done', run: r };
     return;
   }
@@ -603,7 +686,8 @@ async function* agentRunGenerator(
 
   await persistAgentRun(run);
   audit('run', `run ${run.status}`, `${agent.name}: ${(run.finalOutput || prompt).slice(0, 120)}`, {
-    runId, agentId: agent.id, steps: trace.length, sideEffects: run.sideEffects?.length || 0,
+    runId, agent: agent.name, agentId: agent.id, model: agent.model,
+    steps: trace.length, sideEffects: run.sideEffects?.length || 0,
   });
   yield { kind: 'done', run };
 }

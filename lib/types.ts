@@ -177,6 +177,8 @@ export interface AppConfig {
   globalInstructions?: string;
   /** Inject AGENTS.md / CLAUDE.md from workspace into prompts */
   useAgentsMd?: boolean;
+  /** Monthly spend quota (USD) — usage is reported as a percentage of this */
+  usageBudgetUsd?: number;
 }
 
 export interface InterAgentMessage {

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { MessageSquare, Pencil, Plus, X, Search, Archive, ArchiveRestore } from 'lucide-react';
+import { MessageSquare, Pencil, Plus, X, Search, Archive, ArchiveRestore, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import GrokChatPanel from '@/components/grok-chat-panel';
@@ -41,6 +41,16 @@ export default function ChatSessionsPanel({
   const [bootstrapping, setBootstrapping] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  // Session rail collapse — remembered across visits.
+  const [railOpen, setRailOpen] = useState<boolean>(() =>
+    typeof window === 'undefined' ? true : window.localStorage.getItem('shiba-chat-rail') !== 'closed');
+
+  function toggleRail() {
+    setRailOpen((open) => {
+      try { window.localStorage.setItem('shiba-chat-rail', open ? 'closed' : 'open'); } catch { /* private mode */ }
+      return !open;
+    });
+  }
 
   const loadSessions = useCallback(async (query?: string) => {
     try {
@@ -98,7 +108,9 @@ export default function ChatSessionsPanel({
   }, []);
 
   useEffect(() => {
-    loadProjects();
+    void (async () => {
+      await loadProjects();
+    })();
   }, [loadProjects]);
 
   useEffect(() => {
@@ -148,9 +160,12 @@ export default function ChatSessionsPanel({
 
   useEffect(() => {
     if (!sessionId || bootstrapping) return;
-    loadSession(sessionId).then((session) => {
-      if (session) loadLinkedProject(session.projectId);
-    });
+    let stale = false;
+    void (async () => {
+      const session = await loadSession(sessionId);
+      if (!stale && session) await loadLinkedProject(session.projectId);
+    })();
+    return () => { stale = true; };
   }, [sessionId, bootstrapping, loadSession, loadLinkedProject]);
 
   async function createSession() {
@@ -303,101 +318,143 @@ export default function ChatSessionsPanel({
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)] max-w-4xl mx-auto w-full">
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-          <Search size={14} className="text-dim shrink-0" />
-          <input
-            className="grok-input text-xs flex-1"
-            placeholder="Search sessions…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void loadSessions(searchQuery);
-            }}
-          />
-          <button type="button" onClick={() => void loadSessions(searchQuery)} className="grok-btn grok-btn-secondary text-xs">
-            Search
-          </button>
-        </div>
-        <label className="flex items-center gap-1.5 text-xs text-dim cursor-pointer">
-          <input type="checkbox" checked={showArchived} onChange={(e) => { setShowArchived(e.target.checked); void loadSessions(searchQuery); }} />
-          Archived
-        </label>
-      </div>
-      <div className="chat-session-tabs flex items-center gap-1 mb-3 overflow-x-auto pb-1">
-        {sessions.map((s) => {
-          const active = s.id === sessionId;
-          const agentName = s.chatTarget !== 'grok' && s.chatTarget !== 'all'
-            ? agents.find((a) => a.id === s.chatTarget)?.name
-            : null;
-          const label = s.title || 'New chat';
-          return (
-            <div
-              key={s.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSessionChange(s.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onSessionChange(s.id);
-                }
-              }}
-              className={`chat-session-tab ${active ? 'chat-session-tab-active' : ''}`}
-              title={agentName ? `${label} · ${agentName}` : label}
+    <div className="chat-sessions-layout flex h-[calc(100vh-120px)] w-full gap-3">
+      {/* Session rail — expandable pane; scales to hundreds of chats */}
+      {railOpen ? (
+        <div className="chat-session-rail">
+          <div className="chat-session-rail-head">
+            <span className="chat-session-rail-title">Chats</span>
+            <span className="chat-session-rail-count">{sessions.length}</span>
+            <button
+              type="button"
+              onClick={createSession}
+              className="chat-session-rail-btn"
+              title="New chat session"
             >
-              <MessageSquare size={12} className="shrink-0 opacity-60" />
-              <span className="chat-session-tab-label">{label}</span>
-              {agentName && <span className="chat-session-tab-meta">{agentName}</span>}
-              <button
-                type="button"
-                className="chat-session-tab-close"
-                onClick={(e) => void renameSession(s.id, e)}
-                title="Rename chat"
-              >
-                <Pencil size={12} />
-              </button>
-              {s.archived ? (
-                <button
-                  type="button"
-                  className="chat-session-tab-close"
-                  onClick={(e) => restoreSession(s.id, e)}
-                  title="Restore session"
+              <Plus size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={toggleRail}
+              className="chat-session-rail-btn"
+              title="Collapse the chat list"
+              aria-label="Collapse chat list"
+            >
+              <ChevronsLeft size={14} />
+            </button>
+          </div>
+          <div className="chat-session-rail-search">
+            <Search size={13} className="text-dim shrink-0" />
+            <input
+              className="grok-input text-xs flex-1 min-w-0"
+              placeholder="Search sessions… (Enter)"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void loadSessions(searchQuery);
+              }}
+            />
+          </div>
+          <label className="chat-session-rail-archived">
+            <input type="checkbox" checked={showArchived} onChange={(e) => { setShowArchived(e.target.checked); void loadSessions(searchQuery); }} />
+            Show archived
+          </label>
+          <div className="chat-session-rail-list">
+            {sessions.map((s) => {
+              const active = s.id === sessionId;
+              const agentName = s.chatTarget !== 'grok' && s.chatTarget !== 'all'
+                ? agents.find((a) => a.id === s.chatTarget)?.name
+                : null;
+              const label = s.title || 'New chat';
+              return (
+                <div
+                  key={s.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSessionChange(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onSessionChange(s.id);
+                    }
+                  }}
+                  className={`chat-session-item ${active ? 'chat-session-item-active' : ''}`}
+                  title={agentName ? `${label} · ${agentName}` : label}
                 >
-                  <ArchiveRestore size={12} />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="chat-session-tab-close"
-                  onClick={(e) => archiveSession(s.id, e)}
-                  title="Archive session"
-                >
-                  <Archive size={12} />
-                </button>
-              )}
-              <button
-                type="button"
-                className="chat-session-tab-close"
-                onClick={(e) => closeSession(s.id, e)}
-                title="Delete session"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          );
-        })}
-        <button
-          type="button"
-          onClick={createSession}
-          className="chat-session-tab chat-session-tab-new"
-          title="New chat session"
-        >
-          <Plus size={14} />
-        </button>
-      </div>
+                  <MessageSquare size={13} className="shrink-0 opacity-50" />
+                  <span className="chat-session-item-body">
+                    <span className="chat-session-item-title">{label}</span>
+                    {agentName && <span className="chat-session-item-meta">{agentName}</span>}
+                  </span>
+                  <span className="chat-session-item-actions">
+                    <button
+                      type="button"
+                      className="chat-session-item-action"
+                      onClick={(e) => void renameSession(s.id, e)}
+                      title="Rename chat"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    {s.archived ? (
+                      <button
+                        type="button"
+                        className="chat-session-item-action"
+                        onClick={(e) => restoreSession(s.id, e)}
+                        title="Restore session"
+                      >
+                        <ArchiveRestore size={12} />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="chat-session-item-action"
+                        onClick={(e) => archiveSession(s.id, e)}
+                        title="Archive session"
+                      >
+                        <Archive size={12} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="chat-session-item-action chat-session-item-action-danger"
+                      onClick={(e) => closeSession(s.id, e)}
+                      title="Delete session"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
+            {sessions.length === 0 && (
+              <div className="text-xs text-dim px-2 py-4 text-center">No chats{searchQuery ? ' match your search' : ' yet'}.</div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="chat-session-rail chat-session-rail-collapsed">
+          <button
+            type="button"
+            onClick={toggleRail}
+            className="chat-session-rail-btn"
+            title="Expand the chat list"
+            aria-label="Expand chat list"
+          >
+            <ChevronsRight size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={createSession}
+            className="chat-session-rail-btn"
+            title="New chat session"
+          >
+            <Plus size={15} />
+          </button>
+          <span className="chat-session-rail-count-collapsed" title={`${sessions.length} chat session(s)`}>{sessions.length}</span>
+        </div>
+      )}
 
+      <div className="flex flex-col flex-1 min-w-0 max-w-4xl mx-auto w-full">
       {activeSession && (
         <GrokChatPanel
           key={activeSession.id}
@@ -430,6 +487,7 @@ export default function ChatSessionsPanel({
           agents={agents}
         />
       )}
+      </div>
     </div>
   );
 }

@@ -53,10 +53,21 @@ export async function loadAndScheduleAll() {
       const taskKey = `${agent.id}:${entry.id}`;
       try {
         const task = cron.schedule(entry.cron, async () => {
+          // Deleted agents must never fire: re-verify existence at trigger time
+          // and retire the schedule if the agent is gone.
+          const live = (await loadAgents()).find((a) => a.id === agent.id);
+          if (!live) {
+            console.log(`[scheduler] agent ${agent.name} (${agent.id}) no longer exists — retiring schedule ${entry.id}`);
+            const stale = tasks.get(taskKey);
+            if (stale) { try { stale.stop(); } catch {} tasks.delete(taskKey); }
+            const { audit } = await import('./audit-log');
+            audit('run', 'schedule retired', `${agent.name}: agent deleted — automation stopped`, { agentId: agent.id, scheduleId: entry.id });
+            return;
+          }
           console.log(`[scheduler] firing ${agent.name} schedule ${entry.id} with specific instructions`);
           try {
             // Use the schedule entry's dedicated instructions as the prompt (AC3)
-            await runScheduledAgent(agent, entry.instructions, {
+            await runScheduledAgent(normalizeAgent(live), entry.instructions, {
               scheduled: true,
               scheduleId: entry.id,
               scheduleInstructions: entry.instructions,

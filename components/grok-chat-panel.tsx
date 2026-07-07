@@ -2,11 +2,30 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Brain, Check, ChevronDown, ChevronUp, Copy, Download, Eraser, Paperclip, Pencil, RefreshCw, RotateCcw,
+  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, GitBranch, Paperclip, Pencil, RefreshCw, RotateCcw,
   Send, Sparkles, Square, Terminal, X,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import ChatMarkdown from '@/components/chat-markdown-lazy';
+import type { SubBrowserAnnotation } from '@/components/sub-browser';
+
+const SubBrowser = dynamic(() => import('@/components/sub-browser'));
+
+/** Slash-command catalog — drives the composer autocomplete and /help. */
+const SLASH_COMMANDS: Array<{ cmd: string; insert: string; desc: string }> = [
+  { cmd: '/git status', insert: '/git status', desc: 'Branch, changed files, recent commits' },
+  { cmd: '/git checkout <branch>', insert: '/git checkout ', desc: 'Switch to a branch, or create it' },
+  { cmd: '/git commit <message>', insert: '/git commit ', desc: 'Stage everything and commit' },
+  { cmd: '/git pr <title> | <body>', insert: '/git pr ', desc: 'Push branch and open a GitHub PR' },
+  { cmd: '/annotate', insert: '/annotate', desc: 'Sub-browser: highlight an element for refinement' },
+  { cmd: '/search <query>', insert: '/search ', desc: 'Web search results into this chat' },
+  { cmd: '/fetch <url>', insert: '/fetch ', desc: 'Read a page as text into this chat' },
+  { cmd: '/remember <key> | <content>', insert: '/remember ', desc: 'Save a persistent memory' },
+  { cmd: '/recall <keyword>', insert: '/recall ', desc: 'List saved memories' },
+  { cmd: '/note <path> | <content>', insert: '/note ', desc: 'Create an Obsidian note' },
+  { cmd: '/help', insert: '/help', desc: 'Full command reference' },
+];
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { ChatAttachment, ChatMessagePayload, ReasoningEffort } from '@/lib/chat-types';
 import { buildAgentChatSystem } from '@/lib/chat-skill';
@@ -181,11 +200,14 @@ function sessionToInitialState(
   agents: Agent[],
 ) {
   const target = (session?.chatTarget || 'grok') as ChatTarget;
+  // Multi-agent mode never routes through the local CLI — clamp at the source
+  // so every state-set path (init + session sync) holds the invariant.
+  const useGrokCli = !!session?.useGrokCli && target !== 'all';
   if (session?.messages?.length) {
     return {
       target,
       messages: projectMessagesToUi(session.messages),
-      useGrokCli: !!session.useGrokCli,
+      useGrokCli,
       cliModel: session.cliModel || '',
       reasoningEffort: session.reasoningEffort || 'low' as ReasoningEffort,
     };
@@ -193,7 +215,7 @@ function sessionToInitialState(
   return {
     target,
     messages: initialMessages(project, target, agents),
-    useGrokCli: !!session?.useGrokCli,
+    useGrokCli,
     cliModel: session?.cliModel || '',
     reasoningEffort: (session?.reasoningEffort || 'low') as ReasoningEffort,
   };
@@ -230,6 +252,24 @@ export default function GrokChatPanel({
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; name: string } | null>(null);
+  const [showSubBrowser, setShowSubBrowser] = useState(false);
+
+  // Slash-command completion — filtered while the command token is typed.
+  const [slashIdx, setSlashIdx] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const slashToken = input.trimStart();
+  const slashMatches = slashToken.startsWith('/') && !slashToken.includes('\n')
+    ? SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(slashToken.toLowerCase()))
+    : [];
+  const slashMenuOpen = !streaming && !slashDismissed && slashMatches.length > 0;
+  const slashSelected = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
+
+  function acceptSlash(c: { insert: string }) {
+    setInput(c.insert);
+    setSlashIdx(0);
+    textareaRef.current?.focus();
+  }
   const [grokCliInstalled, setGrokCliInstalled] = useState(false);
   const [grokCliVersion, setGrokCliVersion] = useState<string | null>(null);
   const [useGrokCli, setUseGrokCli] = useState(init.useGrokCli);
@@ -308,7 +348,7 @@ export default function GrokChatPanel({
     const lines: string[] = [
       `# ${title}`,
       '',
-      `_Exported ${new Date().toLocaleString()} from GrokDesk_`,
+      `_Exported ${new Date().toLocaleString()} from Shiba Studio_`,
       '',
     ];
     for (const m of real) {
@@ -378,14 +418,31 @@ export default function GrokChatPanel({
   async function persistSessionMessages(msgs: UiMessage[]) {
     if (!session) return;
     const saved = uiToProjectMessages(msgs);
+    const wasUntitled = !session.title || session.title === 'New chat';
     await patchSession({
       messages: saved,
       title: deriveSessionTitle(saved, session.title),
     });
+    // First exchange of a fresh chat → have a low-end model write a real
+    // title (server picks a fast/cheap model; falls back to the default).
+    const userCount = saved.filter((m) => m.role === 'user').length;
+    if (wasUntitled && userCount === 1 && saved.some((m) => m.role === 'assistant')) {
+      try {
+        await fetch('/api/chat-sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'autotitle', id: session.id }),
+        });
+        onSessionUpdated?.();
+      } catch {
+        /* derived title stays */
+      }
+    }
   }
 
   function updateChatTarget(next: ChatTarget) {
     setChatTarget(next);
+    if (next === 'all') setUseGrokCli(false);
     if (isSessionMode) void patchSession({ chatTarget: next });
   }
 
@@ -429,10 +486,6 @@ export default function GrokChatPanel({
     if (isSessionMode) void patchSession({ cliModel: next });
   }
 
-  useEffect(() => {
-    if (chatTarget === 'all') setUseGrokCli(false);
-  }, [chatTarget]);
-
   async function persistProjectChat(msgs: UiMessage[]) {
     if (!project) return;
     try {
@@ -456,6 +509,28 @@ export default function GrokChatPanel({
     : undefined;
 
   const supportsMultimodal = chatTarget !== 'all';
+
+  /** Sub-browser hands back an annotated element — prefill the composer with
+   *  the refinement prompt and attach the highlighted screenshot. */
+  function handleAnnotation(annotation: SubBrowserAnnotation) {
+    setInput((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${annotation.promptBlock}` : annotation.promptBlock));
+    if (supportsMultimodal && !useGrokCli) {
+      let host = 'page';
+      try { host = new URL(annotation.pageUrl).host || 'page'; } catch { /* keep default */ }
+      setPendingAttachments((prev) => [
+        ...prev,
+        {
+          id: uuidv4(),
+          kind: 'image',
+          name: `annotation-${host}.png`,
+          mimeType: 'image/png',
+          dataUrl: annotation.screenshotDataUrl,
+        },
+      ]);
+    }
+    textareaRef.current?.focus();
+    toast.success('Annotation added to the composer — edit or send.');
+  }
   const hasChatHistory = messages.some((m) => m.id !== 'welcome');
 
   /** Live catalog flag when available; id heuristic for saved/fallback models. */
@@ -763,9 +838,184 @@ export default function GrokChatPanel({
     }
   }
 
+  /**
+   * Slash commands — deterministic actions issued right from the chat while
+   * you work: git operations against the linked workspace and Obsidian notes.
+   */
+  async function runSlashCommand(text: string): Promise<boolean> {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('/')) return false;
+
+    const appendExchange = (result: string) => {
+      const userMsg: UiMessage = { id: uuidv4(), role: 'user', content: trimmed };
+      const resultMsg: UiMessage = { id: uuidv4(), role: 'assistant', content: result };
+      setMessages((prev) => {
+        const next = [...prev.filter((m) => m.id !== 'welcome'), userMsg, resultMsg];
+        if (isSessionMode) void persistSessionMessages(next);
+        else if (project) void persistProjectChat(next);
+        return next;
+      });
+    };
+
+    const HELP = [
+      '## Chat commands',
+      '',
+      '### 🌿 Git — act on your repository while you work',
+      '| Command | What it does |',
+      '| --- | --- |',
+      '| `/git status` | Branch, changed files, and recent commits |',
+      '| `/git checkout <branch>` | Switch to a branch, or create it from HEAD |',
+      '| `/git commit <message>` | Stage everything and commit |',
+      '| `/git pr <title> \\| <body>` | Push the branch and open a GitHub pull request |',
+      '',
+      '### 🔍 Research — pull the web into this conversation',
+      '| Command | What it does |',
+      '| --- | --- |',
+      '| `/search <query>` | Web search (DuckDuckGo, no API key) — top results with links |',
+      '| `/fetch <url>` | Read a page as clean text so we can discuss it |',
+      '',
+      '### 🎯 Annotation — refine code visually',
+      '| Command | What it does |',
+      '| --- | --- |',
+      '| `/annotate [url]` | Open the sub-browser: load your app, click an element, send it here for refinement |',
+      '',
+      '### 🧠 Memory & notes',
+      '| Command | What it does |',
+      '| --- | --- |',
+      '| `/remember <key> \\| <content>` | Save a fact that persists across every chat |',
+      '| `/recall [keyword]` | List saved memories (optionally filtered) |',
+      '| `/note <path> \\| <content>` | Create an Obsidian note in your vault |',
+      '',
+      `_Git runs against ${project?.name ? `the "${project.name}" project workspace` : 'the default workspace'}; PRs use your GitHub token from Capabilities. Type \`/\` any time to see the command bar._`,
+    ].join('\n');
+
+    if (trimmed === '/help' || trimmed === '/' || trimmed === '/commands') {
+      appendExchange(HELP);
+      setInput('');
+      return true;
+    }
+
+    if (trimmed.startsWith('/annotate')) {
+      setInput('');
+      setShowSubBrowser(true);
+      return true;
+    }
+
+    if (trimmed.startsWith('/search')) {
+      const query = trimmed.slice(7).trim();
+      setInput('');
+      if (!query) { appendExchange('Usage: `/search <query>` — e.g. `/search css container queries`'); return true; }
+      const res = await fetch('/api/chat-tools', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'search', query }),
+      }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+      appendExchange(res.ok
+        ? [`🔍 **Web results for "${query}":**`, '', ...res.results.map((x: { title: string; url: string; snippet: string }, i: number) =>
+            `${i + 1}. [${x.title || x.url}](${x.url})${x.snippet ? `\n   ${x.snippet.slice(0, 180)}` : ''}`)].join('\n')
+        : `⚠️ ${res.error || 'Search failed'}`);
+      return true;
+    }
+
+    if (trimmed.startsWith('/fetch')) {
+      const url = trimmed.slice(6).trim();
+      setInput('');
+      if (!url) { appendExchange('Usage: `/fetch <url>` — reads the page as text into this conversation.'); return true; }
+      const res = await fetch('/api/chat-tools', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'fetch', url }),
+      }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+      appendExchange(res.ok
+        ? [`📄 **Fetched ${res.page.url}**${res.page.title ? ` — ${res.page.title}` : ''}`, '', res.page.text.slice(0, 4000), '', '_Page content is now part of this conversation — ask me anything about it._'].join('\n')
+        : `⚠️ ${res.error || 'Fetch failed'}`);
+      return true;
+    }
+
+    if (trimmed.startsWith('/remember')) {
+      const rest = trimmed.slice(9).trim();
+      const [key, ...contentParts] = rest.split('|');
+      const content = contentParts.join('|').trim();
+      setInput('');
+      if (!key?.trim() || !content) { appendExchange('Usage: `/remember <key> | <content>` — e.g. `/remember deploy-cmd | npm run deploy:prod`'); return true; }
+      const res = await fetch('/api/chat-tools', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remember', key: key.trim(), content }),
+      }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+      appendExchange(res.ok ? `🧠 Remembered \`${res.entry.key}\` — recall it any time with \`/recall\`.` : `⚠️ ${res.error || 'Save failed'}`);
+      return true;
+    }
+
+    if (trimmed.startsWith('/recall')) {
+      const query = trimmed.slice(7).trim();
+      setInput('');
+      const res = await fetch('/api/chat-tools', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'recall', query: query || undefined }),
+      }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+      appendExchange(res.ok
+        ? (res.entries.length
+            ? [`🧠 **Memories${query ? ` matching "${query}"` : ''}:**`, '', ...res.entries.map((e2: { key: string; content: string }) => `- **${e2.key}** — ${e2.content.slice(0, 200)}`)].join('\n')
+            : `No memories${query ? ` matching "${query}"` : ''} yet — save one with \`/remember <key> | <content>\`.`)
+        : `⚠️ ${res.error || 'Recall failed'}`);
+      return true;
+    }
+
+    if (trimmed.startsWith('/note')) {
+      const rest = trimmed.slice(5).trim();
+      const [path, ...contentParts] = rest.split('|');
+      const content = contentParts.join('|').trim();
+      setInput('');
+      const res = await fetch('/api/obsidian', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: (path || '').trim(), content }),
+      }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+      appendExchange(res.ok
+        ? `📝 Obsidian note created: \`${res.path}\``
+        : `⚠️ ${res.error || 'Note creation failed'}`);
+      return true;
+    }
+
+    if (trimmed.startsWith('/git')) {
+      const rest = trimmed.slice(4).trim();
+      const [sub, ...args] = rest.split(/\s+/);
+      const argText = args.join(' ');
+      const workspacePath = project?.workspacePath?.trim() || undefined;
+      let payload: Record<string, string | undefined> | null = null;
+      if (sub === 'status') payload = { action: 'status' };
+      else if (sub === 'checkout' && args[0]) payload = { action: 'checkout', branch: args[0] };
+      else if (sub === 'commit' && argText) payload = { action: 'commit', message: argText };
+      else if (sub === 'pr' && argText) {
+        const [title, ...bodyParts] = argText.split('|');
+        payload = { action: 'pr', title: title.trim(), body: bodyParts.join('|').trim() || undefined };
+      }
+      if (!payload) {
+        appendExchange(HELP);
+        setInput('');
+        return true;
+      }
+      setInput('');
+      const res = await fetch('/api/git', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, workspacePath }),
+      }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+      appendExchange(res.ok ? res.result : `⚠️ ${res.error || 'git action failed'}`);
+      return true;
+    }
+
+    return false;
+  }
+
   async function sendChat() {
     const text = input.trim();
     if ((!text && pendingAttachments.length === 0) || streaming) return;
+
+    // Slash commands always win over a normal send — attachments stay pending
+    // in the composer for the next real message.
+    if (text.startsWith('/')) {
+      const handled = await runSlashCommand(text);
+      if (handled) return;
+    }
 
     if (chatTarget === 'all' && pendingAttachments.length > 0) {
       toast.error('Multi-agent mode does not support file attachments yet — send text only.');
@@ -859,15 +1109,29 @@ export default function GrokChatPanel({
   }
 
   function renderAttachments(attachments: ChatAttachment[], compact = false) {
+    const images = attachments.filter((a) => a.kind === 'image' && a.dataUrl);
+    const files = attachments.filter((a) => !(a.kind === 'image' && a.dataUrl));
     return (
       <div className={`chat-attachments ${compact ? 'chat-attachments-compact' : ''}`}>
-        {attachments.map((att) => (
+        {/* Images display directly in the conversation — click to view full size */}
+        {images.length > 0 && (
+          <div className="chat-inline-images">
+            {images.map((att) => (
+              <button
+                key={att.id}
+                type="button"
+                className="chat-inline-image-wrap"
+                onClick={() => setLightboxImage({ src: att.dataUrl!, name: att.name })}
+                title={`${att.name} — click to view full size`}
+              >
+                <img src={att.dataUrl} alt={att.name} className="chat-inline-image" />
+              </button>
+            ))}
+          </div>
+        )}
+        {files.map((att) => (
           <div key={att.id} className="chat-attachment-chip">
-            {att.kind === 'image' && att.dataUrl ? (
-              <img src={att.dataUrl} alt={att.name} className="chat-attachment-thumb" />
-            ) : (
-              <Paperclip size={14} className="opacity-60" />
-            )}
+            <Paperclip size={14} className="opacity-60" />
             <span className="chat-attachment-name">{att.name}</span>
           </div>
         ))}
@@ -877,7 +1141,7 @@ export default function GrokChatPanel({
 
   return (
     <div className={`grok-chat-panel mx-auto flex flex-col flex-1 min-h-0 ${project && onProjectUpdated ? 'grok-chat-panel-embedded max-w-none h-[min(520px,calc(100vh-420px))]' : 'max-w-none'}`}>
-      <div className="flex items-center gap-3 mb-3 flex-wrap w-full">
+      <div className="grok-chat-topbar flex items-center gap-3 mb-3 flex-wrap w-full">
         {!project && !session && (
           <div className="flex items-center gap-2">
             <Sparkles size={16} className="text-muted" />
@@ -938,6 +1202,9 @@ export default function GrokChatPanel({
       <div className="relative flex-1 min-h-0 flex flex-col">
       <div ref={scrollRef} onScroll={onMessagesScroll} className="grok-chat-messages flex-1 grok-card overflow-auto p-5 space-y-4 text-[15px] leading-relaxed bg-elev">
         {messages.map((m, idx) => {
+          // Fresh default chats get the hero below instead of a canned bubble;
+          // agent/all targets keep their welcome line (it carries real info).
+          if (m.id === 'welcome' && chatTarget === 'grok' && !hasChatHistory && !streaming) return null;
           const isUser = m.role === 'user';
           const showThinking = !isUser && (m.thinking || (m.streaming && !m.content));
           const thinkingOpen = expandedThinking[m.id] ?? m.streaming;
@@ -1110,6 +1377,17 @@ export default function GrokChatPanel({
             </div>
           );
         })}
+        {!hasChatHistory && !streaming && chatTarget === 'grok' && (
+          <div className="chat-empty-hero">
+            <div className="chat-empty-orb" aria-hidden>
+              <Sparkles size={22} />
+            </div>
+            <div className="chat-empty-title">Ask Grok anything</div>
+            <div className="chat-empty-sub">
+              Multimodal chat on cloud or local models — your uploads, projects, and integrations ride along as context.
+            </div>
+          </div>
+        )}
         {!hasChatHistory && !streaming && (
           <div className="chat-suggestions" aria-label="Suggested prompts">
             {chatSuggestions.map((s) => (
@@ -1164,6 +1442,27 @@ export default function GrokChatPanel({
         </div>
       )}
 
+      {slashMenuOpen && (
+        <div className="chat-slash-menu" role="listbox" aria-label="Slash commands">
+          {slashMatches.map((c, i) => (
+            <button
+              key={c.cmd}
+              type="button"
+              role="option"
+              aria-selected={i === slashSelected}
+              className={`chat-slash-item ${i === slashSelected ? 'chat-slash-item-active' : ''}`}
+              onMouseDown={(e) => { e.preventDefault(); acceptSlash(c); }}
+              onMouseEnter={() => setSlashIdx(i)}
+            >
+              <GitBranch size={11} className="shrink-0 opacity-40" />
+              <code className="chat-slash-cmd">{c.cmd}</code>
+              <span className="chat-slash-desc">{c.desc}</span>
+            </button>
+          ))}
+          <div className="chat-slash-footer">↑↓ navigate · Tab or Enter to complete · Esc to dismiss</div>
+        </div>
+      )}
+
       <div
         className={`grok-chat-composer mt-3 ${dragOver ? 'grok-chat-composer-drag' : ''}`}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -1187,8 +1486,23 @@ export default function GrokChatPanel({
         <textarea
           ref={textareaRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => { setInput(e.target.value); setSlashDismissed(false); }}
           onKeyDown={(e) => {
+            if (slashMenuOpen) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashMatches.length); return; }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashMatches.length) % slashMatches.length); return; }
+              if (e.key === 'Escape') { setSlashDismissed(true); return; }
+              const sel = slashMatches[slashSelected];
+              if (e.key === 'Tab' && sel) { e.preventDefault(); acceptSlash(sel); return; }
+              if (e.key === 'Enter' && !e.shiftKey && sel
+                  && slashToken !== sel.insert.trimEnd()
+                  && !slashToken.startsWith(sel.insert)) {
+                // Enter completes the command; a fully typed command sends as usual.
+                e.preventDefault();
+                acceptSlash(sel);
+                return;
+              }
+            }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void sendChat();
@@ -1207,6 +1521,15 @@ export default function GrokChatPanel({
           title={!supportsMultimodal || useGrokCli ? 'This mode is text-only' : 'Attach images or files — or drop / paste them'}
         >
           {uploading ? <RefreshCw size={16} className="animate-spin" /> : <Paperclip size={16} />}
+        </button>
+        <button
+          type="button"
+          className="grok-btn grok-btn-ghost grok-chat-attach-btn"
+          onClick={() => setShowSubBrowser(true)}
+          disabled={streaming}
+          title="Annotate a page — load the app you're building, highlight an element, and send it here for code refinement (/annotate)"
+        >
+          <Crosshair size={16} />
         </button>
         {useGrokCli && grokCliInstalled ? (
           <select
@@ -1339,6 +1662,23 @@ export default function GrokChatPanel({
                 ? 'Local model — served from this machine · global workspace uploads included'
                 : 'Cloud Grok — streaming, reasoning, images & files · global workspace uploads included'}
       </div>
+
+      {showSubBrowser && (
+        <SubBrowser
+          open={showSubBrowser}
+          onClose={() => setShowSubBrowser(false)}
+          onAnnotate={handleAnnotation}
+          initialUrl={undefined}
+        />
+      )}
+
+      {/* Full-size image viewer for inline chat images */}
+      {lightboxImage && (
+        <div className="chat-lightbox" onClick={() => setLightboxImage(null)} role="dialog" aria-label={lightboxImage.name}>
+          <img src={lightboxImage.src} alt={lightboxImage.name} className="chat-lightbox-img" onClick={(e) => e.stopPropagation()} />
+          <div className="chat-lightbox-caption">{lightboxImage.name} — click anywhere to close</div>
+        </div>
+      )}
     </div>
   );
 }

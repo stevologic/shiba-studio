@@ -3,10 +3,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { 
+import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
-  CloudUpload, CloudDownload, Command, Menu, Pencil, ScrollText
+  CloudUpload, CloudDownload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
+  KeyRound, Server, Cpu, ShieldCheck
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -15,6 +16,7 @@ import MultitaskSidebar from '@/components/multitask-sidebar';
 import type { PendingToolApproval } from '@/components/tool-approval-modal';
 import type { ToolApprovalMode } from '@/lib/types';
 import MultimodalBadge from '@/components/multimodal-badge';
+import InfoHint from '@/components/info-hint';
 
 // Heavy tab panels and open-on-demand modals are code-split so the first
 // paint only ships the shell — each chunk loads when its tab/modal is used.
@@ -30,6 +32,8 @@ const SkillsBrowser = dynamic(() => import('@/components/skills-browser'), { loa
 const WorkspaceDiffPanel = dynamic(() => import('@/components/workspace-diff-panel'), { loading: panelLoading });
 const WorktreePanel = dynamic(() => import('@/components/worktree-panel'), { loading: panelLoading });
 const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
+const ToolsCatalog = dynamic(() => import('@/components/tools-catalog'), { loading: panelLoading });
+const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
 const SyncModal = dynamic(() => import('@/components/sync-modal'));
 const CommandPalette = dynamic(() => import('@/components/command-palette'));
 const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
@@ -37,7 +41,7 @@ const ToolApprovalModal = dynamic(() => import('@/components/tool-approval-modal
 import { toast } from 'sonner';
 import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { THEME_IDENTITY } from '@/lib/theme';
-import { ALIEN_AVATARS, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
+import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
 import {
   SCHEDULE_PRESETS,
   SchedulePresetId,
@@ -54,6 +58,20 @@ import { formatUsageCostUsd, type NavStats } from '@/lib/nav-stats-types';
 import pkg from '@/package.json';
 
 type ModelOption = { id: string; label: string; provider?: ModelProvider; reasoning?: boolean };
+
+/** Run summary as served by /api/runs (no trace payload). */
+type RunSummaryLite = {
+  id: string; agentId: string; agentName: string; model: string; status: string;
+  prompt: string; startedAt: string; completedAt?: string; finalOutput?: string;
+  scheduleId?: string; scheduleInstructions?: string; traceSteps?: number;
+};
+
+// One source of truth for tab display names (nav, top bar, document titles).
+const TAB_LABELS: Record<string, string> = {
+  dashboard: 'Dashboard', chat: 'Grok Chat', projects: 'Projects', agents: 'Agents',
+  workspace: 'Workspace', automations: 'Automations', integrations: 'Capabilities',
+  usage: 'Usage', logs: 'Logs', settings: 'Settings',
+};
 
 function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
   const ref = parseModelRef(modelId || '');
@@ -86,6 +104,8 @@ function IntegrationIcon({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' |
 const OAUTH_POLL_MS = 2000;
 const OAUTH_POLL_MAX_MS = 5 * 60_000;
 const APP_VERSION = pkg.version;
+const GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT || 'unreleased';
+const DOGE_DONATION_ADDRESS = 'DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK';
 
 export default function GrokDesk() {
   const pathname = usePathname();
@@ -104,6 +124,22 @@ export default function GrokDesk() {
     const path = chatSessionPath(id);
     if (pathname !== path) router.push(path);
   }, [pathname, router]);
+
+  /** Top-bar New Chat — create a fresh session and jump straight into it. */
+  const startNewChat = useCallback(async () => {
+    try {
+      const res = await fetch('/api/chat-sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', defaults: {} }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.session) throw new Error(data.error || 'Could not create chat');
+      navigateToChatSession(data.session.id);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not create chat');
+    }
+  }, [navigateToChatSession]);
 
   useEffect(() => {
     if (!isKnownAppPath(pathname)) router.replace('/');
@@ -148,13 +184,13 @@ export default function GrokDesk() {
     router.replace('/settings');
   }, [tab, searchParams, router, handleOAuthConnected]);
 
+  // Fetched once on mount — the top bar shows a Grok CLI badge on every tab.
   useEffect(() => {
-    if (tab !== 'settings' && tab !== 'chat') return;
     fetch('/api/grok-cli/status')
       .then((r) => r.json())
       .then((data) => setGrokCliStatus({ installed: !!data.installed, version: data.version, path: data.path }))
       .catch(() => setGrokCliStatus({ installed: false }));
-  }, [tab]);
+  }, []);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -164,6 +200,16 @@ export default function GrokDesk() {
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Desktop sidebar collapse to an icon rail — remembered across visits.
+  const [navCollapsed, setNavCollapsed] = useState<boolean>(() =>
+    typeof window !== 'undefined' && window.localStorage.getItem('shiba-nav') === 'collapsed');
+
+  function toggleNavCollapsed() {
+    setNavCollapsed((c) => {
+      try { window.localStorage.setItem('shiba-nav', c ? 'open' : 'collapsed'); } catch { /* private mode */ }
+      return !c;
+    });
+  }
   const [previewSelectedIdx, setPreviewSelectedIdx] = useState<number | null>(null);
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null);
   const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>('yolo');
@@ -249,8 +295,32 @@ export default function GrokDesk() {
     automationsScheduled: 0,
     integrationsConfigured: 0,
     usageCostUsd: 0,
+    usageBudgetUsd: 0,
   });
   const [navStatsLoaded, setNavStatsLoaded] = useState(false);
+  const [usageBudgetInput, setUsageBudgetInput] = useState('25');
+  const [cliUpdate, setCliUpdate] = useState<{ checking: boolean; text?: string; available?: boolean }>({ checking: false });
+
+  async function checkCliUpdate() {
+    setCliUpdate({ checking: true });
+    try {
+      const data = await fetch('/api/grok-cli/status?checkUpdate=1').then((r) => r.json());
+      const u = data.update;
+      if (!u || !u.ok) {
+        setCliUpdate({ checking: false, text: u?.error || 'Update check failed' });
+        return;
+      }
+      setCliUpdate({
+        checking: false,
+        available: !!u.updateAvailable,
+        text: u.updateAvailable
+          ? `Update available: ${u.latest || 'newer version'} (run "grok update" in a terminal)`
+          : `Up to date (${u.current || 'current version'})`,
+      });
+    } catch {
+      setCliUpdate({ checking: false, text: 'Update check failed' });
+    }
+  }
 
   async function loadNavStats() {
     try {
@@ -264,6 +334,7 @@ export default function GrokDesk() {
           automationsScheduled: data.automationsScheduled ?? 0,
           integrationsConfigured: data.integrationsConfigured ?? 0,
           usageCostUsd: data.usageCostUsd ?? 0,
+          usageBudgetUsd: data.usageBudgetUsd ?? 0,
         });
         setNavStatsLoaded(true);
       }
@@ -376,6 +447,7 @@ export default function GrokDesk() {
       if (cfg.toolApprovalMode) setToolApprovalMode(cfg.toolApprovalMode);
       if (cfg.globalInstructions != null) setGlobalInstructionsInput(cfg.globalInstructions);
       if (cfg.useAgentsMd != null) setUseAgentsMd(!!cfg.useAgentsMd);
+      setUsageBudgetInput(String(cfg.usageBudgetUsd ?? 25));
       // trigger scheduler + boot
       fetch('/api/boot').catch(() => {});
       fetch('/api/scheduler', { method: 'POST', body: JSON.stringify({ agentId: '__boot__' }) }).catch(() => {});
@@ -420,19 +492,95 @@ export default function GrokDesk() {
     if ((config as any)?.hasCloudAuth || (config as any)?.localGrokEnabled) loadModels();
   }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled]);
 
-  /** Runs list holds lightweight summaries — fetch the full trace on demand. */
-  async function openRunTrace(runId: string) {
+  /**
+   * A run hyperlink targets its agent's configuration + log. Execution traces
+   * live on the Automations page. Cross-tab navigation remounts this component
+   * (each path is its own route segment), so state set before router.push is
+   * lost — the run id rides in the URL instead and the effects below hydrate
+   * after mount.
+   */
+  function openRunTrace(runId: string) {
+    router.push(`/automations?run=${encodeURIComponent(runId)}`);
+  }
+
+  const [pendingRunAgent, setPendingRunAgent] = useState<{ agentId: string; agentName?: string } | null>(null);
+
+  useEffect(() => {
+    if (tab !== 'automations') return;
+    const runId = searchParams.get('run');
+    if (!runId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Runs list holds lightweight summaries — fetch the full trace here.
+        const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
+        const data = await res.json();
+        if (!data.ok || !data.run) throw new Error(data.error || 'Run not found');
+        if (cancelled) return;
+        setActiveRun(data.run);
+        setLiveTrace(Array.isArray(data.run.trace) ? data.run.trace : []);
+        setPreviewSelectedIdx(null);
+        setPendingRunAgent({ agentId: data.run.agentId, agentName: data.run.agentName });
+      } catch (e: unknown) {
+        if (!cancelled) toast.error(e instanceof Error ? e.message : 'Could not load run');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tab, searchParams]);
+
+  // Agents load asynchronously after mount — open the config modal once the
+  // list is in. Fall back to name matching in case the agent was re-created.
+  useEffect(() => {
+    if (!pendingRunAgent || agents.length === 0) return;
+    const agent =
+      agents.find((a) => a.id === pendingRunAgent.agentId) ||
+      agents.find((a) => a.name === pendingRunAgent.agentName);
+    setPendingRunAgent(null);
+    if (agent) openEditAgent(agent);
+    else toast.info("This run's agent was deleted — its automation is retired. Showing the historical log.");
+  }, [pendingRunAgent, agents]);
+
+  // Per-agent run history (History button on agent cards)
+  const [historyAgent, setHistoryAgent] = useState<Agent | null>(null);
+  const [historyRuns, setHistoryRuns] = useState<RunSummaryLite[] | null>(null);
+
+  async function openRunHistory(agent: Agent) {
+    setHistoryAgent(agent);
+    setHistoryRuns(null);
     try {
-      const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
+      const res = await fetch(`/api/runs?agentId=${encodeURIComponent(agent.id)}&limit=50`);
       const data = await res.json();
-      if (!data.ok || !data.run) throw new Error(data.error || 'Run not found');
-      setActiveRun(data.run);
-      setLiveTrace(data.run.trace || []);
-      navigateToTab('agents');
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'Could not load run');
+      let list: RunSummaryLite[] = data.ok ? (data.runs || []) : [];
+      if (list.length === 0) {
+        // Agent may have been re-created with a new id — fall back to name match.
+        const all = await fetch('/api/runs?limit=200').then((r) => r.json()).catch(() => null);
+        list = ((all?.ok && all.runs) || []).filter((r: RunSummaryLite) => r.agentName === agent.name);
+      }
+      setHistoryRuns(list);
+    } catch {
+      setHistoryRuns([]);
     }
   }
+
+  // "View answer" quick look on run rows (final output without the full trace)
+  const [answerRun, setAnswerRun] = useState<RunSummaryLite | null>(null);
+
+  // Automations tab: what has actually run (scheduled executions), per agent
+  const [scheduledRuns, setScheduledRuns] = useState<RunSummaryLite[] | null>(null);
+  useEffect(() => {
+    if (tab !== 'automations') return;
+    let stale = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/runs?scheduledOnly=1&limit=200');
+        const data = await res.json();
+        if (!stale && data.ok) setScheduledRuns(data.runs || []);
+      } catch {
+        if (!stale) setScheduledRuns([]);
+      }
+    })();
+    return () => { stale = true; };
+  }, [tab]);
 
   // Agents CRUD
   async function refreshAgents() {
@@ -676,7 +824,8 @@ export default function GrokDesk() {
     scheduleInstructions?: string,
     scope?: ExecuteRunScope,
   ) {
-    if (!scope?.stayOnTab) navigateToTab('agents');
+    // Live traces render on the Automations page (runs + execution live there)
+    if (!scope?.stayOnTab) navigateToTab('automations');
     const runProjectId = scope?.projectId;
     setActiveRun(null);
     setLiveTrace([{
@@ -1343,7 +1492,7 @@ export default function GrokDesk() {
       { id: 'agents', label: 'Agents' },
       { id: 'workspace', label: 'Workspace' },
       { id: 'automations', label: 'Automations' },
-      { id: 'integrations', label: 'Integrations' },
+      { id: 'integrations', label: 'Capabilities' },
       { id: 'usage', label: 'Usage' },
       { id: 'logs', label: 'Logs' },
       { id: 'settings', label: 'Settings' },
@@ -1427,22 +1576,22 @@ export default function GrokDesk() {
         setShowSyncModal(false);
       } else if (folderBrowseFor !== null) {
         setFolderBrowseFor(null);
+      } else if (answerRun) {
+        setAnswerRun(null);
+      } else if (historyAgent) {
+        setHistoryAgent(null);
+        setHistoryRuns(null);
       } else if (mobileNavOpen) {
         setMobileNavOpen(false);
       }
     };
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
-  }, [showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen]);
+  }, [showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen, answerRun, historyAgent]);
 
   // Dynamic document titles (C7) — tabs are distinguishable in the browser.
   useEffect(() => {
-    const labels: Record<string, string> = {
-      dashboard: 'Dashboard', chat: 'Chat', projects: 'Projects', agents: 'Agents',
-      workspace: 'Workspace', automations: 'Automations', integrations: 'Integrations',
-      usage: 'Usage', logs: 'Logs', settings: 'Settings',
-    };
-    document.title = `${labels[tab] || 'GrokDesk'} — GrokDesk`;
+    document.title = `${TAB_LABELS[tab] || 'Shiba Studio'} — Shiba Studio`;
   }, [tab]);
 
   return (
@@ -1452,20 +1601,48 @@ export default function GrokDesk() {
         <div className="sidebar-backdrop" onClick={() => setMobileNavOpen(false)} aria-hidden />
       )}
       <div
-        className={`sidebar w-64 flex-shrink-0 flex flex-col ${mobileNavOpen ? 'sidebar-open' : ''}`}
+        className={`sidebar w-64 flex-shrink-0 flex flex-col ${mobileNavOpen ? 'sidebar-open' : ''} ${navCollapsed ? 'sidebar-collapsed' : ''}`}
         onClickCapture={(e) => {
           const el = e.target as HTMLElement;
           if (el.closest('a, .multitask-item, .multitask-section-head')) setMobileNavOpen(false);
         }}
       >
-        <div className="px-5 py-5 border-b border-default">
-          <Link href="/" className="flex items-center gap-3 brand-home-link" title="Go to Dashboard">
-            <img src={THEME_IDENTITY.logoPath} alt={THEME_IDENTITY.logoAlt} className="brand-logo" width={36} height={36} />
-            <div>
-              <div className="font-semibold tracking-tighter text-xl logo-text">{THEME_IDENTITY.brandName}</div>
-              <div className="text-[10px] text-dim -mt-1">{THEME_IDENTITY.sidebarTagline}</div>
-            </div>
-          </Link>
+        <div className={`py-5 border-b border-default ${navCollapsed ? 'px-2' : 'px-5'}`}>
+          <div className="flex items-center gap-3">
+            <Link href="/" className={`flex items-center gap-3 brand-home-link min-w-0 ${navCollapsed ? 'mx-auto' : 'flex-1'}`} title="Go to Dashboard">
+              <img src={THEME_IDENTITY.logoPath} alt={THEME_IDENTITY.logoAlt} className="brand-logo" width={36} height={36} />
+              {!navCollapsed && (
+                <div className="min-w-0">
+                  <div className="font-semibold tracking-tighter text-xl logo-text truncate">{THEME_IDENTITY.brandName}</div>
+                  <div className="text-[10px] text-dim -mt-1 font-mono" title="Source commit this build is running">
+                    {GIT_COMMIT}
+                  </div>
+                </div>
+              )}
+            </Link>
+            {!navCollapsed && (
+              <button
+                type="button"
+                onClick={toggleNavCollapsed}
+                className="nav-collapse-btn shrink-0"
+                title="Collapse the navigation"
+                aria-label="Collapse navigation"
+              >
+                <ChevronsLeft size={15} />
+              </button>
+            )}
+          </div>
+          {navCollapsed && (
+            <button
+              type="button"
+              onClick={toggleNavCollapsed}
+              className="nav-collapse-btn mx-auto mt-3 flex"
+              title="Expand the navigation"
+              aria-label="Expand navigation"
+            >
+              <ChevronsRight size={15} />
+            </button>
+          )}
         </div>
 
         {/* Main menu — always fully visible, never scrolls */}
@@ -1477,7 +1654,7 @@ export default function GrokDesk() {
             { id: 'agents', label: 'Agents', icon: Users, stat: agents.length > 0 ? String(agents.length) : null },
             { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
-            { id: 'integrations', label: 'Integrations', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
+            { id: 'integrations', label: 'Capabilities', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
             { id: 'usage', label: 'Usage', icon: BarChart3, stat: navStats.usageCostUsd > 0 ? formatUsageCostUsd(navStats.usageCostUsd) : null },
             { id: 'logs', label: 'Logs', icon: ScrollText, stat: null },
             { id: 'settings', label: 'Settings', icon: Settings, stat: null },
@@ -1489,13 +1666,14 @@ export default function GrokDesk() {
               <Link
                 key={item.id}
                 href={linkHref}
-                className={`nav-item ${active ? 'active' : ''}`}
+                className={`nav-item ${active ? 'active' : ''} ${navCollapsed ? 'nav-item-collapsed' : ''}`}
+                title={navCollapsed ? item.label : undefined}
               >
-                <Icon size={16} /> {item.label}
-                {!navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
+                <Icon size={navCollapsed ? 22 : 16} /> {!navCollapsed && item.label}
+                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
                   <span className="data-spinner ml-auto" aria-label={`Loading ${item.label} count`} />
                 )}
-                {item.stat != null && (
+                {!navCollapsed && item.stat != null && (
                   <span className={`nav-stat-badge ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
                     item.id === 'chat' ? `${item.stat} open session(s)`
                     : item.id === 'projects' ? `${item.stat} project(s)`
@@ -1513,25 +1691,38 @@ export default function GrokDesk() {
           })}
         </div>
 
-        <MultitaskSidebar
-          agents={agents}
-          onNavigate={(next, extra) => {
-            navigateToTab(next);
-            if (extra?.sessionId) navigateToChatSession(extra.sessionId);
-          }}
-          onDataChanged={() => { void refreshAgents(); void loadNavStats(); }}
-        />
+        {!navCollapsed && (
+          <MultitaskSidebar
+            agents={agents}
+            onNavigate={(next, extra) => {
+              navigateToTab(next);
+              if (extra?.sessionId) navigateToChatSession(extra.sessionId);
+            }}
+            onDataChanged={() => { void refreshAgents(); void loadNavStats(); }}
+          />
+        )}
 
-        <div className="p-4 border-t border-default text-xs text-dim">
-          localhost • Cloud + local models
-          <div className="mt-1 text-[10px]">SpaceX-grade focus • xAI cloud or local runtime</div>
-        </div>
+        {!navCollapsed && (
+          <div className="p-4 border-t border-default text-xs text-dim">
+            localhost • Cloud + local models
+            <div className="mt-1 text-[10px]">SpaceX-grade focus • xAI cloud or local runtime</div>
+          </div>
+        )}
       </div>
 
       {/* Main */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden relative">
+        {/* Animated deep-space scene — behind every page, pure CSS, honors reduced-motion */}
+        <div className="space-scene space-scene-app" aria-hidden>
+          <div className="space-stars space-stars-far" />
+          <div className="space-stars space-stars-mid" />
+          <div className="space-stars space-stars-near" />
+          <div className="space-nebula" />
+          <div className="space-comet" />
+          <div className="space-comet space-comet-2" />
+        </div>
         {/* Top bar */}
-        <div className="top-bar h-14 px-3 sm:px-5 flex items-center justify-between">
+        <div className="top-bar h-14 px-3 sm:px-5 flex items-center justify-between relative z-[1]">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
@@ -1542,20 +1733,65 @@ export default function GrokDesk() {
             >
               <Menu size={18} />
             </button>
-            <div className="font-medium text-sm tracking-tight">{tab.charAt(0).toUpperCase() + tab.slice(1)}</div>
-            {(config as any)?.hasCloudAuth && (
-              <div className="status-pill text-success">
-                CLOUD READY{(config as any)?.activeCloudSource === 'oauth' ? ' · OAUTH' : (config as any)?.hasKey ? ' · API' : ''}
+            <div className="font-medium text-sm tracking-tight">{TAB_LABELS[tab] || tab}</div>
+            {/* Readiness — one badge per model source */}
+            <div className="readiness-badges hidden sm:flex items-center gap-1.5">
+              <div
+                className={`status-pill ${(config as any)?.hasKey ? 'text-success' : 'status-pill-off'}`}
+                title={(config as any)?.hasKey
+                  ? `xAI API key configured${(config as any)?.activeCloudSource !== 'oauth' ? ' — active cloud source' : ''}`
+                  : 'No xAI API key — add one in Settings'}
+              >
+                XAI TOKEN{(config as any)?.hasKey ? '' : ' · OFF'}
               </div>
-            )}
-            {(config as any)?.localGrokEnabled && (
-              <div className={`status-pill ${localGrokReachable ? 'text-success' : 'text-warning'}`}>
-                LOCAL {localGrokReachable ? 'READY' : 'OFFLINE'}
+              <div
+                className={`status-pill ${oauthStatus.connected ? 'text-success' : 'status-pill-off'}`}
+                title={oauthStatus.connected
+                  ? `Signed in with X (OAuth 2.0)${(config as any)?.activeCloudSource === 'oauth' ? ' — active cloud source' : ''}`
+                  : 'OAuth 2.0 not connected — sign in with X from Settings'}
+              >
+                OAUTH 2.0{oauthStatus.connected ? '' : ' · OFF'}
               </div>
-            )}
-            {!(config as any)?.hasCloudAuth && !(config as any)?.localGrokEnabled && <div className="status-pill text-warning">NO MODEL SOURCE</div>}
+              <div
+                className={`status-pill ${grokCliStatus?.installed ? 'text-success' : 'status-pill-off'}`}
+                title={grokCliStatus?.installed
+                  ? `Grok CLI on this machine${grokCliStatus.version ? ` — ${grokCliStatus.version}` : ''}. Route chats through it with the composer's terminal toggle.`
+                  : 'Grok CLI not detected on this machine'}
+              >
+                GROK CLI{grokCliStatus?.installed
+                  ? (grokCliStatus.version ? ` · ${grokCliStatus.version.replace(/^grok\s*/i, '').split(' ')[0]}` : '')
+                  : ' · OFF'}
+              </div>
+              <div
+                className={`status-pill ${(config as any)?.localGrokEnabled ? (localGrokReachable ? 'text-success' : 'text-warning') : 'status-pill-off'}`}
+                title={(config as any)?.localGrokEnabled
+                  ? (localGrokReachable ? 'Local model server reachable' : 'Local models enabled but the server is not responding')
+                  : 'Local models disabled — enable an OpenAI-compatible server in Settings'}
+              >
+                LOCAL{(config as any)?.localGrokEnabled ? (localGrokReachable ? '' : ' · OFFLINE') : ' · OFF'}
+              </div>
+            </div>
+            {/* Compact summary for the smallest screens */}
+            <div className="sm:hidden">
+              {(config as any)?.hasCloudAuth || ((config as any)?.localGrokEnabled && localGrokReachable)
+                ? <div className="status-pill text-success">READY</div>
+                : <div className="status-pill text-warning">NO MODEL SOURCE</div>}
+            </div>
           </div>
           <div className="flex items-center gap-2 text-sm">
+            {/* Chat quota — spend as a share of the monthly budget */}
+            {tab === 'chat' && navStats.usageBudgetUsd > 0 && (() => {
+              const pct = Math.min(999, (navStats.usageCostUsd / navStats.usageBudgetUsd) * 100);
+              const tone = pct >= 90 ? 'text-error' : pct >= 60 ? 'text-warning' : 'text-success';
+              return (
+                <div
+                  className={`status-pill ${tone}`}
+                  title={`${formatUsageCostUsd(navStats.usageCostUsd)} used of your $${navStats.usageBudgetUsd}/month quota (set it in Settings). Refreshes every 15 minutes.`}
+                >
+                  QUOTA {pct < 0.05 ? '<0.1' : pct.toFixed(pct < 10 ? 1 : 0)}%
+                </div>
+              );
+            })()}
             <button
               type="button"
               onClick={() => setShowCommandPalette(true)}
@@ -1565,26 +1801,18 @@ export default function GrokDesk() {
               <Command size={14} /> <span className="text-dim text-xs">Ctrl+K</span>
             </button>
             <button onClick={() => setShowSyncModal(true)} className="grok-btn grok-btn-ghost"><RefreshCw size={14}/> <span className="hidden sm:inline">Sync</span></button>
+            <button onClick={() => void startNewChat()} className="grok-btn grok-btn-secondary" title="Start a fresh Grok chat session">
+              <MessageSquare size={14}/> <span className="hidden sm:inline">New Chat</span>
+            </button>
             <button onClick={openCreateAgent} className="grok-btn grok-btn-primary"><Plus size={15}/> <span className="hidden sm:inline">New Agent</span></button>
           </div>
         </div>
 
         {/* Content surfaces */}
-        <div className="flex-1 overflow-auto p-3 sm:p-5 space-y-5">
-          {/* DASHBOARD — min-height keeps the space scene (and its planet)
-              anchored bottom-right from first paint, before runs load in. */}
+        <div className="flex-1 overflow-auto p-3 sm:p-5 space-y-5 relative z-[1]">
+          {/* DASHBOARD */}
           {tab === 'dashboard' && (
             <div className="relative dashboard-page">
-              {/* Animated deep-space scene — pure CSS, GPU-friendly, honors reduced-motion */}
-              <div className="space-scene" aria-hidden>
-                <div className="space-stars space-stars-far" />
-                <div className="space-stars space-stars-mid" />
-                <div className="space-stars space-stars-near" />
-                <div className="space-nebula" />
-                <div className="space-comet" />
-                <div className="space-comet space-comet-2" />
-                <div className="space-planet"><span className="space-planet-ring" /></div>
-              </div>
             <div className="space-y-5 relative z-[1]">
               <div className="flex flex-col lg:flex-row gap-4">
                 <div className="grok-card p-6 flex-1">
@@ -1609,19 +1837,26 @@ export default function GrokDesk() {
               </div>
 
               <div>
-                <div className="flex justify-between items-center mb-2"><div className="font-medium">Recent Agent Runs</div><button onClick={() => navigateToTab('agents')} className="text-xs link-accent">All agents →</button></div>
+                <div className="flex justify-between items-center mb-2">
+                  <div className="font-medium flex items-center gap-1.5">
+                    Recent Agent Runs
+                    <InfoHint text="Click a row to open the run's full execution log and its agent's configuration. 'view answer' shows just the final output." />
+                  </div>
+                  <button onClick={() => navigateToTab('agents')} className="text-xs link-accent">All agents →</button>
+                </div>
                 {runs.length === 0 ? (
                   <div className="text-dim text-sm">No runs yet — create an agent and press Run.</div>
                 ) : (
-                  <div className="grok-card overflow-hidden">
+                  <div className="grok-card runs-table-wrap">
                     <table className="runs-table w-full text-xs">
                       <thead>
                         <tr>
-                          <th className="w-[180px]">Agent</th>
+                          <th className="runs-col-agent">Agent</th>
                           <th>Prompt</th>
-                          <th className="w-[92px]">Status</th>
-                          <th className="w-[150px]">Model</th>
-                          <th className="w-[130px]">Started</th>
+                          <th className="runs-col-status">Status</th>
+                          <th className="runs-col-model">Model</th>
+                          <th className="runs-col-started">Started</th>
+                          <th className="runs-col-answer"><span className="sr-only">Answer</span></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1635,14 +1870,35 @@ export default function GrokDesk() {
                             >
                               <td>
                                 <span className="flex items-center gap-2 min-w-0">
-                                  {runAgent && <img src={resolveAgentAvatarPath(runAgent)} alt="" className="agent-avatar-xs" width={18} height={18} />}
+                                  <img
+                                    src={runAgent ? resolveAgentAvatarPath(runAgent) : MISSING_AGENT_AVATAR_PATH}
+                                    alt=""
+                                    className="agent-avatar-xs shrink-0"
+                                    width={18}
+                                    height={18}
+                                    title={runAgent ? undefined : 'This agent has since been deleted'}
+                                  />
                                   <span className="truncate font-medium">{r.agentName}</span>
                                 </span>
                               </td>
-                              <td className="text-muted"><span className="line-clamp-1">{r.prompt}</span></td>
+                              <td className="text-muted"><span className="line-clamp-1" title={r.prompt}>{r.prompt}</span></td>
                               <td><span className={`run-status run-status-${r.status}`}>{r.status}</span></td>
-                              <td className="text-dim font-mono truncate">{modelDisplayName(r.model)}</td>
-                              <td className="text-dim whitespace-nowrap">{new Date(r.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                              <td className="text-dim runs-model" title={modelDisplayName(r.model)}>{modelDisplayName(r.model)}</td>
+                              <td className="text-dim runs-started">{new Date(r.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                              <td className="runs-col-answer">
+                                {r.finalOutput ? (
+                                  <button
+                                    type="button"
+                                    className="link-accent text-[11px] whitespace-nowrap inline-flex items-center gap-1"
+                                    onClick={(e) => { e.stopPropagation(); setAnswerRun(r); }}
+                                    title="View this run's final answer"
+                                  >
+                                    <Eye size={11} /> view answer
+                                  </button>
+                                ) : (
+                                  <span className="text-dim">—</span>
+                                )}
+                              </td>
                             </tr>
                           );
                         })}
@@ -1698,7 +1954,10 @@ export default function GrokDesk() {
           {tab === 'agents' && (
             <div>
               <div className="flex justify-between mb-4 flex-wrap gap-2">
-                <div className="text-xl font-semibold tracking-tighter">Your Grok Agents</div>
+                <div className="text-xl font-semibold tracking-tighter flex items-center gap-2">
+                  Your Grok Agents
+                  <InfoHint text="Local agents get full machine access (files, shell, browser, MCP); cloud agents run against Grok cloud services only. Each agent has its own model, workspace, integrations, schedules, and peers." />
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={syncCloudAgents}
@@ -1713,34 +1972,29 @@ export default function GrokDesk() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {agents.map(agent => (
-                  <div key={agent.id} className="grok-card p-4">
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-start gap-3 min-w-0">
-                        <img src={resolveAgentAvatarPath(agent)} alt="" className="agent-avatar" width={40} height={40} />
-                        <div className="min-w-0">
-                          <div className="font-semibold text-lg truncate flex items-center gap-2">
-                            <span className="truncate">{agent.name}</span>
-                            <span
-                              className={`agent-origin-badge ${agent.origin === 'cloud' ? 'agent-origin-cloud' : 'agent-origin-local'}`}
-                              title={agent.origin === 'cloud'
-                                ? 'Cloud agent — runs in the Grok cloud, no local system access'
-                                : 'Local agent — full access to this machine plus cloud services'}
-                            >
-                              {agent.origin === 'cloud' ? 'CLOUD AGENT' : 'LOCAL'}
-                            </span>
-                          </div>
-                          <div className="text-xs text-dim flex flex-wrap items-center gap-1.5">
-                            <ModelLine modelId={agent.model} />
-                            <span>• {agent.origin === 'cloud' ? 'Grok cloud services' : (agent.workspace.useWorktree ? 'worktree' : 'workspace')}</span>
-                          </div>
+                  <div key={agent.id} className="grok-card p-4 flex flex-col min-w-0">
+                    <div className="flex items-start gap-3 min-w-0">
+                      <img src={resolveAgentAvatarPath(agent)} alt="" className="agent-avatar shrink-0" width={40} height={40} />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-base flex items-center gap-2 min-w-0">
+                          <span className="truncate">{agent.name}</span>
+                          <span
+                            className={`agent-origin-badge shrink-0 ${agent.origin === 'cloud' ? 'agent-origin-cloud' : 'agent-origin-local'}`}
+                            title={agent.origin === 'cloud'
+                              ? 'Cloud agent — runs in the Grok cloud, no local system access'
+                              : 'Local agent — full access to this machine plus cloud services'}
+                          >
+                            {agent.origin === 'cloud' ? 'CLOUD' : 'LOCAL'}
+                          </span>
                         </div>
-                      </div>
-                      <div className="flex gap-1">
-                        <button onClick={() => runAgent(agent)} className="grok-btn grok-btn-primary text-xs py-1"><Play size={14}/> Run</button>
-                        <button onClick={() => openEditAgent(agent)} className="grok-btn grok-btn-ghost text-xs py-1"><Edit2 size={14}/></button>
-                        <button onClick={() => deleteAgent(agent.id)} className="grok-btn grok-btn-ghost text-xs py-1 text-error"><Trash2 size={14}/></button>
+                        <div className="text-xs text-dim flex items-center gap-1.5 min-w-0 mt-0.5">
+                          <span className="min-w-0 truncate" title={modelDisplayName(agent.model)}>
+                            <ModelLine modelId={agent.model} />
+                          </span>
+                          <span className="shrink-0">• {agent.origin === 'cloud' ? 'cloud' : (agent.workspace.useWorktree ? 'worktree' : 'workspace')}</span>
+                        </div>
                       </div>
                     </div>
 
@@ -1773,58 +2027,46 @@ export default function GrokDesk() {
                       )}
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between text-xs gap-2">
-                      <div className="text-dim font-mono truncate min-w-0">{agent.workspace.path}</div>
-                      <button
-                        onClick={() => toggleSchedule(agent)}
-                        className={`text-xs px-2 py-0.5 rounded border shrink-0 ${scheduleStats(agent).active > 0 ? 'border-success text-success' : 'border-default'}`}
-                      >
-                        {scheduleStats(agent).active > 0 ? 'SCHEDULED' : 'schedule off'}
-                      </button>
+                    <div className="mt-auto pt-3">
+                      <div className="flex items-center justify-between text-xs gap-2 min-w-0">
+                        <div className="text-dim font-mono truncate min-w-0" title={agent.workspace.path}>
+                          {agent.origin === 'cloud' ? 'Grok cloud services' : agent.workspace.path}
+                        </div>
+                        <button
+                          onClick={() => toggleSchedule(agent)}
+                          className={`text-[10px] px-2 py-0.5 rounded border shrink-0 ${scheduleStats(agent).active > 0 ? 'border-success text-success' : 'border-default text-dim'}`}
+                        >
+                          {scheduleStats(agent).active > 0 ? 'SCHEDULED' : 'schedule off'}
+                        </button>
+                      </div>
+                      <div className="text-xs mt-2 text-muted italic truncate" title={agent.description || undefined}>
+                        {agent.description || 'No description'}
+                      </div>
+                      <div className="text-[10px] mt-1 text-dim truncate">{formatScheduleSummary(agent)}</div>
+                      {/* Agents page = view/edit/create. Running + traces live on Automations. */}
+                      <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-default">
+                        <button onClick={() => openEditAgent(agent)} className="grok-btn grok-btn-primary text-xs py-1 flex-1 min-w-0" title="Edit this agent's configuration">
+                          <Edit2 size={14}/> Edit
+                        </button>
+                        <button
+                          onClick={() => navigateToTab('automations')}
+                          className="grok-btn grok-btn-ghost text-xs py-1 shrink-0"
+                          title="Runs, execution traces & automations for this agent"
+                          aria-label="Open runs and automations"
+                        >
+                          <Terminal size={14}/>
+                        </button>
+                        <button onClick={() => void openRunHistory(agent)} className="grok-btn grok-btn-ghost text-xs py-1 shrink-0" title="Run history" aria-label="Run history">
+                          <History size={14}/>
+                        </button>
+                        <button onClick={() => deleteAgent(agent.id)} className="grok-btn grok-btn-ghost text-xs py-1 shrink-0 text-error" title="Delete agent" aria-label="Delete agent">
+                          <Trash2 size={14}/>
+                        </button>
+                      </div>
                     </div>
-
-                    <div className="text-xs mt-2 text-muted italic truncate">{agent.description || 'No description'}</div>
-                    <div className="text-[10px] mt-1 text-dim">{formatScheduleSummary(agent)}</div>
                   </div>
                 ))}
                 {agents.length === 0 && <div className="text-sm text-muted">No agents yet. Create one to start orchestrating.</div>}
-              </div>
-
-              {/* Live execution trace area (agent-tab runs only — project builds show trace on Projects tab) */}
-              <div className="mt-8">
-                <div className="flex items-center gap-2 mb-3">
-                  <Terminal size={16}/> <div className="font-medium">Execution Trace</div>
-                  {activeRun && !activeRun.projectId && <span className="badge">{activeRun.status}</span>}
-                </div>
-                <div className="grok-card p-4 font-mono text-xs overflow-auto max-h-[380px] bg-black/40">
-                  {liveTrace.length > 0 && !activeRun?.projectId ? liveTrace.map((step, idx) => (
-                    <div key={idx} className={`trace-step mb-3 ${step.type}`}>
-                      <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {step.type.toUpperCase()}</div>
-                      <div className="mt-0.5">{step.content}</div>
-                      {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
-                      {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="browser" /></div>}
-                    </div>
-                  )) : <div className="text-dim">Run any agent to see live detailed traces here (tools, thoughts, screenshots, side effects).</div>}
-                </div>
-                {activeRun && !activeRun.projectId && (
-                  <div className="text-xs text-muted mt-1 flex flex-wrap items-center gap-2">
-                    <span>Final: {activeRun.finalOutput?.slice(0,200)}</span>
-                    <ModelLine modelId={activeRun.model} />
-                  </div>
-                )}
-                {!activeRun?.projectId && (
-                  <PreviewRail
-                    trace={liveTrace}
-                    selectedIdx={previewSelectedIdx}
-                    onSelect={setPreviewSelectedIdx}
-                  />
-                )}
-                {activeRun && !activeRun.projectId && activeRun.status !== 'running' && (
-                  <WorkspaceDiffPanel
-                    workspaceDir={activeRun?.workspaceSnapshot}
-                    runId={activeRun?.id}
-                  />
-                )}
               </div>
             </div>
           )}
@@ -1835,7 +2077,10 @@ export default function GrokDesk() {
               <div className="grok-card p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
                   <div>
-                    <div className="font-semibold text-lg">Global Uploads</div>
+                    <div className="font-semibold text-lg flex items-center gap-1.5">
+                      Global Uploads
+                      <InfoHint text="Files here are injected as context into every chat and agent run — drop reference docs, data files, or anything Grok should always know about." />
+                    </div>
                     <div className="text-xs text-dim mt-1">Shared by all agents · stored in <span className="font-mono">{wsUploadsPath || '…/uploads'}</span></div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1975,9 +2220,13 @@ export default function GrokDesk() {
           {/* AUTOMATIONS — schedules & orchestration */}
           {tab === 'automations' && (
             <div>
-              <div className="mb-3 font-medium">Scheduled &amp; Orchestrated Agents</div>
+              <div className="mb-3 font-medium flex items-center gap-1.5">
+                Scheduled &amp; Orchestrated Agents
+                <InfoHint text="Automations run agents on cron schedules with their own instructions. The Run log under each card shows what actually executed — click an entry for its full trace." />
+              </div>
               <div className="space-y-3">
-                {agents.map(a => {
+                {/* Only agents with actual schedules — no placeholder cards */}
+                {agents.filter((a) => agentSchedules(a).length > 0).map(a => {
                   const scheds = agentSchedules(a);
                   const first = scheds[0];
                   const isActive = !!(first?.enabled);
@@ -2050,21 +2299,108 @@ export default function GrokDesk() {
                         </div>
                       ))}
                     </div>
+                    {/* What has actually run — not just what is scheduled */}
+                    <div className="mt-3 pt-3 border-t border-default">
+                      <div className="text-[10px] uppercase tracking-wide text-dim mb-1.5 flex items-center gap-1.5">
+                        <History size={11}/> Run log
+                      </div>
+                      {scheduledRuns === null ? (
+                        <div className="data-loading-row text-xs"><span className="data-spinner" /> Loading run log…</div>
+                      ) : (() => {
+                        // Name fallback keeps history visible when an agent was re-created
+                        const log = scheduledRuns.filter((r) => r.agentId === a.id || r.agentName === a.name).slice(0, 5);
+                        return log.length === 0 ? (
+                          <div className="text-xs text-dim">No scheduled runs yet — press Run now or wait for the next cron tick.</div>
+                        ) : (
+                          <div className="space-y-1">
+                            {log.map((r) => (
+                              <button
+                                key={r.id}
+                                type="button"
+                                onClick={() => openRunTrace(r.id)}
+                                className="automation-run-row"
+                                title="Open the full execution log"
+                              >
+                                <span className={`run-status run-status-${r.status} shrink-0`}>{r.status}</span>
+                                <span className="text-dim shrink-0">
+                                  {new Date(r.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                                <span className="truncate text-muted flex-1 text-left">
+                                  {r.scheduleInstructions || r.prompt}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
                     <div className="mt-3">
                       <button onClick={() => runAgent(a, { useScheduleInstructions: true })} className="grok-btn grok-btn-primary text-xs"><Play size={14}/> Run now</button>
                     </div>
                   </div>
                 )})}
-                {agents.length === 0 && <div>No agents. Create agents with schedules.</div>}
+                {agents.filter((a) => agentSchedules(a).length > 0).length === 0 && (
+                  <div className="grok-card p-8 text-center text-dim text-sm">
+                    No scheduled automations yet — open an agent&apos;s editor (Agents → Edit) and add a schedule to see it here.
+                  </div>
+                )}
               </div>
               <div className="mt-6 text-xs text-dim">Agents can schedule themselves via the schedule_task tool and message other agents using send_to_peer. Everything is scoped per agent.</div>
+
+              {/* Live execution trace — runs kicked off anywhere stream here */}
+              <div className="mt-8">
+                <div className="flex items-center gap-2 mb-3">
+                  <Terminal size={16}/> <div className="font-medium">Execution Trace</div>
+                  <InfoHint text="Every step of a run — model thoughts, tool calls, outputs, screenshots — streams here live. Open past runs from the dashboard, an agent's history, or the Logs page." />
+                  {activeRun && !activeRun.projectId && <span className="badge">{activeRun.status}</span>}
+                </div>
+                <div className="grok-card p-4 font-mono text-xs overflow-auto max-h-[380px] bg-black/40">
+                  {liveTrace.length > 0 && !activeRun?.projectId ? liveTrace.map((step, idx) => (
+                    <div key={idx} className={`trace-step mb-3 ${step.type}`}>
+                      <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {step.type.toUpperCase()}</div>
+                      <div className="mt-0.5">{step.content}</div>
+                      {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
+                      {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="browser" /></div>}
+                    </div>
+                  )) : <div className="text-dim">Run any agent to see live detailed traces here (tools, thoughts, screenshots, side effects).</div>}
+                </div>
+                {activeRun && !activeRun.projectId && (
+                  <div className="text-xs text-muted mt-1 flex flex-wrap items-center gap-2">
+                    <span>Final: {activeRun.finalOutput?.slice(0,200)}</span>
+                    <ModelLine modelId={activeRun.model} />
+                  </div>
+                )}
+                {!activeRun?.projectId && (
+                  <PreviewRail
+                    trace={liveTrace}
+                    selectedIdx={previewSelectedIdx}
+                    onSelect={setPreviewSelectedIdx}
+                  />
+                )}
+                {activeRun && !activeRun.projectId && activeRun.status !== 'running' && (
+                  <WorkspaceDiffPanel
+                    workspaceDir={activeRun?.workspaceSnapshot}
+                    runId={activeRun?.id}
+                  />
+                )}
+              </div>
             </div>
           )}
 
-          {/* INTEGRATIONS */}
+          {/* CAPABILITIES — core integrations, skills, MCP servers, tools */}
           {tab === 'integrations' && (
             <div className="integrations-page">
-              <div className="text-xl font-semibold mb-1">Core Integrations</div>
+              <div className="text-2xl font-semibold tracking-tighter mb-1 flex items-center gap-2">
+                Capabilities
+                <InfoHint text="Everything on this page becomes available to agents during runs and to Grok Chat when the matching scope is enabled on the agent." />
+              </div>
+              <div className="text-sm text-muted mb-6">Everything your agents can reach — core integrations, skills, MCP servers, and built-in tools.</div>
+
+              <div className="text-xl font-semibold flex items-center gap-2 mb-1">
+                <Plug size={18} className="opacity-70" />
+                Core Integrations
+                <InfoHint text="Credentials are AES-256-GCM encrypted at rest on this machine and never leave it except toward the service itself." />
+              </div>
               <div className="text-sm text-muted mb-5">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, and Obsidian during runs.</div>
 
               <div className="integrations-grid">
@@ -2292,6 +2628,8 @@ export default function GrokDesk() {
                 externalAllowedPath={mcpBrowsePath}
                 onBrowsePath={() => setFolderBrowseFor('mcp')}
               />
+
+              <ToolsCatalog />
             </div>
           )}
 
@@ -2304,12 +2642,22 @@ export default function GrokDesk() {
           )}
 
           {tab === 'settings' && (
-            <div className="max-w-xl">
-              <div className="grok-card p-6">
-                <div className="font-semibold text-lg mb-4">GrokDesk Settings</div>
+            <div className="max-w-5xl settings-page">
+              <div className="text-2xl font-semibold tracking-tighter mb-1">Settings</div>
+              <div className="text-sm text-muted mb-6">
+                Model sources, agent behavior, quotas, and workspace — everything lives on this machine.
+              </div>
 
-                <div>
-                  <div className="grok-label">xAI Grok API Key</div>
+              <div className="settings-grid">
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <KeyRound size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">xAI Grok API Key</div>
+                      <div className="text-[11px] text-dim">Cloud Grok via console.x.ai token — encrypted at rest.</div>
+                    </div>
+                    <InfoHint className="ml-auto" text="Get a key at console.x.ai. It is encrypted at rest (AES-256-GCM) with a machine key stored outside the project — never in source code." />
+                  </div>
                   <input value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder="xai-..." className="grok-input mb-2 font-mono" />
                   <div className="flex gap-2">
                     <button onClick={saveApiKey} className="grok-btn grok-btn-primary">Save &amp; Validate Key</button>
@@ -2322,11 +2670,17 @@ export default function GrokDesk() {
                   </div>
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-default">
-                  <div className="grok-label">OAuth with X (SuperGrok / X Premium+)</div>
-                  <div className="text-xs text-dim mt-1 mb-3">
-                    Sign in via <span className="font-mono">accounts.x.ai</span> to use cloud Grok without an API key.
-                    SuperGrok or X Premium+ may be required; some tiers can return HTTP 403 after login — keep the API key as fallback.
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <Users size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">OAuth with X</div>
+                      <div className="text-[11px] text-dim">OAuth 2.0 · SuperGrok / X Premium+ sign-in — no API key needed.</div>
+                    </div>
+                  </div>
+                  <div className="text-xs text-dim mb-3">
+                    Sign in via <span className="font-mono">accounts.x.ai</span>.
+                    Some tiers can return HTTP 403 after login — keep the API key as fallback.
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mb-3">
                     {oauthStatus.connected ? (
@@ -2376,8 +2730,14 @@ export default function GrokDesk() {
                   {oauthStatus.error && <div className="text-xs text-warning mt-2">{oauthStatus.error}</div>}
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-default">
-                  <div className="grok-label">Local Models — LM Studio, Ollama, llama.cpp</div>
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <Server size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Local Models</div>
+                      <div className="text-[11px] text-dim">LM Studio, Ollama, llama.cpp — any OpenAI-compatible server.</div>
+                    </div>
+                  </div>
                   <label className="flex items-center gap-2 text-sm mt-2">
                     <input type="checkbox" checked={localGrokEnabled} onChange={e => setLocalGrokEnabled(e.target.checked)} />
                     Enable local models (any OpenAI-compatible server — Grok, Llama, Qwen, Mistral…)
@@ -2458,11 +2818,15 @@ export default function GrokDesk() {
                   )}
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-default">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="grok-label mb-0">Default Grok Model</div>
-                    <button type="button" onClick={loadModels} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5">
-                      <RefreshCw size={12} className={modelsLoading ? 'animate-spin' : ''} /> Refresh list
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <Cpu size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Default Model</div>
+                      <div className="text-[11px] text-dim">Used by Grok Chat and every new agent.</div>
+                    </div>
+                    <button type="button" onClick={loadModels} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5 ml-auto">
+                      <RefreshCw size={12} className={modelsLoading ? 'animate-spin' : ''} /> Refresh
                     </button>
                   </div>
                   <select
@@ -2488,8 +2852,14 @@ export default function GrokDesk() {
                   )}
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-default">
-                  <div className="grok-label">Grok Build CLI</div>
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <Terminal size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Grok Build CLI</div>
+                      <div className="text-[11px] text-dim">Detected automatically from PATH on this machine.</div>
+                    </div>
+                  </div>
                   <div className="text-xs mt-2 flex items-center gap-2 flex-wrap">
                     <Terminal size={14} className="opacity-70" />
                     {grokCliStatus?.installed ? (
@@ -2502,13 +2872,35 @@ export default function GrokDesk() {
                     )}
                   </div>
                   <div className="text-xs text-dim mt-1">
-                    When installed, Grok Chat can route through the CLI (API/CLI toggle) and agents gain a <span className="font-mono">grok_cli</span> tool.
+                    When installed, Grok Chat can route through the CLI (API/CLI toggle) and agents gain a <span className="font-mono">grok_cli</span> tool
+                    with effort levels, self-verification (<span className="font-mono">check</span>), best-of-N runs, and structured JSON output.
                   </div>
+                  {grokCliStatus?.installed && (
+                    <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => void checkCliUpdate()}
+                        disabled={cliUpdate.checking}
+                        className="grok-btn grok-btn-secondary text-xs"
+                      >
+                        <RefreshCw size={12} className={cliUpdate.checking ? 'animate-spin' : ''} />
+                        {cliUpdate.checking ? 'Checking…' : 'Check for updates'}
+                      </button>
+                      {cliUpdate.text && (
+                        <span className={`text-xs ${cliUpdate.available ? 'text-warning' : 'text-dim'}`}>{cliUpdate.text}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-default">
-                  <div className="grok-label">Agent Behavior</div>
-                  <div className="text-xs text-dim mt-1 mb-3">Tool approval, global instructions, and AGENTS.md injection for all agents and chat.</div>
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <ShieldCheck size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Agent Behavior</div>
+                      <div className="text-[11px] text-dim">Tool approval, global instructions, AGENTS.md injection.</div>
+                    </div>
+                  </div>
                   <div className="flex gap-2 mb-3">
                     <button
                       type="button"
@@ -2540,8 +2932,57 @@ export default function GrokDesk() {
                   </button>
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-default">
-                  <div className="grok-label">Default Workspace</div>
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <BarChart3 size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Monthly Usage Quota</div>
+                      <div className="text-[11px] text-dim">Grok Chat reports spend as a share of this budget.</div>
+                    </div>
+                    <InfoHint className="ml-auto" text="Green under 60%, amber under 90%, red past it. Estimated from xAI per-token rates; local models are $0." />
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-sm text-dim">$</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      className="grok-input w-28"
+                      value={usageBudgetInput}
+                      onChange={(e) => setUsageBudgetInput(e.target.value)}
+                    />
+                    <span className="text-xs text-dim">per month</span>
+                    <button
+                      type="button"
+                      className="grok-btn grok-btn-secondary text-xs ml-auto"
+                      onClick={async () => {
+                        const budget = Math.max(0, Number(usageBudgetInput) || 0);
+                        const res = await fetch('/api/config', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ usageBudgetUsd: budget }),
+                        }).then((r) => r.json()).catch(() => null);
+                        if (res?.ok) {
+                          toast.success(`Monthly quota set to $${budget}`);
+                          void loadNavStats();
+                        } else {
+                          toast.error('Could not save quota');
+                        }
+                      }}
+                    >
+                      Save Quota
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <FolderOpen size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Default Workspace</div>
+                      <div className="text-[11px] text-dim">Root folder for uploads, new agents, and the explorer.</div>
+                    </div>
+                  </div>
                   <div className="flex gap-2 mt-1">
                     <input
                       className="grok-input flex-1 min-w-0 font-mono text-xs"
@@ -2568,16 +3009,45 @@ export default function GrokDesk() {
                   </div>
                 </div>
 
-                <div className="mt-6 text-[11px] text-dim">Use cloud Grok (xAI API) or local models served on your machine — any model your local server offers is selectable. Agents, chat, and usage tracking reflect which provider each model uses.</div>
+              </div>
+
+              <div className="mt-5 text-[11px] text-dim">
+                Use cloud Grok (xAI API) or local models served on your machine — any model your local server offers is selectable.
+                Agents, chat, and usage tracking reflect which provider each model uses.
               </div>
             </div>
           )}
         </div>
 
         {/* Footer bar */}
-        <div className="footer-bar h-9 px-4 text-[10px] flex items-center text-dim justify-between">
-          <div>GrokDesk v{APP_VERSION} — xAI Grok agent studio • SpaceX-inspired mission control</div>
-          <Link href="/settings" className="cursor-pointer hover:text-primary">Settings</Link>
+        <div className="footer-bar h-9 px-4 text-[10px] flex items-center text-dim justify-between gap-3 relative z-[1]">
+          <div className="truncate" title={`Running source commit ${GIT_COMMIT} (v${APP_VERSION})`}>
+            Shiba Studio <span className="font-mono">{GIT_COMMIT}</span> — xAI Grok agent studio • SpaceX-inspired mission control
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <a
+              href="https://github.com/stevologic/shiba-studio/issues/new"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-primary inline-flex items-center gap-1"
+              title="Contribute by submitting a feature request — opens a new GitHub issue"
+            >
+              <Plus size={11} /> Request a feature
+            </a>
+            <button
+              type="button"
+              className="donate-doge-btn"
+              onClick={() => {
+                navigator.clipboard.writeText(DOGE_DONATION_ADDRESS)
+                  .then(() => toast.success('Dogecoin address copied — much thanks, very wow 🐕'))
+                  .catch(() => toast.error(`Could not copy — address: ${DOGE_DONATION_ADDRESS}`));
+              }}
+              title={`Support the creator with Dogecoin — click to copy the wallet address\n${DOGE_DONATION_ADDRESS}`}
+            >
+              Ð Donate Dogecoin
+            </button>
+            <Link href="/settings" className="cursor-pointer hover:text-primary">Settings</Link>
+          </div>
         </div>
       </div>
 
@@ -2664,6 +3134,101 @@ export default function GrokDesk() {
             </div>
           </div>
         )}
+
+      {/* Per-agent run history — every previous run, linking into the full trace */}
+      {historyAgent && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+          onClick={() => { setHistoryAgent(null); setHistoryRuns(null); }}
+        >
+          <div className="modal modal-pop w-full max-w-2xl p-6 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-1">
+              <img src={resolveAgentAvatarPath(historyAgent)} alt="" className="agent-avatar-sm" width={28} height={28} />
+              <div className="text-lg font-semibold truncate">Run history — {historyAgent.name}</div>
+            </div>
+            <div className="text-xs text-dim mb-4">Click a run to open its full execution log and this agent&apos;s configuration.</div>
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {historyRuns === null ? (
+                <div className="data-loading-row py-6"><span className="data-spinner" /> Loading runs…</div>
+              ) : historyRuns.length === 0 ? (
+                <div className="text-sm text-dim py-6 text-center">No runs yet — press Run on this agent to create the first one.</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {historyRuns.map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className="run-history-row"
+                      onClick={() => { setHistoryAgent(null); setHistoryRuns(null); openRunTrace(r.id); }}
+                      title="Open full execution log"
+                    >
+                      <span className={`run-status run-status-${r.status} shrink-0`}>{r.status}</span>
+                      <span className="text-dim shrink-0 text-[11px]">
+                        {new Date(r.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span className="truncate flex-1 text-left text-muted" title={r.prompt}>{r.prompt}</span>
+                      <span className="text-dim shrink-0 text-[11px] font-mono">{r.traceSteps ?? 0} steps</span>
+                      {r.finalOutput && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          className="link-accent text-[11px] shrink-0 inline-flex items-center gap-1"
+                          onClick={(e) => { e.stopPropagation(); setAnswerRun(r); }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setAnswerRun(r); }
+                          }}
+                          title="View this run's final answer"
+                        >
+                          <Eye size={11} /> answer
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end mt-4">
+              <button type="button" onClick={() => { setHistoryAgent(null); setHistoryRuns(null); }} className="grok-btn grok-btn-secondary">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Final-answer quick look — the run's output without leaving the page */}
+      {answerRun && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4"
+          onClick={() => setAnswerRun(null)}
+        >
+          <div className="modal modal-pop w-full max-w-2xl p-6 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 mb-1">
+              <div className="text-lg font-semibold truncate">Answer — {answerRun.agentName}</div>
+              <span className={`run-status run-status-${answerRun.status} shrink-0`}>{answerRun.status}</span>
+            </div>
+            <div className="text-xs text-dim mb-3 flex flex-wrap items-center gap-2">
+              <ModelLine modelId={answerRun.model} />
+              <span>· {new Date(answerRun.startedAt).toLocaleString()}</span>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 grok-card p-4 bg-black/30">
+              <ChatMarkdown content={answerRun.finalOutput || ''} />
+            </div>
+            <div className="flex items-center justify-between gap-3 mt-4">
+              <button
+                type="button"
+                className="grok-btn grok-btn-ghost text-xs"
+                onClick={() => { const id = answerRun.id; setAnswerRun(null); setHistoryAgent(null); setHistoryRuns(null); openRunTrace(id); }}
+              >
+                <Terminal size={13} /> Open full trace
+              </button>
+              <button type="button" onClick={() => setAnswerRun(null)} className="grok-btn grok-btn-secondary">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Agent create/edit modal — rich form */}
       {showAgentModal && (

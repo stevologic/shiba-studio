@@ -135,3 +135,103 @@ export async function browserGetUrl(runId?: string): Promise<string> {
   const page = runId ? await getPageForRun(runId) : await getPage();
   return page.url();
 }
+
+/* ── Sub-browser: annotate live pages and feed elements into chat ── */
+
+export interface InspectedElement {
+  selector: string;
+  tag: string;
+  id?: string;
+  className?: string;
+  rect: { x: number; y: number; width: number; height: number };
+  outerHTML: string;
+  text: string;
+}
+
+/** Full current-viewport screenshot at natural size, with dimensions for
+ *  client-side coordinate mapping. */
+export async function browserViewportShot(runId?: string): Promise<{ dataUrl: string; width: number; height: number; url: string; title: string }> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  const viewport = page.viewport() || { width: 1280, height: 800 };
+  const buf = await page.screenshot({ encoding: 'base64', fullPage: false });
+  return {
+    dataUrl: `data:image/png;base64,${buf}`,
+    width: viewport.width,
+    height: viewport.height,
+    url: page.url(),
+    title: await page.title().catch(() => ''),
+  };
+}
+
+/** DevTools-style pick: the deepest element at viewport coordinates, with a
+ *  stable selector and an HTML excerpt for prompting. */
+export async function browserInspectAt(x: number, y: number, runId?: string): Promise<InspectedElement | null> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  return page.evaluate(({ px, py }) => {
+    const el = document.elementFromPoint(px, py) as HTMLElement | null;
+    if (!el) return null;
+
+    const cssEscape = (s: string) => (window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, '\\$&'));
+    const buildSelector = (start: Element): string => {
+      const parts: string[] = [];
+      let node: Element | null = start;
+      for (let depth = 0; node && node !== document.documentElement && depth < 6; depth++) {
+        if ((node as HTMLElement).id) {
+          parts.unshift(`#${cssEscape((node as HTMLElement).id)}`);
+          break;
+        }
+        let part = node.tagName.toLowerCase();
+        const cls = typeof (node as HTMLElement).className === 'string'
+          ? (node as HTMLElement).className.trim().split(/\s+/).filter(Boolean).slice(0, 2)
+          : [];
+        if (cls.length) part += `.${cls.map(cssEscape).join('.')}`;
+        const parentEl: Element | null = node.parentElement;
+        if (parentEl) {
+          const siblings = Array.from(parentEl.children).filter((c) => c.tagName === node!.tagName);
+          if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+        }
+        parts.unshift(part);
+        node = parentEl;
+      }
+      return parts.join(' > ');
+    };
+
+    const r = el.getBoundingClientRect();
+    return {
+      selector: buildSelector(el),
+      tag: el.tagName.toLowerCase(),
+      id: el.id || undefined,
+      className: typeof el.className === 'string' && el.className.trim() ? el.className.trim() : undefined,
+      rect: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+      outerHTML: el.outerHTML.slice(0, 4000),
+      text: ((el as HTMLElement).innerText || '').slice(0, 400),
+    };
+  }, { px: x, py: y });
+}
+
+/** Forward a real click at viewport coordinates — lets the sub-browser's
+ *  Interact mode click links/buttons and navigate like a normal browser. */
+export async function browserClickAt(x: number, y: number, runId?: string): Promise<void> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  await page.mouse.click(x, y);
+  // Give any resulting navigation/render a moment to settle.
+  await page.waitForNetworkIdle({ idleTime: 400, timeout: 4000 }).catch(() => {});
+}
+
+/** Outline one element (orange) so annotated screenshots show the selection. */
+export async function browserHighlight(selector: string, runId?: string): Promise<boolean> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  return page.evaluate((sel) => {
+    document.querySelectorAll('[data-shiba-annotated]').forEach((prev) => {
+      (prev as HTMLElement).style.outline = '';
+      (prev as HTMLElement).style.outlineOffset = '';
+      prev.removeAttribute('data-shiba-annotated');
+    });
+    const el = document.querySelector(sel) as HTMLElement | null;
+    if (!el) return false;
+    el.style.outline = '3px solid #f97316';
+    el.style.outlineOffset = '2px';
+    el.setAttribute('data-shiba-annotated', '1');
+    return true;
+  }, selector).catch(() => false);
+}

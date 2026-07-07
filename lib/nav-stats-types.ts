@@ -5,6 +5,8 @@ export interface NavStats {
   automationsScheduled: number;
   integrationsConfigured: number;
   usageCostUsd: number;
+  /** Monthly spend quota (USD) from settings — 0 disables the quota display */
+  usageBudgetUsd: number;
 }
 
 export function formatUsageCostUsd(usd: number): string {
