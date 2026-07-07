@@ -32,6 +32,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, entries });
     }
 
+    // Post to X through the configured integration (same path as the agents'
+    // x_post tool) — used by the /x chat command.
+    if (action === 'post_x') {
+      const text = String(body.text || '').trim();
+      if (!text) return NextResponse.json({ ok: false, error: 'Nothing to post — /x <text>' }, { status: 400 });
+      const { loadConfig } = await import('@/lib/persistence');
+      await loadConfig(); // hydrates decrypted integration creds
+      const { xPostTweet } = await import('@/lib/integrations');
+      const result = await xPostTweet(text);
+      const { audit } = await import('@/lib/audit-log');
+      audit('integration', 'posted to X', text.slice(0, 120), { via: 'chat', url: result.url });
+      return NextResponse.json({ ok: true, ...result });
+    }
+
     return NextResponse.json({ ok: false, error: `Unknown chat tool "${action}"` }, { status: 400 });
   } catch (e: unknown) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'chat tool failed' }, { status: 500 });

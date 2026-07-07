@@ -40,6 +40,7 @@ Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dism
 | `/remember <key> \| <content>` | Save a fact that persists across every chat |
 | `/recall [keyword]` | List saved memories |
 | `/note <path> \| <content>` | Create an Obsidian note in your vault |
+| `/x <text>` | Post to X through the configured integration (agents with the X scope can post too, via `x_post`) |
 | `/help` | The full reference, in chat |
 
 Git commands run against the linked project's workspace (or the default workspace); PRs use your GitHub token from Capabilities.

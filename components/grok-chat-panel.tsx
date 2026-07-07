@@ -24,6 +24,7 @@ const SLASH_COMMANDS: Array<{ cmd: string; insert: string; desc: string }> = [
   { cmd: '/remember <key> | <content>', insert: '/remember ', desc: 'Save a persistent memory' },
   { cmd: '/recall <keyword>', insert: '/recall ', desc: 'List saved memories' },
   { cmd: '/note <path> | <content>', insert: '/note ', desc: 'Create an Obsidian note' },
+  { cmd: '/x <text>', insert: '/x ', desc: 'Post to X through the configured integration' },
   { cmd: '/help', insert: '/help', desc: 'Full command reference' },
 ];
 import { confirmDialog } from '@/components/confirm-dialog';
@@ -885,6 +886,7 @@ export default function GrokChatPanel({
       '| `/remember <key> \\| <content>` | Save a fact that persists across every chat |',
       '| `/recall [keyword]` | List saved memories (optionally filtered) |',
       '| `/note <path> \\| <content>` | Create an Obsidian note in your vault |',
+      '| `/x <text>` | Post to X via the integration (agents can too, with the X scope) |',
       '',
       `_Git runs against ${project?.name ? `the "${project.name}" project workspace` : 'the default workspace'}; PRs use your GitHub token from Capabilities. Type \`/\` any time to see the command bar._`,
     ].join('\n');
@@ -956,6 +958,20 @@ export default function GrokChatPanel({
             ? [`🧠 **Memories${query ? ` matching "${query}"` : ''}:**`, '', ...res.entries.map((e2: { key: string; content: string }) => `- **${e2.key}** — ${e2.content.slice(0, 200)}`)].join('\n')
             : `No memories${query ? ` matching "${query}"` : ''} yet — save one with \`/remember <key> | <content>\`.`)
         : `⚠️ ${res.error || 'Recall failed'}`);
+      return true;
+    }
+
+    if (trimmed === '/x' || trimmed.startsWith('/x ')) {
+      const text = trimmed.slice(2).trim();
+      setInput('');
+      if (!text) { appendExchange('Usage: `/x <text>` — posts to X via the integration on the Capabilities page (max 280 chars).'); return true; }
+      const res = await fetch('/api/chat-tools', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'post_x', text }),
+      }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+      appendExchange(res.ok
+        ? `📣 Posted to X${res.url ? `: [view the post](${res.url})` : ''}.`
+        : `⚠️ ${res.error || 'X post failed'}`);
       return true;
     }
 
