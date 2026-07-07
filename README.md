@@ -77,6 +77,7 @@ The top bar shows a readiness badge for each source.
 | [Automations](docs/automations.md) | Cron schedules, execution traces, run logs, headless operation |
 | [Capabilities](docs/capabilities.md) | Integrations, skills, MCP servers, and the full built-in tool catalog |
 | [Cloud Sync](docs/sync.md) | What sync does, where snapshots live, push/pull semantics |
+| [Architecture](docs/architecture.md) | How every feature fits together — one diagram, one engine |
 | [Configuration](docs/configuration.md) | Settings reference, environment variables, data locations, security model |
 | [Development](docs/development.md) | Repo layout, scripts, the verification suite, architecture notes |
 

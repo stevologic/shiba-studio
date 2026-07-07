@@ -1,5 +1,7 @@
 # Development
 
+> New to the codebase? Start with the [feature-interaction diagram](architecture.md) — it maps every surface onto the engine pieces listed below.
+
 ## Stack
 
 Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 with built-in `node:sqlite` · puppeteer for browser control · node-cron for schedules. No native modules anywhere — the repo builds identically on Windows, macOS, and Linux.
