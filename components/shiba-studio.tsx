@@ -202,6 +202,9 @@ export default function ShibaStudio() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Donate button briefly shows its own "copied" state instead of a toast.
   const [dogeCopied, setDogeCopied] = useState(false);
+  // Execution Trace lives in a modal — opened manually, on Run now, or by a
+  // /automations?run=<id> deep link. The page itself stays uncluttered.
+  const [showTraceModal, setShowTraceModal] = useState(false);
   // Desktop sidebar collapse to an icon rail — remembered across visits.
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() =>
     typeof window !== 'undefined' && window.localStorage.getItem('shiba-nav') === 'collapsed');
@@ -523,6 +526,7 @@ export default function ShibaStudio() {
         setLiveTrace(Array.isArray(data.run.trace) ? data.run.trace : []);
         setPreviewSelectedIdx(null);
         setPendingRunAgent({ agentId: data.run.agentId, agentName: data.run.agentName });
+        setShowTraceModal(true); // deep link = explicit intent to see the trace
       } catch (e: unknown) {
         if (!cancelled) toast.error(e instanceof Error ? e.message : 'Could not load run');
       }
@@ -825,6 +829,7 @@ export default function ShibaStudio() {
     }]);
     setPreviewSelectedIdx(null);
     setPendingToolApproval(null);
+    if (!runProjectId) setShowTraceModal(true); // watch the run live
 
     try {
       const res = await fetch('/api/execute/stream', {
@@ -2389,43 +2394,79 @@ export default function ShibaStudio() {
               </div>
               <div className="mt-6 text-xs text-dim">Agents can schedule themselves via the schedule_task tool and message other agents using send_to_peer. Everything is scoped per agent.</div>
 
-              {/* Live execution trace — runs kicked off anywhere stream here */}
-              <div className="mt-8">
-                <div className="flex items-center gap-2 mb-3">
-                  <Terminal size={16}/> <div className="font-medium">Execution Trace</div>
-                  <InfoHint text="Every step of a run — model thoughts, tool calls, outputs, screenshots — streams here live. Open past runs from the dashboard, an agent's history, or the Logs page." />
-                  {activeRun && !activeRun.projectId && <span className="badge">{activeRun.status}</span>}
-                </div>
-                <div className="grok-card p-4 font-mono text-xs overflow-auto max-h-[380px] bg-black/40">
-                  {liveTrace.length > 0 && !activeRun?.projectId ? liveTrace.map((step, idx) => (
-                    <div key={idx} className={`trace-step mb-3 ${step.type}`}>
-                      <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {step.type.toUpperCase()}</div>
-                      <div className="mt-0.5">{step.content}</div>
-                      {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
-                      {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="browser" /></div>}
-                    </div>
-                  )) : <div className="text-dim">Run any agent to see live detailed traces here (tools, thoughts, screenshots, side effects).</div>}
-                </div>
-                {activeRun && !activeRun.projectId && (
-                  <div className="text-xs text-muted mt-1 flex flex-wrap items-center gap-2">
-                    <span>Final: {activeRun.finalOutput?.slice(0,200)}</span>
-                    <ModelLine modelId={activeRun.model} />
-                  </div>
+              {/* Execution Trace lives in a modal — this bar is the handle */}
+              <div className="mt-8 grok-card p-4 flex flex-wrap items-center gap-3">
+                <Terminal size={16} className="shrink-0"/>
+                <div className="font-medium shrink-0">Execution Trace</div>
+                <InfoHint text="Every step of a run — model thoughts, tool calls, outputs, screenshots — streams into the trace viewer. It opens automatically when you press Run now or follow a run link; open it manually here any time." />
+                {activeRun && !activeRun.projectId ? (
+                  <span className="text-xs text-muted flex items-center gap-2 min-w-0">
+                    <span className={`badge shrink-0 ${activeRun.status === 'running' ? 'badge-accent' : ''}`}>{activeRun.status}</span>
+                    <span className="truncate">{activeRun.agentName}</span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-dim">No run open — press ▶ on an automation or open a run-log entry.</span>
                 )}
-                {!activeRun?.projectId && (
-                  <PreviewRail
-                    trace={liveTrace}
-                    selectedIdx={previewSelectedIdx}
-                    onSelect={setPreviewSelectedIdx}
-                  />
-                )}
-                {activeRun && !activeRun.projectId && activeRun.status !== 'running' && (
-                  <WorkspaceDiffPanel
-                    workspaceDir={activeRun?.workspaceSnapshot}
-                    runId={activeRun?.id}
-                  />
-                )}
+                <button
+                  type="button"
+                  onClick={() => setShowTraceModal(true)}
+                  disabled={liveTrace.length === 0 && !activeRun}
+                  className="grok-btn grok-btn-secondary text-xs ml-auto shrink-0"
+                >
+                  View trace
+                </button>
               </div>
+
+              {showTraceModal && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={() => setShowTraceModal(false)}>
+                  <div className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Execution trace">
+                    <div className="flex items-center gap-2 mb-3 shrink-0">
+                      <Terminal size={16}/>
+                      <div className="font-medium">Execution Trace</div>
+                      {activeRun && !activeRun.projectId && <span className={`badge ${activeRun.status === 'running' ? 'badge-accent' : ''}`}>{activeRun.status}</span>}
+                      {activeRun && !activeRun.projectId && (
+                        <span className="text-xs text-muted truncate min-w-0 flex items-center gap-1.5">
+                          {activeRun.agentName} <ModelLine modelId={activeRun.model} />
+                        </span>
+                      )}
+                      <button type="button" className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0" onClick={() => setShowTraceModal(false)} title="Close">
+                        <X size={16}/>
+                      </button>
+                    </div>
+                    <div className="flex-1 min-h-0 overflow-auto space-y-3 pr-1">
+                      <div className="grok-card p-4 font-mono text-xs bg-black/40">
+                        {liveTrace.length > 0 && !activeRun?.projectId ? liveTrace.map((step, idx) => (
+                          <div key={idx} className={`trace-step mb-3 ${step.type}`}>
+                            <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {step.type.toUpperCase()}</div>
+                            <div className="mt-0.5">{step.content}</div>
+                            {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
+                            {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="browser" /></div>}
+                          </div>
+                        )) : <div className="text-dim">Run any agent to see live detailed traces here (tools, thoughts, screenshots, side effects).</div>}
+                      </div>
+                      {activeRun && !activeRun.projectId && (
+                        <div className="text-xs text-muted flex flex-wrap items-center gap-2">
+                          <span>Final: {activeRun.finalOutput?.slice(0,200)}</span>
+                          <ModelLine modelId={activeRun.model} />
+                        </div>
+                      )}
+                      {!activeRun?.projectId && (
+                        <PreviewRail
+                          trace={liveTrace}
+                          selectedIdx={previewSelectedIdx}
+                          onSelect={setPreviewSelectedIdx}
+                        />
+                      )}
+                      {activeRun && !activeRun.projectId && activeRun.status !== 'running' && (
+                        <WorkspaceDiffPanel
+                          workspaceDir={activeRun?.workspaceSnapshot}
+                          runId={activeRun?.id}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -3396,7 +3437,7 @@ export default function ShibaStudio() {
                       type="button"
                       className="grok-btn grok-btn-ghost text-xs"
                       onClick={() => { const id = runDetail.id; setRunDetail(null); openRunTrace(id); }}
-                      title="Open in the full-page trace view (with preview rail and workspace diff)"
+                      title="Open in the trace viewer (with preview rail and workspace diff)"
                     >
                       <Terminal size={13} /> Open in trace view
                     </button>

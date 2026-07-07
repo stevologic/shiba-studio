@@ -24,7 +24,7 @@ Each automation card shows its last scheduled executions — status, time, and i
 
 ## Execution Trace
 
-The live trace at the bottom of the page streams every step of a run:
+The trace lives in a modal so the page stays clean — it opens automatically when you press **Run now** or follow a run link, and any time from the **View trace** bar at the bottom of the page. Inside, every step of a run streams live:
 
 - model **thoughts**, **tool calls** with arguments, and tool **results**,
 - **screenshots** from browser automation and generated images inline,
