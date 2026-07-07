@@ -2091,6 +2091,16 @@ export default function ShibaStudio() {
           {/* WORKSPACE + FILE TREE */}
           {tab === 'workspace' && (
             <div className="workspace-page space-y-4">
+              {/* What this page is for — three tools, each labeled at its section */}
+              <div className="mb-1">
+                <div className="text-lg font-semibold">Workspace</div>
+                <div className="text-sm text-muted mt-0.5 max-w-3xl">
+                  The files your agents live in, three ways: <strong>Global Uploads</strong> ride along as context in every chat and agent run,
+                  {' '}<strong>Agent Worktrees</strong> are the isolated git copies agents code in, and <strong>Browse &amp; Edit</strong> opens any
+                  folder on disk for a quick look or a hand fix.
+                </div>
+              </div>
+
               <div className="grok-card p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
                   <div>
@@ -2098,7 +2108,8 @@ export default function ShibaStudio() {
                       Global Uploads
                       <InfoHint text="Files here are injected as context into every chat and agent run — drop reference docs, data files, or anything Grok should always know about." />
                     </div>
-                    <div className="text-xs text-dim mt-1">Shared by all agents · stored in <span className="font-mono">{wsUploadsPath || '…/uploads'}</span></div>
+                    <div className="text-xs text-success mt-1">Always-on context — every chat and every agent run can read these files.</div>
+                    <div className="text-xs text-dim mt-0.5">Shared by all agents · stored in <span className="font-mono">{wsUploadsPath || '…/uploads'}</span></div>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button onClick={syncToCloud} disabled={wsSyncing !== null || !(config as any)?.hasCloudAuth} className="grok-btn grok-btn-secondary text-xs">
@@ -2186,48 +2197,68 @@ export default function ShibaStudio() {
                 )}
               </div>
 
-              <WorktreePanel workspace={wsPath || config?.defaultWorkspace || ''} agents={agents} />
-
-              <div className="workspace-editor-row">
-                <div className="workspace-explorer-panel grok-card p-4 flex flex-col min-h-0">
-                  <div className="flex justify-between mb-2 shrink-0">
-                    <div className="font-semibold text-sm">Workspace Explorer</div>
-                    <button onClick={() => loadWorkspace()} className="grok-btn grok-btn-secondary text-xs">Refresh</button>
-                  </div>
-                  <input value={wsPath} onChange={e=>setWsPath(e.target.value)} className="grok-input mb-2 text-xs shrink-0" placeholder="Workspace path" />
-                  <button onClick={() => loadWorkspace()} className="grok-btn grok-btn-primary mb-3 text-xs shrink-0">Load</button>
-                  <div className="workspace-file-tree flex-1 min-h-0 overflow-auto text-sm border border-default rounded p-1">
-                    {wsFiles.length === 0 && <div className="p-2 text-xs text-dim">Load a path above (e.g. your project folder)</div>}
-                    {wsFiles.map((f, idx) => (
-                      <div key={idx} onClick={() => openFile(f.path)} className={`file-tree-item ${selectedFile === f.path ? 'active' : ''}`}>
-                        {f.isDir ? '📁' : '📄'} {f.name}
-                      </div>
-                    ))}
-                  </div>
+              <div>
+                <div className="text-xs text-success mb-1.5 px-1">
+                  Agent sandboxes — isolated git copies your agents commit to, kept out of your real checkout. Review or clean them up here.
                 </div>
-                <div className="workspace-file-viewer grok-card p-4 flex flex-col min-h-0">
-                  <div className="workspace-file-viewer-header shrink-0">
-                    <div className="font-semibold">View File Contents</div>
-                    <button
-                      onClick={saveWorkspaceFile}
-                      disabled={!selectedFile}
-                      className="grok-btn grok-btn-primary text-xs"
-                    >
-                      Save File
-                    </button>
+                <WorktreePanel workspace={wsPath || config?.defaultWorkspace || ''} agents={agents} />
+              </div>
+
+              <div>
+                <div className="text-xs text-success mb-1.5 px-1">
+                  Manual access — open any folder on disk to inspect what agents produced, or hand-edit a file without leaving the app.
+                </div>
+                <div className="workspace-editor-row">
+                  <div className="workspace-explorer-panel grok-card p-4 flex flex-col min-h-0">
+                    <div className="flex justify-between mb-2 shrink-0">
+                      <div className="font-semibold text-sm">Browse a Folder</div>
+                      <button onClick={() => loadWorkspace()} className="grok-btn grok-btn-secondary text-xs">Refresh</button>
+                    </div>
+                    <div className="flex gap-2 mb-3 shrink-0">
+                      <input
+                        value={wsPath}
+                        onChange={e=>setWsPath(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') loadWorkspace(); }}
+                        className="grok-input flex-1 min-w-0 text-xs font-mono"
+                        placeholder="C:\path\to\any\folder — Enter to open"
+                        spellCheck={false}
+                      />
+                      <button onClick={() => loadWorkspace()} className="grok-btn grok-btn-primary text-xs shrink-0">Open</button>
+                    </div>
+                    <div className="workspace-file-tree flex-1 min-h-0 overflow-auto text-sm border border-default rounded p-1">
+                      {wsFiles.length === 0 && <div className="p-2 text-xs text-dim">Type a folder path above and press Enter — your project, an agent worktree, anywhere.</div>}
+                      {wsFiles.map((f, idx) => (
+                        <div key={idx} onClick={() => openFile(f.path)} className={`file-tree-item ${selectedFile === f.path ? 'active' : ''}`}>
+                          {f.isDir ? '📁' : '📄'} {f.name}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="workspace-file-path text-xs text-muted shrink-0" title={selectedFile || undefined}>
-                    {selectedFile || 'No file selected — click a file in the explorer or global uploads'}
-                  </div>
-                  <textarea
-                    value={fileContent}
-                    onChange={e => setFileContent(e.target.value)}
-                    className="workspace-file-editor grok-input flex-1 min-h-0 font-mono text-xs"
-                    placeholder={selectedFile ? 'File contents…' : 'Select a file to view and edit its contents'}
-                    spellCheck={false}
-                  />
-                  <div className="text-[10px] text-dim mt-2 shrink-0">
-                    Agents read/write via tools. Global uploads are available to every agent.
+                  <div className="workspace-file-viewer grok-card p-4 flex flex-col min-h-0">
+                    <div className="workspace-file-viewer-header shrink-0">
+                      <div className="font-semibold">File Editor</div>
+                      <button
+                        onClick={saveWorkspaceFile}
+                        disabled={!selectedFile}
+                        className="grok-btn grok-btn-primary text-xs"
+                        title={selectedFile ? `Write changes back to ${selectedFile}` : 'Open a file first'}
+                      >
+                        Save File
+                      </button>
+                    </div>
+                    <div className="workspace-file-path text-xs text-muted shrink-0" title={selectedFile || undefined}>
+                      {selectedFile || 'Nothing open — click a file on the left or a Global Upload above'}
+                    </div>
+                    <textarea
+                      value={fileContent}
+                      onChange={e => setFileContent(e.target.value)}
+                      className="workspace-file-editor grok-input flex-1 min-h-0 font-mono text-xs"
+                      placeholder={selectedFile ? 'File contents…' : 'Select a file to view and edit its contents'}
+                      spellCheck={false}
+                    />
+                    <div className="text-[10px] text-dim mt-2 shrink-0">
+                      Edits here save straight to disk. Agents use their own fs tools; Global Uploads feed every conversation.
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2284,6 +2315,15 @@ export default function ShibaStudio() {
                           <span className="ml-auto flex items-center gap-1 shrink-0">
                             <button
                               type="button"
+                              onClick={() => runAgent(a, { useScheduleInstructions: true, scheduleIndex: i })}
+                              className="grok-btn grok-btn-ghost text-xs p-1"
+                              title="Run this automation now with its instructions"
+                              aria-label="Run automation now"
+                            >
+                              <Play size={12}/>
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => openEditAgentSchedule(a, i)}
                               className="grok-btn grok-btn-ghost text-xs p-1"
                               title="Edit this automation (cron + instructions)"
@@ -2338,9 +2378,6 @@ export default function ShibaStudio() {
                           </div>
                         );
                       })()}
-                    </div>
-                    <div className="mt-3">
-                      <button onClick={() => runAgent(a, { useScheduleInstructions: true })} className="grok-btn grok-btn-primary text-xs"><Play size={14}/> Run now</button>
                     </div>
                   </div>
                 )})}

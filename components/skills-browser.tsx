@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Check, Code2, MessageSquare, Palette, Pencil, Plus, Search, Sparkles, Trash2, Users, Zap,
+  Check, Code2, MessageSquare, Palette, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, Users, Wand2, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { confirmDialog } from '@/components/confirm-dialog';
@@ -49,6 +49,7 @@ export default function SkillsBrowser({
   const [saving, setSaving] = useState(false);
   const [manageSkill, setManageSkill] = useState<UiSkill | null>(null);
   const [togglingAgent, setTogglingAgent] = useState<string | null>(null);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
 
   const loadSkills = useCallback(async () => {
     try {
@@ -113,6 +114,33 @@ export default function SkillsBrowser({
       toast.error(e instanceof Error ? e.message : 'Save failed');
     }
     setSaving(false);
+  }
+
+  /** Model rewrites the skill's description + prompt guidance from its title alone. */
+  async function regenerateSkill(skill: UiSkill) {
+    if (regeneratingId) return;
+    setRegeneratingId(skill.id);
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'regenerate', id: skill.id }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Regenerate failed');
+      toast.success(`"${data.skill.name}" rewritten from its title by the model`);
+      await loadSkills();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Regenerate failed');
+    }
+    setRegeneratingId(null);
+  }
+
+  /** Built-in presets can't be changed in place — editing one forks an editable custom copy. */
+  function openEditor(skill: UiSkill) {
+    setEditor(skill.custom
+      ? { mode: 'edit', id: skill.id, name: skill.name, category: skill.category, description: skill.description, promptHint: skill.promptHint }
+      : { mode: 'create', name: `${skill.name} (custom)`, category: skill.category, description: skill.description, promptHint: skill.promptHint });
   }
 
   async function removeSkill(skill: UiSkill) {
@@ -388,24 +416,25 @@ export default function SkillsBrowser({
                   >
                     <Users size={12} />
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => openEditor(skill)}
+                    className="grok-btn grok-btn-ghost text-xs"
+                    title={skill.custom ? "Edit this skill's definition" : 'Customize — edit an editable copy of this built-in skill'}
+                    aria-label="Edit skill definition"
+                  >
+                    <Pencil size={12} />
+                  </button>
                   {skill.custom && (
                     <button
                       type="button"
-                      onClick={() =>
-                        setEditor({
-                          mode: 'edit',
-                          id: skill.id,
-                          name: skill.name,
-                          category: skill.category,
-                          description: skill.description,
-                          promptHint: skill.promptHint,
-                        })
-                      }
+                      onClick={() => void regenerateSkill(skill)}
+                      disabled={regeneratingId !== null}
                       className="grok-btn grok-btn-ghost text-xs"
-                      title="Edit this custom skill's definition"
-                      aria-label="Edit skill definition"
+                      title="Regenerate — the model rewrites the description and prompt guidance from the title alone"
+                      aria-label="Regenerate skill with the model"
                     >
-                      <Pencil size={12} />
+                      {regeneratingId === skill.id ? <RefreshCw size={12} className="animate-spin" /> : <Wand2 size={12} />}
                     </button>
                   )}
                   {skill.custom && (

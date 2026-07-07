@@ -20,7 +20,7 @@ If an agent is deleted, its schedule **retires itself** at the next fire attempt
 
 ## Run log
 
-Each automation card shows its last scheduled executions — status, time, and instructions — and every entry opens the full trace. **Run now** triggers the schedule's instructions immediately.
+Each automation card shows its last scheduled executions — status, time, and instructions — and every entry opens the full trace. Each schedule row has its own **Run now** (▶) that fires that automation's instructions immediately.
 
 ## Execution Trace
 
