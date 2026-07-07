@@ -450,9 +450,9 @@ export default function ShibaStudio() {
       if (cfg.globalInstructions != null) setGlobalInstructionsInput(cfg.globalInstructions);
       if (cfg.useAgentsMd != null) setUseAgentsMd(!!cfg.useAgentsMd);
       setUsageBudgetInput(String(cfg.usageBudgetUsd ?? 25));
-      // trigger scheduler + boot
+      // Boot ping — hydrates server config; schedule arming is idempotent
+      // (instrumentation.ts already armed everything at server start).
       fetch('/api/boot').catch(() => {});
-      fetch('/api/scheduler', { method: 'POST', body: JSON.stringify({ agentId: '__boot__' }) }).catch(() => {});
     } catch (e) {
       console.error(e);
     }

@@ -117,7 +117,38 @@ export function getDb(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_log(category, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS schedule_ticks (
+      scheduleKey TEXT NOT NULL,
+      tick TEXT NOT NULL,
+      claimedAt TEXT NOT NULL,
+      PRIMARY KEY (scheduleKey, tick)
+    );
   `);
   migrateRunsFromJson(db);
   return db;
+}
+
+/**
+ * Atomically claim one cron tick for a schedule (tick = UTC minute). Cron
+ * fires can be duplicated — extra module copies of the scheduler, or a second
+ * server process on the same data dir — and every duplicate lands here; the
+ * PRIMARY KEY guarantees exactly one caller wins the minute.
+ */
+export function claimScheduleTick(scheduleKey: string, tick: string): boolean {
+  const database = getDb();
+  try {
+    database
+      .prepare('INSERT INTO schedule_ticks (scheduleKey, tick, claimedAt) VALUES (?, ?, ?)')
+      .run(scheduleKey, tick, new Date().toISOString());
+  } catch {
+    return false; // this minute was already claimed by another task/process
+  }
+  // Opportunistic cleanup — claims are meaningless after the minute passes.
+  try {
+    database
+      .prepare('DELETE FROM schedule_ticks WHERE claimedAt < ?')
+      .run(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+  } catch { /* cleanup is best-effort */ }
+  return true;
 }

@@ -14,19 +14,43 @@ async function runScheduledAgent(
   return runAgentOnce(agent, prompt, opts);
 }
 
-let tasks: Map<string, cron.ScheduledTask> = new Map();
-let agentMap: Map<string, Agent> = new Map();
+// Scheduler state MUST live on globalThis: Next bundles this module into
+// several separate graphs (instrumentation.ts, each API route), and per-copy
+// maps meant each copy armed its own cron task for every schedule — the cause
+// of automations firing twice on the same tick. One shared map lets any
+// copy's resync stop tasks armed by another.
+interface SchedulerGlobals {
+  __shibaCronTasks?: Map<string, cron.ScheduledTask>;
+  __shibaCronAgents?: Map<string, Agent>;
+  __shibaCronResync?: Promise<void>;
+  __shibaCronInterval?: ReturnType<typeof setInterval>;
+}
+const g = globalThis as unknown as SchedulerGlobals;
+const tasks: Map<string, cron.ScheduledTask> = g.__shibaCronTasks ?? (g.__shibaCronTasks = new Map());
+const agentMap: Map<string, Agent> = g.__shibaCronAgents ?? (g.__shibaCronAgents = new Map());
 
 export function initScheduler() {
   // Will be called on server boot
   loadAndScheduleAll().catch(console.error);
-  // Periodically resync (in case agents change)
-  setInterval(() => {
-    loadAndScheduleAll().catch(() => {});
-  }, 1000 * 60 * 4);
+  // Periodically resync (in case agents change) — one interval per process,
+  // no matter how many module copies or /api/boot hits call this.
+  if (!g.__shibaCronInterval) {
+    g.__shibaCronInterval = setInterval(() => {
+      loadAndScheduleAll().catch(() => {});
+    }, 1000 * 60 * 4);
+  }
 }
 
-export async function loadAndScheduleAll() {
+/** Resyncs are serialized — two callers interleaving stop-all/arm-all (e.g.
+ *  an agent save racing a page-load /api/boot) could otherwise overwrite a
+ *  just-armed task in the map without stopping it, leaving a duplicate. */
+export function loadAndScheduleAll(): Promise<void> {
+  const next = (g.__shibaCronResync ?? Promise.resolve()).then(resyncAllSchedules, resyncAllSchedules);
+  g.__shibaCronResync = next.catch(() => {});
+  return next;
+}
+
+async function resyncAllSchedules() {
   let agents = await loadAgents();
   // Normalize legacy single-schedule agents to multi + skills for compatibility
   agents = agents.map(normalizeAgent);
@@ -64,6 +88,16 @@ export async function loadAndScheduleAll() {
             audit('run', 'schedule retired', `${agent.name}: agent deleted — automation stopped`, { agentId: agent.id, scheduleId: entry.id });
             return;
           }
+          // Claim this cron tick in SQLite before running: if a stray task
+          // (another module copy, or a second server process on the same data
+          // dir) fires for the same schedule in the same minute, exactly one
+          // claim succeeds and the rest skip — no more double runs.
+          const tick = new Date().toISOString().slice(0, 16);
+          const { claimScheduleTick } = await import('./db');
+          if (!claimScheduleTick(taskKey, tick)) {
+            console.log(`[scheduler] tick ${tick} for ${agent.name}/${entry.id} already claimed — skipping duplicate fire`);
+            return;
+          }
           console.log(`[scheduler] firing ${agent.name} schedule ${entry.id} with specific instructions`);
           try {
             // Use the schedule entry's dedicated instructions as the prompt (AC3)
@@ -76,6 +110,9 @@ export async function loadAndScheduleAll() {
             console.error('scheduled run error', e);
           }
         });
+        // Defensive: never orphan a still-running task under the same key.
+        const existing = tasks.get(taskKey);
+        if (existing) { try { existing.stop(); } catch { /* already stopped */ } }
         tasks.set(taskKey, task);
       } catch (e) {
         console.error('bad cron for', agent.name, entry.cron, entry.id);
