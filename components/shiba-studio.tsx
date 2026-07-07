@@ -167,9 +167,12 @@ export default function ShibaStudio() {
 
   // The OAuth popup's callback page announces success the instant tokens are
   // stored — no waiting on the status poll (which stays as the fallback).
+  // The hand-back page is served by a loopback listener on 127.0.0.1 (any
+  // port — the only redirect shape auth.x.ai accepts), so allow that origin.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin) return;
+      const loopback = /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(e.origin);
+      if (e.origin !== window.location.origin && !loopback) return;
       if (e.data === 'shiba-oauth:connected') void handleOAuthConnected();
     };
     window.addEventListener('message', onMessage);

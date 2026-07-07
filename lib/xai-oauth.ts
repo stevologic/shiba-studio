@@ -100,6 +100,8 @@ export function buildAuthorizeUrl(input: {
   codeChallenge: string;
   redirectUri: string;
 }): string {
+  // nonce + referrer mirror the grok-cli's own authorize request — the same
+  // OIDC client validated end-to-end against auth.x.ai.
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: XAI_OAUTH_CLIENT_ID,
@@ -108,6 +110,8 @@ export function buildAuthorizeUrl(input: {
     state: input.state,
     code_challenge: input.codeChallenge,
     code_challenge_method: 'S256',
+    nonce: randomBytes(16).toString('base64url'),
+    referrer: 'grok-build',
   });
   return `${XAI_OAUTH_AUTHORIZE}?${params.toString()}`;
 }
@@ -285,7 +289,13 @@ export async function startOAuthFlow(origin?: string): Promise<{
 }> {
   const pkce = generatePkce();
   const state = generateOAuthState();
-  const redirectUri = getOAuthRedirectUri(origin);
+  // auth.x.ai's grok-cli client only registers RFC 8252 loopback redirects
+  // (http://127.0.0.1:{any port}/callback) — the app's own Next.js origin is
+  // rejected with "redirect_uri does not match any registered URI". Bind a
+  // disposable listener on a random port, exactly like the CLI does.
+  const appOrigin = origin?.trim() || getOAuthRedirectUri().replace(/\/api\/xai-oauth\/callback$/, '');
+  const { startOAuthLoopback } = await import('./oauth-loopback');
+  const { redirectUri } = await startOAuthLoopback(appOrigin);
   await saveOAuthPending({
     state,
     codeVerifier: pkce.codeVerifier,
@@ -410,7 +420,7 @@ export async function getOAuthPublicStatus(): Promise<XaiOAuthPublicStatus> {
     return { connected: false, expired: false };
   }
   const expired = isSessionExpired(session);
-  let canRefresh = !!session.refreshToken;
+  const canRefresh = !!session.refreshToken;
   if (expired && canRefresh) {
     const token = await getValidAccessToken();
     if (token) {
