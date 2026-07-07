@@ -2610,13 +2610,14 @@ body::before {
   animation: space-drift 240s linear infinite;
 }
 
+/* Pure monochrome cosmos — no color tints anywhere in the backdrop */
 .space-stars-mid {
   background-image:
-    radial-gradient(1.4px 1.4px at 22% 42%, rgba(199,222,255,0.7), transparent),
+    radial-gradient(1.4px 1.4px at 22% 42%, rgba(255,255,255,0.7), transparent),
     radial-gradient(1.2px 1.2px at 64% 17%, rgba(255,255,255,0.6), transparent),
-    radial-gradient(1.4px 1.4px at 83% 58%, rgba(255,240,214,0.6), transparent),
+    radial-gradient(1.4px 1.4px at 83% 58%, rgba(255,255,255,0.6), transparent),
     radial-gradient(1px 1px at 38% 76%, rgba(255,255,255,0.5), transparent),
-    radial-gradient(1.3px 1.3px at 9% 14%, rgba(214,230,255,0.55), transparent),
+    radial-gradient(1.3px 1.3px at 9% 14%, rgba(255,255,255,0.55), transparent),
     radial-gradient(1.2px 1.2px at 52% 91%, rgba(255,255,255,0.5), transparent);
   background-size: 420px 420px;
   opacity: 0.75;
@@ -2626,9 +2627,9 @@ body::before {
 .space-stars-near {
   background-image:
     radial-gradient(1.8px 1.8px at 31% 29%, rgba(255,255,255,0.95), transparent),
-    radial-gradient(1.6px 1.6px at 76% 71%, rgba(214,230,255,0.85), transparent),
+    radial-gradient(1.6px 1.6px at 76% 71%, rgba(255,255,255,0.85), transparent),
     radial-gradient(2px 2px at 55% 48%, rgba(255,255,255,0.8), transparent),
-    radial-gradient(1.7px 1.7px at 12% 82%, rgba(255,240,214,0.75), transparent),
+    radial-gradient(1.7px 1.7px at 12% 82%, rgba(255,255,255,0.75), transparent),
     radial-gradient(2.2px 2.2px at 91% 16%, rgba(255,255,255,0.85), transparent);
   background-size: 540px 540px;
   opacity: 0.85;
@@ -2649,9 +2650,9 @@ body::before {
   position: absolute;
   inset: -30%;
   background:
-    radial-gradient(38% 30% at 22% 30%, rgba(99, 102, 241, 0.10), transparent 70%),
-    radial-gradient(30% 26% at 78% 62%, rgba(56, 189, 248, 0.07), transparent 70%),
-    radial-gradient(26% 22% at 55% 18%, rgba(217, 70, 239, 0.06), transparent 70%);
+    radial-gradient(38% 30% at 22% 30%, rgba(255, 255, 255, 0.05), transparent 70%),
+    radial-gradient(30% 26% at 78% 62%, rgba(255, 255, 255, 0.035), transparent 70%),
+    radial-gradient(26% 22% at 55% 18%, rgba(255, 255, 255, 0.03), transparent 70%);
   filter: blur(28px);
   animation: space-nebula-swirl 90s ease-in-out infinite alternate;
   will-change: transform;
@@ -2669,8 +2670,8 @@ body::before {
   width: 130px;
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg, transparent, rgba(214, 234, 255, 0.9));
-  box-shadow: 0 0 8px rgba(180, 215, 255, 0.6);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9));
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
   transform: rotate(16deg);
   opacity: 0;
   animation: space-comet-fly 11s ease-in 2s infinite;
