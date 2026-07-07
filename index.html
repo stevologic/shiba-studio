@@ -92,7 +92,64 @@
   .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 36px rgba(255,255,255,.3); }
   .btn-ghost { border: 1px solid var(--border-light); color: var(--text); }
   .btn-ghost:hover { background: rgba(255,255,255,.06); }
-  .os-note { margin-top: 16px; font-size: 12.5px; color: var(--dim); }
+  .os-note { margin-top: 14px; font-size: 12.5px; color: var(--dim); }
+
+  /* One-liner install in the hero */
+  .quick-install {
+    margin: 30px auto 0; max-width: 820px;
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid var(--border-light); border-radius: 12px;
+    background: rgba(0,0,0,.85); padding: 13px 14px 13px 18px;
+    box-shadow: 0 12px 44px rgba(0,0,0,.6), 0 0 30px rgba(255,255,255,.05);
+    text-align: left;
+  }
+  .qi-prompt { color: var(--dim); font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .quick-install code {
+    flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; color: #e8e8e8;
+    scrollbar-width: none;
+  }
+  .quick-install code::-webkit-scrollbar { display: none; }
+  .qi-copy {
+    border: 1px solid var(--border-light); background: rgba(255,255,255,.07); color: #fff;
+    font-size: 12px; font-weight: 600; border-radius: 8px; padding: 6px 14px; cursor: pointer; font-family: inherit;
+    white-space: nowrap;
+  }
+  .qi-copy:hover { background: rgba(255,255,255,.14); }
+
+  /* Command chips */
+  .chips { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .chip {
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 13px;
+    background: rgba(255,255,255,.03);
+  }
+
+  /* Stats strip */
+  .stats {
+    margin: 80px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px;
+    border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--border);
+  }
+  .stat { background: rgba(10,10,10,.95); padding: 22px 16px; text-align: center; }
+  .stat b { display: block; font-size: 26px; letter-spacing: -.03em; }
+  .stat span { font-size: 12px; color: var(--dim); }
+
+  /* Ad banners */
+  .ad {
+    margin: 88px 0 0; text-align: center; padding: 56px 28px;
+    border: 1px solid var(--border-light); border-radius: 20px;
+    background:
+      radial-gradient(60% 120% at 50% 0%, rgba(255,255,255,.07), transparent 70%),
+      linear-gradient(180deg, rgba(14,14,14,.95), rgba(6,6,6,.95));
+    box-shadow: 0 24px 80px rgba(0,0,0,.6);
+  }
+  .ad-line {
+    font-size: clamp(24px, 4.4vw, 40px); font-weight: 800; letter-spacing: -.035em; line-height: 1.15;
+    background: linear-gradient(180deg, #fff 40%, #8a8a8a); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .ad-sub { margin: 14px auto 0; max-width: 560px; color: var(--muted); font-size: 15px; }
+  .ad-sub code { font-family: ui-monospace, Consolas, monospace; background: rgba(255,255,255,.07); padding: 1px 7px; border-radius: 6px; color: #eee; font-size: 13px; }
+  .ad-doge .ad-line { font-style: italic; }
 
   /* ── Terminal mock ── */
   .term {
@@ -199,7 +256,21 @@
       <a class="btn btn-primary" href="#download">⬇ Install Shiba Studio</a>
       <a class="btn btn-ghost" href="https://github.com/stevologic/shiba-studio">★ View on GitHub</a>
     </div>
+
+    <!-- One command. Right here. -->
+    <div class="quick-install">
+      <span class="qi-prompt">$</span>
+      <code id="qi-cmd">git clone https://github.com/stevologic/shiba-studio.git &amp;&amp; cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code>
+      <button class="qi-copy" id="qi-copy" title="Copy the install command">Copy</button>
+    </div>
     <div class="os-note">Windows · macOS · Linux — Node.js ≥ 22.5, nothing to compile</div>
+
+    <!-- The commands you'll live in -->
+    <div class="chips" aria-label="Chat commands">
+      <span class="chip">/git pr</span><span class="chip">/annotate</span><span class="chip">/search</span>
+      <span class="chip">/fetch</span><span class="chip">/remember</span><span class="chip">/recall</span>
+      <span class="chip">/note</span><span class="chip">/git checkout</span><span class="chip">/help</span>
+    </div>
 
     <div class="term">
       <div class="term-bar"><span></span><span></span><span></span></div>
@@ -214,6 +285,15 @@
       </div>
     </div>
   </header>
+
+  <!-- Stats strip -->
+  <div class="stats">
+    <div class="stat"><b>30+</b><span>built-in agent tools</span></div>
+    <div class="stat"><b>6</b><span>core integrations</span></div>
+    <div class="stat"><b>4</b><span>model routes: token · OAuth · CLI · local</span></div>
+    <div class="stat"><b>100%</b><span>local — zero telemetry</span></div>
+    <div class="stat"><b>AES-256</b><span>credentials at rest</span></div>
+  </div>
 
   <section id="features">
     <h2>An engineering copilot with hands</h2>
@@ -234,6 +314,12 @@
     </div>
   </section>
 
+  <!-- Ad banner -->
+  <div class="ad">
+    <div class="ad-line">Point at a div. Ask for the fix. Ship the PR.</div>
+    <div class="ad-sub">The annotation sub-browser + <code>/git pr</code> turn "that container looks wrong" into a merged pull request — without leaving chat.</div>
+  </div>
+
   <section id="how">
     <h2>How you use it</h2>
     <p class="sub">Three minutes from clone to a working agent.</p>
@@ -246,6 +332,12 @@
         <p>Wrap the workflow in an agent, give it scopes and a schedule, and watch live traces on the Automations page — or don't watch; it runs headless either way.</p></div>
     </div>
   </section>
+
+  <!-- Second ad banner -->
+  <div class="ad ad-doge">
+    <div class="ad-line">Much agents. Very local. Wow.</div>
+    <div class="ad-sub">Your models, your machine, your data. Agents that keep working after you close the browser — and remember what they learned tomorrow.</div>
+  </div>
 
   <section id="download">
     <h2>Download &amp; install</h2>
@@ -334,6 +426,14 @@ npm run dev</pre>
         btn.textContent = 'Copied ✓';
         setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
       });
+    });
+  });
+
+  // Hero one-liner copy
+  document.getElementById('qi-copy').addEventListener('click', function () {
+    navigator.clipboard.writeText(document.getElementById('qi-cmd').textContent).then(() => {
+      this.textContent = 'Copied ✓';
+      setTimeout(() => { this.textContent = 'Copy'; }, 1600);
     });
   });
 
