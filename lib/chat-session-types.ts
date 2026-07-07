@@ -11,6 +11,9 @@ export interface ChatSession {
   /** Model used when routing through the local Grok CLI (limited to the CLI's own model list). */
   cliModel?: string;
   reasoningEffort: ReasoningEffort;
+  /** Folder this chat is bound to (e.g. a cloned repo) — fs tools and /git
+   *  commands operate here. null/absent = no workspace. */
+  workspaceDir?: string | null;
   messages: ProjectChatMessage[];
   createdAt: string;
   updatedAt: string;

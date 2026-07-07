@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, GitBranch, Paperclip, Pencil, RefreshCw, RotateCcw,
+  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, FolderGit2, GitBranch, Paperclip, Pencil, RefreshCw, RotateCcw,
   Send, Sparkles, Square, Terminal, X,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -11,6 +11,7 @@ import ChatMarkdown from '@/components/chat-markdown-lazy';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
 
 const SubBrowser = dynamic(() => import('@/components/sub-browser'));
+const WorkspacePicker = dynamic(() => import('@/components/workspace-picker'));
 
 /** Slash-command catalog — drives the composer autocomplete and /help. */
 const SLASH_COMMANDS: Array<{ cmd: string; insert: string; desc: string }> = [
@@ -19,6 +20,7 @@ const SLASH_COMMANDS: Array<{ cmd: string; insert: string; desc: string }> = [
   { cmd: '/git commit <message>', insert: '/git commit ', desc: 'Stage everything and commit' },
   { cmd: '/git pr <title> | <body>', insert: '/git pr ', desc: 'Push branch and open a GitHub PR' },
   { cmd: '/annotate', insert: '/annotate', desc: 'Sub-browser: highlight an element for refinement' },
+  { cmd: '/workspace <path>', insert: '/workspace ', desc: 'Bind this chat to a folder (blank opens the picker)' },
   { cmd: '/search <query>', insert: '/search ', desc: 'Web search results into this chat' },
   { cmd: '/fetch <url>', insert: '/fetch ', desc: 'Read a page as text into this chat' },
   { cmd: '/remember <key> | <content>', insert: '/remember ', desc: 'Save a persistent memory' },
@@ -211,6 +213,7 @@ function sessionToInitialState(
       useGrokCli,
       cliModel: session.cliModel || '',
       reasoningEffort: session.reasoningEffort || 'low' as ReasoningEffort,
+      workspaceDir: session.workspaceDir || null,
     };
   }
   return {
@@ -219,6 +222,7 @@ function sessionToInitialState(
     useGrokCli,
     cliModel: session?.cliModel || '',
     reasoningEffort: (session?.reasoningEffort || 'low') as ReasoningEffort,
+    workspaceDir: session?.workspaceDir || null,
   };
 }
 
@@ -243,7 +247,7 @@ export default function GrokChatPanel({
   const [messages, setMessages] = useState<UiMessage[]>(init.messages);
   // Drafts survive tab switches and reloads (C6). Scoped per session/project;
   // the panel remounts per session via its key prop, so lazy init is enough.
-  const draftKey = `grokdesk-draft:${session?.id || project?.id || 'direct'}`;
+  const draftKey = `shiba-draft:${session?.id || project?.id || 'direct'}`;
   const [input, setInput] = useState(() =>
     (typeof window !== 'undefined' ? window.localStorage.getItem(draftKey) || '' : ''),
   );
@@ -255,6 +259,10 @@ export default function GrokChatPanel({
   const [dragOver, setDragOver] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<{ src: string; name: string } | null>(null);
   const [showSubBrowser, setShowSubBrowser] = useState(false);
+  // Chat workspace: folder this conversation reads/writes/analyzes (fs tools
+  // + /git). Persisted on the session so it survives reloads.
+  const [workspaceDir, setWorkspaceDir] = useState<string | null>(init.workspaceDir);
+  const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
 
   // Slash-command completion — filtered while the command token is typed.
   const [slashIdx, setSlashIdx] = useState(0);
@@ -387,6 +395,7 @@ export default function GrokChatPanel({
     setMessages(next.messages);
     setUseGrokCli(next.useGrokCli);
     setReasoningEffort(next.reasoningEffort);
+    setWorkspaceDir(next.workspaceDir);
     setExpandedThinking({});
   }, [session, project, agents, streaming]);
 
@@ -450,6 +459,14 @@ export default function GrokChatPanel({
   function updateReasoningEffort(next: ReasoningEffort) {
     setReasoningEffort(next);
     if (isSessionMode) void patchSession({ reasoningEffort: next });
+  }
+
+  function updateWorkspaceDir(next: string | null) {
+    setWorkspaceDir(next);
+    if (isSessionMode) void patchSession({ workspaceDir: next });
+    if (next) {
+      toast.success(`Chat bound to ${next} — file reads/writes and /git run there now`);
+    }
   }
 
   function updateUseGrokCli(next: boolean) {
@@ -791,6 +808,10 @@ export default function GrokChatPanel({
         // Server injects live integration context (Obsidian vault, GitHub repos…)
         body.agentId = selectedAgent.id;
       }
+      // Bound workspace folder → server enables fs tools rooted there.
+      if (!isMulti && !useCli && workspaceDir) {
+        body.workspaceDir = workspaceDir;
+      }
 
       if (project) {
         const ctxRes = await fetch(`/api/projects/context?id=${encodeURIComponent(project.id)}`);
@@ -880,6 +901,13 @@ export default function GrokChatPanel({
       '| --- | --- |',
       '| `/annotate [url]` | Open the sub-browser: load your app, click an element, send it here for refinement |',
       '',
+      '### 📁 Workspace — give this chat a folder',
+      '| Command | What it does |',
+      '| --- | --- |',
+      '| `/workspace` | Open the folder picker — bind this chat to a repo/folder |',
+      '| `/workspace <path>` | Bind directly to a path |',
+      '| `/workspace off` | Detach the folder from this chat |',
+      '',
       '### 🧠 Memory & notes',
       '| Command | What it does |',
       '| --- | --- |',
@@ -888,7 +916,7 @@ export default function GrokChatPanel({
       '| `/note <path> \\| <content>` | Create an Obsidian note in your vault |',
       '| `/x <text>` | Post to X via the integration (agents can too, with the X scope) |',
       '',
-      `_Git runs against ${project?.name ? `the "${project.name}" project workspace` : 'the default workspace'}; PRs use your GitHub token from Capabilities. Type \`/\` any time to see the command bar._`,
+      `_Git and file tools run against ${workspaceDir ? `the chat workspace \`${workspaceDir}\`` : project?.name ? `the "${project.name}" project workspace` : 'the default workspace'}; PRs use your GitHub token from Capabilities. Type \`/\` any time to see the command bar._`,
     ].join('\n');
 
     if (trimmed === '/help' || trimmed === '/' || trimmed === '/commands') {
@@ -900,6 +928,30 @@ export default function GrokChatPanel({
     if (trimmed.startsWith('/annotate')) {
       setInput('');
       setShowSubBrowser(true);
+      return true;
+    }
+
+    if (trimmed === '/workspace' || trimmed.startsWith('/workspace ')) {
+      const arg = trimmed.slice('/workspace'.length).trim();
+      setInput('');
+      if (!arg) {
+        setShowWorkspacePicker(true);
+        return true;
+      }
+      if (arg === 'off' || arg === 'clear' || arg === 'none') {
+        updateWorkspaceDir(null);
+        appendExchange('📁 Workspace detached — this chat no longer has folder access.');
+        return true;
+      }
+      // Validate the typed path server-side before binding.
+      const res = await fetch(`/api/fs/browse?dir=${encodeURIComponent(arg)}`)
+        .then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+      if (res.ok) {
+        updateWorkspaceDir(res.path);
+        appendExchange(`📁 Chat workspace set to \`${res.path}\`${res.isRepo ? ' (git repository)' : ''} — I can now read, write, and search files there, and \`/git\` commands run against it.`);
+      } else {
+        appendExchange(`⚠️ ${res.error || `Could not open ${arg}`}`);
+      }
       return true;
     }
 
@@ -995,7 +1047,7 @@ export default function GrokChatPanel({
       const rest = trimmed.slice(4).trim();
       const [sub, ...args] = rest.split(/\s+/);
       const argText = args.join(' ');
-      const workspacePath = project?.workspacePath?.trim() || undefined;
+      const workspacePath = workspaceDir?.trim() || project?.workspacePath?.trim() || undefined;
       let payload: Record<string, string | undefined> | null = null;
       if (sub === 'status') payload = { action: 'status' };
       else if (sub === 'checkout' && args[0]) payload = { action: 'checkout', branch: args[0] };
@@ -1193,6 +1245,17 @@ export default function GrokChatPanel({
           )}
           <option value="all" disabled={agents.length === 0}>All agents — summarize</option>
         </select>
+        <button
+          type="button"
+          onClick={() => setShowWorkspacePicker(true)}
+          className={`grok-btn grok-btn-ghost text-xs py-1 ${workspaceDir ? 'workspace-chip-active' : ''}`}
+          title={workspaceDir
+            ? `Chat workspace: ${workspaceDir}\nFile reads/writes, analysis, and /git commands run in this folder — click to change or detach`
+            : 'Bind this chat to a folder (e.g. a cloned GitHub repo) so Grok can read, write, search, and run /git commands there'}
+        >
+          <FolderGit2 size={14} />
+          {workspaceDir ? (workspaceDir.split(/[\\/]/).filter(Boolean).pop() || workspaceDir) : 'Workspace'}
+        </button>
         <button
           type="button"
           onClick={exportChatMarkdown}
@@ -1685,6 +1748,15 @@ export default function GrokChatPanel({
           onClose={() => setShowSubBrowser(false)}
           onAnnotate={handleAnnotation}
           initialUrl={undefined}
+        />
+      )}
+
+      {showWorkspacePicker && (
+        <WorkspacePicker
+          open={showWorkspacePicker}
+          value={workspaceDir}
+          onClose={() => setShowWorkspacePicker(false)}
+          onSelect={updateWorkspaceDir}
         />
       )}
 

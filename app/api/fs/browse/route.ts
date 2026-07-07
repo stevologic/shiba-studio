@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
+import * as fsSync from 'fs';
 import path from 'path';
 import { resolveWorkspace } from '@/lib/workspace';
+
+function isGitRepo(dir: string): boolean {
+  try {
+    return fsSync.existsSync(path.join(dir, '.git'));
+  } catch {
+    return false;
+  }
+}
 
 function defaultBrowseRoot(): string {
   if (process.env.USERPROFILE) return process.env.USERPROFILE;
@@ -23,11 +32,11 @@ export async function GET(req: NextRequest) {
 
     const entries = await fs.readdir(current, { withFileTypes: true });
     const directories = entries
-      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-      .map((e) => ({
-        name: e.name,
-        path: path.join(current, e.name),
-      }))
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules')
+      .map((e) => {
+        const full = path.join(current, e.name);
+        return { name: e.name, path: full, isRepo: isGitRepo(full) };
+      })
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
     const parent = path.dirname(current);
@@ -37,6 +46,7 @@ export async function GET(req: NextRequest) {
       ok: true,
       path: current,
       parent: hasParent ? parent : null,
+      isRepo: isGitRepo(current),
       directories,
     });
   } catch (e: unknown) {

@@ -3196,6 +3196,42 @@ body::before {
   padding: 10px 12px;
 }
 
+/* Chat workspace picker — bind a chat to a folder on disk */
+.workspace-dir-list {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  min-height: 180px;
+}
+
+.workspace-dir-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 12px;
+  font-size: 0.78rem;
+  color: var(--text);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 0.12s ease;
+}
+
+.workspace-dir-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.workspace-dir-item:last-child {
+  border-bottom: none;
+}
+
+/* Topbar chip lights up while a folder is bound */
+.workspace-chip-active {
+  border-color: rgba(255, 255, 255, 0.35) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+}
+
 /* Slash-command completion menu above the composer */
 .chat-slash-menu {
   margin-top: 10px;

@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import * as fs from 'fs';
 import { setApiKey } from '@/lib/grok-client';
 import { encodeSseEvent, grokChatStream } from '@/lib/grok-chat-stream';
 import { parseModelRef } from '@/lib/model-providers';
@@ -49,6 +50,24 @@ export async function POST(req: NextRequest) {
       /* integration context is best-effort */
     }
   }
+  // Chat workspace: a folder the user bound this chat to (usually a cloned
+  // repo). Validated here; fs tools + the system prompt are rooted in it.
+  let workspaceDir = '';
+  if (body.workspaceDir) {
+    const requested = String(body.workspaceDir).trim();
+    try {
+      if (requested && fs.statSync(requested).isDirectory()) workspaceDir = requested;
+    } catch { /* stale/unreachable folder — chat continues without it */ }
+  }
+  if (workspaceDir) {
+    systemParts.push([
+      '## Chat workspace',
+      `This chat is bound to the folder \`${workspaceDir}\` on the user's machine.`,
+      'Your filesystem tools (fs_list, fs_read, fs_write, fs_search) operate inside this folder — use paths relative to it.',
+      'Explore with fs_list/fs_search and read files before answering questions about the code; write changes directly with fs_write when asked.',
+    ].join('\n'));
+  }
+
   if (systemParts.length) {
     messages.push({ role: 'system', content: systemParts.join('\n\n') });
   }
@@ -76,14 +95,17 @@ export async function POST(req: NextRequest) {
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   audit('chat', 'message sent', (lastUser?.content || '').slice(0, 120), {
     model, agent: agentName, agentId: body.agentId || null, turns: messages.length,
+    workspace: workspaceDir || null,
   });
 
   // Chatting AS an agent: give the model that agent's cloud-safe toolbelt so
   // "post this to X" actually posts instead of the model pretending it did.
-  // Machine tools (files/shell/browser) stay run-only; attachments fall back
-  // to the plain vision stream.
+  // Machine tools (files/shell/browser) stay run-only — EXCEPT the fs tools
+  // when the user bound this chat to a workspace folder, which is an explicit
+  // grant of file access to that folder. Attachments fall back to the plain
+  // vision stream.
   const hasAttachments = messages.some((m) => m.attachments?.length);
-  const useAgentTools = !!chatAgent && !hasAttachments && parseModelRef(model).provider !== 'local';
+  const useAgentTools = (!!chatAgent || !!workspaceDir) && !hasAttachments && parseModelRef(model).provider !== 'local';
 
   const stream = useAgentTools
     ? new ReadableStream({
@@ -96,10 +118,21 @@ export async function POST(req: NextRequest) {
             const { getToolDefinitions } = await import('@/lib/agent-runtime');
             const { executeAgentTool } = await import('@/lib/agent-tool-exec');
             const { resolveWorkspace } = await import('@/lib/workspace');
+            const { normalizeAgent } = await import('@/lib/types');
 
-            const agent = chatAgent!;
-            const tools = getToolDefinitions(agent.integrations, false, 'cloud');
-            const workDir = resolveWorkspace(agent.workspace.path);
+            const agent = chatAgent;
+            // fs tools run as this synthetic local "agent" so a cloud-origin
+            // chat agent can still touch the user-granted workspace folder.
+            const WORKSPACE_TOOL_NAMES = new Set(['fs_list', 'fs_read', 'fs_write', 'fs_search']);
+            const workspaceAgent = normalizeAgent({ id: '__chat__', name: 'Grok Chat', origin: 'local' });
+            const tools = agent ? getToolDefinitions(agent.integrations, false, 'cloud') : [];
+            if (workspaceDir) {
+              const fsTools = getToolDefinitions(workspaceAgent.integrations, false, 'local')
+                .filter((t) => WORKSPACE_TOOL_NAMES.has(t.function.name));
+              const have = new Set(tools.map((t) => t.function.name));
+              tools.push(...fsTools.filter((t) => !have.has(t.function.name)));
+            }
+            const workDir = workspaceDir || resolveWorkspace(agent!.workspace.path);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const msgs: any[] = messages.map((m) => ({ role: m.role, content: m.content }));
             const toolsUsed: string[] = [];
@@ -130,7 +163,8 @@ export async function POST(req: NextRequest) {
                 let args: any = {};
                 try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
                 send({ type: 'thinking', delta: `⚙ ${fn.name}(${JSON.stringify(args).slice(0, 160)})\n` });
-                const out = await executeAgentTool(fn.name, args, agent, {}, workDir);
+                const execAgent = !agent || (workspaceDir && WORKSPACE_TOOL_NAMES.has(fn.name)) ? workspaceAgent : agent;
+                const out = await executeAgentTool(fn.name, args, execAgent, {}, workDir);
                 toolsUsed.push(fn.name);
                 send({ type: 'thinking', delta: `→ ${JSON.stringify(out.result).slice(0, 200)}\n` });
                 msgs.push({ role: 'tool', tool_call_id: tc.id, name: fn.name, content: JSON.stringify(out.result).slice(0, 8000) });
@@ -139,7 +173,8 @@ export async function POST(req: NextRequest) {
 
             if (toolsUsed.length) {
               audit('chat', 'agent chat used tools', toolsUsed.join(', '), {
-                model, agent: agentName, agentId: agent.id, tools: toolsUsed,
+                model, agent: agentName, agentId: agent?.id ?? null, tools: toolsUsed,
+                workspace: workspaceDir || null,
               });
             }
             send({ type: 'done', model });
