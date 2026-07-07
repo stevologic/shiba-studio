@@ -5,7 +5,7 @@
 // note, and send the whole annotation (selector + HTML + highlighted
 // screenshot) into Grok Chat for code refinement.
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Crosshair, Globe, Loader2, MousePointer, RefreshCw, Send, X } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -99,24 +99,35 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
     setBusy(null);
   }
 
-  // Mouse wheel scrolls the live page (works in both modes). Accumulate the
-  // deltas and flush once the wheel settles, so a scroll gesture is one
-  // round-trip instead of dozens.
-  function onWheel(e: React.WheelEvent<HTMLImageElement>) {
-    if (!shot) return;
-    e.preventDefault();
-    wheelAccum.current += e.deltaY;
-    if (wheelTimer.current) clearTimeout(wheelTimer.current);
-    wheelTimer.current = setTimeout(async () => {
-      const dy = Math.round(wheelAccum.current);
-      wheelAccum.current = 0;
-      if (!dy) return;
-      try {
-        const data = await call({ action: 'scrollby', dy });
-        if (data.ok) setShot(data);
-      } catch { /* keep view */ }
-    }, 140);
-  }
+  // Mouse wheel scrolls the live page (works in both modes). Bound as a native
+  // non-passive listener — React registers wheel handlers passively, so a
+  // synthetic onWheel can't preventDefault() and the modal scrolls instead of
+  // the rendered page. Deltas accumulate and flush once the gesture settles,
+  // so a scroll is one round-trip instead of dozens.
+  const hasShot = !!shot;
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!open || !hasShot || !img) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      wheelAccum.current += e.deltaY;
+      if (wheelTimer.current) clearTimeout(wheelTimer.current);
+      wheelTimer.current = setTimeout(async () => {
+        const dy = Math.round(wheelAccum.current);
+        wheelAccum.current = 0;
+        if (!dy) return;
+        try {
+          const data = await call({ action: 'scrollby', dy });
+          if (data.ok) setShot(data);
+        } catch { /* keep view */ }
+      }, 140);
+    };
+    img.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      img.removeEventListener('wheel', onWheel);
+      if (wheelTimer.current) clearTimeout(wheelTimer.current);
+    };
+  }, [open, hasShot, call]);
 
   async function pick(e: React.MouseEvent<HTMLImageElement>) {
     if (!shot || !imgRef.current || busy) return;
@@ -250,7 +261,6 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
               alt={shot.title || 'page'}
               className={`subbrowser-shot ${mode === 'interact' ? 'subbrowser-shot-interact' : ''}`}
               onClick={(e) => void pick(e)}
-              onWheel={onWheel}
             />
           ) : (
             <div className="text-sm text-dim text-center py-16">
