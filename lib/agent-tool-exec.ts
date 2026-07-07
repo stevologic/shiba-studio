@@ -147,6 +147,11 @@ export async function executeAgentTool(
         const r = await Ints.xPostTweet(args.text);
         return { result: r, sideEffect: r.url ? `posted to X: ${r.url}` : 'posted to X' };
       }
+      case 'x_read_timeline': {
+        const feed = args.feed === 'home' ? 'home' : 'mine';
+        const tweets = await Ints.xReadTimeline(feed, args.count ? Number(args.count) : 5);
+        return { result: tweets, sideEffect: `read ${tweets.length} tweets from X (${feed})` };
+      }
       case 'drive_list': {
         const r = await Ints.driveListFiles(args.query);
         return { result: r, sideEffect: 'listed Drive files' };

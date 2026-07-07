@@ -214,6 +214,67 @@ export async function testX(): Promise<{ ok: boolean; username?: string; id?: st
   }
 }
 
+export interface XTweet {
+  id: string;
+  text: string;
+  createdAt?: string;
+  likes?: number;
+  reposts?: number;
+  replies?: number;
+  url: string;
+  author?: string;
+}
+
+/** Read recent tweets — your own posts, or your home timeline. */
+export async function xReadTimeline(feed: 'mine' | 'home' = 'mine', count = 5): Promise<XTweet[]> {
+  const keys = getXCreds();
+  if (!keys) throw new Error('X not configured');
+
+  // Resolve the authenticated user's id first.
+  const meUrl = `${X_API}/users/me`;
+  const meRes = await fetch(meUrl, { headers: { Authorization: xOAuth1Auth('GET', meUrl, keys) } });
+  if (!meRes.ok) throw new Error(`X API ${meRes.status}: ${(await meRes.text()).slice(0, 300)}`);
+  const me = await meRes.json();
+  const userId = me.data?.id;
+  if (!userId) throw new Error('Could not resolve the authenticated X user');
+
+  const max = Math.min(Math.max(Math.floor(count) || 5, 5), 25); // API minimum is 5
+  const path = feed === 'home'
+    ? `${X_API}/users/${userId}/timelines/reverse_chronological`
+    : `${X_API}/users/${userId}/tweets`;
+  const query: Record<string, string> = {
+    max_results: String(max),
+    'tweet.fields': 'created_at,public_metrics,author_id',
+    expansions: 'author_id',
+    'user.fields': 'username',
+  };
+  const qs = Object.entries(query).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  const res = await fetch(`${path}?${qs}`, { headers: { Authorization: xOAuth1Auth('GET', path, keys, query) } });
+  if (!res.ok) {
+    const txt = await res.text();
+    if (res.status === 403 || res.status === 429) {
+      throw new Error(
+        `X refused the timeline read (${res.status}). Reading tweets requires at least the Basic API tier at developer.x.com — the Free tier only allows posting and identity lookups. Details: ${txt.slice(0, 200)}`,
+      );
+    }
+    throw new Error(`X API ${res.status}: ${txt.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const users = new Map<string, string>(
+    ((data.includes?.users || []) as Array<{ id: string; username: string }>).map((u) => [u.id, u.username]),
+  );
+  return ((data.data || []) as Array<Record<string, unknown>>).map((t) => ({
+    id: String(t.id),
+    text: String(t.text || ''),
+    createdAt: t.created_at ? String(t.created_at) : undefined,
+    likes: (t.public_metrics as Record<string, number> | undefined)?.like_count,
+    reposts: (t.public_metrics as Record<string, number> | undefined)?.retweet_count,
+    replies: (t.public_metrics as Record<string, number> | undefined)?.reply_count,
+    author: t.author_id ? users.get(String(t.author_id)) : undefined,
+    url: `https://x.com/i/web/status/${t.id}`,
+  }));
+}
+
 export async function xPostTweet(text: string) {
   const keys = getXCreds();
   if (!keys) throw new Error('X not configured');

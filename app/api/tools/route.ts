@@ -28,6 +28,7 @@ const TOOL_GROUPS: Record<string, { group: string; requires?: string; localOnly?
   drive_upload: { group: 'Integrations', requires: 'googledrive' },
   discord_post: { group: 'Integrations', requires: 'discord' },
   x_post: { group: 'Integrations', requires: 'x' },
+  x_read_timeline: { group: 'Integrations', requires: 'x' },
   obsidian_list: { group: 'Integrations', requires: 'obsidian' },
   obsidian_read: { group: 'Integrations', requires: 'obsidian' },
   obsidian_write: { group: 'Integrations', requires: 'obsidian' },

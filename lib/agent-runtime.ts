@@ -189,6 +189,20 @@ export function getToolDefinitions(
         },
       },
     });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'x_read_timeline',
+        description: "Read recent tweets from X via the API — the user's own posts (feed=mine) or their home timeline (feed=home). Use this instead of fetching x.com pages.",
+        parameters: {
+          type: 'object',
+          properties: {
+            feed: { type: 'string', enum: ['mine', 'home'], description: "Which feed: 'mine' = the user's own tweets (default), 'home' = their following timeline" },
+            count: { type: 'number', description: 'How many tweets (5-25, default 5)' },
+          },
+        },
+      },
+    });
   }
   if (scope.obsidian) {
     tools.push({

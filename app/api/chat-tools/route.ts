@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       const result = await xPostTweet(text);
       const { audit } = await import('@/lib/audit-log');
       audit('integration', 'posted to X', text.slice(0, 120), { via: 'chat', url: result.url });
-      return NextResponse.json({ ok: true, ...result });
+      return NextResponse.json({ ...result, ok: true });
     }
 
     return NextResponse.json({ ok: false, error: `Unknown chat tool "${action}"` }, { status: 400 });
