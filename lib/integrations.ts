@@ -226,6 +226,14 @@ export async function xPostTweet(text: string) {
   });
   if (!res.ok) {
     const txt = await res.text();
+    // The most common failure: the X app is Read-only. Auth tests pass but
+    // posting 403s — and tokens keep the permission level they were CREATED
+    // with, so regeneration after the change is mandatory.
+    if (res.status === 403 && /oauth1.?permissions/i.test(txt)) {
+      throw new Error(
+        'X refused the post (403): the app\'s permissions are Read-only. At developer.x.com set App permissions to "Read and write", then REGENERATE the Access Token & Secret (existing tokens keep their old permission level) and re-save them on the Capabilities page.',
+      );
+    }
     throw new Error(`X API ${res.status}: ${txt}`);
   }
   const data = await res.json();
