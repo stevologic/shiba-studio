@@ -19,6 +19,15 @@ export async function POST(req: NextRequest) {
       which && creds[which] !== undefined
         ? { [which]: creds[which] }
         : creds;
+    // Pasted tokens routinely arrive with stray whitespace/newlines — a top
+    // cause of baffling 401s. Trim every string credential field on save.
+    for (const svc of Object.values(partial) as Array<Record<string, unknown>>) {
+      if (svc && typeof svc === 'object') {
+        for (const [k, v] of Object.entries(svc)) {
+          if (typeof v === 'string') (svc as Record<string, unknown>)[k] = v.trim();
+        }
+      }
+    }
     const next = await saveConfig({ integrations: partial });
     audit('integration', 'credentials saved', which || Object.keys(partial).join(', '));
     return NextResponse.json({ ok: true, integrations: next.integrations });
