@@ -48,7 +48,7 @@ Open **http://localhost:3000**. For a production build: `npm run build && npm ru
 
 1. **Connect a model source** in **Settings** — any one of:
    - **xAI API key** — from [console.x.ai](https://console.x.ai); paste and *Save & Validate*.
-   - **OAuth 2.0 with X** — *Sign in with X* (SuperGrok / X Premium+); if the redirect fails, paste the callback URL into the manual field.
+   - **OAuth 2.0 with X** — *Sign in with X* (SuperGrok / X Premium+): a popup opens the official `accounts.x.ai` login and closes itself when done — tokens are cached encrypted and refresh automatically, nothing to copy or paste. (A manual fallback field exists under the button if the popup can't come back.)
    - **Grok CLI** — install the `grok` binary; Shiba Studio detects it automatically and shows a `GROK CLI` badge.
    - **Local models** — enable, point at your server (e.g. `http://127.0.0.1:11434/v1` for Ollama), *Test Connection*, then choose which models are selectable.
 2. Watch the **top-bar readiness badges** — one per source: `XAI TOKEN`, `OAUTH 2.0`, `GROK CLI`, `LOCAL`.

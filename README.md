@@ -61,7 +61,7 @@ Then open **Settings** and connect a model source (any one works):
 | Source | How |
 | --- | --- |
 | **xAI API key** | Paste your `xai-…` key from [console.x.ai](https://console.x.ai) → *Save & Validate* |
-| **OAuth 2.0 with X** | *Sign in with X* → complete login at `accounts.x.ai` |
+| **OAuth 2.0 with X** | *Sign in with X* → a popup opens `accounts.x.ai`, then closes itself — tokens cached & auto-refreshed, nothing to paste |
 | **Grok CLI** | Install the `grok` CLI — detected automatically from PATH |
 | **Local models** | Enable local models and point at any OpenAI-compatible server |
 

@@ -290,7 +290,11 @@ async function runApiRouteTests() {
     const cbRes = await callbackRoute(new NextRequest(
       `http://127.0.0.1:3000/api/xai-oauth/callback?code=cb-code&state=${pending?.state || ''}`,
     ));
-    assert(cbRes.status === 307 || cbRes.status === 302, 'GET /callback redirects after exchange');
+    assert(cbRes.status === 200, 'GET /callback returns the hand-back page after exchange');
+    const cbHtml = await cbRes.text();
+    assert(cbHtml.includes('shiba-oauth:connected'), 'callback page announces success to the opener');
+    assert(cbHtml.includes('window.close'), 'callback popup closes itself');
+    assert(cbHtml.includes('/settings?oauth=connected'), 'callback falls back to same-tab return');
 
     setTokenFetcher(null);
   });

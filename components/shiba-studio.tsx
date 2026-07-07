@@ -165,6 +165,17 @@ export default function ShibaStudio() {
     return () => stopOAuthPolling();
   }, [stopOAuthPolling]);
 
+  // The OAuth popup's callback page announces success the instant tokens are
+  // stored — no waiting on the status poll (which stays as the fallback).
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data === 'shiba-oauth:connected') void handleOAuthConnected();
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [handleOAuthConnected]);
+
   useEffect(() => {
     if (tab === 'settings') void refreshOAuthStatus();
   }, [tab]);
@@ -205,6 +216,9 @@ export default function ShibaStudio() {
   // Execution Trace lives in a modal — opened manually, on Run now, or by a
   // /automations?run=<id> deep link. The page itself stays uncluttered.
   const [showTraceModal, setShowTraceModal] = useState(false);
+  // First-run banner stays dismissed across visits once closed.
+  const [welcomeDismissed, setWelcomeDismissed] = useState<boolean>(() =>
+    typeof window !== 'undefined' && window.localStorage.getItem('shiba-welcome') === 'dismissed');
   // Desktop sidebar collapse to an icon rail — remembered across visits.
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() =>
     typeof window !== 'undefined' && window.localStorage.getItem('shiba-nav') === 'collapsed');
@@ -1232,6 +1246,11 @@ export default function ShibaStudio() {
 
   async function startOAuthLogin() {
     setOauthStarting(true);
+    // The popup MUST open synchronously with the click — blockers kill
+    // window.open calls made after an await. It starts blank and is pointed
+    // at accounts.x.ai once the PKCE flow is prepared; the callback page
+    // postMessages back and closes itself, so nothing is ever pasted.
+    const popup = window.open('about:blank', 'shiba-oauth', 'width=520,height=760,menubar=no,toolbar=no,location=yes');
     try {
       const res = await fetch('/api/xai-oauth/start', {
         method: 'POST',
@@ -1240,10 +1259,18 @@ export default function ShibaStudio() {
       });
       const data = await res.json();
       if (!data.ok || !data.authorizeUrl) throw new Error(data.error || 'Failed to start OAuth');
-      window.open(data.authorizeUrl, '_blank', 'noopener,noreferrer');
-      startOAuthStatusPolling();
-      toast.success('Sign in at accounts.x.ai — this tab will update when connected');
+      if (popup && !popup.closed) {
+        popup.location.href = data.authorizeUrl;
+        popup.focus();
+        startOAuthStatusPolling();
+        toast.success('Approve the sign-in in the popup — this window updates by itself');
+      } else {
+        // Popup blocked → same-tab redirect; the callback page routes back here.
+        window.location.assign(data.authorizeUrl);
+        return;
+      }
     } catch (e: unknown) {
+      try { popup?.close(); } catch { /* already gone */ }
       toast.error(e instanceof Error ? e.message : 'OAuth start failed');
     }
     setOauthStarting(false);
@@ -1836,6 +1863,38 @@ export default function ShibaStudio() {
           {tab === 'dashboard' && (
             <div className="relative dashboard-page">
             <div className="space-y-5 relative z-[1]">
+              {/* First-run: nothing connected yet → one-click OAuth, no key hunting */}
+              {config && !(config as any).hasCloudAuth && !oauthStatus.connected && !welcomeDismissed && (
+                <div className="grok-card p-6 relative">
+                  <button
+                    type="button"
+                    className="grok-btn grok-btn-ghost p-1 absolute top-3 right-3"
+                    onClick={() => { setWelcomeDismissed(true); try { window.localStorage.setItem('shiba-welcome', 'dismissed'); } catch { /* private mode */ } }}
+                    title="Dismiss — you can always connect from Settings"
+                    aria-label="Dismiss welcome banner"
+                  >
+                    <X size={14} />
+                  </button>
+                  <div className="text-xl font-semibold tracking-tight">Connect Grok in one click</div>
+                  <div className="text-sm text-muted mt-1.5 max-w-2xl">
+                    Sign in with your X account — a popup opens the official <span className="font-mono">accounts.x.ai</span> login
+                    and closes itself when done. Tokens are cached encrypted on this machine and refresh automatically,
+                    and your SuperGrok / Premium+ quota is used. No API keys to create, copy, or paste.
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <button onClick={startOAuthLogin} disabled={oauthStarting} className="grok-btn grok-btn-primary">
+                      {oauthStarting ? 'Opening accounts.x.ai…' : '🔑 Sign in with X'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigateToTab('settings')}
+                      className="text-xs text-dim underline underline-offset-2 hover:text-primary"
+                    >
+                      or paste an xAI API key in Settings
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="flex flex-col lg:flex-row gap-4">
                 <div className="grok-card p-6 flex-1">
                   <div className="hero-eyebrow">{THEME_IDENTITY.heroEyebrow}</div>
@@ -2762,8 +2821,9 @@ export default function ShibaStudio() {
                     </div>
                   </div>
                   <div className="text-xs text-dim mb-3">
-                    Sign in via <span className="font-mono">accounts.x.ai</span>.
-                    Some tiers can return HTTP 403 after login — keep the API key as fallback.
+                    One click, zero config — a popup opens the official <span className="font-mono">accounts.x.ai</span> login,
+                    then closes itself. Tokens are cached encrypted on this machine and refresh automatically; your
+                    SuperGrok / Premium+ quota is used. Nothing to copy or paste.
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mb-3">
                     {oauthStatus.connected ? (
@@ -2774,21 +2834,27 @@ export default function ShibaStudio() {
                       <span className="status-pill text-dim">Not connected</span>
                     )}
                     <button onClick={startOAuthLogin} disabled={oauthStarting} className="grok-btn grok-btn-primary text-xs">
-                      {oauthStarting ? 'Starting…' : 'Sign in with X'}
+                      {oauthStarting ? 'Opening accounts.x.ai…' : '🔑 Sign in with X'}
                     </button>
                     {oauthStatus.connected && (
                       <button onClick={disconnectOAuth} className="grok-btn grok-btn-ghost text-xs text-error">Disconnect</button>
                     )}
                   </div>
-                  <input
-                    value={oauthCallbackInput}
-                    onChange={(e) => setOauthCallbackInput(e.target.value)}
-                    placeholder="Paste callback URL or authorization code (manual fallback)"
-                    className="grok-input mb-2 text-xs font-mono"
-                  />
-                  <button onClick={exchangeOAuthCallback} disabled={!oauthCallbackInput.trim()} className="grok-btn grok-btn-secondary text-xs">
-                    Complete OAuth
-                  </button>
+                  <details className="text-xs">
+                    <summary className="text-dim cursor-pointer select-none">Popup didn&apos;t come back? Manual fallback</summary>
+                    <div className="mt-2">
+                      <input
+                        value={oauthCallbackInput}
+                        onChange={(e) => setOauthCallbackInput(e.target.value)}
+                        placeholder="Paste the callback URL or authorization code"
+                        className="grok-input mb-2 text-xs font-mono"
+                      />
+                      <button onClick={exchangeOAuthCallback} disabled={!oauthCallbackInput.trim()} className="grok-btn grok-btn-secondary text-xs">
+                        Complete OAuth
+                      </button>
+                      <div className="text-[10px] text-dim mt-2">Some tiers can return HTTP 403 after login — keep an API key as fallback.</div>
+                    </div>
+                  </details>
                   {(config as any)?.hasKey && oauthStatus.connected && (
                     <div className="mt-4">
                       <div className="grok-label text-xs">Cloud auth preference (both configured)</div>
