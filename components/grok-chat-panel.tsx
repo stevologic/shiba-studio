@@ -8,6 +8,7 @@ import {
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import ChatMarkdown from '@/components/chat-markdown-lazy';
+import ShibaMark from '@/components/shiba-mark';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
 
 const SubBrowser = dynamic(() => import('@/components/sub-browser'));
@@ -1459,7 +1460,7 @@ export default function GrokChatPanel({
         {!hasChatHistory && !streaming && chatTarget === 'grok' && (
           <div className="chat-empty-hero">
             <div className="chat-empty-orb" aria-hidden>
-              <Sparkles size={22} />
+              <ShibaMark size={26} />
             </div>
             <div className="chat-empty-title">Ask Grok anything</div>
             <div className="chat-empty-sub">

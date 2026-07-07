@@ -1724,9 +1724,9 @@ export default function ShibaStudio() {
         )}
 
         {!navCollapsed && (
-          <div className="p-4 border-t border-default text-xs text-dim">
+          <div className={`sidebar-foot p-4 border-t border-default text-xs text-dim ${process.env.NODE_ENV === 'development' ? 'sidebar-foot-dev' : ''}`}>
             localhost • Cloud + local models
-            <div className="mt-1 text-[10px]">SpaceX-grade focus • xAI cloud or local runtime</div>
+            <div className="mt-1 text-[10px]">Chat that acts • agents that run while you sleep</div>
           </div>
         )}
       </div>
@@ -3043,7 +3043,7 @@ export default function ShibaStudio() {
         {/* Footer bar */}
         <div className="footer-bar h-9 px-4 text-[10px] flex items-center text-dim justify-between gap-3 relative z-[1]">
           <div className="truncate" title={`Running source commit ${GIT_COMMIT} (v${APP_VERSION})`}>
-            Shiba Studio <span className="font-mono">{GIT_COMMIT}</span> — xAI Grok agent studio • SpaceX-inspired mission control
+            Shiba Studio <span className="font-mono">{GIT_COMMIT}</span> — the localhost Grok agent studio • nothing leaves your box
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <a

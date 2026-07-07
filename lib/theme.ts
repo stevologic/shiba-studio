@@ -31,13 +31,13 @@ export const THEME_IDENTITY = {
   brandName: 'Shiba Studio',
   sidebarTagline: "Powered by El0n's AI",
   footerPoweredBy: 'Grok / xAI',
-  heroEyebrow: 'MISSION CONTROL — GROK × xAI',
-  heroTitle: 'Aerospace-minimal agent studio.',
+  heroEyebrow: 'GROK × xAI — 100% LOCAL',
+  heroTitle: 'Your Grok agent studio. On your machine.',
   heroSubtitle:
-    'Orchestrate Grok agents with SpaceX-grade focus — code, browser control, integrations, and scheduling. Powered exclusively by xAI.',
+    'Build, orchestrate, and schedule AI agents with full computer use — chat that acts, a sub-browser that annotates your app, and automations that run while you sleep. Nothing leaves your box.',
   metadataTitle: 'Shiba Studio • xAI Grok Agent Platform',
   metadataDescription:
-    'SpaceX-inspired localhost Grok agent studio. Build, orchestrate, and schedule xAI-powered agents with full computer use.',
+    'The localhost Grok agent studio. Build, orchestrate, and schedule xAI-powered agents with full computer use.',
 } as const;
 
 /** Relative luminance (sRGB); values < 0.15 indicate near-black UI surfaces. */

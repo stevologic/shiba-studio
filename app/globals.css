@@ -210,6 +210,17 @@ body::before {
   flex-shrink: 0;
 }
 
+/* Dev only: the Next.js devtools badge floats at the viewport's bottom-left.
+   Indent the sidebar footer past it and center the text on the badge's row so
+   the overlay reads as part of the footer instead of covering the text. */
+.sidebar-foot-dev {
+  padding-left: 3.4rem;
+  min-height: 3.6rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
 .nav-collapse-btn {
   display: inline-flex;
   align-items: center;
