@@ -144,7 +144,10 @@ export async function detectGrokCli(force = false): Promise<GrokCliStatus> {
 export function grokCliModelId(modelRef?: string): string | undefined {
   if (!modelRef?.trim()) return undefined;
   const ref = parseModelRef(modelRef);
-  if (ref.provider === 'cloud') return ref.id;
+  // Accept cloud:/cli:/grok-cli: or bare ids — CLI always wants the bare model name.
+  if (ref.provider === 'cloud' || ref.provider === 'cli' || ref.provider === 'local') {
+    return ref.id || undefined;
+  }
   return ref.id || undefined;
 }
 
@@ -447,7 +450,9 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
     }
 
     if (exitCode === 0 || gotStdout) {
-      yield { type: 'done', model: `grok-cli:${model ? grokCliModelId(model) : 'default'}` };
+      // Prefer cli: so the model badge shows "CLI" (legacy grok-cli: still parses).
+      const bare = model ? grokCliModelId(model) : 'default';
+      yield { type: 'done', model: `cli:${bare || 'default'}` };
       return;
     }
 

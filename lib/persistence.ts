@@ -12,6 +12,7 @@ import { decryptSecret, encryptSecret, isEncryptedSecret } from './secure-store'
  */
 const SENSITIVE_CONFIG_PATHS = [
   'xaiApiKey',
+  'xaiManagementKey',
   'integrations.github.token',
   'integrations.slack.token',
   'integrations.googledrive.accessToken',
@@ -144,6 +145,7 @@ const DEFAULT_CONFIG: AppConfig = {
   localModelAllowlist: [],
   cloudAuthMode: 'api_key',
   toolApprovalMode: 'yolo',
+  disabledTools: [],
   globalInstructions: '',
   useAgentsMd: true,
 };

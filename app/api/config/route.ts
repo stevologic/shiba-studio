@@ -12,7 +12,11 @@ export async function GET() {
   const safe = {
     ...cfg,
     xaiApiKey: cfg.xaiApiKey ? (cfg.xaiApiKey.slice(0, 6) + '…' + cfg.xaiApiKey.slice(-4)) : '',
+    xaiManagementKey: cfg.xaiManagementKey
+      ? (cfg.xaiManagementKey.slice(0, 6) + '…' + cfg.xaiManagementKey.slice(-4))
+      : '',
     hasKey: !!cfg.xaiApiKey,
+    hasManagementKey: !!cfg.xaiManagementKey?.trim(),
     hasOAuth: oauth.connected,
     hasCloudAuth: auth.hasCloudAuth,
     cloudAuthMode: (cfg.cloudAuthMode || 'api_key') as CloudAuthMode,
@@ -30,9 +34,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const changedKeys = [
-    'xaiApiKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel', 'localGrokEnabled',
-    'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode', 'globalInstructions', 'useAgentsMd',
-    'usageBudgetUsd',
+    'xaiApiKey', 'xaiManagementKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel',
+    'localGrokEnabled', 'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode',
+    'disabledTools', 'globalInstructions', 'useAgentsMd', 'usageBudgetUsd',
   ].filter((k) => body[k] !== undefined);
   if (changedKeys.length) {
     const { audit } = await import('@/lib/audit-log');
@@ -42,6 +46,17 @@ export async function POST(req: NextRequest) {
     const cfg = await saveConfig({ xaiApiKey: body.xaiApiKey });
     const auth = await resolveCloudBearer(cfg);
     return NextResponse.json({ ok: true, hasKey: !!cfg.xaiApiKey, hasCloudAuth: auth.hasCloudAuth });
+  }
+  if (body.xaiManagementKey !== undefined) {
+    const cfg = await saveConfig({ xaiManagementKey: String(body.xaiManagementKey || '') });
+    try {
+      const { clearXaiUsageCache } = await import('@/lib/xai-billing-usage');
+      clearXaiUsageCache();
+    } catch { /* */ }
+    return NextResponse.json({
+      ok: true,
+      hasManagementKey: !!cfg.xaiManagementKey?.trim(),
+    });
   }
   if (body.cloudAuthMode === 'api_key' || body.cloudAuthMode === 'oauth') {
     const cfg = await saveConfig({ cloudAuthMode: body.cloudAuthMode });

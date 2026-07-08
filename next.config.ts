@@ -1,15 +1,18 @@
 import type { NextConfig } from 'next';
 import { execSync } from 'child_process';
 
-// Resolved once when the server/build starts, so the sidebar can show exactly
-// which commit of the source is running. Falls back for non-git installs
-// (release tarballs) to an env override or "unreleased".
+// Initial bake only — the UI prefers live SHAs from GET /api/version which
+// re-reads git HEAD from the process project root (keeps pace with local commits
+// without restarting the Next server). Env override for non-git installs.
 function resolveGitCommit(): string {
   if (process.env.SHIBA_GIT_COMMIT) return process.env.SHIBA_GIT_COMMIT;
   try {
-    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim() || 'unreleased';
+    return execSync('git rev-parse --short HEAD', {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+      windowsHide: true,
+    }).toString().trim() || 'unreleased';
   } catch {
     return 'unreleased';
   }
@@ -30,8 +33,11 @@ const nextConfig: NextConfig = {
     'octokit',
     '@modelcontextprotocol/sdk',
     '@slack/web-api',
+    'node-pty',
+    'ws',
   ],
   env: {
+    // Fallback for first paint before /api/version returns; not the source of truth.
     NEXT_PUBLIC_GIT_COMMIT: resolveGitCommit(),
   },
 };

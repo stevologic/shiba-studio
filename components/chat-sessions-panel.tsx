@@ -66,9 +66,13 @@ export default function ChatSessionsPanel({
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
-  // Session rail collapse — remembered across visits.
-  const [railOpen, setRailOpen] = useState<boolean>(() =>
-    typeof window === 'undefined' ? true : window.localStorage.getItem('shiba-chat-rail') !== 'closed');
+  // Session rail collapse — SSR default open; restore preference after mount.
+  const [railOpen, setRailOpen] = useState(true);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem('shiba-chat-rail') === 'closed') setRailOpen(false);
+    } catch { /* private mode */ }
+  }, []);
 
   // Parent callbacks via refs — never put them in effect deps (identity churn
   // used to re-bootstrap /chat on every parent render).
@@ -593,7 +597,7 @@ export default function ChatSessionsPanel({
         </div>
       )}
 
-      <div className="flex flex-col flex-1 min-w-0 max-w-4xl mx-auto w-full">
+      <div className="chat-sessions-main flex flex-col flex-1 min-w-0 w-full">
       {activeSession && (
         <GrokChatPanel
           key={activeSession.id}

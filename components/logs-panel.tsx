@@ -5,12 +5,20 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Download, RefreshCw, ScrollText, SquareArrowOutUpRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, RefreshCw, ScrollText, Search, SquareArrowOutUpRight, X } from 'lucide-react';
 import { modelDisplayName } from '@/lib/model-providers';
 import { MISSING_AGENT_AVATAR_PATH, resolveAgentAvatarPath } from '@/lib/agent-avatars';
 import InfoHint from '@/components/info-hint';
 
 const PAGE_SIZE = 100;
+const SEARCH_DEBOUNCE_MS = 320;
+
+/** Clamp a 1-based page number to a valid zero-based index. */
+function clampPageIndex(pageOneBased: number, pageCount: number): number {
+  if (!Number.isFinite(pageOneBased)) return 0;
+  const n = Math.floor(pageOneBased);
+  return Math.min(pageCount - 1, Math.max(0, n - 1));
+}
 
 interface LogEntry {
   id: number;
@@ -58,13 +66,34 @@ export default function LogsPanel() {
   const [entries, setEntries] = useState<LogEntry[] | null>(null);
   const [total, setTotal] = useState(0);
   const [category, setCategory] = useState<string>('all');
+  /** What the user is typing */
+  const [searchDraft, setSearchDraft] = useState('');
+  /** Debounced query sent to the API (matches any column) */
+  const [searchQ, setSearchQ] = useState('');
   const [page, setPage] = useState(0);
+  /** Draft for the jump-to-page field (1-based string while editing). */
+  const [pageInput, setPageInput] = useState('1');
   const [reloadKey, setReloadKey] = useState(0);
   // Flipped on synchronously in the event handlers below (never in the
   // effect) so pager/refresh buttons disable while a fetch is in flight.
   const [loading, setLoading] = useState(false);
   // Live agents, for avatars in the Agent column — deleted agents get the UFO.
   const [agentsById, setAgentsById] = useState<Map<string, { id: string; avatar?: string }>>(new Map());
+
+  // Debounce free-text search; reset to page 1 when the query settles.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      const next = searchDraft.trim();
+      setSearchQ((prev) => {
+        if (prev === next) return prev;
+        setLoading(true);
+        setPage(0);
+        setPageInput('1');
+        return next;
+      });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [searchDraft]);
 
   useEffect(() => {
     let stale = false;
@@ -91,6 +120,7 @@ export default function LogsPanel() {
           offset: String(page * PAGE_SIZE),
         });
         if (category !== 'all') params.set('category', category);
+        if (searchQ) params.set('q', searchQ);
         const res = await fetch(`/api/logs?${params}`);
         const data = await res.json();
         if (!stale && data.ok) {
@@ -103,17 +133,51 @@ export default function LogsPanel() {
       if (!stale) setLoading(false);
     })();
     return () => { stale = true; };
-  }, [category, page, reloadKey]);
+  }, [category, page, reloadKey, searchQ]);
 
   function changeCategory(next: string) {
     setLoading(true);
     setCategory(next);
     setPage(0);
+    setPageInput('1');
+  }
+
+  function clearSearch() {
+    setSearchDraft('');
+    if (searchQ) {
+      setLoading(true);
+      setSearchQ('');
+      setPage(0);
+      setPageInput('1');
+    }
   }
 
   function goToPage(next: number) {
+    const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const clamped = Math.min(pageCount - 1, Math.max(0, next));
     setLoading(true);
-    setPage(next);
+    setPage(clamped);
+    setPageInput(String(clamped + 1));
+  }
+
+  function commitPageInput() {
+    const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const raw = pageInput.trim();
+    if (!raw) {
+      setPageInput(String(page + 1));
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      setPageInput(String(page + 1));
+      return;
+    }
+    const next = clampPageIndex(parsed, pageCount);
+    if (next === page) {
+      setPageInput(String(page + 1));
+      return;
+    }
+    goToPage(next);
   }
 
   function refresh() {
@@ -126,9 +190,15 @@ export default function LogsPanel() {
   const rangeStart = total === 0 ? 0 : page * PAGE_SIZE + 1;
   const rangeEnd = Math.min(total, page * PAGE_SIZE + loaded.length);
 
+  // Keep the jump field in sync when Prev/Next (or external) changes `page`.
+  useEffect(() => {
+    setPageInput(String(page + 1));
+  }, [page]);
+
   function exportLogs(format: 'csv' | 'json') {
     const params = new URLSearchParams({ format });
     if (category !== 'all') params.set('category', category);
+    if (searchQ) params.set('q', searchQ);
     const a = document.createElement('a');
     a.href = `/api/logs?${params}`;
     a.download = '';
@@ -145,16 +215,19 @@ export default function LogsPanel() {
             <InfoHint text="Every consequential action lands here — runs, chats, config, integrations, sync. Run entries link to their full execution log; a UFO avatar means the agent has since been deleted." />
           </div>
           <div className="text-sm text-muted mt-1">
-            Full audit trail of actions taken — {total.toLocaleString()} event{total === 1 ? '' : 's'} recorded.
+            Full audit trail of actions taken —
+            {searchQ
+              ? ` ${total.toLocaleString()} match${total === 1 ? '' : 'es'} for “${searchQ}”`
+              : ` ${total.toLocaleString()} event${total === 1 ? '' : 's'} recorded`}.
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={() => exportLogs('csv')}
             disabled={total === 0}
             className="grok-btn grok-btn-secondary text-xs"
-            title={`Download the ${category === 'all' ? 'full' : `"${category}"`} audit trail as CSV`}
+            title={`Download the ${category === 'all' ? 'full' : `"${category}"`}${searchQ ? ' matching' : ''} audit trail as CSV`}
           >
             <Download size={14} /> CSV
           </button>
@@ -163,7 +236,7 @@ export default function LogsPanel() {
             onClick={() => exportLogs('json')}
             disabled={total === 0}
             className="grok-btn grok-btn-secondary text-xs"
-            title={`Download the ${category === 'all' ? 'full' : `"${category}"`} audit trail as JSON`}
+            title={`Download the ${category === 'all' ? 'full' : `"${category}"`}${searchQ ? ' matching' : ''} audit trail as JSON`}
           >
             <Download size={14} /> JSON
           </button>
@@ -177,6 +250,43 @@ export default function LogsPanel() {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="logs-search-wrap">
+          <Search size={14} className="logs-search-icon" aria-hidden />
+          <input
+            type="search"
+            value={searchDraft}
+            onChange={(e) => setSearchDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && searchDraft) {
+                e.preventDefault();
+                clearSearch();
+              }
+            }}
+            placeholder="Search any column…"
+            className="grok-input logs-search-input"
+            aria-label="Search logs in any column"
+            disabled={loading && entries === null}
+          />
+          {searchDraft ? (
+            <button
+              type="button"
+              className="logs-search-clear"
+              onClick={clearSearch}
+              title="Clear search"
+              aria-label="Clear search"
+            >
+              <X size={14} />
+            </button>
+          ) : null}
+        </div>
+        {searchQ ? (
+          <span className="text-[11px] text-dim">
+            Searching when, category, action, agent/model, detail, and meta
+          </span>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 mb-5">
@@ -196,7 +306,16 @@ export default function LogsPanel() {
         <div className="data-loading-row py-8"><span className="data-spinner data-spinner-lg" /> Loading audit trail…</div>
       ) : loaded.length === 0 ? (
         <div className="grok-card p-8 text-center text-dim text-sm">
-          No events{category !== 'all' ? ` in "${category}"` : ''} yet — actions you take will appear here.
+          {searchQ
+            ? `No events match “${searchQ}”${category !== 'all' ? ` in “${category}”` : ''}.`
+            : `No events${category !== 'all' ? ` in "${category}"` : ''} yet — actions you take will appear here.`}
+          {searchQ ? (
+            <div className="mt-3">
+              <button type="button" className="grok-btn grok-btn-secondary text-xs" onClick={clearSearch}>
+                Clear search
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="grok-card logs-table-wrap">
@@ -287,9 +406,33 @@ export default function LogsPanel() {
             >
               <ChevronLeft size={14} /> Prev
             </button>
-            <span className="px-2 font-mono">
-              {page + 1} / {pageCount}
-            </span>
+            <label className="flex items-center gap-1.5 px-1 font-mono" title="Jump to page">
+              <span className="text-dim">Page</span>
+              <input
+                type="number"
+                min={1}
+                max={pageCount}
+                inputMode="numeric"
+                value={pageInput}
+                disabled={loading}
+                onChange={(e) => setPageInput(e.target.value)}
+                onBlur={() => commitPageInput()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    (e.target as HTMLInputElement).blur();
+                    commitPageInput();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setPageInput(String(page + 1));
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                className="grok-input logs-page-input font-mono text-xs"
+                aria-label={`Page number, 1 to ${pageCount}`}
+              />
+              <span className="text-dim whitespace-nowrap">/ {pageCount}</span>
+            </label>
             <button
               type="button"
               onClick={() => goToPage(Math.min(pageCount - 1, page + 1))}

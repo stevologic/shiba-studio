@@ -1,7 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getUsageSummary } from '@/lib/usage';
 import { loadConfig } from '@/lib/persistence';
 import { XAI_BASE } from '@/lib/grok-client';
+import { clearXaiUsageCache, fetchXaiAccountUsage } from '@/lib/xai-billing-usage';
 
 interface LiveXaiStatus {
   connected: boolean;
@@ -13,9 +14,9 @@ interface LiveXaiStatus {
 }
 
 /**
- * Live probe against the xAI API. Token counts in the summary are already live —
- * they come from the `usage` field of every real xAI API response — and this
- * confirms the account link and current model catalog in real time.
+ * Live probe against the xAI inference API — confirms the account link and
+ * model catalog. Actual billing usage is loaded separately via the management
+ * billing API (see xaiAccount in the response).
  */
 async function probeXaiLive(): Promise<LiveXaiStatus> {
   const checkedAt = new Date().toISOString();
@@ -61,15 +62,35 @@ async function probeXaiLive(): Promise<LiveXaiStatus> {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const force = req.nextUrl.searchParams.get('refresh') === '1'
+      || req.nextUrl.searchParams.get('force') === '1';
+    if (force) clearXaiUsageCache();
+
     const cfg = await loadConfig();
     const defaultModel = cfg.defaultGrokModel?.trim() || 'cloud:grok-4';
-    const [summary, live] = await Promise.all([
+    const [summary, live, xaiAccount] = await Promise.all([
       getUsageSummary(defaultModel),
       probeXaiLive(),
+      fetchXaiAccountUsage({ force, days: 30 }),
     ]);
-    return NextResponse.json({ ok: true, ...summary, live });
+
+    // Prefer xAI month-to-date for the "authoritative" cost badge consumers.
+    const authoritativeCostUsd = xaiAccount.available && xaiAccount.monthToDateCostUsd != null
+      ? xaiAccount.monthToDateCostUsd
+      : summary.estimatedCostUsd;
+
+    return NextResponse.json({
+      ok: true,
+      ...summary,
+      live,
+      xaiAccount,
+      authoritativeCostUsd,
+      pricingNote: xaiAccount.available
+        ? `${xaiAccount.note} Studio-local metering (below) attributes tokens to chat/agents in this app only.`
+        : summary.pricingNote,
+    });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Failed to load usage';
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });

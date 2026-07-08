@@ -37,16 +37,47 @@ export function audit(
   }
 }
 
+/** Escape LIKE wildcards so user input is treated as a literal substring. */
+function escapeLike(raw: string): string {
+  return raw.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
 export function listAuditLogs(opts: {
   limit?: number;
   offset?: number;
   category?: string;
+  /** Case-insensitive substring match across all columns (and meta JSON). */
+  q?: string;
 } = {}): { entries: AuditEntry[]; total: number } {
   const db = getDb();
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
   const offset = Math.max(opts.offset ?? 0, 0);
-  const where = opts.category ? 'WHERE category = ?' : '';
-  const params = opts.category ? [opts.category] : [];
+
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (opts.category) {
+    clauses.push('category = ?');
+    params.push(opts.category);
+  }
+
+  const q = typeof opts.q === 'string' ? opts.q.trim() : '';
+  if (q) {
+    // Search every column the UI shows: when (ts), category, action, agent/model
+    // (inside meta), detail, plus raw meta and id for power users.
+    const like = `%${escapeLike(q)}%`;
+    clauses.push(`(
+      ts LIKE ? ESCAPE '\\'
+      OR category LIKE ? ESCAPE '\\'
+      OR action LIKE ? ESCAPE '\\'
+      OR IFNULL(detail, '') LIKE ? ESCAPE '\\'
+      OR IFNULL(meta, '') LIKE ? ESCAPE '\\'
+      OR CAST(id AS TEXT) LIKE ? ESCAPE '\\'
+    )`);
+    params.push(like, like, like, like, like, like);
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM audit_log ${where}`).get(...params) as { n: number }).n;
   const rows = db

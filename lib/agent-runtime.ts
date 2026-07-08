@@ -53,8 +53,26 @@ export function getToolDefinitions(
       type: 'function',
       function: {
         name: 'shell_exec',
-        description: 'Run a shell command in the agent workspace (node, npm, git, python etc). Keep commands safe and short.',
+        description: 'Run a one-shot shell command in the agent workspace (node, npm, git, python etc). Keep commands safe and short. Does not use the Studio Terminal UI.',
         parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'terminal_exec',
+        description:
+          'Run a command in the shared Studio Terminal (the interactive PTY panel the user can open with Ctrl+`). ' +
+          'The user sees the command and output live. Prefer this when the user asked to use the terminal, for multi-step shell work they should watch, or to leave cwd/env state for follow-up commands. ' +
+          'Use shell_exec for silent one-shot workspace commands. Avoid interactive full-screen apps (vim, less, top).',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: 'Shell command to run in the Studio Terminal' },
+            timeoutMs: { type: 'number', description: 'Optional timeout in ms (default 45000, max 180000)' },
+          },
+          required: ['command'],
+        },
       },
     },
     {
@@ -557,6 +575,11 @@ async function* agentRunGenerator(
   if (cliStatus.installed && origin === 'local') tools.push(grokCliToolDefinition());
   const mcpServers = origin === 'local' ? await listEnabledMcpServers() : [];
   if (mcpServers.length) tools.push(...mcpToolDefinitions());
+  // Honor Capabilities → Tools toggles (global disabled list).
+  const { filterToolsByDisabled } = await import('./disabled-tools');
+  const enabledTools = filterToolsByDisabled(tools, cfg.disabledTools);
+  tools.length = 0;
+  tools.push(...enabledTools);
   const globalUploadsPath = await getGlobalUploadsDir();
   const { buildGlobalInstructionsContext } = await import('./global-instructions');
   const globalInstructionsText = await buildGlobalInstructionsContext(cfg);

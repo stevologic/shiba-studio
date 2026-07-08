@@ -2,7 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Check, Code2, MessageSquare, Palette, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, Users, Wand2, Zap,
+  Check, ChevronDown, ChevronUp, Code2, MessageSquare, Palette, Pencil, Plus,
+  RefreshCw, Search, Sparkles, Trash2, Users, Wand2, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { confirmDialog } from '@/components/confirm-dialog';
@@ -32,6 +33,15 @@ const CATEGORY_ICONS: Record<string, React.ComponentType<{ size?: number | strin
   creative: Palette,
 };
 
+const CATEGORY_LABELS: Record<string, string> = {
+  all: 'All',
+  coding: 'Coding',
+  research: 'Research',
+  automation: 'Automation',
+  communication: 'Communication',
+  creative: 'Creative',
+};
+
 interface EditorState {
   mode: 'create' | 'edit';
   id?: string;
@@ -52,6 +62,7 @@ export default function SkillsBrowser({
   const [manageSkill, setManageSkill] = useState<UiSkill | null>(null);
   const [togglingAgent, setTogglingAgent] = useState<string | null>(null);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const loadSkills = useCallback(async () => {
     try {
@@ -81,11 +92,16 @@ export default function SkillsBrowser({
     return skills.filter((s) => {
       if (category !== 'all' && s.category !== category) return false;
       if (!q) return true;
-      return [s.name, s.id, s.description, s.category].join(' ').toLowerCase().includes(q);
+      return [s.name, s.id, s.description, s.category, s.promptHint].join(' ').toLowerCase().includes(q);
     });
   }, [skills, query, category]);
 
   const categories = ['all', ...SKILL_CATEGORIES];
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: skills.length };
+    for (const c of SKILL_CATEGORIES) counts[c] = skills.filter((s) => s.category === c).length;
+    return counts;
+  }, [skills]);
 
   async function saveEditor() {
     if (!editor || saving) return;
@@ -174,14 +190,17 @@ export default function SkillsBrowser({
       onClick={() => setEditor(null)}
     >
       <div
-        className="modal modal-pop w-full max-w-md p-6"
+        className="modal modal-pop w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label={editor.mode === 'create' ? 'New skill' : 'Edit skill'}
       >
-        <div className="text-lg font-semibold mb-4">
-          {editor.mode === 'create' ? 'New skill' : `Edit "${editor.name || 'skill'}"`}
+        <div className="text-lg font-semibold mb-1">
+          {editor.mode === 'create' ? 'New skill' : `Edit “${editor.name || 'skill'}”`}
+        </div>
+        <div className="text-xs text-dim mb-4">
+          Description is what you see here. Prompt guidance is injected into the agent when this skill is active.
         </div>
         <div className="space-y-3">
           <div>
@@ -202,40 +221,35 @@ export default function SkillsBrowser({
               onChange={(e) => setEditor((p) => p && ({ ...p, category: e.target.value as SkillCategory }))}
             >
               {SKILL_CATEGORIES.map((c) => (
-                <option key={c} value={c}>{c}</option>
+                <option key={c} value={c}>{CATEGORY_LABELS[c] || c}</option>
               ))}
             </select>
           </div>
           <div>
-            <div className="grok-label">Description</div>
-            <input
-              className="grok-input"
+            <div className="grok-label">Short description</div>
+            <textarea
+              className="grok-input min-h-[4.5rem] resize-y"
               value={editor.description}
-              placeholder="One line on what this skill is for"
+              placeholder="One or two sentences people can read at a glance"
               onChange={(e) => setEditor((p) => p && ({ ...p, description: e.target.value }))}
             />
           </div>
           <div>
             <div className="grok-label">Prompt guidance</div>
             <textarea
-              className="grok-input schedule-instructions-input text-xs"
+              className="grok-input min-h-[8rem] resize-y font-mono text-xs leading-relaxed"
               value={editor.promptHint}
-              placeholder="Injected into the agent's system prompt when this skill is active, e.g. 'Always validate API responses; retry idempotent calls once.'"
+              placeholder="Detailed instructions injected into the agent system prompt when this skill is on…"
               onChange={(e) => setEditor((p) => p && ({ ...p, promptHint: e.target.value }))}
             />
           </div>
         </div>
-        <div className="flex gap-2.5 mt-5">
-          <button type="button" className="grok-btn grok-btn-secondary flex-1" onClick={() => setEditor(null)}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="grok-btn grok-btn-primary flex-1"
-            disabled={saving || !editor.name.trim()}
-            onClick={saveEditor}
-          >
+        <div className="flex gap-2 mt-5">
+          <button type="button" className="grok-btn grok-btn-primary flex-1" disabled={saving} onClick={() => void saveEditor()}>
             {saving ? 'Saving…' : editor.mode === 'create' ? 'Create skill' : 'Save changes'}
+          </button>
+          <button type="button" className="grok-btn grok-btn-secondary" onClick={() => setEditor(null)}>
+            Cancel
           </button>
         </div>
       </div>
@@ -291,7 +305,7 @@ export default function SkillsBrowser({
     </div>
   );
 
-  // Compact variant — agent editor: chip grid of available capabilities.
+  // Compact variant — agent editor: readable list of capabilities.
   if (compact) {
     return (
       <div className="agent-skills-browser">
@@ -329,7 +343,7 @@ export default function SkillsBrowser({
                 className={`agent-skills-cat ${category === c ? 'active' : ''}`}
                 onClick={() => setCategory(c)}
               >
-                {c === 'all' ? 'All' : c}
+                {CATEGORY_LABELS[c] || c}
               </button>
             ))}
           </div>
@@ -372,113 +386,165 @@ export default function SkillsBrowser({
     );
   }
 
-  // Full-page variant — mirrors the Core Integrations / MCP Servers sections.
+  // Full-page variant — Capabilities: wide, readable skill cards (not MCP’s narrow grid).
   return (
-    <div className="mt-10 pt-8 border-t border-default">
+    <div className="skills-section mt-10 pt-8 border-t border-default">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
-        <div>
+        <div className="min-w-0">
           <div className="text-xl font-semibold flex items-center gap-2">
-            <Sparkles size={18} className="opacity-70" />
+            <Sparkles size={18} className="opacity-70 shrink-0" />
             Skills
           </div>
-          <div className="text-sm text-muted mt-1">
-            Reusable capability presets for agents — create your own or manage them from any agent&apos;s editor.
+          <div className="text-sm text-muted mt-1 max-w-2xl">
+            Capability presets agents can equip. Each skill injects focused prompt guidance when active — expand a card to read the full guidance.
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="grok-btn grok-btn-primary text-xs shrink-0"
+          onClick={() => setEditor({ mode: 'create', name: '', category: 'coding', description: '', promptHint: '' })}
+        >
+          <Plus size={13} /> New skill
+        </button>
+      </div>
+
+      <div className="skills-toolbar mb-4">
+        <div className="relative flex-1 min-w-[12rem] max-w-md">
+          <Search size={14} className="skills-toolbar-search-icon" />
           <input
-            className="grok-input text-xs w-[170px]"
-            placeholder="Search skills…"
+            className="grok-input text-sm pl-9"
+            placeholder="Search skills by name or description…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search skills"
           />
-          <select className="grok-select text-xs" value={category} onChange={(e) => setCategory(e.target.value)}>
-            {categories.map((c) => (
-              <option key={c} value={c}>{c === 'all' ? 'All categories' : c}</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="grok-btn grok-btn-primary text-xs"
-            onClick={() => setEditor({ mode: 'create', name: '', category: 'coding', description: '', promptHint: '' })}
-          >
-            <Plus size={13} /> New Skill
-          </button>
+        </div>
+        <div className="skills-cat-pills" role="tablist" aria-label="Skill categories">
+          {categories.map((c) => (
+            <button
+              key={c}
+              type="button"
+              role="tab"
+              aria-selected={category === c}
+              className={`skills-cat-pill ${category === c ? 'skills-cat-pill-active' : ''}`}
+              onClick={() => setCategory(c)}
+            >
+              {CATEGORY_LABELS[c] || c}
+              <span className="skills-cat-count">{categoryCounts[c] ?? 0}</span>
+            </button>
+          ))}
         </div>
       </div>
 
-      <div className="mcp-preset-grid">
-        {filtered.map((skill) => {
-          const has = installed.includes(skill.id);
-          const count = installedCounts?.[skill.id] ?? 0;
-          const Icon = CATEGORY_ICONS[skill.category] || Sparkles;
-          return (
-            <div key={skill.id} className={`mcp-preset-card grok-card p-4 text-left ${has ? 'mcp-preset-card-active' : ''}`}>
-              <div className="flex items-start gap-3">
-                <span className="skill-card-icon"><Icon size={16} /></span>
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium text-sm">
-                    {skill.name}
-                    {skill.custom && <span className="badge badge-muted ml-1.5 text-[9px] align-middle">custom</span>}
-                  </div>
-                  <div className="text-[10px] text-dim uppercase tracking-wide mt-0.5">{skill.category}</div>
-                  <div className="text-[11px] text-dim mt-1 line-clamp-2">{skill.description}</div>
-                  {has && (
-                    <div className="text-[10px] text-success mt-1">
-                      {count > 0 ? `Installed on ${count} agent${count === 1 ? '' : 's'}` : 'Installed'}
+      {filtered.length === 0 ? (
+        <div className="grok-card p-8 text-center text-sm text-dim">
+          No skills match{query ? ` “${query}”` : ''}. Try another category or create a new skill.
+        </div>
+      ) : (
+        <div className="skills-grid">
+          {filtered.map((skill) => {
+            const has = installed.includes(skill.id);
+            const count = installedCounts?.[skill.id] ?? 0;
+            const Icon = CATEGORY_ICONS[skill.category] || Sparkles;
+            const open = expandedId === skill.id;
+            return (
+              <article
+                key={skill.id}
+                className={`skills-card grok-card ${has ? 'skills-card-active' : ''} ${open ? 'skills-card-open' : ''}`}
+              >
+                <div className="skills-card-top">
+                  <span className={`skills-card-icon skills-card-icon-${skill.category}`}>
+                    <Icon size={18} />
+                  </span>
+                  <div className="skills-card-head min-w-0 flex-1">
+                    <div className="skills-card-title-row">
+                      <h3 className="skills-card-title">{skill.name}</h3>
+                      {skill.custom && <span className="badge badge-muted text-[10px]">custom</span>}
+                      {has && (
+                        <span className="skills-card-installed">
+                          {count > 0 ? `${count} agent${count === 1 ? '' : 's'}` : 'In use'}
+                        </span>
+                      )}
                     </div>
-                  )}
+                    <div className="skills-card-meta">
+                      <span className={`skills-cat-badge skills-cat-badge-${skill.category}`}>
+                        {CATEGORY_LABELS[skill.category] || skill.category}
+                      </span>
+                      <span className="skills-card-id font-mono">{skill.id}</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex flex-col gap-1 shrink-0">
+
+                <p className="skills-card-desc">{skill.description || 'No description yet.'}</p>
+
+                {open && skill.promptHint && (
+                  <div className="skills-card-guidance">
+                    <div className="skills-card-guidance-label">Prompt guidance (injected when active)</div>
+                    <p className="skills-card-guidance-body">{skill.promptHint}</p>
+                  </div>
+                )}
+
+                <div className="skills-card-actions">
                   <button
                     type="button"
-                    onClick={() => (agents && onToggleAgentSkill ? setManageSkill(skill) : onInstall(skill.id))}
-                    className="grok-btn grok-btn-secondary text-xs"
-                    title="Manage which agents have this skill"
-                    aria-label="Manage skill assignments"
+                    className="grok-btn grok-btn-ghost text-xs skills-card-expand"
+                    onClick={() => setExpandedId(open ? null : skill.id)}
+                    aria-expanded={open}
                   >
-                    <Users size={12} />
+                    {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    {open ? 'Hide guidance' : 'Read full guidance'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => openEditor(skill)}
-                    className="grok-btn grok-btn-ghost text-xs"
-                    title={skill.custom ? "Edit this skill's definition" : 'Customize — edit an editable copy of this built-in skill'}
-                    aria-label="Edit skill definition"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  {skill.custom && (
+                  <div className="skills-card-action-btns">
                     <button
                       type="button"
-                      onClick={() => void regenerateSkill(skill)}
-                      disabled={regeneratingId !== null}
+                      onClick={() => (agents && onToggleAgentSkill ? setManageSkill(skill) : onInstall(skill.id))}
+                      className="grok-btn grok-btn-secondary text-xs"
+                      title="Assign to agents"
+                    >
+                      <Users size={13} />
+                      Assign
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openEditor(skill)}
                       className="grok-btn grok-btn-ghost text-xs"
-                      title="Regenerate — the model rewrites the description and prompt guidance from the title alone"
-                      aria-label="Regenerate skill with the model"
+                      title={skill.custom ? 'Edit skill' : 'Customize — create an editable copy'}
                     >
-                      {regeneratingId === skill.id ? <RefreshCw size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                      <Pencil size={13} />
+                      {skill.custom ? 'Edit' : 'Customize'}
                     </button>
-                  )}
-                  {skill.custom && (
-                    <button
-                      type="button"
-                      onClick={() => void removeSkill(skill)}
-                      className="grok-btn grok-btn-ghost text-xs text-error"
-                      title="Delete this custom skill"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  )}
+                    {skill.custom && (
+                      <button
+                        type="button"
+                        onClick={() => void regenerateSkill(skill)}
+                        disabled={regeneratingId !== null}
+                        className="grok-btn grok-btn-ghost text-xs"
+                        title="Regenerate description and guidance from the title"
+                      >
+                        {regeneratingId === skill.id
+                          ? <RefreshCw size={13} className="animate-spin" />
+                          : <Wand2 size={13} />}
+                        Rewrite
+                      </button>
+                    )}
+                    {skill.custom && (
+                      <button
+                        type="button"
+                        onClick={() => void removeSkill(skill)}
+                        className="grok-btn grok-btn-ghost text-xs text-error"
+                        title="Delete this custom skill"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </div>
-          );
-        })}
-        {filtered.length === 0 && (
-          <div className="text-sm text-dim py-4">No skills match “{query}”.</div>
-        )}
-      </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
       {editorModal}
       {manageModal}
     </div>

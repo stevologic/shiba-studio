@@ -30,7 +30,7 @@ const LogsPanel = dynamic(() => import('@/components/logs-panel'), { loading: pa
 const McpPanel = dynamic(() => import('@/components/mcp-panel'), { loading: panelLoading });
 const SkillsBrowser = dynamic(() => import('@/components/skills-browser'), { loading: panelLoading });
 const WorkspaceDiffPanel = dynamic(() => import('@/components/workspace-diff-panel'), { loading: panelLoading });
-const WorktreePanel = dynamic(() => import('@/components/worktree-panel'), { loading: panelLoading });
+const WorkspacePage = dynamic(() => import('@/components/workspace-page'), { loading: panelLoading });
 const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
 const ToolsCatalog = dynamic(() => import('@/components/tools-catalog'), { loading: panelLoading });
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
@@ -39,6 +39,7 @@ const CommandPalette = dynamic(() => import('@/components/command-palette'));
 const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
 const ToolApprovalModal = dynamic(() => import('@/components/tool-approval-modal'));
 import { toast } from 'sonner';
+import { getTerminalOpen, setTerminalOpen, toggleTerminalOpen, subscribeTerminalOpen } from '@/lib/terminal-ui-store';
 import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { THEME_IDENTITY } from '@/lib/theme';
 import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
@@ -52,7 +53,7 @@ import {
   schedulesForSave,
 } from '@/lib/schedule-presets';
 import { INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/integration-catalog';
-import { modelDisplayName, parseModelRef, providerLabel, type ModelProvider } from '@/lib/model-providers';
+import { modelDisplayName, parseModelRef, providerLabel, providerTitle, type ModelProvider } from '@/lib/model-providers';
 import { resolveProjectWorkspace } from '@/lib/project-types';
 import {
   AppTab,
@@ -65,6 +66,7 @@ import {
   writeLastChatSessionId,
 } from '@/lib/app-navigation';
 import { formatUsageCostUsd, type NavStats } from '@/lib/nav-stats-types';
+import { DEFAULT_TTS_VOICE, GROK_TTS_VOICES } from '@/lib/xai-tts';
 import pkg from '@/package.json';
 
 type ModelOption = { id: string; label: string; provider?: ModelProvider; reasoning?: boolean };
@@ -86,9 +88,10 @@ const TAB_LABELS: Record<string, string> = {
 function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
   const ref = parseModelRef(modelId || '');
   const cls = size === 'xs' ? 'model-provider-badge model-provider-badge-xs' : 'model-provider-badge';
+  const text = ref.authSource === 'oauth' ? 'OAuth' : ref.authSource === 'token' ? 'Token' : providerLabel(ref.provider);
   return (
-    <span className={`${cls} model-provider-${ref.provider}`} title={ref.provider === 'local' ? 'Local model on this machine — any OpenAI-compatible server' : 'xAI Grok cloud API'}>
-      {providerLabel(ref.provider)}
+    <span className={`${cls} model-provider-${ref.provider}`} title={providerTitle(ref.provider, ref.authSource)}>
+      {text}
     </span>
   );
 }
@@ -114,7 +117,8 @@ function IntegrationIcon({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' |
 const OAUTH_POLL_MS = 2000;
 const OAUTH_POLL_MAX_MS = 5 * 60_000;
 const APP_VERSION = pkg.version;
-const GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT || 'unreleased';
+/** Build-time fallback only — live SHA is fetched from /api/version. */
+const GIT_COMMIT_FALLBACK = process.env.NEXT_PUBLIC_GIT_COMMIT || 'unreleased';
 const DOGE_DONATION_ADDRESS = 'DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK';
 
 /** Per-agent credential override fields, by integration. Only shown for the
@@ -290,6 +294,12 @@ export default function ShibaStudio() {
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [liveTrace, setLiveTrace] = useState<any[]>([]);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  // Terminal open state is global (root layout) so it survives tab navigation.
+  const [showTerminal, setShowTerminalLocal] = useState(false);
+  useEffect(() => {
+    setShowTerminalLocal(getTerminalOpen());
+    return subscribeTerminalOpen(() => setShowTerminalLocal(getTerminalOpen()));
+  }, []);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Donate button briefly shows its own "copied" state instead of a toast.
@@ -297,12 +307,17 @@ export default function ShibaStudio() {
   // Execution Trace lives in a modal — opened manually, on Run now, or by a
   // /automations?run=<id> deep link. The page itself stays uncluttered.
   const [showTraceModal, setShowTraceModal] = useState(false);
-  // First-run banner stays dismissed across visits once closed.
-  const [welcomeDismissed, setWelcomeDismissed] = useState<boolean>(() =>
-    typeof window !== 'undefined' && window.localStorage.getItem('shiba-welcome') === 'dismissed');
-  // Desktop sidebar collapse to an icon rail — remembered across visits.
-  const [navCollapsed, setNavCollapsed] = useState<boolean>(() =>
-    typeof window !== 'undefined' && window.localStorage.getItem('shiba-nav') === 'collapsed');
+  // First-run banner / nav collapse — SSR-safe defaults; restore after mount.
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem('shiba-welcome') === 'dismissed') setWelcomeDismissed(true);
+    } catch { /* private mode */ }
+    try {
+      if (window.localStorage.getItem('shiba-nav') === 'collapsed') setNavCollapsed(true);
+    } catch { /* private mode */ }
+  }, []);
 
   function toggleNavCollapsed() {
     setNavCollapsed((c) => {
@@ -335,8 +350,11 @@ export default function ShibaStudio() {
   const [agentForm, setAgentForm] = useState<any>({
     name: 'Builder Agent', avatar: 'alien-01', origin: 'local', model: 'grok-4', workspace: { path: '', useWorktree: true },
     integrations: { ...EMPTY_INTEGRATION_SCOPE },
-    peers: [], skills: [], chatSkill: '', schedules: [defaultScheduleEntry()], driveFolders: []
+    peers: [], skills: [], chatSkill: '', voiceId: '', schedules: [defaultScheduleEntry()], driveFolders: []
   });
+  // TTS voice catalog for agent editor (live xAI list when signed in).
+  type AgentVoiceOpt = { id: string; name: string; description?: string };
+  const [agentVoiceOptions, setAgentVoiceOptions] = useState<AgentVoiceOpt[]>(GROK_TTS_VOICES);
   // Drive folder picker (agent editor) — the connected Drive's folders.
   const [driveFolderOptions, setDriveFolderOptions] = useState<Array<{ id: string; name: string }> | null>(null);
   const [driveFoldersLoading, setDriveFoldersLoading] = useState(false);
@@ -382,6 +400,7 @@ export default function ShibaStudio() {
   const [grokCliStatus, setGrokCliStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(null);
 
   const [apiKeyInput, setApiKeyInput] = useState('');
+  const [managementKeyInput, setManagementKeyInput] = useState('');
   const [oauthStatus, setOauthStatus] = useState<{
     connected: boolean;
     expired: boolean;
@@ -415,6 +434,32 @@ export default function ShibaStudio() {
   const [navStatsLoaded, setNavStatsLoaded] = useState(false);
   const [usageBudgetInput, setUsageBudgetInput] = useState('25');
   const [cliUpdate, setCliUpdate] = useState<{ checking: boolean; text?: string; available?: boolean }>({ checking: false });
+  /** Live commit of the tree this server process is serving (refreshed via /api/version). */
+  const [runtimeVersion, setRuntimeVersion] = useState<{
+    version: string;
+    commit: string;
+    commitFull: string | null;
+    dirty: boolean;
+    root?: string;
+  }>({ version: APP_VERSION, commit: GIT_COMMIT_FALLBACK, commitFull: null, dirty: false });
+
+  async function refreshRuntimeVersion() {
+    try {
+      const res = await fetch('/api/version', { cache: 'no-store' });
+      const data = await res.json();
+      if (data.ok && data.commit) {
+        setRuntimeVersion({
+          version: data.version || APP_VERSION,
+          commit: data.commit,
+          commitFull: data.commitFull || null,
+          dirty: !!data.dirty,
+          root: data.root,
+        });
+      }
+    } catch {
+      /* keep last known / fallback */
+    }
+  }
 
   async function checkCliUpdate() {
     setCliUpdate({ checking: true });
@@ -509,13 +554,17 @@ export default function ShibaStudio() {
     } else {
       const cloud = availableModels.filter(m => m.provider === 'cloud');
       const local = availableModels.filter(m => m.provider === 'local');
+      const cli = availableModels.filter(m => m.provider === 'cli');
       if (cloud.length > 0) {
         opts.push(<optgroup key="cloud" label="Cloud — xAI API">{cloud.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>);
       }
       if (local.length > 0) {
         opts.push(<optgroup key="local" label="Local — this machine">{local.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>);
       }
-      const other = availableModels.filter(m => m.provider !== 'cloud' && m.provider !== 'local');
+      if (cli.length > 0) {
+        opts.push(<optgroup key="cli" label="CLI — Grok CLI">{cli.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</optgroup>);
+      }
+      const other = availableModels.filter(m => m.provider !== 'cloud' && m.provider !== 'local' && m.provider !== 'cli');
       other.forEach(m => opts.push(<option key={m.id} value={m.id}>{m.label}</option>));
     }
     if (currentValue && !availableModels.some(m => m.id === currentValue)) {
@@ -542,6 +591,7 @@ export default function ShibaStudio() {
         setIntCreds({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...intRes.integrations });
       }
       if ((cfg as any).hasKey) setApiKeyInput('••••••••'); // masked
+      if ((cfg as any).hasManagementKey) setManagementKeyInput('••••••••');
       if ((cfg as any).oauthStatus) setOauthStatus((cfg as any).oauthStatus);
       if ((cfg as any).cloudAuthMode) setCloudAuthMode((cfg as any).cloudAuthMode);
       if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(!!cfg.localGrokEnabled);
@@ -565,7 +615,21 @@ export default function ShibaStudio() {
       setUsageBudgetInput(String(cfg.usageBudgetUsd ?? 25));
       // Boot ping — hydrates server config; schedule arming is idempotent
       // (instrumentation.ts already armed everything at server start).
-      fetch('/api/boot').catch(() => {});
+      // Also carries live commit SHA of the tree Node is serving.
+      fetch('/api/boot')
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.commit) {
+            setRuntimeVersion({
+              version: data.version || APP_VERSION,
+              commit: data.commit,
+              commitFull: data.commitFull || null,
+              dirty: !!data.dirty,
+              root: data.root,
+            });
+          }
+        })
+        .catch(() => { void refreshRuntimeVersion(); });
     } catch (e) {
       console.error(e);
     }
@@ -763,8 +827,11 @@ export default function ShibaStudio() {
   async function createOrUpdateAgent() {
     setLoading(true);
     try {
+      // Empty string clears a previously saved agent voice (JSON omits undefined).
+      const voiceRaw = typeof agentForm.voiceId === 'string' ? agentForm.voiceId.trim().toLowerCase() : '';
       const payload = {
         ...agentForm,
+        voiceId: voiceRaw,
         schedules: schedulesForSave(agentForm.schedules || []),
       };
       const isEdit = !!editingAgent;
@@ -797,6 +864,7 @@ export default function ShibaStudio() {
       peers: [],
       skills: [],
       chatSkill: '',
+      voiceId: '',
       schedules: [enrichScheduleForForm({ ...defaultScheduleEntry(), instructions: 'Perform the scheduled task using your skills.' })],
     });
     setShowAgentModal(true);
@@ -819,6 +887,7 @@ export default function ShibaStudio() {
       peers: [],
       skills: [],
       chatSkill: skill.slice(0, 4000),
+      voiceId: '',
       schedules: [enrichScheduleForForm({
         ...defaultScheduleEntry(),
         enabled: false,
@@ -903,6 +972,7 @@ export default function ShibaStudio() {
       ...norm,
       avatar: resolveAgentAvatar(norm),
       origin: norm.origin === 'cloud' ? 'cloud' : 'local',
+      voiceId: typeof norm.voiceId === 'string' ? norm.voiceId : '',
       workspace: { ...norm.workspace },
       integrations: { ...norm.integrations },
       integrationOverrides: (norm as any).integrationOverrides ? JSON.parse(JSON.stringify((norm as any).integrationOverrides)) : {},
@@ -913,6 +983,23 @@ export default function ShibaStudio() {
     setDriveFolderOptions(null); // reset the picker; user loads on demand
     setShowAgentModal(true);
   }
+
+  // Load Grok TTS voices when the agent editor opens (for default voice picker).
+  useEffect(() => {
+    if (!showAgentModal) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/tts');
+        const data = await res.json();
+        if (cancelled || !data.ok || !Array.isArray(data.voices) || !data.voices.length) return;
+        setAgentVoiceOptions(data.voices);
+      } catch {
+        /* keep built-in list */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showAgentModal]);
 
   function openEditAgentSchedule(a: Agent, scheduleIndex = 0) {
     openEditAgent(a);
@@ -1361,6 +1448,41 @@ export default function ShibaStudio() {
     await loadModels();
   }
 
+  async function saveManagementKey() {
+    if (!managementKeyInput || managementKeyInput.startsWith('••••')) return;
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xaiManagementKey: managementKeyInput }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.ok) {
+      toast.success('Management key saved — Usage will pull xAI billing data');
+      setManagementKeyInput('••••••••');
+      await loadAll();
+    } else {
+      toast.error(data.error || 'Failed to save management key');
+    }
+  }
+
+  async function clearManagementKey() {
+    const ok = await confirmDialog({
+      title: 'Clear the xAI Management key?',
+      message: 'Account billing usage on the Usage page may fall back to inference-key access only.',
+      confirmLabel: 'Clear key',
+      danger: true,
+    });
+    if (!ok) return;
+    await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xaiManagementKey: '' }),
+    });
+    setManagementKeyInput('');
+    toast.success('Management key cleared');
+    await loadAll();
+  }
+
   async function refreshOAuthStatus() {
     try {
       const res = await fetch('/api/xai-oauth/status');
@@ -1728,6 +1850,13 @@ export default function ShibaStudio() {
     return () => clearInterval(t);
   }, []);
 
+  // Keep sidebar/footer commit SHA in sync with the tree Node is actually serving.
+  useEffect(() => {
+    void refreshRuntimeVersion();
+    const t = setInterval(() => { void refreshRuntimeVersion(); }, 15_000);
+    return () => clearInterval(t);
+  }, []);
+
   const currentAgent = agents[0];
 
   const paletteCommands = useMemo((): CommandPaletteItem[] => {
@@ -1792,6 +1921,14 @@ export default function ShibaStudio() {
         keywords: ['refresh', 'reload'],
         run: () => void loadAll(),
       },
+      {
+        id: 'terminal',
+        label: 'Open Terminal',
+        hint: 'Real host PTY (Ctrl+`)',
+        group: 'Actions',
+        keywords: ['terminal', 'shell', 'bash', 'pty', 'console'],
+        run: () => setTerminalOpen(true),
+      },
       ...agentCmds,
     ];
   }, [agents, navigateToTab]);
@@ -1802,6 +1939,7 @@ export default function ShibaStudio() {
         e.preventDefault();
         setShowCommandPalette((v) => !v);
       }
+      // Ctrl+` is also handled in StudioTerminal; keep palette-only here to avoid double-toggle.
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1834,6 +1972,8 @@ export default function ShibaStudio() {
       } else if (mobileNavOpen) {
         setMobileNavOpen(false);
       }
+      // Do not bind Escape to the host terminal — real PTY apps (vim/less)
+      // need Escape. Use Ctrl+` or the panel chrome to close.
     };
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
@@ -1864,8 +2004,16 @@ export default function ShibaStudio() {
               {!navCollapsed && (
                 <div className="min-w-0">
                   <div className="font-semibold tracking-tighter text-xl logo-text truncate">{THEME_IDENTITY.brandName}</div>
-                  <div className="text-[10px] text-dim -mt-1 font-mono" title="Source commit this build is running">
-                    {GIT_COMMIT}
+                  <div
+                    className="text-[10px] text-dim -mt-1 font-mono"
+                    title={
+                      `Source commit of the code this server is running`
+                      + (runtimeVersion.commitFull ? `\n${runtimeVersion.commitFull}` : '')
+                      + (runtimeVersion.dirty ? '\nWorking tree has uncommitted changes' : '')
+                      + (runtimeVersion.root ? `\n${runtimeVersion.root}` : '')
+                    }
+                  >
+                    {runtimeVersion.commit}{runtimeVersion.dirty ? '*' : ''}
                   </div>
                 </div>
               )}
@@ -2049,6 +2197,14 @@ export default function ShibaStudio() {
               title="Command palette (Ctrl+K)"
             >
               <Command size={14} /> <span className="text-dim text-xs">Ctrl+K</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleTerminalOpen()}
+              className={`grok-btn grok-btn-ghost inline-flex items-center gap-1.5 ${showTerminal ? 'ring-1 ring-border-light' : ''}`}
+              title="Host terminal (Ctrl+`)"
+            >
+              <Terminal size={14} /> <span className="hidden sm:inline">Terminal</span>
             </button>
             <button onClick={() => setShowSyncModal(true)} className="grok-btn grok-btn-ghost"><RefreshCw size={14}/> <span className="hidden sm:inline">Sync</span></button>
             <button onClick={() => void startNewChat()} className="grok-btn grok-btn-secondary" title="Start a fresh Grok chat session">
@@ -2288,6 +2444,16 @@ export default function ShibaStudio() {
                           {agent.peers.length > 0 && <span className="badge badge-muted">{agent.peers.length} peers</span>}
                         </div>
                       )}
+                      {agent.voiceId?.trim() && (
+                        <div className="flex items-center gap-1">
+                          <span className="text-dim shrink-0 w-20">Voice</span>
+                          <span className="badge badge-muted capitalize" title="Default Grok TTS voice for chat / voice mode">
+                            {agentVoiceOptions.find((v) => v.id === agent.voiceId)?.name
+                              || GROK_TTS_VOICES.find((v) => v.id === agent.voiceId)?.name
+                              || agent.voiceId}
+                          </span>
+                        </div>
+                      )}
                       {agent.chatSkill?.trim() && (
                         <div className="flex items-start gap-1">
                           <span className="text-dim shrink-0 w-20">Skill</span>
@@ -2348,181 +2514,17 @@ export default function ShibaStudio() {
             </div>
           )}
 
-          {/* WORKSPACE + FILE TREE */}
+          {/* WORKSPACE — uploads, worktrees, VS Code-style explorer */}
           {tab === 'workspace' && (
-            <div className="workspace-page space-y-4">
-              {/* What this page is for — three tools, each labeled at its section */}
-              <div className="mb-1">
-                <div className="text-lg font-semibold">Workspace</div>
-                <div className="text-sm text-muted mt-0.5 max-w-3xl">
-                  The files your agents live in, three ways: <strong>Global Uploads</strong> ride along as context in every chat and agent run,
-                  {' '}<strong>Agent Worktrees</strong> are the isolated git copies agents code in, and <strong>Browse &amp; Edit</strong> opens any
-                  folder on disk for a quick look or a hand fix.
-                </div>
-              </div>
-
-              <div className="grok-card p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
-                  <div>
-                    <div className="font-semibold text-lg flex items-center gap-1.5">
-                      Global Uploads
-                      <InfoHint text="Files here are injected as context into every chat and agent run — drop reference docs, data files, or anything Grok should always know about." />
-                    </div>
-                    <div className="text-xs text-success mt-1">Always-on context — every chat and every agent run can read these files.</div>
-                    <div className="text-xs text-dim mt-0.5">Shared by all agents · stored in <span className="font-mono">{wsUploadsPath || '…/uploads'}</span></div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button onClick={syncToCloud} disabled={wsSyncing !== null || !(config as any)?.hasCloudAuth} className="grok-btn grok-btn-secondary text-xs">
-                      <CloudUpload size={14} className={wsSyncing === 'upload' ? 'animate-pulse' : ''} /> Sync to Grok Cloud
-                    </button>
-                    <button onClick={syncFromCloud} disabled={wsSyncing !== null || !(config as any)?.hasCloudAuth} className="grok-btn grok-btn-secondary text-xs">
-                      <CloudDownload size={14} className={wsSyncing === 'download' ? 'animate-pulse' : ''} /> Sync from Grok Cloud
-                    </button>
-                    <label className="grok-btn grok-btn-primary text-xs cursor-pointer">
-                      <Upload size={14} /> Choose files
-                      <input type="file" multiple className="hidden" onChange={e => e.target.files && uploadWorkspaceFiles(e.target.files)} />
-                    </label>
-                  </div>
-                </div>
-
-                <div
-                  className={`workspace-dropzone ${wsDragging ? 'workspace-dropzone-active' : ''}`}
-                  onDragEnter={(e) => { e.preventDefault(); setWsDragging(true); }}
-                  onDragOver={(e) => { e.preventDefault(); setWsDragging(true); }}
-                  onDragLeave={(e) => { e.preventDefault(); setWsDragging(false); }}
-                  onDrop={onWorkspaceDrop}
-                >
-                  <Upload size={28} className="opacity-40 mb-2" />
-                  <div className="text-sm font-medium">{wsUploading ? 'Uploading…' : 'Drop files here'}</div>
-                  <div className="text-xs text-dim mt-1">PDF, code, markdown, CSV, JSON — up to 48 MB each</div>
-                  {wsLastSync && <div className="text-[10px] text-dim mt-2">Last cloud sync: {new Date(wsLastSync).toLocaleString()}</div>}
-                </div>
-
-                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                  {wsUploads.length === 0 && <div className="text-xs text-dim col-span-full">No uploads yet — drag files above or use Choose files.</div>}
-                  {wsUploads.map((u) => (
-                    <div
-                      key={u.path}
-                      className="workspace-upload-item"
-                      onClick={() => openFile(u.path)}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="font-mono text-xs truncate min-w-0 flex-1">{u.name}</div>
-                        <button
-                          type="button"
-                          className="workspace-upload-delete grok-btn grok-btn-ghost text-error p-0.5 shrink-0"
-                          title="Remove from global uploads"
-                          onClick={(e) => { e.stopPropagation(); deleteWorkspaceUpload(u.name); }}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                      <div className="text-[10px] text-dim mt-1 flex justify-between gap-2">
-                        <span>{(u.size / 1024).toFixed(1)} KB</span>
-                        {u.cloud ? (
-                          <a
-                            href={u.cloud.url || u.cloud.cloudUrl || `/api/workspace/cloud-file?fileId=${encodeURIComponent(u.cloud.xaiFileId)}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="workspace-cloud-link text-success shrink-0"
-                            title="Open file in Grok cloud"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            ☁ synced
-                          </a>
-                        ) : (
-                          <span className="shrink-0">local</span>
-                        )}
-                      </div>
-                      {u.uploadedAt && (
-                        <div className="text-[10px] text-dim mt-1">
-                          Uploaded {new Date(u.uploadedAt).toLocaleString()}
-                        </div>
-                      )}
-                      {u.checksum && (
-                        <div
-                          className="text-[10px] text-dim mt-0.5 font-mono truncate"
-                          title={`SHA-256: ${u.checksum}`}
-                        >
-                          sha256:{u.checksum.slice(0, 12)}…
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                {cloudFiles.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-default text-xs text-dim">
-                    {cloudFiles.length} file(s) in your xAI Grok cloud storage
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <div className="text-xs text-success mb-1.5 px-1">
-                  Agent sandboxes — isolated git copies your agents commit to, kept out of your real checkout. Review or clean them up here.
-                </div>
-                <WorktreePanel workspace={wsPath || config?.defaultWorkspace || ''} agents={agents} />
-              </div>
-
-              <div>
-                <div className="text-xs text-success mb-1.5 px-1">
-                  Manual access — open any folder on disk to inspect what agents produced, or hand-edit a file without leaving the app.
-                </div>
-                <div className="workspace-editor-row">
-                  <div className="workspace-explorer-panel grok-card p-4 flex flex-col min-h-0">
-                    <div className="flex justify-between mb-2 shrink-0">
-                      <div className="font-semibold text-sm">Browse a Folder</div>
-                      <button onClick={() => loadWorkspace()} className="grok-btn grok-btn-secondary text-xs">Refresh</button>
-                    </div>
-                    <div className="flex gap-2 mb-3 shrink-0">
-                      <input
-                        value={wsPath}
-                        onChange={e=>setWsPath(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') loadWorkspace(); }}
-                        className="grok-input flex-1 min-w-0 text-xs font-mono"
-                        placeholder="C:\path\to\any\folder — Enter to open"
-                        spellCheck={false}
-                      />
-                      <button onClick={() => loadWorkspace()} className="grok-btn grok-btn-primary text-xs shrink-0">Open</button>
-                    </div>
-                    <div className="workspace-file-tree flex-1 min-h-0 overflow-auto text-sm border border-default rounded p-1">
-                      {wsFiles.length === 0 && <div className="p-2 text-xs text-dim">Type a folder path above and press Enter — your project, an agent worktree, anywhere.</div>}
-                      {wsFiles.map((f, idx) => (
-                        <div key={idx} onClick={() => openFile(f.path)} className={`file-tree-item ${selectedFile === f.path ? 'active' : ''}`}>
-                          {f.isDir ? '📁' : '📄'} {f.name}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="workspace-file-viewer grok-card p-4 flex flex-col min-h-0">
-                    <div className="workspace-file-viewer-header shrink-0">
-                      <div className="font-semibold">File Editor</div>
-                      <button
-                        onClick={saveWorkspaceFile}
-                        disabled={!selectedFile}
-                        className="grok-btn grok-btn-primary text-xs"
-                        title={selectedFile ? `Write changes back to ${selectedFile}` : 'Open a file first'}
-                      >
-                        Save File
-                      </button>
-                    </div>
-                    <div className="workspace-file-path text-xs text-muted shrink-0" title={selectedFile || undefined}>
-                      {selectedFile || 'Nothing open — click a file on the left or a Global Upload above'}
-                    </div>
-                    <textarea
-                      value={fileContent}
-                      onChange={e => setFileContent(e.target.value)}
-                      className="workspace-file-editor grok-input flex-1 min-h-0 font-mono text-xs"
-                      placeholder={selectedFile ? 'File contents…' : 'Select a file to view and edit its contents'}
-                      spellCheck={false}
-                    />
-                    <div className="text-[10px] text-dim mt-2 shrink-0">
-                      Edits here save straight to disk. Agents use their own fs tools; Global Uploads feed every conversation.
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <WorkspacePage
+              agents={agents}
+              defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || wsPath || ''}
+              hasCloudAuth={!!(config as any)?.hasCloudAuth}
+              onOpenAgent={(id) => {
+                const a = agents.find((x) => x.id === id);
+                if (a) openEditAgent(a);
+              }}
+            />
           )}
 
           {/* AUTOMATIONS — schedules & orchestration */}
@@ -2753,6 +2755,19 @@ export default function ShibaStudio() {
                           </span>
                         </div>
                         <div className="text-xs text-dim">{integration.description}</div>
+                        {integration.docsUrl && (
+                          <a
+                            href={integration.docsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="integration-docs-link"
+                            onClick={(e) => e.stopPropagation()}
+                            title={integration.docsLabel || 'API documentation'}
+                          >
+                            {integration.docsLabel || 'API docs'}
+                            <span className="opacity-60" aria-hidden> ↗</span>
+                          </a>
+                        )}
                         {integration.id === 'github' && intTest.github?.ok && (
                           <span className="integration-card-status text-success">connected as {intTest.github.login}</span>
                         )}
@@ -2932,6 +2947,30 @@ export default function ShibaStudio() {
                       </>
                       );
                     })()}
+                    {(integration.docsUrl || integration.setupUrl) && (
+                      <div className="integration-docs-row">
+                        {integration.docsUrl && (
+                          <a
+                            href={integration.docsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="integration-docs-link"
+                          >
+                            {integration.docsLabel || 'API docs'} ↗
+                          </a>
+                        )}
+                        {integration.setupUrl && (
+                          <a
+                            href={integration.setupUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="integration-docs-link"
+                          >
+                            Setup guide ↗
+                          </a>
+                        )}
+                      </div>
+                    )}
                     <div className="integration-card-actions">
                       <button
                         type="button"
@@ -3046,6 +3085,37 @@ export default function ShibaStudio() {
                   <div className="text-[10px] mt-1.5 text-dim">
                     🔒 Credentials are encrypted at rest (AES-256-GCM). The encryption key is stored outside this project
                     {(config as any)?.secretKeyLocation ? <> at <span className="font-mono">{(config as any).secretKeyLocation}</span></> : null} — never in source code.
+                  </div>
+                </div>
+
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <BarChart3 size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">xAI Management Key</div>
+                      <div className="text-[11px] text-dim">Backports official team usage &amp; billing into the Usage page.</div>
+                    </div>
+                  </div>
+                  <input
+                    value={managementKeyInput}
+                    onChange={(e) => setManagementKeyInput(e.target.value)}
+                    placeholder="Management key from console.x.ai → Settings → Management Keys"
+                    className="grok-input mb-2 font-mono text-xs"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => void saveManagementKey()} className="grok-btn grok-btn-primary text-xs">
+                      Save Management Key
+                    </button>
+                    {(config as any)?.hasManagementKey && (
+                      <button type="button" onClick={() => void clearManagementKey()} className="grok-btn grok-btn-ghost text-xs text-error">
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <div className="text-xs mt-2 text-dim">
+                    Separate from your inference API key. Used only to read{' '}
+                    <span className="font-mono">management-api.x.ai</span> billing / usage (models, spend, prepaid balance).
+                    Without it, Usage still tries your API key / OAuth, then falls back to studio metering.
                   </div>
                 </div>
 
@@ -3407,8 +3477,20 @@ export default function ShibaStudio() {
 
         {/* Footer bar */}
         <div className="footer-bar h-9 px-4 text-[10px] flex items-center text-dim justify-between gap-3 relative z-[1]">
-          <div className="truncate" title={`Running source commit ${GIT_COMMIT} (v${APP_VERSION})`}>
-            Shiba Studio <span className="font-mono">{GIT_COMMIT}</span> — the localhost Grok agent studio • nothing leaves your box
+          <div
+            className="truncate"
+            title={
+              `Running source commit ${runtimeVersion.commitFull || runtimeVersion.commit}`
+              + ` (v${runtimeVersion.version || APP_VERSION})`
+              + (runtimeVersion.dirty ? ' · dirty working tree' : '')
+              + (runtimeVersion.root ? `\n${runtimeVersion.root}` : '')
+            }
+          >
+            Shiba Studio{' '}
+            <span className="font-mono">
+              {runtimeVersion.commit}{runtimeVersion.dirty ? '*' : ''}
+            </span>
+            {' '}— the localhost Grok agent studio • nothing leaves your box
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <a
@@ -3870,6 +3952,36 @@ export default function ShibaStudio() {
                       This agent will use <strong>{providerLabel(parseModelRef(agentForm.model).provider)}</strong> inference: {modelDisplayName(agentForm.model)}
                     </div>
                   )}
+                </div>
+                <div>
+                  <div className="grok-label">Default voice</div>
+                  <select
+                    className="grok-select w-full mt-1"
+                    value={agentForm.voiceId || ''}
+                    onChange={(e) => setAgentForm({ ...agentForm, voiceId: e.target.value })}
+                    aria-label="Default Grok TTS voice for this agent"
+                  >
+                    <option value="">App default (chat voice picker)</option>
+                    {/* Ensure a saved custom/unknown id still appears even if not in the live list */}
+                    {agentForm.voiceId
+                      && !agentVoiceOptions.some((v) => v.id === agentForm.voiceId)
+                      && (
+                        <option value={agentForm.voiceId}>
+                          {agentForm.voiceId} (saved)
+                        </option>
+                      )}
+                    {agentVoiceOptions.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name}{v.description ? ` — ${v.description}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="text-[10px] text-dim mt-1">
+                    Used when chatting as this agent (Grok Voice / Speak). Leave as app default to use the global chat voice
+                    {agentForm.voiceId
+                      ? ` · currently ${agentVoiceOptions.find((v) => v.id === agentForm.voiceId)?.name || agentForm.voiceId}`
+                      : ` · app fallback is ${DEFAULT_TTS_VOICE}`}.
+                  </div>
                 </div>
                 {agentForm.origin !== 'cloud' ? (
                   <>

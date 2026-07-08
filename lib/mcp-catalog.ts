@@ -8,6 +8,7 @@ export interface McpPresetEnvField {
   required?: boolean;
   /** When set, value is appended to args instead of env (e.g. filesystem path). */
   asArg?: boolean;
+  help?: string;
 }
 
 export interface McpPreset {
@@ -19,6 +20,19 @@ export interface McpPreset {
   command: string;
   args: string[];
   envFields: McpPresetEnvField[];
+  /** npm package or binary name shown in the UI */
+  packageName?: string;
+  /** Group chip: web, code, files, security, search */
+  category?: string;
+  /**
+   * Public documentation URL (npm, GitHub, or product docs).
+   * When set, the Capabilities UI shows a “Docs” link.
+   */
+  docsUrl?: string;
+  /** Optional secondary link (e.g. MCP protocol or package page). */
+  homepageUrl?: string;
+  /** One-line “what agents get” for the card. */
+  toolsHint?: string;
 }
 
 export const MCP_PRESETS: McpPreset[] = [
@@ -26,10 +40,15 @@ export const MCP_PRESETS: McpPreset[] = [
     id: 'github',
     name: 'GitHub',
     shortLabel: 'GitHub',
-    description: 'Repos, issues, pull requests, and code search',
+    description: 'Repos, issues, pull requests, and code search on GitHub',
     icon: '/integrations/github.svg',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-github'],
+    packageName: '@modelcontextprotocol/server-github',
+    category: 'Code',
+    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/github',
+    homepageUrl: 'https://www.npmjs.com/package/@modelcontextprotocol/server-github',
+    toolsHint: 'Issues, PRs, search, file contents',
     envFields: [
       {
         key: 'GITHUB_PERSONAL_ACCESS_TOKEN',
@@ -37,6 +56,7 @@ export const MCP_PRESETS: McpPreset[] = [
         placeholder: 'ghp_…',
         secret: true,
         required: true,
+        help: 'Classic or fine-grained PAT with repo access. Create under GitHub → Settings → Developer settings.',
       },
     ],
   },
@@ -48,18 +68,28 @@ export const MCP_PRESETS: McpPreset[] = [
     icon: '/integrations/mcp-shield.svg',
     command: 'npx',
     args: ['-y', '@cyanheads/osv-advisory-mcp-server'],
+    packageName: '@cyanheads/osv-advisory-mcp-server',
+    category: 'Security',
+    docsUrl: 'https://github.com/cyanheads/osv-advisory-mcp-server',
+    homepageUrl: 'https://www.npmjs.com/package/@cyanheads/osv-advisory-mcp-server',
+    toolsHint: 'Package vulnerability queries',
     envFields: [],
   },
   {
     id: 'fetch',
     name: 'Web Fetch',
     shortLabel: 'Fetch',
-    description: 'Fetch URLs and convert pages to markdown/text/JSON for agents',
+    description: 'Fetch URLs and convert pages to markdown, text, or JSON for agents',
     icon: '/integrations/mcp-globe.svg',
     command: 'npx',
     // The official fetch server is Python-only (uvx mcp-server-fetch); this is
     // the maintained npm equivalent, exposing fetch_html/markdown/txt/json.
     args: ['-y', '@tokenizin/mcp-npx-fetch'],
+    packageName: '@tokenizin/mcp-npx-fetch',
+    category: 'Web',
+    docsUrl: 'https://www.npmjs.com/package/@tokenizin/mcp-npx-fetch',
+    homepageUrl: 'https://github.com/tokenizin-agency/mcp-npx-fetch',
+    toolsHint: 'fetch_html, fetch_markdown, fetch_txt, fetch_json',
     envFields: [],
   },
   {
@@ -70,6 +100,11 @@ export const MCP_PRESETS: McpPreset[] = [
     icon: '/integrations/mcp-folder.svg',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-filesystem'],
+    packageName: '@modelcontextprotocol/server-filesystem',
+    category: 'Files',
+    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem',
+    homepageUrl: 'https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem',
+    toolsHint: 'Read, list, and search within a sandbox path',
     envFields: [
       {
         key: 'allowedPath',
@@ -77,6 +112,7 @@ export const MCP_PRESETS: McpPreset[] = [
         placeholder: 'C:\\Users\\you\\Projects\\my-repo',
         required: true,
         asArg: true,
+        help: 'Agents can only access files under this path. Prefer a project root or workspace.',
       },
     ],
   },
@@ -88,6 +124,11 @@ export const MCP_PRESETS: McpPreset[] = [
     icon: '/integrations/mcp-search.svg',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-brave-search'],
+    packageName: '@modelcontextprotocol/server-brave-search',
+    category: 'Search',
+    docsUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search',
+    homepageUrl: 'https://brave.com/search/api/',
+    toolsHint: 'brave_web_search, brave_local_search',
     envFields: [
       {
         key: 'BRAVE_API_KEY',
@@ -95,10 +136,15 @@ export const MCP_PRESETS: McpPreset[] = [
         placeholder: 'BSA…',
         secret: true,
         required: true,
+        help: 'Get a key from the Brave Search API dashboard.',
       },
     ],
   },
 ];
+
+/** Protocol-level docs (always public). */
+export const MCP_PROTOCOL_DOCS_URL = 'https://modelcontextprotocol.io/docs';
+export const MCP_SERVERS_REGISTRY_URL = 'https://github.com/modelcontextprotocol/servers';
 
 const byId = new Map(MCP_PRESETS.map((p) => [p.id, p]));
 

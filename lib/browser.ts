@@ -2,10 +2,28 @@
 import { dataDir } from './data-paths';
 // Provides navigate, click, type, screenshot, extract, scroll.
 
-import puppeteer, { Browser, Page } from 'puppeteer';
+import puppeteer, { Browser, Page, type CDPSession } from 'puppeteer';
 
 let browser: Browser | null = null;
 const runPageMap = new Map<string, Page>();
+
+/* ── Live screencast (sub-browser Interact mode) ── */
+export type ScreencastFrame = {
+  dataUrl: string;
+  width: number;
+  height: number;
+  url: string;
+  title: string;
+  ts: number;
+};
+
+type FrameListener = (frame: ScreencastFrame) => void;
+
+const screencastListeners = new Set<FrameListener>();
+let screencastCdp: CDPSession | null = null;
+let screencastRunId: string | null = null;
+let lastScreencastFrame: ScreencastFrame | null = null;
+let screencastStarting: Promise<void> | null = null;
 
 /** The annotation sub-browser's persistent page. Chat-driven browser tools
  *  share it, so /annotate always shows what the agent is doing. */
@@ -304,4 +322,200 @@ export async function browserHighlight(selector: string, runId?: string): Promis
     el.setAttribute('data-shiba-annotated', '1');
     return true;
   }, selector).catch(() => false);
+}
+
+/** Clear annotation highlights before live interact / new navigation. */
+export async function browserClearHighlight(runId?: string): Promise<void> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  await page.evaluate(() => {
+    document.querySelectorAll('[data-shiba-annotated]').forEach((prev) => {
+      (prev as HTMLElement).style.outline = '';
+      (prev as HTMLElement).style.outlineOffset = '';
+      prev.removeAttribute('data-shiba-annotated');
+    });
+  }).catch(() => {});
+}
+
+export async function browserPageMeta(runId?: string): Promise<{ url: string; title: string; width: number; height: number }> {
+  const page = runId ? await getPageForRun(runId) : await getPage();
+  const viewport = page.viewport() || { width: 1280, height: 800 };
+  return {
+    url: page.url(),
+    title: await page.title().catch(() => ''),
+    width: viewport.width,
+    height: viewport.height,
+  };
+}
+
+function emitScreencastFrame(frame: ScreencastFrame) {
+  lastScreencastFrame = frame;
+  for (const listener of screencastListeners) {
+    try { listener(frame); } catch { /* ignore bad subscribers */ }
+  }
+}
+
+/** Subscribe to live viewport frames. Call startScreencast separately (or ensure
+ *  at least one subscriber starts it via browserEnsureScreencast). */
+export function browserSubscribeScreencast(listener: FrameListener): () => void {
+  screencastListeners.add(listener);
+  if (lastScreencastFrame) {
+    try { listener(lastScreencastFrame); } catch { /* */ }
+  }
+  return () => {
+    screencastListeners.delete(listener);
+    // Stop CDP stream when nobody is watching — saves CPU when modal closes.
+    if (screencastListeners.size === 0) {
+      void browserStopScreencast();
+    }
+  };
+}
+
+export function browserLastScreencastFrame(): ScreencastFrame | null {
+  return lastScreencastFrame;
+}
+
+export async function browserEnsureScreencast(runId: string = SUBBROWSER_RUN_ID): Promise<void> {
+  if (screencastCdp && screencastRunId === runId) return;
+  if (screencastStarting) {
+    await screencastStarting;
+    return;
+  }
+  screencastStarting = browserStartScreencast(runId).finally(() => {
+    screencastStarting = null;
+  });
+  await screencastStarting;
+}
+
+/** Start a continuous CDP screencast of the page viewport — powers Interact
+ *  mode so the sub-browser feels like a real browser, not click-then-screenshot. */
+export async function browserStartScreencast(runId: string = SUBBROWSER_RUN_ID): Promise<void> {
+  if (screencastCdp && screencastRunId === runId) return;
+  await browserStopScreencast();
+
+  const page = await getPageForRun(runId);
+  const viewport = page.viewport() || { width: 1280, height: 800 };
+  const cdp = await page.createCDPSession();
+  screencastCdp = cdp;
+  screencastRunId = runId;
+
+  cdp.on('Page.screencastFrame', async (event: {
+    data: string;
+    sessionId: number;
+    metadata?: { deviceWidth?: number; deviceHeight?: number };
+  }) => {
+    try {
+      const w = event.metadata?.deviceWidth || viewport.width;
+      const h = event.metadata?.deviceHeight || viewport.height;
+      let url = '';
+      let title = '';
+      try {
+        url = page.url();
+        title = await page.title().catch(() => '');
+      } catch { /* page may be navigating */ }
+      emitScreencastFrame({
+        dataUrl: `data:image/jpeg;base64,${event.data}`,
+        width: w,
+        height: h,
+        url,
+        title,
+        ts: Date.now(),
+      });
+      await cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
+    } catch {
+      try { await cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }); } catch { /* */ }
+    }
+  });
+
+  await cdp.send('Page.startScreencast', {
+    format: 'jpeg',
+    quality: 62,
+    maxWidth: viewport.width,
+    maxHeight: viewport.height,
+    everyNthFrame: 1,
+  });
+}
+
+export async function browserStopScreencast(): Promise<void> {
+  const cdp = screencastCdp;
+  screencastCdp = null;
+  screencastRunId = null;
+  if (!cdp) return;
+  try {
+    await cdp.send('Page.stopScreencast');
+  } catch { /* already stopped */ }
+  try {
+    await cdp.detach();
+  } catch { /* */ }
+}
+
+export type BrowserInputEvent =
+  | { kind: 'mousemove'; x: number; y: number }
+  | { kind: 'mousedown'; x: number; y: number; button?: number }
+  | { kind: 'mouseup'; x: number; y: number; button?: number }
+  | { kind: 'click'; x: number; y: number; button?: number; clickCount?: number }
+  | { kind: 'dblclick'; x: number; y: number }
+  | { kind: 'wheel'; x: number; y: number; deltaX?: number; deltaY?: number }
+  | { kind: 'keydown'; key: string; code?: string; text?: string }
+  | { kind: 'keyup'; key: string; code?: string }
+  | { kind: 'type'; text: string };
+
+/** Forward real pointer/keyboard events into the live page (viewport coords). */
+export async function browserInput(event: BrowserInputEvent, runId: string = SUBBROWSER_RUN_ID): Promise<void> {
+  const page = await getPageForRun(runId);
+  const mouseButton = (btn?: number): 'left' | 'right' | 'middle' => {
+    if (btn === 2) return 'right';
+    if (btn === 1) return 'middle';
+    return 'left';
+  };
+
+  switch (event.kind) {
+    case 'mousemove':
+      await page.mouse.move(event.x, event.y);
+      break;
+    case 'mousedown':
+      await page.mouse.move(event.x, event.y);
+      await page.mouse.down({ button: mouseButton(event.button) });
+      break;
+    case 'mouseup':
+      await page.mouse.move(event.x, event.y);
+      await page.mouse.up({ button: mouseButton(event.button) });
+      break;
+    case 'click':
+      await page.mouse.click(event.x, event.y, {
+        button: mouseButton(event.button),
+        count: event.clickCount || 1,
+      });
+      break;
+    case 'dblclick':
+      await page.mouse.click(event.x, event.y, { count: 2 });
+      break;
+    case 'wheel':
+      await page.mouse.move(event.x, event.y);
+      await page.mouse.wheel({
+        deltaX: event.deltaX || 0,
+        deltaY: event.deltaY || 0,
+      });
+      break;
+    case 'keydown': {
+      // Printable characters → insert text; special keys → key events.
+      const special = /^(Enter|Tab|Backspace|Delete|Escape|Arrow|Home|End|Page|F\d)/.test(event.key)
+        || event.key === 'Meta' || event.key === 'Control' || event.key === 'Alt' || event.key === 'Shift';
+      if (event.text && event.text.length >= 1 && !special) {
+        await page.keyboard.sendCharacter(event.text);
+      } else {
+        await page.keyboard.down(event.key as Parameters<Page['keyboard']['down']>[0]);
+      }
+      break;
+    }
+    case 'keyup':
+      try {
+        await page.keyboard.up(event.key as Parameters<Page['keyboard']['up']>[0]);
+      } catch { /* non-standard or already released */ }
+      break;
+    case 'type':
+      await page.keyboard.type(event.text, { delay: 8 });
+      break;
+    default:
+      break;
+  }
 }

@@ -1,6 +1,6 @@
-/** Cloud (xAI API) vs local (OpenAI-compatible Grok runtime, e.g. LM Studio / Ollama). */
+/** Cloud (xAI API) · local (OpenAI-compatible, e.g. LM Studio / Ollama) · CLI (Grok CLI). */
 
-export type ModelProvider = 'cloud' | 'local';
+export type ModelProvider = 'cloud' | 'local' | 'cli';
 
 /** Which cloud credential a cloud-model selection uses. Undefined = follow the
  *  global cloudAuthMode preference (back-compat with plain `cloud:` refs). */
@@ -79,21 +79,45 @@ export function parseModelRef(value: string): ModelRef {
     const id = v.slice('cloud:'.length);
     return { provider: 'cloud', id, encoded: encodeModelRef('cloud', id) };
   }
-  // Replies routed through the local Grok CLI report as grok-cli:<model>.
+  // Grok CLI models — preferred prefix `cli:`, legacy stream tag `grok-cli:`.
+  if (v.startsWith('cli:')) {
+    const id = v.slice('cli:'.length);
+    return { provider: 'cli', id, encoded: encodeModelRef('cli', id) };
+  }
   if (v.startsWith('grok-cli:')) {
     const id = v.slice('grok-cli:'.length);
-    return { provider: 'local', id: `${id} · CLI`, encoded: v };
+    return { provider: 'cli', id, encoded: encodeModelRef('cli', id) };
   }
   return { provider: 'cloud', id: v, encoded: encodeModelRef('cloud', v) };
 }
 
 export function providerLabel(provider: ModelProvider): string {
-  return provider === 'local' ? 'Local' : 'Cloud';
+  if (provider === 'local') return 'Local';
+  if (provider === 'cli') return 'CLI';
+  return 'Cloud';
+}
+
+/** Tooltip for provider badges in the UI. */
+export function providerTitle(provider: ModelProvider, authSource?: CloudAuthSource): string {
+  if (provider === 'local') {
+    return 'Local model on this machine — any OpenAI-compatible server (LM Studio, Ollama, …)';
+  }
+  if (provider === 'cli') {
+    return 'Grok CLI — agentic coding model running via the local `grok` binary';
+  }
+  if (authSource === 'oauth') {
+    return 'xAI Grok cloud via OAuth 2.0 (SuperGrok / Premium+ quota)';
+  }
+  if (authSource === 'token') {
+    return 'xAI Grok cloud via your API key (pay-as-you-go)';
+  }
+  return 'xAI Grok cloud API';
 }
 
 /** Short label for a model entry's source — used in pickers. */
 export function modelSourceLabel(m: SelectableModel): string {
   if (m.provider === 'local') return 'Local';
+  if (m.provider === 'cli') return 'CLI';
   if (m.authSource === 'oauth') return 'OAuth';
   if (m.authSource === 'token') return 'Token';
   return 'Cloud';

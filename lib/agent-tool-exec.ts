@@ -24,7 +24,7 @@ import { invokeMcpTool } from './mcp-client';
 
 /** Tools that touch this machine — never available to cloud agents. */
 const LOCAL_ONLY_TOOLS = new Set([
-  'fs_list', 'fs_read', 'fs_write', 'fs_search', 'shell_exec',
+  'fs_list', 'fs_read', 'fs_write', 'fs_search', 'shell_exec', 'terminal_exec',
   'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
   'grok_cli', 'mcp_list_tools', 'mcp_invoke',
 ]);
@@ -43,6 +43,22 @@ export async function executeAgentTool(
       sideEffect: `blocked local tool ${name} for cloud agent`,
     };
   }
+  // Global Capabilities → Tools toggle — never run a disabled tool even if the
+  // model still tries (stale context, race after toggle, etc.).
+  try {
+    const { loadConfig } = await import('./persistence');
+    const { isToolDisabled } = await import('./disabled-tools');
+    const cfg = await loadConfig();
+    if (isToolDisabled(name, cfg.disabledTools)) {
+      return {
+        result: {
+          error: `Tool "${name}" is disabled in Capabilities → Tools. Re-enable it there to use it again.`,
+          disabled: true,
+        },
+        sideEffect: `blocked disabled tool ${name}`,
+      };
+    }
+  } catch { /* config load is best-effort; fall through to normal exec */ }
   try {
     switch (name) {
       case 'fs_list': {
@@ -61,6 +77,24 @@ export async function executeAgentTool(
       case 'shell_exec': {
         const out = await shellExec(args.command, workDir, 45000);
         return { result: { stdout: out.stdout.slice(0, 4000), stderr: out.stderr.slice(0, 1200), code: out.code }, sideEffect: `shell: ${args.command}` };
+      }
+      case 'terminal_exec': {
+        const { runTerminalCommand } = await import('./terminal-server');
+        const timeoutMs = args.timeoutMs != null ? Number(args.timeoutMs) : undefined;
+        const out = await runTerminalCommand(String(args.command || ''), { timeoutMs });
+        return {
+          result: {
+            ok: out.ok,
+            output: out.output.slice(0, 8000),
+            code: out.code,
+            timedOut: out.timedOut,
+            shell: out.shell,
+            pid: out.pid,
+            error: out.error,
+            note: 'Command ran in the shared Studio Terminal (visible in the Terminal panel).',
+          },
+          sideEffect: `terminal: ${String(args.command || '').slice(0, 120)}`,
+        };
       }
       case 'fs_search': {
         const { fsSearch } = await import('./agent-power-tools');

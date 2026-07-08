@@ -25,7 +25,7 @@ import type { NavStats } from './nav-stats-types';
 export type { NavStats } from './nav-stats-types';
 export { formatUsageCostUsd } from './nav-stats-types';
 
-// Usage aggregation scans the full usage ledger — cache it for 15 minutes.
+// Usage aggregation / xAI billing pull — cache 15 minutes.
 // Entity counts stay live (they're cheap directory/JSON reads).
 const USAGE_CACHE_MS = 15 * 60_000;
 let usageCostCache: { at: number; costUsd: number } | null = null;
@@ -33,6 +33,17 @@ let usageCostCache: { at: number; costUsd: number } | null = null;
 async function getCachedUsageCost(): Promise<number> {
   if (usageCostCache && Date.now() - usageCostCache.at < USAGE_CACHE_MS) {
     return usageCostCache.costUsd;
+  }
+  // Prefer authoritative month-to-date from xAI billing; fall back to local estimate.
+  try {
+    const { fetchXaiAccountUsage } = await import('./xai-billing-usage');
+    const xai = await fetchXaiAccountUsage({ days: 30 });
+    if (xai.available && xai.monthToDateCostUsd != null) {
+      usageCostCache = { at: Date.now(), costUsd: xai.monthToDateCostUsd };
+      return usageCostCache.costUsd;
+    }
+  } catch {
+    /* fall through to local ledger */
   }
   const usage = await getUsageSummary();
   usageCostCache = { at: Date.now(), costUsd: usage.estimatedCostUsd };

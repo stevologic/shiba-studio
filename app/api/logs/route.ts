@@ -12,13 +12,14 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const category = searchParams.get('category') || undefined;
+    const q = searchParams.get('q')?.trim() || undefined;
     const format = searchParams.get('format');
 
     // Export the full (filtered) trail as a downloadable file.
     if (format === 'csv' || format === 'json') {
-      const { entries } = listAuditLogs({ limit: EXPORT_CAP, offset: 0, category });
+      const { entries } = listAuditLogs({ limit: EXPORT_CAP, offset: 0, category, q });
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-      const suffix = category ? `-${category}` : '';
+      const suffix = [category, q ? 'search' : ''].filter(Boolean).map((s) => `-${s}`).join('');
       if (format === 'json') {
         return new NextResponse(JSON.stringify(entries, null, 2), {
           headers: {
@@ -51,8 +52,9 @@ export async function GET(req: NextRequest) {
       limit: Number(searchParams.get('limit')) || 100,
       offset: Number(searchParams.get('offset')) || 0,
       category,
+      q,
     });
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json({ ok: true, ...result, q: q || null });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Failed to load logs';
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });

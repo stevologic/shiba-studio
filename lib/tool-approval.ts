@@ -4,6 +4,7 @@ import type { ToolApprovalMode } from './types';
 export const APPROVAL_GATED_TOOLS = new Set([
   'fs_write',
   'shell_exec',
+  'terminal_exec',
   'browser_navigate',
   'browser_click',
   'browser_type',
