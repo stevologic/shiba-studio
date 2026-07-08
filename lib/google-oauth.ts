@@ -40,13 +40,14 @@ export function bundledGoogleClient(): { clientId: string; clientSecret: string 
 }
 
 async function resolveGoogleClient(): Promise<{ clientId: string; clientSecret: string } | null> {
-  const bundled = bundledGoogleClient();
-  if (bundled) return bundled;
+  // A user's OWN client wins — their quota, their choice — so a bundled default
+  // never hijacks a per-user client. The env default is only the fallback for
+  // users who haven't set one.
   const creds = await driveCreds();
   const clientId = creds.clientId?.trim();
   const clientSecret = creds.clientSecret?.trim();
   if (clientId && clientSecret) return { clientId, clientSecret };
-  return null;
+  return bundledGoogleClient();
 }
 
 /** Whether sign-in is available at all (bundled default or a per-user client). */
