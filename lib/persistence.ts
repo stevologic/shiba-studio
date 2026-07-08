@@ -89,12 +89,40 @@ async function ensureData() {
   await fs.mkdir(resolveDataDir(), { recursive: true });
 }
 
+// Sensitive fields inside an agent's per-integration credential overrides —
+// sealed with AES-256-GCM at rest, opened in memory (mirrors the global
+// SENSITIVE_CONFIG_PATHS but scoped per agent).
+const AGENT_OVERRIDE_SECRET_FIELDS: Record<string, string[]> = {
+  github: ['token'],
+  slack: ['token'],
+  discord: ['token'],
+  x: ['apiKey', 'apiSecret', 'accessToken', 'accessTokenSecret'],
+  obsidian: ['restApiKey'],
+  googledrive: ['accessToken', 'serviceAccountJson', 'clientSecret', 'refreshToken'],
+};
+
+function transformAgentOverrideSecrets(agent: Agent, fn: (v: string) => string): Agent {
+  const ov = (agent as any).integrationOverrides as Record<string, Record<string, unknown>> | undefined;
+  if (!ov) return agent;
+  const nextOv: Record<string, Record<string, unknown>> = {};
+  for (const [svc, svcObj] of Object.entries(ov)) {
+    if (!svcObj || typeof svcObj !== 'object') { nextOv[svc] = svcObj; continue; }
+    const copy: Record<string, unknown> = { ...svcObj };
+    for (const f of AGENT_OVERRIDE_SECRET_FIELDS[svc] || []) {
+      const v = copy[f];
+      if (typeof v === 'string' && v) copy[f] = fn(v);
+    }
+    nextOv[svc] = copy;
+  }
+  return { ...agent, integrationOverrides: nextOv } as Agent;
+}
+
 export async function loadAgents(): Promise<Agent[]> {
   await ensureData();
   try {
     const raw = await fs.readFile(agentsFile(), 'utf8');
     const list = JSON.parse(raw) as any[];
-    return list.map(normalizeAgent);
+    return list.map(normalizeAgent).map((a) => transformAgentOverrideSecrets(a, decryptSecret));
   } catch {
     return [];
   }
@@ -102,7 +130,8 @@ export async function loadAgents(): Promise<Agent[]> {
 
 export async function saveAgents(agents: Agent[]) {
   await ensureData();
-  await fs.writeFile(agentsFile(), JSON.stringify(agents, null, 2));
+  const sealed = agents.map((a) => transformAgentOverrideSecrets(a, encryptSecret));
+  await fs.writeFile(agentsFile(), JSON.stringify(sealed, null, 2));
 }
 
 const DEFAULT_CONFIG: AppConfig = {

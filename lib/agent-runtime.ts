@@ -482,6 +482,12 @@ async function* agentRunGenerator(
   const { resolveCloudBearer, ensureCloudAuth } = await import('./xai-oauth');
   const modelRef = parseModelRef(agent.model);
   const cfg = await loadConfig();
+  // Scope this run's integrations to the agent's own credential overrides
+  // (its own GitHub token, Slack bot, X account, …) falling back to global.
+  {
+    const { setIntegrationCreds, mergeAgentIntegrationCreds } = await import('./integrations');
+    setIntegrationCreds(mergeAgentIntegrationCreds(cfg.integrations || {}, agent.integrationOverrides));
+  }
   const cloudAuth = await resolveCloudBearer(cfg, modelRef.authSource);
   const modelError = modelRef.provider === 'local'
     ? (!cfg.localGrokEnabled ? 'Local Grok is disabled. Enable it in Settings or switch this agent to a Cloud model.' : null)
@@ -606,7 +612,10 @@ async function* agentRunGenerator(
         }
         messages.push({ role: 'assistant', content: msg.content, tool_calls: msg.tool_calls as any });
       } else {
-        messages.push({ role: 'assistant', content: null, tool_calls: msg.tool_calls as any });
+        // Empty string, NOT null — local OpenAI-compatible servers (LM Studio,
+        // Ollama) reject a null content on a tool-call turn with
+        // "invalid message content type: <nil>". "" is valid on cloud too.
+        messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: msg.tool_calls as any });
       }
 
       // Execute tool calls

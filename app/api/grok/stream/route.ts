@@ -43,6 +43,10 @@ export async function POST(req: NextRequest) {
       if (agent) {
         chatAgent = agent;
         agentName = agent.name;
+        // Scope this chat's integration tools to the agent's own credential
+        // overrides (its own token/account) before building context or running.
+        const { setIntegrationCreds, mergeAgentIntegrationCreds } = await import('@/lib/integrations');
+        setIntegrationCreds(mergeAgentIntegrationCreds(cfg.integrations || {}, agent.integrationOverrides));
         const { buildIntegrationContext } = await import('@/lib/integration-context');
         const integrationContext = await buildIntegrationContext(agent.integrations, agent.driveFolders);
         if (integrationContext) systemParts.push(integrationContext);
@@ -182,7 +186,8 @@ export async function POST(req: NextRequest) {
                 break;
               }
 
-              msgs.push({ role: 'assistant', content: msg.content ?? null, tool_calls: toolCalls });
+              // "" not null — local servers reject null content on tool-call turns.
+              msgs.push({ role: 'assistant', content: msg.content ?? '', tool_calls: toolCalls });
               for (const tc of toolCalls) {
                 const fn = tc.function;
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any

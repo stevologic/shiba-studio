@@ -68,6 +68,7 @@ export async function POST(req: NextRequest) {
       useWorktree: !!body.workspace?.useWorktree,
     },
     integrations: { ...EMPTY_INTEGRATION_SCOPE, ...(body.integrations || {}) },
+    integrationOverrides: body.integrationOverrides && typeof body.integrationOverrides === 'object' ? body.integrationOverrides : undefined,
     driveFolders: Array.isArray(body.driveFolders) ? body.driveFolders : [],
     peers: body.peers || [],
     skills: body.skills || [],

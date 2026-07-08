@@ -60,6 +60,11 @@ export interface Agent {
     useWorktree: boolean;    // if true, create/use isolated git worktree for this agent
   };
   integrations: IntegrationScope;
+  /** Per-agent credential overrides — an agent can use its OWN token/account
+   *  for any authenticated integration instead of the global one, scoping it to
+   *  that credential. Absent fields fall back to the global config. Sensitive
+   *  fields are AES-256-GCM encrypted at rest (see persistence). */
+  integrationOverrides?: IntegrationCreds;
   /** Google Drive folder isolation: when non-empty, this agent's Drive tools
    *  are soft-scoped to these folders only (list within them, upload into the
    *  first). Empty/absent = full Drive access. Not a hard API-level boundary —
