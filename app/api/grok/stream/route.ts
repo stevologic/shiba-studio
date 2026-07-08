@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
         chatAgent = agent;
         agentName = agent.name;
         const { buildIntegrationContext } = await import('@/lib/integration-context');
-        const integrationContext = await buildIntegrationContext(agent.integrations);
+        const integrationContext = await buildIntegrationContext(agent.integrations, agent.driveFolders);
         if (integrationContext) systemParts.push(integrationContext);
       }
     } catch {

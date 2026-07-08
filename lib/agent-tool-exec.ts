@@ -153,12 +153,14 @@ export async function executeAgentTool(
         return { result: tweets, sideEffect: `read ${tweets.length} tweets from X (${feed})` };
       }
       case 'drive_list': {
-        const r = await Ints.driveListFiles(args.query);
-        return { result: r, sideEffect: 'listed Drive files' };
+        const folders = (agent.driveFolders || []).map((f) => f.id).filter(Boolean);
+        const r = await Ints.driveListFiles(args.query, 8, folders);
+        return { result: r, sideEffect: folders.length ? `listed Drive files in ${folders.length} scoped folder(s)` : 'listed Drive files' };
       }
       case 'drive_upload': {
-        const r = await Ints.driveUploadText(args.name, args.content);
-        return { result: r, sideEffect: `uploaded ${args.name} to Drive` };
+        const folders = (agent.driveFolders || []).map((f) => f.id).filter(Boolean);
+        const r = await Ints.driveUploadText(args.name, args.content, folders);
+        return { result: r, sideEffect: `uploaded ${args.name} to Drive${folders.length ? ' (scoped folder)' : ''}` };
       }
       case 'obsidian_list': {
         const creds = Ints.getIntegrationCreds();

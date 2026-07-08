@@ -292,8 +292,23 @@ export default function ShibaStudio() {
   const [agentForm, setAgentForm] = useState<any>({
     name: 'Builder Agent', avatar: 'alien-01', origin: 'local', model: 'grok-4', workspace: { path: '', useWorktree: true },
     integrations: { ...EMPTY_INTEGRATION_SCOPE },
-    peers: [], skills: [], chatSkill: '', schedules: [defaultScheduleEntry()]
+    peers: [], skills: [], chatSkill: '', schedules: [defaultScheduleEntry()], driveFolders: []
   });
+  // Drive folder picker (agent editor) — the connected Drive's folders.
+  const [driveFolderOptions, setDriveFolderOptions] = useState<Array<{ id: string; name: string }> | null>(null);
+  const [driveFoldersLoading, setDriveFoldersLoading] = useState(false);
+  const loadDriveFolders = useCallback(async () => {
+    setDriveFoldersLoading(true);
+    try {
+      const res = await fetch('/api/google-drive/folders');
+      const data = await res.json();
+      setDriveFolderOptions(data.ok ? (data.folders || []) : []);
+      if (!data.ok) toast.error(data.error || 'Could not list Drive folders — sign in to Google Drive first');
+    } catch {
+      setDriveFolderOptions([]);
+    }
+    setDriveFoldersLoading(false);
+  }, []);
 
   // Workspace
   const [wsFiles, setWsFiles] = useState<any[]>([]);
@@ -796,9 +811,11 @@ export default function ShibaStudio() {
       origin: norm.origin === 'cloud' ? 'cloud' : 'local',
       workspace: { ...norm.workspace },
       integrations: { ...norm.integrations },
+      driveFolders: [...((norm as any).driveFolders || [])],
       peers: [...(norm.peers || [])],
       schedules: (norm.schedules || []).map((s: any) => enrichScheduleForForm(s)),
     });
+    setDriveFolderOptions(null); // reset the picker; user loads on demand
     setShowAgentModal(true);
   }
 
@@ -3784,6 +3801,62 @@ export default function ShibaStudio() {
                     })}
                   </div>
                 </div>
+
+                {/* Google Drive folder isolation — soft-scope this agent to
+                    specific folders instead of the whole Drive. */}
+                {agentForm.integrations?.googledrive && (
+                  <div className="grok-card p-3 bg-black/20">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="grok-label mb-0 flex items-center gap-1.5">
+                        Drive folder scope
+                        <InfoHint text="Restrict this agent's Drive tools to specific folders. It will only list files inside them and upload into the first. Leave empty for full Drive access. This is workspace isolation enforced in the tool layer, not a hard API boundary." />
+                      </div>
+                      <button type="button" className="grok-btn grok-btn-ghost text-xs" onClick={() => void loadDriveFolders()} disabled={driveFoldersLoading}>
+                        {driveFoldersLoading ? 'Loading…' : (driveFolderOptions ? 'Refresh folders' : 'Load folders')}
+                      </button>
+                    </div>
+                    {(agentForm.driveFolders || []).length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {(agentForm.driveFolders || []).map((f: { id: string; name: string }) => (
+                          <span key={f.id} className="tool-chip tool-chip-local flex items-center gap-1">
+                            📁 {f.name}
+                            <button type="button" className="opacity-70 hover:opacity-100" title="Remove" onClick={() => setAgentForm({ ...agentForm, driveFolders: (agentForm.driveFolders || []).filter((x: { id: string }) => x.id !== f.id) })}>×</button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-warning mb-2">Full Drive access — this agent can read and write anywhere. Pick folders below to isolate it.</div>
+                    )}
+                    {driveFolderOptions && driveFolderOptions.length > 0 && (
+                      <div className="workspace-dir-list max-h-40 overflow-auto">
+                        {driveFolderOptions.map((f) => {
+                          const selected = (agentForm.driveFolders || []).some((x: { id: string }) => x.id === f.id);
+                          return (
+                            <label key={f.id} className="workspace-dir-item cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={(e) => {
+                                  const cur = agentForm.driveFolders || [];
+                                  setAgentForm({
+                                    ...agentForm,
+                                    driveFolders: e.target.checked
+                                      ? [...cur, { id: f.id, name: f.name }]
+                                      : cur.filter((x: { id: string }) => x.id !== f.id),
+                                  });
+                                }}
+                              />
+                              <span className="truncate min-w-0">📁 {f.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {driveFolderOptions && driveFolderOptions.length === 0 && (
+                      <div className="text-[11px] text-dim">No folders found (or Drive not signed in). Sign in on the Capabilities page, then Load folders.</div>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <div className="grok-label">Peer Agents (inter-agent messaging)</div>

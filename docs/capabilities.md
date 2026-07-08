@@ -17,6 +17,10 @@ Provide credentials once; agents with the matching scope can call the service du
 
 Every credential is AES-256-GCM encrypted at rest. *Test Connection* verifies each one; *Remove* deletes stored credentials.
 
+### Google Drive folder isolation (per agent)
+
+When an agent has the Google Drive scope, its editor shows a **Drive folder scope** picker. Click **Load folders** to list your Drive's folders and select which ones the agent may use. With folders selected, that agent's `drive_list` only returns files inside them and `drive_upload` writes into the first — the model is also told its boundary in-context. Leave it empty for full Drive access. This is *workspace isolation* enforced in the tool layer (so one agent doesn't rummage through your whole Drive), not a hard API-level permission — the underlying token still has full scope.
+
 ## Skills
 
 Reusable prompt capabilities you assign to agents — presets plus your own custom skills (create, edit, and manage agent assignments right from the page). An agent's skills are injected into its system prompt on every run.

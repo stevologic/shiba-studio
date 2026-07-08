@@ -68,6 +68,7 @@ export async function POST(req: NextRequest) {
       useWorktree: !!body.workspace?.useWorktree,
     },
     integrations: { ...EMPTY_INTEGRATION_SCOPE, ...(body.integrations || {}) },
+    driveFolders: Array.isArray(body.driveFolders) ? body.driveFolders : [],
     peers: body.peers || [],
     skills: body.skills || [],
     chatSkill: body.chatSkill || '',

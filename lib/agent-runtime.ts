@@ -571,7 +571,7 @@ async function* agentRunGenerator(
         opts.projectContext,
         await (await import('./custom-skills')).getAllSkillPresets(),
         await (await import('./integration-context'))
-          .buildIntegrationContext(agent.integrations)
+          .buildIntegrationContext(agent.integrations, agent.driveFolders)
           .catch(() => ''),
       ),
     },

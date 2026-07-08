@@ -51,7 +51,7 @@ export async function* multiAgentChatStream(params: MultiAgentChatParams): Async
       try {
         // Each agent answers with live context from its own enabled integrations.
         const { buildIntegrationContext } = await import('./integration-context');
-        const integrationContext = await buildIntegrationContext(agent.integrations).catch(() => '');
+        const integrationContext = await buildIntegrationContext(agent.integrations, agent.driveFolders).catch(() => '');
         const resp = await grokChat({
           model: agent.model || model,
           messages: [

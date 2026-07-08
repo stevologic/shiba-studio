@@ -112,14 +112,43 @@ export async function testGoogleDrive(): Promise<{ ok: boolean; email?: string; 
   } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Drive test failed' }; }
 }
 
-export async function driveListFiles(query = '', max = 8) {
+export async function driveListFiles(query = '', max = 8, allowedFolders?: string[]) {
   const auth = await driveAuth();
   if (!auth) throw new Error('Google Drive not configured');
   const { google } = await import('googleapis');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const drive = google.drive({ version: 'v3', auth: auth as any });
-  const res = await drive.files.list({ q: query || undefined, pageSize: max, fields: 'files(id,name,mimeType,webViewLink)' });
-  return (res.data.files || []).map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType, link: f.webViewLink }));
+  const folders = (allowedFolders || []).filter(Boolean);
+  // Folder isolation: constrain the query to files that live directly in an
+  // allowed folder, then filter defensively on the returned parents.
+  let q = query || '';
+  if (folders.length) {
+    const inParents = folders.map((id) => `'${id.replace(/'/g, "\\'")}' in parents`).join(' or ');
+    q = q ? `(${q}) and (${inParents})` : `(${inParents})`;
+  }
+  const res = await drive.files.list({ q: q || undefined, pageSize: max, fields: 'files(id,name,mimeType,webViewLink,parents)' });
+  let files = res.data.files || [];
+  if (folders.length) {
+    const allow = new Set(folders);
+    files = files.filter((f) => (f.parents || []).some((p) => allow.has(p)));
+  }
+  return files.map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType, link: f.webViewLink }));
+}
+
+/** List the connected Drive's folders — powers the per-agent folder picker. */
+export async function driveListFolders(max = 200): Promise<Array<{ id: string; name: string }>> {
+  const auth = await driveAuth();
+  if (!auth) throw new Error('Google Drive not configured');
+  const { google } = await import('googleapis');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const drive = google.drive({ version: 'v3', auth: auth as any });
+  const res = await drive.files.list({
+    q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+    pageSize: max,
+    fields: 'files(id,name)',
+    orderBy: 'name',
+  });
+  return (res.data.files || []).map((f) => ({ id: f.id || '', name: f.name || '(unnamed)' })).filter((f) => f.id);
 }
 
 const DISCORD_API = 'https://discord.com/api/v10';
@@ -322,20 +351,18 @@ export {
   obsidianSearch,
 } from './obsidian';
 
-export async function driveUploadText(name: string, content: string, parentId?: string) {
-  if (!creds.googledrive?.accessToken && !creds.googledrive?.serviceAccountJson) throw new Error('Google Drive not configured');
+export async function driveUploadText(name: string, content: string, allowedFolders?: string[]) {
+  const auth = await driveAuth();
+  if (!auth) throw new Error('Google Drive not configured');
   const { google } = await import('googleapis');
-  let auth: any;
-  if (creds.googledrive.serviceAccountJson) {
-    const sa = JSON.parse(creds.googledrive.serviceAccountJson);
-    auth = new google.auth.GoogleAuth({ credentials: sa, scopes: ['https://www.googleapis.com/auth/drive.file'] });
-  } else {
-    auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: creds.googledrive.accessToken });
-  }
-  const drive = google.drive({ version: 'v3', auth });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const drive = google.drive({ version: 'v3', auth: auth as any });
+  const folders = (allowedFolders || []).filter(Boolean);
+  // Folder isolation: a scoped agent writes into its first allowed folder,
+  // never loose in the Drive root.
+  const parents = folders.length ? [folders[0]] : undefined;
   const file = await drive.files.create({
-    requestBody: { name, parents: parentId ? [parentId] : undefined },
+    requestBody: { name, parents },
     media: { mimeType: 'text/plain', body: content },
     fields: 'id,webViewLink,name',
   });

@@ -60,6 +60,11 @@ export interface Agent {
     useWorktree: boolean;    // if true, create/use isolated git worktree for this agent
   };
   integrations: IntegrationScope;
+  /** Google Drive folder isolation: when non-empty, this agent's Drive tools
+   *  are soft-scoped to these folders only (list within them, upload into the
+   *  first). Empty/absent = full Drive access. Not a hard API-level boundary —
+   *  it's workspace isolation enforced in the tool layer. */
+  driveFolders?: Array<{ id: string; name: string }>;
   peers: string[];           // ids of other agents this one can message
   // Skills: array of skill descriptors (e.g. ["research", "coder", "browser-navigator"])
   // Injected into system prompt for specialization (informed by LLM agent best practices like Anthropic Agent Skills)

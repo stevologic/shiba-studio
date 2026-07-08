@@ -82,12 +82,17 @@ async function slackContext(): Promise<string> {
   return `### Slack\nConnected to workspace "${t.team}".${channel ? ` Default channel: ${channel}.` : ''}`;
 }
 
-async function driveContext(): Promise<string> {
+async function driveContext(driveFolders?: Array<{ id: string; name: string }>): Promise<string> {
   try {
-    const files = (await withTimeout(driveListFiles('', 8))) as Array<{ name?: string }>;
+    const folders = (driveFolders || []).filter((f) => f?.id);
+    const folderIds = folders.map((f) => f.id);
+    const files = (await withTimeout(driveListFiles('', 8, folderIds.length ? folderIds : undefined))) as Array<{ name?: string }>;
     const names = files.map((f) => f.name).filter(Boolean);
-    if (!names.length) return '### Google Drive\nConnected (no files listed).';
-    return `### Google Drive\nRecent files: ${names.join(', ')}`;
+    const scopeNote = folders.length
+      ? `\nScope: restricted to these folders only — ${folders.map((f) => f.name).join(', ')}. List and upload stay inside them; do not attempt other locations.`
+      : '';
+    if (!names.length) return `### Google Drive\nConnected (no files listed).${scopeNote}`;
+    return `### Google Drive\nRecent files: ${names.join(', ')}${scopeNote}`;
   } catch {
     return '';
   }
@@ -110,11 +115,17 @@ async function xContext(): Promise<string> {
  * Live context for every enabled integration in the scope. Returns '' when
  * nothing is enabled or nothing is reachable — callers can append verbatim.
  */
-export async function buildIntegrationContext(scope: IntegrationScope): Promise<string> {
+export async function buildIntegrationContext(
+  scope: IntegrationScope,
+  driveFolders?: Array<{ id: string; name: string }>,
+): Promise<string> {
   const enabled = Object.entries(scope).filter(([, v]) => v).map(([k]) => k);
   if (!enabled.length) return '';
 
-  const key = enabled.sort().join(',');
+  // Folder scope is part of the cache identity — a differently-scoped agent
+  // must not read another's cached Drive context.
+  const folderKey = (driveFolders || []).map((f) => f.id).sort().join('|');
+  const key = enabled.sort().join(',') + (folderKey ? `#drive:${folderKey}` : '');
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
 
@@ -122,7 +133,7 @@ export async function buildIntegrationContext(scope: IntegrationScope): Promise<
     obsidian: obsidianContext,
     github: githubContext,
     slack: slackContext,
-    googledrive: driveContext,
+    googledrive: () => driveContext(driveFolders),
     discord: discordContext,
     x: xContext,
   };
