@@ -13,6 +13,8 @@ type UiSkill = SkillPreset & { custom?: boolean };
 interface SkillsBrowserProps {
   installed: string[];
   onInstall: (skillId: string) => void;
+  /** Remove a skill from the current agent (compact editor). */
+  onUninstall?: (skillId: string) => void;
   compact?: boolean;
   /** Per-skill usage counts (e.g. how many agents have it) for the status line. */
   installedCounts?: Record<string, number>;
@@ -40,7 +42,7 @@ interface EditorState {
 }
 
 export default function SkillsBrowser({
-  installed, onInstall, compact, installedCounts, agents, onToggleAgentSkill,
+  installed, onInstall, onUninstall, compact, installedCounts, agents, onToggleAgentSkill,
 }: SkillsBrowserProps) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<string>('all');
@@ -289,58 +291,79 @@ export default function SkillsBrowser({
     </div>
   );
 
-  // Compact variant — list layout for the agent editor modal (includes custom skills).
+  // Compact variant — agent editor: chip grid of available capabilities.
   if (compact) {
     return (
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <Sparkles size={16} />
-          <div className="font-semibold">Skills Browser</div>
+      <div className="agent-skills-browser">
+        <div className="flex items-center gap-2 mb-2.5 flex-wrap">
+          <div className="flex items-center gap-1.5 text-xs font-semibold">
+            <Sparkles size={14} className="opacity-70" />
+            Add capabilities
+          </div>
+          <span className="text-[10px] text-dim">
+            {installed.length} active
+          </span>
           <button
             type="button"
             className="grok-btn grok-btn-ghost text-xs py-0.5 ml-auto"
             onClick={() => setEditor({ mode: 'create', name: '', category: 'coding', description: '', promptHint: '' })}
           >
-            <Plus size={12} /> New
+            <Plus size={12} /> New skill
           </button>
         </div>
-        <div className="flex flex-wrap gap-2 mb-3">
-          <input
-            className="grok-input text-xs flex-1 min-w-[140px]"
-            placeholder="Search skills…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <select className="grok-select text-xs" value={category} onChange={(e) => setCategory(e.target.value)}>
+        <div className="flex flex-wrap gap-2 mb-2.5">
+          <div className="relative flex-1 min-w-[140px]">
+            <Search size={12} className="agent-skills-search-icon" />
+            <input
+              className="grok-input text-xs pl-7"
+              placeholder="Search capabilities…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          <div className="agent-skills-cats">
             {categories.map((c) => (
-              <option key={c} value={c}>{c === 'all' ? 'All categories' : c}</option>
+              <button
+                key={c}
+                type="button"
+                className={`agent-skills-cat ${category === c ? 'active' : ''}`}
+                onClick={() => setCategory(c)}
+              >
+                {c === 'all' ? 'All' : c}
+              </button>
             ))}
-          </select>
+          </div>
         </div>
-        <div className="skills-grid max-h-[240px] overflow-auto space-y-2">
+        <div className="agent-skills-pick-grid">
+          {filtered.length === 0 && (
+            <div className="text-xs text-dim col-span-full py-3 text-center">No skills match that search.</div>
+          )}
           {filtered.map((skill) => {
             const has = installed.includes(skill.id);
+            const Icon = CATEGORY_ICONS[skill.category] || Sparkles;
             return (
-              <div key={skill.id} className="skills-card p-3 border border-default rounded-md">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="font-medium text-sm">
-                      {skill.name}
-                      {skill.custom && <span className="badge badge-muted ml-1.5 text-[9px] align-middle">custom</span>}
-                    </div>
-                    <div className="text-[10px] text-dim uppercase tracking-wide mt-0.5">{skill.category}</div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={has}
-                    onClick={() => onInstall(skill.id)}
-                    className={`grok-btn text-xs ${has ? 'grok-btn-ghost opacity-60' : 'grok-btn-secondary'}`}
-                  >
-                    {has ? <><Check size={12} /> Installed</> : <><Plus size={12} /> Add</>}
-                  </button>
-                </div>
-                <div className="text-xs text-dim mt-2">{skill.description}</div>
-              </div>
+              <button
+                key={skill.id}
+                type="button"
+                className={`agent-skill-pick ${has ? 'agent-skill-pick-on' : ''}`}
+                title={skill.description}
+                onClick={() => {
+                  if (has) onUninstall?.(skill.id);
+                  else onInstall(skill.id);
+                }}
+              >
+                <span className="agent-skill-pick-icon"><Icon size={14} /></span>
+                <span className="agent-skill-pick-body">
+                  <span className="agent-skill-pick-name">
+                    {skill.name}
+                    {skill.custom && <span className="badge badge-muted ml-1 text-[8px] align-middle">custom</span>}
+                  </span>
+                  <span className="agent-skill-pick-desc">{skill.description}</span>
+                </span>
+                <span className={`agent-skill-pick-toggle ${has ? 'on' : ''}`}>
+                  {has ? <Check size={12} /> : <Plus size={12} />}
+                </span>
+              </button>
             );
           })}
         </div>

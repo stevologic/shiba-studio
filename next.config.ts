@@ -16,7 +16,21 @@ function resolveGitCommit(): string {
 }
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ['child_process'],
+  // Real npm packages only — never Node builtins like `child_process`.
+  // Listing builtins confuses Turbopack's import map and can panic with
+  // "Next.js package not found" during HMR (especially when loading Chat).
+  serverExternalPackages: [
+    'puppeteer',
+    'puppeteer-core',
+    '@puppeteer/browsers',
+    'googleapis',
+    'google-auth-library',
+    'gaxios',
+    'node-cron',
+    'octokit',
+    '@modelcontextprotocol/sdk',
+    '@slack/web-api',
+  ],
   env: {
     NEXT_PUBLIC_GIT_COMMIT: resolveGitCommit(),
   },

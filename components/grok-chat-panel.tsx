@@ -2,14 +2,24 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, FolderGit2, GitBranch, Paperclip, Pencil, RefreshCw, RotateCcw,
-  Send, Sparkles, Square, Terminal, X,
+  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, FolderGit2, GitBranch, Mic, MicOff,
+  Paperclip, Pencil, RefreshCw, RotateCcw, Send, Sparkles, Square, Terminal, X,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import ChatMarkdown from '@/components/chat-markdown-lazy';
 import ShibaMark from '@/components/shiba-mark';
+import { confirmDialog } from '@/components/confirm-dialog';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
+import type { ChatAttachment, ChatMessagePayload, ReasoningEffort } from '@/lib/chat-types';
+import { buildAgentChatSystem } from '@/lib/chat-skill';
+import { modelDisplayName, parseModelRef, providerLabel, supportsReasoning } from '@/lib/model-providers';
+import type { Agent } from '@/lib/types';
+import type { Project, ProjectChatMessage } from '@/lib/project-types';
+import type { ChatSession } from '@/lib/chat-session-types';
+import { deriveSessionTitle } from '@/lib/chat-session-types';
+import { resolveAgentAvatarPath } from '@/lib/agent-avatars';
+import { v4 as uuidv4 } from 'uuid';
 
 const SubBrowser = dynamic(() => import('@/components/sub-browser'));
 const WorkspacePicker = dynamic(() => import('@/components/workspace-picker'));
@@ -30,16 +40,6 @@ const SLASH_COMMANDS: Array<{ cmd: string; insert: string; desc: string }> = [
   { cmd: '/x <text>', insert: '/x ', desc: 'Post to X through the configured integration' },
   { cmd: '/help', insert: '/help', desc: 'Full command reference' },
 ];
-import { confirmDialog } from '@/components/confirm-dialog';
-import type { ChatAttachment, ChatMessagePayload, ReasoningEffort } from '@/lib/chat-types';
-import { buildAgentChatSystem } from '@/lib/chat-skill';
-import { modelDisplayName, parseModelRef, providerLabel, supportsReasoning } from '@/lib/model-providers';
-import type { Agent } from '@/lib/types';
-import type { Project, ProjectChatMessage } from '@/lib/project-types';
-import type { ChatSession } from '@/lib/chat-session-types';
-import { deriveSessionTitle } from '@/lib/chat-session-types';
-import { resolveAgentAvatarPath } from '@/lib/agent-avatars';
-import { v4 as uuidv4 } from 'uuid';
 
 export type ChatTarget = 'grok' | 'all' | string;
 
@@ -90,8 +90,9 @@ type UiMessage = ChatMessagePayload & {
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 };
 
-function fmtTokenCount(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+function fmtTokenCount(n: number | undefined): string {
+  const v = typeof n === 'number' && Number.isFinite(n) ? n : 0;
+  return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v);
 }
 
 function projectMessagesToUi(messages: ProjectChatMessage[]): UiMessage[] {
@@ -296,6 +297,14 @@ export default function GrokChatPanel({
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
+  // Speech-to-text (Web Speech API) — Chrome/Edge; graceful no-op elsewhere.
+  const [dictating, setDictating] = useState(false);
+  const [dictationInterim, setDictationInterim] = useState('');
+  const [dictationSupported, setDictationSupported] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const dictationBaseRef = useRef('');
+  const dictationFinalRef = useRef('');
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -303,6 +312,113 @@ export default function GrokChatPanel({
   const abortRef = useRef<AbortController | null>(null);
   const chatModelRef = useRef(chatModel);
   useEffect(() => { chatModelRef.current = chatModel; }, [chatModel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    setDictationSupported(!!SR);
+  }, []);
+
+  const stopDictation = useCallback(() => {
+    try { recognitionRef.current?.stop(); } catch { /* already stopped */ }
+    recognitionRef.current = null;
+    setDictating(false);
+    setDictationInterim('');
+  }, []);
+
+  const startDictation = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      toast.error('Dictation is not supported in this browser — try Chrome or Edge.');
+      return;
+    }
+    try {
+      const rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = typeof navigator !== 'undefined' && navigator.language ? navigator.language : 'en-US';
+
+      // Snapshot current composer text so we append spoken words rather than replace.
+      const existing = input.trimEnd();
+      dictationBaseRef.current = existing ? `${existing} ` : '';
+      dictationFinalRef.current = '';
+      setDictationInterim('');
+
+      rec.onresult = (event: SpeechRecognitionEvent) => {
+        let interim = '';
+        let newlyFinal = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const piece = event.results[i][0]?.transcript || '';
+          if (event.results[i].isFinal) newlyFinal += piece;
+          else interim += piece;
+        }
+        if (newlyFinal) {
+          const chunk = newlyFinal.replace(/\s+/g, ' ').trim();
+          if (chunk) {
+            dictationFinalRef.current = dictationFinalRef.current
+              ? `${dictationFinalRef.current} ${chunk}`
+              : chunk;
+          }
+        }
+        const base = dictationBaseRef.current;
+        const finals = dictationFinalRef.current;
+        const interimBit = interim.trim();
+        let next = base;
+        if (finals) next = next ? `${next.replace(/\s+$/, '')} ${finals}` : finals;
+        if (interimBit) next = next ? `${next.replace(/\s+$/, '')} ${interimBit}` : interimBit;
+        setInput(next);
+        setDictationInterim(interimBit);
+      };
+
+      rec.onerror = (event: SpeechRecognitionErrorEvent) => {
+        if (event.error === 'aborted' || event.error === 'no-speech') return;
+        if (event.error === 'not-allowed') {
+          toast.error('Microphone permission denied — allow mic access to dictate.');
+        } else if (event.error === 'network') {
+          toast.error('Dictation needs a network connection for speech recognition.');
+        } else {
+          toast.error(`Dictation error: ${event.error}`);
+        }
+        stopDictation();
+      };
+
+      rec.onend = () => {
+        // Continuous mode can end on silence — restart while user still wants to talk.
+        if (recognitionRef.current === rec) {
+          try {
+            rec.start();
+            return;
+          } catch {
+            /* fall through to stop */
+          }
+        }
+        setDictating(false);
+        setDictationInterim('');
+        recognitionRef.current = null;
+      };
+
+      recognitionRef.current = rec;
+      rec.start();
+      setDictating(true);
+      textareaRef.current?.focus();
+      toast.success('Listening — speak your message');
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not start dictation');
+      stopDictation();
+    }
+  }, [input, stopDictation]);
+
+  function toggleDictation() {
+    if (dictating) stopDictation();
+    else startDictation();
+  }
+
+  // Stop mic when the panel unmounts or a stream starts.
+  useEffect(() => () => { stopDictation(); }, [stopDictation]);
+  useEffect(() => {
+    if (streaming && dictating) stopDictation();
+  }, [streaming, dictating, stopDictation]);
 
   const scrollToBottom = useCallback((smooth = true) => {
     bottomRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
@@ -1083,6 +1199,7 @@ export default function GrokChatPanel({
   async function sendChat() {
     const text = input.trim();
     if ((!text && pendingAttachments.length === 0) || streaming) return;
+    stopDictation();
 
     // Slash commands always win over a normal send — attachments stay pending
     // in the composer for the next real message.
@@ -1323,7 +1440,7 @@ export default function GrokChatPanel({
                 {!isUser && !m.streaming && m.usage && (
                   <span
                     className="grok-chat-token-meta"
-                    title={`${m.usage.promptTokens.toLocaleString()} in · ${m.usage.completionTokens.toLocaleString()} out`}
+                    title={`${Number(m.usage.promptTokens || 0).toLocaleString()} in · ${Number(m.usage.completionTokens || 0).toLocaleString()} out`}
                   >
                     {fmtTokenCount(m.usage.totalTokens)} tok
                   </span>
@@ -1571,7 +1688,11 @@ export default function GrokChatPanel({
         <textarea
           ref={textareaRef}
           value={input}
-          onChange={(e) => { setInput(e.target.value); setSlashDismissed(false); }}
+          onChange={(e) => {
+            if (dictating) stopDictation();
+            setInput(e.target.value);
+            setSlashDismissed(false);
+          }}
           onKeyDown={(e) => {
             if (slashMenuOpen) {
               if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashMatches.length); return; }
@@ -1590,14 +1711,38 @@ export default function GrokChatPanel({
             }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
+              stopDictation();
               void sendChat();
             }
           }}
           onPaste={onPaste}
           rows={1}
-          className="grok-input grok-chat-textarea grok-chat-textarea-lead"
-          placeholder={project ? 'Ask about this project — uploads are carried into context…' : 'Ask Grok anything — Shift+Enter for a new line, drop or paste files…'}
+          className={`grok-input grok-chat-textarea grok-chat-textarea-lead ${dictating ? 'grok-chat-textarea-dictating' : ''}`}
+          placeholder={
+            dictating
+              ? (dictationInterim ? `Listening… “${dictationInterim}”` : 'Listening — speak now…')
+              : project
+                ? 'Ask about this project — uploads are carried into context…'
+                : 'Ask Grok anything — Shift+Enter for a new line, drop or paste files…'
+          }
         />
+        <button
+          type="button"
+          className={`grok-btn grok-chat-attach-btn ${dictating ? 'grok-chat-dictate-active' : 'grok-btn-ghost'}`}
+          onClick={toggleDictation}
+          disabled={streaming || !dictationSupported}
+          title={
+            !dictationSupported
+              ? 'Dictation needs Chrome or Edge (Web Speech API)'
+              : dictating
+                ? 'Stop dictation'
+                : 'Dictate — speak your message into the composer'
+          }
+          aria-pressed={dictating}
+          aria-label={dictating ? 'Stop dictation' : 'Start dictation'}
+        >
+          {dictating ? <MicOff size={16} /> : <Mic size={16} />}
+        </button>
         <button
           type="button"
           className="grok-btn grok-btn-ghost grok-chat-attach-btn"
@@ -1731,7 +1876,13 @@ export default function GrokChatPanel({
       </div>
 
       <div className="text-[10px] text-center text-dim mt-1">
-        {useGrokCli && grokCliInstalled
+        {dictating ? (
+          <span className="grok-chat-dictate-status">
+            <span className="grok-chat-dictate-dot" aria-hidden />
+            Listening… click the mic again when you&apos;re done
+            {dictationInterim ? ` · “${dictationInterim.slice(0, 48)}${dictationInterim.length > 48 ? '…' : ''}”` : ''}
+          </span>
+        ) : useGrokCli && grokCliInstalled
           ? `Grok Build CLI on this machine${grokCliVersion ? ` (${grokCliVersion})` : ''} · global uploads still included as context`
           : isSessionMode && project
           ? `Session chat · global uploads + ${project.files.length} linked project file(s) in context`
@@ -1745,7 +1896,7 @@ export default function GrokChatPanel({
               ? `Chatting as ${selectedAgent.name}${selectedAgent.chatSkill ? ' · Skill active' : ' · add a Skill in agent settings'} · global uploads included`
               : parseModelRef(chatModel).provider === 'local'
                 ? 'Local model — served from this machine · global workspace uploads included'
-                : 'Cloud Grok — streaming, reasoning, images & files · global workspace uploads included'}
+                : 'Cloud Grok — streaming, reasoning, images & files · global workspace uploads included · mic to dictate'}
       </div>
 
       {showSubBrowser && (

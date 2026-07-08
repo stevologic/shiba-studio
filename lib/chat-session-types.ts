@@ -24,6 +24,6 @@ export interface ChatSession {
 export function deriveSessionTitle(messages: ProjectChatMessage[], fallback = 'New chat'): string {
   const firstUser = messages.find((m) => m.role === 'user' && m.content?.trim());
   if (!firstUser?.content) return fallback;
-  const t = firstUser.content.trim();
+  const t = String(firstUser.content).trim();
   return t.length > 42 ? `${t.slice(0, 42)}…` : t;
 }

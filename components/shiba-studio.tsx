@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
   CloudUpload, CloudDownload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -53,7 +53,17 @@ import {
 } from '@/lib/schedule-presets';
 import { INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/integration-catalog';
 import { modelDisplayName, parseModelRef, providerLabel, type ModelProvider } from '@/lib/model-providers';
-import { AppTab, chatSessionPath, isKnownAppPath, pathToChatSessionId, pathToTab, tabToPath } from '@/lib/app-navigation';
+import { resolveProjectWorkspace } from '@/lib/project-types';
+import {
+  AppTab,
+  chatSessionPath,
+  isKnownAppPath,
+  pathToChatSessionId,
+  pathToTab,
+  readLastChatSessionId,
+  tabToPath,
+  writeLastChatSessionId,
+} from '@/lib/app-navigation';
 import { formatUsageCostUsd, type NavStats } from '@/lib/nav-stats-types';
 import pkg from '@/package.json';
 
@@ -138,16 +148,35 @@ export default function ShibaStudio() {
   const [driveAdvancedOpen, setDriveAdvancedOpen] = useState(false);
   // App origin for OAuth redirect URIs (SSR-safe — filled in after mount).
   const [appOrigin, setAppOrigin] = useState('');
+  // Client-only so the Chat nav link points at the last session after hydrate
+  // (avoids always linking bare `/chat`, which remounts and double-loads).
+  const [chatNavHref, setChatNavHref] = useState('/chat');
   useEffect(() => { setAppOrigin(window.location.origin); }, []);
+  useEffect(() => {
+    const last = readLastChatSessionId();
+    setChatNavHref(last ? chatSessionPath(last) : '/chat');
+  }, [pathname]);
 
   const navigateToTab = useCallback((next: AppTab) => {
+    // Open Chat on the last session when possible so we never hit bare `/chat`
+    // first (that extra hop remounts the catch-all route and double-loaded).
+    if (next === 'chat') {
+      const last = readLastChatSessionId();
+      const path = last ? chatSessionPath(last) : tabToPath('chat');
+      if (pathname !== path) router.push(path);
+      return;
+    }
     const path = tabToPath(next);
     if (pathname !== path) router.push(path);
   }, [pathname, router]);
 
   const navigateToChatSession = useCallback((id: string) => {
     const path = chatSessionPath(id);
-    if (pathname !== path) router.push(path);
+    if (pathname === path) return;
+    writeLastChatSessionId(id);
+    // `/chat` → `/chat/:id` is a bootstrap rewrite, not a user navigation.
+    if (pathname === '/chat' || pathname === '/chat/') router.replace(path);
+    else router.push(path);
   }, [pathname, router]);
 
   /** Top-bar New Chat — create a fresh session and jump straight into it. */
@@ -589,6 +618,29 @@ export default function ShibaStudio() {
     router.push(`/automations?run=${encodeURIComponent(runId)}`);
   }
 
+  /** Nested drill-in from run details → execution trace (keeps the stack). */
+  function openExecutionTraceFromDetails(run: AgentRun) {
+    setActiveRun(run);
+    setLiveTrace(Array.isArray(run.trace) ? run.trace : []);
+    setPreviewSelectedIdx(null);
+    setShowTraceModal(true);
+    // Intentionally keep runDetail + historyAgent so closing the trace returns
+    // to details, and closing details returns to the run log.
+  }
+
+  function closeTraceModal() {
+    setShowTraceModal(false);
+    // Drop deep-link query so the URL effect does not reopen this trace.
+    if (searchParams.get('run')) {
+      router.replace(tabToPath('automations'));
+    }
+  }
+
+  function closeRunDetail() {
+    setRunDetail(null);
+    setRunDetailLoading(false);
+  }
+
   const [pendingRunAgent, setPendingRunAgent] = useState<{ agentId: string; agentName?: string } | null>(null);
 
   useEffect(() => {
@@ -748,6 +800,34 @@ export default function ShibaStudio() {
       schedules: [enrichScheduleForForm({ ...defaultScheduleEntry(), instructions: 'Perform the scheduled task using your skills.' })],
     });
     setShowAgentModal(true);
+  }
+
+  /** Pre-fill a new agent from a project (workspace + instructions as chat skill). */
+  function openCreateAgentFromProject(project: import('@/lib/project-types').Project) {
+    const ws = resolveProjectWorkspace(project, config?.defaultWorkspace || defaultWorkspaceInput || '');
+    const skill = (project.instructions || '').trim()
+      || `You help build and maintain the "${project.name}" project. Follow the project goals, respect the workspace, and make focused changes.`;
+    setEditingAgent(null);
+    setAgentForm({
+      name: `${project.name} Agent`,
+      avatar: ALIEN_AVATARS[agents.length % ALIEN_AVATARS.length].id,
+      origin: 'local',
+      model: pickDefaultModel(),
+      description: project.description || `Agent for project: ${project.name}`,
+      workspace: { path: ws, useWorktree: true },
+      integrations: { ...EMPTY_INTEGRATION_SCOPE },
+      peers: [],
+      skills: [],
+      chatSkill: skill.slice(0, 4000),
+      schedules: [enrichScheduleForForm({
+        ...defaultScheduleEntry(),
+        enabled: false,
+        instructions: `Advance the "${project.name}" project: explore the workspace, apply the project instructions, and implement the next clear step.`,
+      })],
+    });
+    navigateToTab('agents');
+    setShowAgentModal(true);
+    toast.success('Agent draft ready — review and save');
   }
 
   function patchSchedule(idx: number, patch: Record<string, unknown>) {
@@ -1040,18 +1120,6 @@ export default function ShibaStudio() {
     }
 
     await executeAgentRun(agent, p, scheduled, scheduleId, scheduleInstructions);
-  }
-
-  async function executeProjectBuild(project: import('@/lib/project-types').Project, agentId: string, prompt: string) {
-    const agent = agents.find((a) => a.id === agentId);
-    if (!agent) {
-      toast.error('Agent not found');
-      return;
-    }
-    await executeAgentRun(agent, prompt, false, undefined, undefined, {
-      stayOnTab: true,
-      projectId: project.id,
-    });
   }
 
   async function submitRunModal() {
@@ -1739,11 +1807,13 @@ export default function ShibaStudio() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Escape closes the topmost open surface (C3 — keyboard parity with backdrop click).
+  // Escape closes the topmost modal only (stack: trace → details → run log).
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (showAgentModal) {
+      if (showTraceModal) {
+        closeTraceModal();
+      } else if (showAgentModal) {
         setShowAgentModal(false);
         setEditingAgent(null);
         setHighlightScheduleIdx(null);
@@ -1757,8 +1827,7 @@ export default function ShibaStudio() {
       } else if (answerRun) {
         setAnswerRun(null);
       } else if (runDetail || runDetailLoading) {
-        setRunDetail(null);
-        setRunDetailLoading(false);
+        closeRunDetail();
       } else if (historyAgent) {
         setHistoryAgent(null);
         setHistoryRuns(null);
@@ -1768,7 +1837,7 @@ export default function ShibaStudio() {
     };
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
-  }, [showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen, answerRun, historyAgent, runDetail, runDetailLoading]);
+  }, [showTraceModal, showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen, answerRun, historyAgent, runDetail, runDetailLoading, searchParams]);
 
   // Dynamic document titles (C7) — tabs are distinguishable in the browser.
   useEffect(() => {
@@ -1842,7 +1911,7 @@ export default function ShibaStudio() {
           ] as const).map(item => {
             const Icon = item.icon;
             const active = tab === item.id;
-            const linkHref = item.id === 'chat' ? tabToPath('chat') : tabToPath(item.id as AppTab);
+            const linkHref = item.id === 'chat' ? chatNavHref : tabToPath(item.id as AppTab);
             return (
               <Link
                 key={item.id}
@@ -2141,19 +2210,14 @@ export default function ShibaStudio() {
 
           {tab === 'projects' && (
             <ProjectsPanel
-              chatModel={chatModel}
-              onChatModelChange={(m) => setChatModel(m as GrokModel)}
-              availableModels={availableModels}
-              modelsLoading={modelsLoading}
-              modelsError={modelsError}
-              onRefreshModels={loadModels}
               agents={agents}
               defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''}
-              activeRun={activeRun}
-              liveTrace={liveTrace}
-              previewSelectedIdx={previewSelectedIdx}
-              onPreviewSelect={setPreviewSelectedIdx}
-              onBuildWithAgent={executeProjectBuild}
+              defaultChatModel={chatModel}
+              onOpenProjectChat={(sessionId) => {
+                void loadNavStats();
+                navigateToChatSession(sessionId);
+              }}
+              onCreateAgentFromProject={openCreateAgentFromProject}
               onProjectSelect={(id) => {
                 if (activeRun?.projectId && id !== activeRun.projectId) {
                   clearProjectRunTrace();
@@ -2466,12 +2530,15 @@ export default function ShibaStudio() {
             <div>
               <div className="mb-3 font-medium flex items-center gap-1.5">
                 Scheduled &amp; Orchestrated Agents
-                <InfoHint text="Automations run agents on cron schedules with their own instructions. The Run log under each card shows what actually executed — click an entry for its full trace." />
+                <InfoHint text="Automations run agents on cron schedules with their own instructions. Open an agent’s run log to inspect past executions — each entry opens a full details modal." />
               </div>
               <div className="space-y-3">
                 {/* Only agents with actual schedules — no placeholder cards */}
                 {agents.filter((a) => agentSchedules(a).length > 0).map(a => {
                   const scheds = agentSchedules(a);
+                  const runCount = scheduledRuns
+                    ? scheduledRuns.filter((r) => r.agentId === a.id || r.agentName === a.name).length
+                    : null;
                   return (
                   <div key={a.id} className="grok-card p-4 automation-card">
                     <div className="flex items-start justify-between gap-3">
@@ -2485,16 +2552,36 @@ export default function ShibaStudio() {
                           {(a.skills||[]).length > 0 && <span className="text-xs badge badge-accent mt-1 inline-block">skills: {(a.skills||[]).join(', ')}</span>}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => openEditAgentSchedule(a, scheds.length)}
-                        className="grok-btn grok-btn-ghost text-xs py-1 px-2 shrink-0"
-                        title="Add a schedule in the agent editor"
-                      >
-                        <CalendarClock size={14}/> Add
-                      </button>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void openRunHistory(a)}
+                          className="grok-btn grok-btn-ghost text-xs p-1.5 relative"
+                          title={
+                            scheduledRuns === null
+                              ? 'Open run log'
+                              : runCount === 0
+                                ? 'Run log — no runs yet'
+                                : `Run log — ${runCount} run${runCount === 1 ? '' : 's'}`
+                          }
+                          aria-label="View run log"
+                        >
+                          <History size={14} />
+                          {runCount != null && runCount > 0 && (
+                            <span className="automation-runlog-badge">{runCount > 99 ? '99+' : runCount}</span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openEditAgentSchedule(a, scheds.length)}
+                          className="grok-btn grok-btn-ghost text-xs py-1 px-2"
+                          title="Add a schedule in the agent editor"
+                        >
+                          <CalendarClock size={14}/> Add
+                        </button>
+                      </div>
                     </div>
-                    {/* One row per automation — its own status pill + edit/delete */}
+                    {/* One row per automation — its own status pill + run/edit/delete */}
                     <div className="mt-2 text-xs space-y-1">
                       {scheds.map((s: any, i: number) => (
                         <div key={s.id || i} className="text-muted flex items-center gap-x-2 gap-y-1 min-w-0">
@@ -2540,49 +2627,6 @@ export default function ShibaStudio() {
                         </div>
                       ))}
                     </div>
-                    {/* What has actually run — not just what is scheduled */}
-                    <div className="mt-3 pt-3 border-t border-default">
-                      <div className="text-[10px] uppercase tracking-wide text-dim mb-1.5 flex items-center gap-1.5">
-                        <History size={11}/> Run log
-                      </div>
-                      {scheduledRuns === null ? (
-                        <div className="data-loading-row text-xs"><span className="data-spinner" /> Loading run log…</div>
-                      ) : (() => {
-                        // Name fallback keeps history visible when an agent was re-created
-                        const log = scheduledRuns.filter((r) => r.agentId === a.id || r.agentName === a.name).slice(0, 5);
-                        return log.length === 0 ? (
-                          <div className="text-xs text-dim">No scheduled runs yet — press ▶ on a schedule or wait for the next cron tick.</div>
-                        ) : (
-                          <div className="space-y-1">
-                            {log.map((r) => (
-                              <button
-                                key={r.id}
-                                type="button"
-                                onClick={() => void openRunDetails(r.id)}
-                                className="automation-run-row"
-                                title="Open run details — prompt, trace, outcome, tools"
-                              >
-                                <span className={`run-status run-status-${r.status} shrink-0`}>{r.status}</span>
-                                <span className="text-dim shrink-0">
-                                  {new Date(r.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                                </span>
-                                <span className="truncate text-muted flex-1 text-left">
-                                  {r.scheduleInstructions || r.prompt}
-                                </span>
-                              </button>
-                            ))}
-                            <button
-                              type="button"
-                              onClick={() => void openRunHistory(a)}
-                              className="text-[11px] link-accent mt-1"
-                              title="Full run history for this agent"
-                            >
-                              View all runs →
-                            </button>
-                          </div>
-                        );
-                      })()}
-                    </div>
                   </div>
                 )})}
                 {agents.filter((a) => agentSchedules(a).length > 0).length === 0 && (
@@ -2593,10 +2637,10 @@ export default function ShibaStudio() {
               </div>
               <div className="mt-6 text-xs text-dim">Agents can schedule themselves via the schedule_task tool and message other agents using send_to_peer. Everything is scoped per agent.</div>
 
-              {/* Execution Trace lives ONLY in this modal — opened by Run now,
-                  run links, and run-details. No inline section on the page. */}
+              {/* Execution Trace — top of the stack. Closing returns to run
+                  details (if any) or the page; never leaves run log visible under it. */}
               {showTraceModal && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={() => setShowTraceModal(false)}>
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={closeTraceModal}>
                   <div className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Execution trace">
                     <div className="flex items-center gap-2 mb-3 shrink-0">
                       <Terminal size={16}/>
@@ -2607,7 +2651,12 @@ export default function ShibaStudio() {
                           {activeRun.agentName} <ModelLine modelId={activeRun.model} />
                         </span>
                       )}
-                      <button type="button" className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0" onClick={() => setShowTraceModal(false)} title="Close">
+                      <button
+                        type="button"
+                        className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0"
+                        onClick={closeTraceModal}
+                        title={runDetail ? 'Back to run details' : 'Close'}
+                      >
                         <X size={16}/>
                       </button>
                     </div>
@@ -2642,6 +2691,13 @@ export default function ShibaStudio() {
                         />
                       )}
                     </div>
+                    {(runDetail || historyAgent) && (
+                      <div className="flex justify-end mt-3 shrink-0">
+                        <button type="button" className="grok-btn grok-btn-secondary text-xs" onClick={closeTraceModal}>
+                          {runDetail ? 'Back to run details' : historyAgent ? 'Back to run log' : 'Close'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -3477,8 +3533,8 @@ export default function ShibaStudio() {
           </div>
         )}
 
-      {/* Per-agent run history — every previous run, linking into the full trace */}
-      {historyAgent && (
+      {/* Run log — hidden while details or execution trace is open (stack). */}
+      {historyAgent && !(runDetail || runDetailLoading) && !showTraceModal && (
         <div
           className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
           onClick={() => { setHistoryAgent(null); setHistoryRuns(null); }}
@@ -3486,14 +3542,22 @@ export default function ShibaStudio() {
           <div className="modal modal-pop w-full max-w-2xl p-6 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-1">
               <img src={resolveAgentAvatarPath(historyAgent)} alt="" className="agent-avatar-sm" width={28} height={28} />
-              <div className="text-lg font-semibold truncate">Run history — {historyAgent.name}</div>
+              <div className="text-lg font-semibold truncate">Run log — {historyAgent.name}</div>
+              <button
+                type="button"
+                className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0"
+                onClick={() => { setHistoryAgent(null); setHistoryRuns(null); }}
+                title="Close"
+              >
+                <X size={16} />
+              </button>
             </div>
-            <div className="text-xs text-dim mb-4">Click a run to open its full execution log and this agent&apos;s configuration.</div>
+            <div className="text-xs text-dim mb-4">Click a run to open its full details — prompt, tools, outcome, and execution trace.</div>
             <div className="flex-1 overflow-y-auto min-h-0">
               {historyRuns === null ? (
                 <div className="data-loading-row py-6"><span className="data-spinner" /> Loading runs…</div>
               ) : historyRuns.length === 0 ? (
-                <div className="text-sm text-dim py-6 text-center">No runs yet — press Run on this agent to create the first one.</div>
+                <div className="text-sm text-dim py-6 text-center">No runs yet — press ▶ on a schedule or wait for the next cron tick.</div>
               ) : (
                 <div className="space-y-1.5">
                   {historyRuns.map((r) => (
@@ -3501,8 +3565,12 @@ export default function ShibaStudio() {
                       key={r.id}
                       type="button"
                       className="run-history-row"
-                      onClick={() => { setHistoryAgent(null); setHistoryRuns(null); openRunTrace(r.id); }}
-                      title="Open full execution log"
+                      onClick={() => {
+                        // Keep the run log open underneath — closing the details
+                        // modal (backdrop / Esc) returns to this list.
+                        void openRunDetails(r.id);
+                      }}
+                      title="Open run details"
                     >
                       <span className={`run-status run-status-${r.status} shrink-0`}>{r.status}</span>
                       <span className="text-dim shrink-0 text-[11px]">
@@ -3560,7 +3628,21 @@ export default function ShibaStudio() {
               <button
                 type="button"
                 className="grok-btn grok-btn-ghost text-xs"
-                onClick={() => { const id = answerRun.id; setAnswerRun(null); setHistoryAgent(null); setHistoryRuns(null); openRunTrace(id); }}
+                onClick={() => {
+                  const id = answerRun.id;
+                  setAnswerRun(null);
+                  void (async () => {
+                    try {
+                      const res = await fetch(`/api/runs?id=${encodeURIComponent(id)}`);
+                      const data = await res.json();
+                      if (!data.ok || !data.run) throw new Error(data.error || 'Run not found');
+                      setRunDetail(data.run);
+                      openExecutionTraceFromDetails(data.run);
+                    } catch (e: unknown) {
+                      toast.error(e instanceof Error ? e.message : 'Could not load run');
+                    }
+                  })();
+                }}
               >
                 <Terminal size={13} /> Open full trace
               </button>
@@ -3572,11 +3654,11 @@ export default function ShibaStudio() {
         </div>
       )}
 
-      {/* Run details — prompt, trace, outcome, tools, skills, side effects */}
-      {(runDetail || runDetailLoading) && (
+      {/* Run details — middle of the stack (under execution trace, over run log). */}
+      {(runDetail || runDetailLoading) && !showTraceModal && (
         <div
           className="fixed inset-0 bg-black/70 flex items-center justify-center z-[65] p-4"
-          onClick={() => { setRunDetail(null); setRunDetailLoading(false); }}
+          onClick={closeRunDetail}
         >
           <div className="modal modal-pop w-full max-w-3xl p-6 max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             {runDetailLoading || !runDetail ? (
@@ -3602,7 +3684,7 @@ export default function ShibaStudio() {
                       <div className="text-lg font-semibold truncate">{runDetail.agentName}</div>
                       <span className={`run-status run-status-${runDetail.status} shrink-0`}>{runDetail.status}</span>
                     </div>
-                    <button type="button" className="grok-btn grok-btn-ghost p-1.5 shrink-0" onClick={() => setRunDetail(null)} title="Close">
+                    <button type="button" className="grok-btn grok-btn-ghost p-1.5 shrink-0" onClick={closeRunDetail} title={historyAgent ? 'Back to run log' : 'Close'}>
                       <X size={16} />
                     </button>
                   </div>
@@ -3683,13 +3765,17 @@ export default function ShibaStudio() {
                     <button
                       type="button"
                       className="grok-btn grok-btn-ghost text-xs"
-                      onClick={() => { const id = runDetail.id; setRunDetail(null); openRunTrace(id); }}
-                      title="Open in the trace viewer (with preview rail and workspace diff)"
+                      onClick={() => openExecutionTraceFromDetails(runDetail)}
+                      title="Open the full execution trace (returns here when closed)"
                     >
                       <Terminal size={13} /> Open in trace view
                     </button>
-                    <button type="button" onClick={() => setRunDetail(null)} className="grok-btn grok-btn-secondary">
-                      Close
+                    <button
+                      type="button"
+                      onClick={closeRunDetail}
+                      className="grok-btn grok-btn-secondary"
+                    >
+                      {historyAgent ? 'Back to run log' : 'Close'}
                     </button>
                   </div>
                 </>
@@ -3801,17 +3887,36 @@ export default function ShibaStudio() {
                   </div>
                 )}
 
-                <div>
-                  <div className="grok-label mb-1">Integrations Scope (what this agent can access)</div>
-                  <div className="flex flex-wrap gap-2 text-sm">
+                <div className="agent-form-section">
+                  <div className="agent-form-section-head">
+                    <div className="agent-form-section-title">
+                      <Plug size={15} className="opacity-70" />
+                      Capabilities — integrations
+                    </div>
+                    <div className="agent-form-section-sub">
+                      Toggle which connected services this agent may use during runs and chat.
+                    </div>
+                  </div>
+                  <div className="agent-capability-grid">
                     {INTEGRATION_IDS.map(key => {
                       const meta = getIntegrationMeta(key)!;
+                      const on = !!agentForm.integrations?.[key];
                       return (
-                        <label key={key} className="integration-scope-label">
-                          <input type="checkbox" checked={!!agentForm.integrations?.[key]} onChange={e => setAgentForm({ ...agentForm, integrations: { ...agentForm.integrations, [key]: e.target.checked } })} />
+                        <button
+                          key={key}
+                          type="button"
+                          className={`agent-capability-tile ${on ? 'on' : ''}`}
+                          onClick={() => setAgentForm({
+                            ...agentForm,
+                            integrations: { ...agentForm.integrations, [key]: !on },
+                          })}
+                        >
                           <IntegrationIcon id={key} size="sm" />
-                          <span>{meta.label}</span>
-                        </label>
+                          <span className="agent-capability-label">{meta.label}</span>
+                          <span className={`agent-capability-check ${on ? 'on' : ''}`}>
+                            {on ? <Check size={12} /> : null}
+                          </span>
+                        </button>
                       );
                     })}
                   </div>
@@ -3919,99 +4024,234 @@ export default function ShibaStudio() {
                   <div className="text-[10px] text-dim">Selected agents can receive messages from this one via the send_to_peer tool.</div>
                 </div>
 
-                <div>
-                  <div className="grok-label">Skill — chat personality</div>
+                <div className="agent-form-section">
+                  <div className="agent-form-section-head">
+                    <div className="agent-form-section-title">
+                      <MessageSquare size={15} className="opacity-70" />
+                      Chat personality
+                    </div>
+                    <div className="agent-form-section-sub">
+                      How this agent speaks in Grok Chat — tone, style, and priorities.
+                    </div>
+                  </div>
                   <textarea
                     className="grok-input schedule-instructions-input text-xs"
                     placeholder="You are a sharp, encouraging builder who explains trade-offs clearly and celebrates small wins…"
                     value={agentForm.chatSkill || ''}
                     onChange={(e) => setAgentForm({ ...agentForm, chatSkill: e.target.value })}
                   />
-                  <div className="text-[10px] text-dim mt-1">Defines how this agent speaks when selected in Grok Chat. This is the conversational persona users interact with.</div>
                 </div>
 
-                <div>
-                  <div className="grok-label">Capabilities (comma separated tags)</div>
-                  <input className="grok-input" placeholder="research, coder, browser-automation" value={(agentForm.skills || []).join(', ')} onChange={e => {
-                    const arr = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
-                    setAgentForm({ ...agentForm, skills: arr });
-                  }} />
-                  <div className="text-[10px] text-dim">Tool-running specialties injected into autonomous agent runs (separate from chat Skill above).</div>
-                  <div className="mt-3">
-                    <SkillsBrowser
-                      compact
-                      installed={agentForm.skills || []}
-                      onInstall={(skillId) => {
-                        const cur = agentForm.skills || [];
-                        if (cur.includes(skillId)) return;
-                        setAgentForm({ ...agentForm, skills: [...cur, skillId] });
-                      }}
-                    />
+                <div className="agent-form-section">
+                  <div className="agent-form-section-head">
+                    <div className="agent-form-section-title">
+                      <Sparkles size={15} className="opacity-70" />
+                      Skills &amp; specialties
+                    </div>
+                    <div className="agent-form-section-sub">
+                      Capability packs injected into autonomous runs (coding, research, browser, …). Click a tile to toggle.
+                    </div>
                   </div>
+                  {(agentForm.skills || []).length > 0 && (
+                    <div className="agent-active-skills mb-3">
+                      {(agentForm.skills || []).map((skillId: string) => (
+                        <button
+                          key={skillId}
+                          type="button"
+                          className="agent-skill-chip"
+                          title="Remove skill"
+                          onClick={() => setAgentForm({
+                            ...agentForm,
+                            skills: (agentForm.skills || []).filter((s: string) => s !== skillId),
+                          })}
+                        >
+                          {skillId}
+                          <X size={11} />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <SkillsBrowser
+                    compact
+                    installed={agentForm.skills || []}
+                    onInstall={(skillId) => {
+                      const cur = agentForm.skills || [];
+                      if (cur.includes(skillId)) return;
+                      setAgentForm({ ...agentForm, skills: [...cur, skillId] });
+                    }}
+                    onUninstall={(skillId) => {
+                      setAgentForm({
+                        ...agentForm,
+                        skills: (agentForm.skills || []).filter((s: string) => s !== skillId),
+                      });
+                    }}
+                  />
                 </div>
 
-                <div id="agent-schedules-section" className={highlightScheduleIdx !== null ? 'schedule-section-focus' : ''}>
-                  <div className="grok-label">Automations — when should this agent run?</div>
-                  <div className="space-y-3">
-                    {(agentForm.schedules || []).map((sch: any, idx: number) => {
-                      const preset: SchedulePresetId = sch._preset || 'every_30m';
-                      const presetMeta = SCHEDULE_PRESETS.find(p => p.id === preset);
-                      return (
-                      <div
-                        key={sch.id || idx}
-                        id={`agent-schedule-${idx}`}
-                        className={`border border-default p-3 rounded text-sm space-y-2 schedule-entry ${highlightScheduleIdx === idx ? 'schedule-entry-highlight' : ''}`}
-                      >
-                        <div className="flex flex-wrap gap-2 items-center">
-                          <select
-                            className="grok-select flex-1 min-w-[180px] text-xs"
-                            value={preset}
-                            onChange={e => onSchedulePresetChange(idx, e.target.value as SchedulePresetId)}
-                          >
-                            {SCHEDULE_PRESETS.map(p => (
-                              <option key={p.id} value={p.id}>{p.label}</option>
-                            ))}
-                          </select>
-                          {(preset === 'daily' || preset === 'weekdays') && (
-                            <input
-                              type="time"
-                              className="grok-input w-auto text-xs"
-                              value={sch._time || '09:00'}
-                              onChange={e => onScheduleTimeChange(idx, e.target.value)}
-                            />
-                          )}
-                          <label className="flex items-center gap-1 text-xs whitespace-nowrap">
-                            <input type="checkbox" checked={!!sch.enabled} onChange={e => patchSchedule(idx, { enabled: e.target.checked })} />
-                            Active
-                          </label>
-                          <button type="button" onClick={() => {
-                            const news = (agentForm.schedules || []).filter((_: any, i: number) => i !== idx);
-                            setAgentForm({ ...agentForm, schedules: news.length ? news : [] });
-                          }} className="text-xs text-red-400">Remove</button>
+                <div
+                  id="agent-schedules-section"
+                  className={`agent-form-section ${highlightScheduleIdx !== null ? 'schedule-section-focus' : ''}`}
+                >
+                  <div className="agent-form-section-head">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="agent-form-section-title">
+                          <CalendarClock size={15} className="opacity-70" />
+                          Automations
                         </div>
-                        {preset === 'custom' ? (
-                          <input
-                            className="grok-input text-xs font-mono"
-                            placeholder="*/15 * * * *"
-                            value={sch._customCron ?? sch.cron ?? ''}
-                            onChange={e => patchSchedule(idx, { _customCron: e.target.value, cron: e.target.value, _preset: 'custom' })}
-                          />
-                        ) : (
-                          <div className="text-[10px] text-dim">{presetMeta?.hint} · saves as <span className="font-mono">{sch.cron}</span></div>
-                        )}
-                        <textarea
-                          className="grok-input schedule-instructions-input text-xs"
-                          placeholder="What should the agent do each time? (This becomes the prompt.)"
-                          value={sch.instructions || ''}
-                          onChange={e => patchSchedule(idx, { instructions: e.target.value })}
-                        />
+                        <div className="agent-form-section-sub">
+                          When this agent should wake up on its own — and exactly what to do each time.
+                        </div>
                       </div>
-                    );})}
-                    <button type="button" onClick={() => {
-                      setAgentForm({ ...agentForm, schedules: [...(agentForm.schedules || []), defaultScheduleEntry()] });
-                    }} className="grok-btn grok-btn-ghost text-xs">+ Add another schedule</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAgentForm({
+                            ...agentForm,
+                            schedules: [...(agentForm.schedules || []), defaultScheduleEntry()],
+                          });
+                        }}
+                        className="grok-btn grok-btn-secondary text-xs shrink-0"
+                      >
+                        <Plus size={13} /> Add schedule
+                      </button>
+                    </div>
                   </div>
-                  <div className="text-[10px] text-dim mt-1">Pick a plain-English frequency — no cron knowledge needed. Use Custom only if you know cron syntax.</div>
+
+                  {(agentForm.schedules || []).length === 0 ? (
+                    <div className="agent-schedule-empty">
+                      <Clock size={20} className="opacity-40 mb-2" />
+                      <div className="text-sm font-medium">No automations yet</div>
+                      <div className="text-xs text-dim mt-1 max-w-xs mx-auto leading-relaxed">
+                        Add a schedule so this agent can run on a timer with its own prompt — no cron knowledge needed.
+                      </div>
+                      <button
+                        type="button"
+                        className="grok-btn grok-btn-primary text-xs mt-3"
+                        onClick={() => {
+                          setAgentForm({
+                            ...agentForm,
+                            schedules: [defaultScheduleEntry()],
+                          });
+                        }}
+                      >
+                        <Plus size={13} /> Create first schedule
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {(agentForm.schedules || []).map((sch: any, idx: number) => {
+                        const preset: SchedulePresetId = sch._preset || 'every_30m';
+                        const presetMeta = SCHEDULE_PRESETS.find((p) => p.id === preset);
+                        return (
+                          <div
+                            key={sch.id || idx}
+                            id={`agent-schedule-${idx}`}
+                            className={`agent-schedule-card ${highlightScheduleIdx === idx ? 'schedule-entry-highlight' : ''} ${sch.enabled ? 'is-active' : 'is-paused'}`}
+                          >
+                            <div className="agent-schedule-card-top">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="agent-schedule-index">{idx + 1}</span>
+                                <div className="min-w-0">
+                                  <div className="text-xs font-semibold truncate">
+                                    {presetMeta?.label || 'Schedule'}
+                                    {(preset === 'daily' || preset === 'weekdays') && sch._time
+                                      ? ` · ${sch._time}`
+                                      : ''}
+                                  </div>
+                                  <div className="text-[10px] text-dim font-mono truncate">
+                                    {sch.cron || presetMeta?.hint}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  className={`automation-status-tag ${sch.enabled ? 'automation-status-active' : 'automation-status-paused'}`}
+                                  onClick={() => patchSchedule(idx, { enabled: !sch.enabled })}
+                                  title={sch.enabled ? 'Pause this schedule' : 'Activate this schedule'}
+                                >
+                                  {sch.enabled ? 'Active' : 'Paused'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="grok-btn grok-btn-ghost text-xs p-1 text-error"
+                                  title="Remove schedule"
+                                  onClick={() => {
+                                    const news = (agentForm.schedules || []).filter((_: any, i: number) => i !== idx);
+                                    setAgentForm({ ...agentForm, schedules: news });
+                                  }}
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="agent-schedule-freq">
+                              <div className="agent-schedule-freq-label">Frequency</div>
+                              <div className="agent-schedule-presets">
+                                {SCHEDULE_PRESETS.filter((p) => p.id !== 'custom').map((p) => (
+                                  <button
+                                    key={p.id}
+                                    type="button"
+                                    className={`agent-schedule-preset ${preset === p.id ? 'active' : ''}`}
+                                    onClick={() => onSchedulePresetChange(idx, p.id)}
+                                    title={p.hint}
+                                  >
+                                    {p.label}
+                                  </button>
+                                ))}
+                                <button
+                                  type="button"
+                                  className={`agent-schedule-preset ${preset === 'custom' ? 'active' : ''}`}
+                                  onClick={() => onSchedulePresetChange(idx, 'custom')}
+                                  title="Raw cron expression"
+                                >
+                                  Custom
+                                </button>
+                              </div>
+                              {(preset === 'daily' || preset === 'weekdays') && (
+                                <div className="flex items-center gap-2 mt-2">
+                                  <span className="text-[10px] text-dim">At</span>
+                                  <input
+                                    type="time"
+                                    className="grok-input w-auto text-xs"
+                                    value={sch._time || '09:00'}
+                                    onChange={(e) => onScheduleTimeChange(idx, e.target.value)}
+                                  />
+                                  <span className="text-[10px] text-dim">{presetMeta?.hint}</span>
+                                </div>
+                              )}
+                              {preset === 'custom' ? (
+                                <input
+                                  className="grok-input text-xs font-mono mt-2"
+                                  placeholder="*/15 * * * *"
+                                  value={sch._customCron ?? sch.cron ?? ''}
+                                  onChange={(e) => patchSchedule(idx, {
+                                    _customCron: e.target.value,
+                                    cron: e.target.value,
+                                    _preset: 'custom',
+                                  })}
+                                />
+                              ) : preset !== 'daily' && preset !== 'weekdays' ? (
+                                <div className="text-[10px] text-dim mt-2">{presetMeta?.hint}</div>
+                              ) : null}
+                            </div>
+
+                            <div>
+                              <div className="agent-schedule-freq-label">What to do each run</div>
+                              <textarea
+                                className="grok-input schedule-instructions-input text-xs"
+                                placeholder="Clear instructions for this automation — e.g. “Summarize new issues in #agent-logs and flag blockers.”"
+                                value={sch.instructions || ''}
+                                onChange={(e) => patchSchedule(idx, { instructions: e.target.value })}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 

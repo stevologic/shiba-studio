@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageSquare, Pencil, Plus, X, Search, Archive, ArchiveRestore, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
@@ -8,8 +8,27 @@ import GrokChatPanel from '@/components/grok-chat-panel';
 import type { ChatSession } from '@/lib/chat-session-types';
 import type { Project } from '@/lib/project-types';
 import type { Agent } from '@/lib/types';
+import { writeLastChatSessionId } from '@/lib/app-navigation';
 
 type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' };
+
+/**
+ * Survives catch-all route remounts when the URL rewrites `/chat` → `/chat/:id`.
+ * Without this, every soft navigation wiped component refs and re-fetched.
+ */
+const sessionCache: {
+  listKey: string | null;
+  sessions: ChatSession[];
+  active: ChatSession | null;
+  loadedId: string | null;
+  listInflight: Promise<ChatSession[] | undefined> | null;
+} = {
+  listKey: null,
+  sessions: [],
+  active: null,
+  loadedId: null,
+  listInflight: null,
+};
 
 interface ChatSessionsPanelProps {
   sessionId: string | null;
@@ -34,16 +53,46 @@ export default function ChatSessionsPanel({
   onRefreshModels,
   defaultChatModel,
 }: ChatSessionsPanelProps) {
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>(() => sessionCache.sessions);
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(() => sessionCache.active);
   const [linkedProject, setLinkedProject] = useState<Project | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [bootstrapping, setBootstrapping] = useState(true);
+  const [bootstrapping, setBootstrapping] = useState(() => {
+    // Warm start from module cache after a `/chat` → `/chat/:id` remount.
+    if (sessionId && sessionCache.loadedId === sessionId && sessionCache.active?.id === sessionId) {
+      return false;
+    }
+    return true;
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   // Session rail collapse — remembered across visits.
   const [railOpen, setRailOpen] = useState<boolean>(() =>
     typeof window === 'undefined' ? true : window.localStorage.getItem('shiba-chat-rail') !== 'closed');
+
+  // Parent callbacks via refs — never put them in effect deps (identity churn
+  // used to re-bootstrap /chat on every parent render).
+  const onSessionChangeRef = useRef(onSessionChange);
+  const onStatsChangeRef = useRef(onStatsChange);
+  useEffect(() => { onSessionChangeRef.current = onSessionChange; }, [onSessionChange]);
+  useEffect(() => { onStatsChangeRef.current = onStatsChange; }, [onStatsChange]);
+
+  const defaultChatModelRef = useRef(defaultChatModel);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  useEffect(() => { defaultChatModelRef.current = defaultChatModel; }, [defaultChatModel]);
+
+  function commitSessions(next: ChatSession[]) {
+    sessionCache.sessions = next;
+    setSessions(next);
+  }
+
+  function commitActive(session: ChatSession | null) {
+    sessionCache.active = session;
+    sessionCache.loadedId = session?.id ?? null;
+    setActiveSession(session);
+    if (session?.id) writeLastChatSessionId(session.id);
+  }
 
   function toggleRail() {
     setRailOpen((open) => {
@@ -53,18 +102,37 @@ export default function ChatSessionsPanel({
   }
 
   const loadSessions = useCallback(async (query?: string) => {
-    try {
-      const params = new URLSearchParams();
-      if (query?.trim()) params.set('q', query.trim());
-      if (showArchived) params.set('archived', '1');
-      const qs = params.toString();
-      const res = await fetch(`/api/chat-sessions${qs ? `?${qs}` : ''}`);
-      const data = await res.json();
-      if (data.ok) setSessions(data.sessions || []);
-      return data.sessions as ChatSession[] | undefined;
-    } catch {
-      return undefined;
+    // Dedupe concurrent list fetches (Strict Mode / remount races).
+    if (!query?.trim() && sessionCache.listInflight) {
+      return sessionCache.listInflight;
     }
+    const run = (async () => {
+      try {
+        const params = new URLSearchParams();
+        if (query?.trim()) params.set('q', query.trim());
+        if (showArchived) params.set('archived', '1');
+        const qs = params.toString();
+        const res = await fetch(`/api/chat-sessions${qs ? `?${qs}` : ''}`);
+        const data = await res.json();
+        if (data.ok) {
+          const list = (data.sessions || []) as ChatSession[];
+          commitSessions(list);
+          return list;
+        }
+        return undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+    if (!query?.trim()) {
+      sessionCache.listInflight = run;
+      try {
+        return await run;
+      } finally {
+        if (sessionCache.listInflight === run) sessionCache.listInflight = null;
+      }
+    }
+    return run;
   }, [showArchived]);
 
   const loadSession = useCallback(async (id: string) => {
@@ -72,9 +140,14 @@ export default function ChatSessionsPanel({
       const res = await fetch(`/api/chat-sessions?id=${encodeURIComponent(id)}`);
       const data = await res.json();
       if (data.ok && data.session) {
-        setActiveSession(data.session);
-        setSessions((prev) => prev.map((s) => (s.id === id ? data.session : s)));
-        return data.session as ChatSession;
+        const session = data.session as ChatSession;
+        commitActive(session);
+        commitSessions(
+          sessionsRef.current.some((s) => s.id === id)
+            ? sessionsRef.current.map((s) => (s.id === id ? session : s))
+            : [session, ...sessionsRef.current],
+        );
+        return session;
       }
     } catch {
       /* ignore */
@@ -108,22 +181,58 @@ export default function ChatSessionsPanel({
   }, []);
 
   useEffect(() => {
-    void (async () => {
-      await loadProjects();
-    })();
+    void loadProjects();
   }, [loadProjects]);
 
+  // Single bootstrap path (avoids the old double-load):
+  //  1) Fetch the session list once per archive filter — entries already include
+  //     full message history, so no follow-up GET is needed for the active chat.
+  //  2) If the URL has no session id, pick/create one, hydrate from the list,
+  //     then navigate. Module cache survives the remount so step 3 is free.
+  //  3) If the URL session changes (user clicks another chat), hydrate from
+  //     cache/list or GET once.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      setBootstrapping(true);
-      const list = await loadSessions();
-      if (cancelled) return;
+    const listKey = showArchived ? 'archived' : 'active';
 
-      let targetId = sessionId;
-      if (!targetId) {
+    (async () => {
+      let list: ChatSession[] | undefined;
+
+      // Warm path after `/chat` → `/chat/:id` remount — no network.
+      if (
+        sessionId
+        && sessionCache.loadedId === sessionId
+        && sessionCache.active?.id === sessionId
+        && sessionCache.listKey === listKey
+      ) {
+        if (sessionCache.sessions.length && sessionsRef.current.length === 0) {
+          setSessions(sessionCache.sessions);
+        }
+        if (!cancelled) setBootstrapping(false);
+        return;
+      }
+
+      if (sessionCache.listKey !== listKey) {
+        setBootstrapping(true);
+        list = await loadSessions();
+        if (cancelled) return;
+        sessionCache.listKey = listKey;
+      } else {
+        list = sessionCache.sessions.length ? sessionCache.sessions : sessionsRef.current;
+      }
+
+      // --- no URL session: pick/create, hydrate, navigate ---
+      if (!sessionId) {
+        setBootstrapping(true);
+        if (!list?.length) {
+          list = await loadSessions();
+          if (cancelled) return;
+          sessionCache.listKey = listKey;
+        }
+
+        let chosen: ChatSession | null = null;
         if (list?.length) {
-          targetId = list[0].id;
+          chosen = list[0];
         } else {
           try {
             const res = await fetch('/api/chat-sessions', {
@@ -131,42 +240,61 @@ export default function ChatSessionsPanel({
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 action: 'create',
-                defaults: { chatModel: defaultChatModel },
+                defaults: { chatModel: defaultChatModelRef.current },
               }),
             });
             const data = await res.json();
             if (data.ok && data.session) {
-              targetId = data.session.id;
-              setSessions([data.session]);
-              onStatsChange?.();
+              chosen = data.session as ChatSession;
+              commitSessions([chosen]);
+              onStatsChangeRef.current?.();
             }
           } catch {
             /* ignore */
           }
         }
-        if (targetId) onSessionChange(targetId);
+
+        if (!chosen || cancelled) {
+          if (!cancelled) setBootstrapping(false);
+          return;
+        }
+
+        commitActive(chosen);
+        await loadLinkedProject(chosen.projectId);
+        if (cancelled) return;
+        setBootstrapping(false);
+        // Navigate last — remount reuses sessionCache (no second fetch).
+        onSessionChangeRef.current(chosen.id);
+        return;
       }
 
-      if (targetId) {
-        const session = await loadSession(targetId);
-        if (!cancelled && session) {
-          await loadLinkedProject(session.projectId);
-        }
+      // --- URL has sessionId ---
+      if (sessionCache.loadedId === sessionId && sessionCache.active?.id === sessionId) {
+        setActiveSession(sessionCache.active);
+        if (!cancelled) setBootstrapping(false);
+        return;
       }
+
+      setBootstrapping(true);
+      const cached =
+        list?.find((s) => s.id === sessionId)
+        || sessionCache.sessions.find((s) => s.id === sessionId)
+        || sessionsRef.current.find((s) => s.id === sessionId);
+      if (cached) {
+        commitActive(cached);
+        await loadLinkedProject(cached.projectId);
+        if (!cancelled) setBootstrapping(false);
+        return;
+      }
+
+      const session = await loadSession(sessionId);
+      if (cancelled) return;
+      if (session) await loadLinkedProject(session.projectId);
       if (!cancelled) setBootstrapping(false);
     })();
-    return () => { cancelled = true; };
-  }, [sessionId, defaultChatModel, loadSessions, loadSession, loadLinkedProject, onSessionChange, onStatsChange]);
 
-  useEffect(() => {
-    if (!sessionId || bootstrapping) return;
-    let stale = false;
-    void (async () => {
-      const session = await loadSession(sessionId);
-      if (!stale && session) await loadLinkedProject(session.projectId);
-    })();
-    return () => { stale = true; };
-  }, [sessionId, bootstrapping, loadSession, loadLinkedProject]);
+    return () => { cancelled = true; };
+  }, [sessionId, showArchived, loadSessions, loadSession, loadLinkedProject]);
 
   async function createSession() {
     try {
@@ -180,9 +308,12 @@ export default function ChatSessionsPanel({
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      await loadSessions();
+      const created = data.session as ChatSession;
+      commitSessions([created, ...sessionsRef.current.filter((s) => s.id !== created.id)]);
+      commitActive(created);
+      setLinkedProject(null);
       onStatsChange?.();
-      onSessionChange(data.session.id);
+      onSessionChange(created.id);
       toast.success('New chat session');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to create session');
@@ -244,7 +375,9 @@ export default function ChatSessionsPanel({
       });
       await loadSessions(searchQuery);
       onStatsChange?.();
-      if (activeSession?.id === id) setActiveSession((s) => (s ? { ...s, title: name } : s));
+      if (activeSession?.id === id && sessionCache.active) {
+        commitActive({ ...sessionCache.active, title: name });
+      }
       toast.success('Chat renamed');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Rename failed');
@@ -267,13 +400,19 @@ export default function ChatSessionsPanel({
         body: JSON.stringify({ action: 'delete', id }),
       });
       const remaining = sessions.filter((s) => s.id !== id);
-      setSessions(remaining);
+      commitSessions(remaining);
       onStatsChange?.();
       if (sessionId === id) {
-        if (remaining.length > 0) onSessionChange(remaining[0].id);
-        else await createSession();
+        if (remaining.length > 0) {
+          commitActive(remaining[0]);
+          onSessionChange(remaining[0].id);
+        } else {
+          commitActive(null);
+          await createSession();
+        }
+      } else if (activeSession?.id === id) {
+        commitActive(null);
       }
-      if (activeSession?.id === id) setActiveSession(null);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to close session');
     }
@@ -300,7 +439,7 @@ export default function ChatSessionsPanel({
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      setActiveSession(data.session);
+      commitActive(data.session);
       await loadLinkedProject(projectId);
       await loadSessions();
     } catch (e: unknown) {
@@ -356,7 +495,7 @@ export default function ChatSessionsPanel({
             />
           </div>
           <label className="chat-session-rail-archived">
-            <input type="checkbox" checked={showArchived} onChange={(e) => { setShowArchived(e.target.checked); void loadSessions(searchQuery); }} />
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
             Show archived
           </label>
           <div className="chat-session-rail-list">
@@ -475,7 +614,9 @@ export default function ChatSessionsPanel({
                   patch: { chatModel: model },
                 }),
               });
-              setActiveSession((s) => (s ? { ...s, chatModel: model } : s));
+              if (sessionCache.active) {
+                commitActive({ ...sessionCache.active, chatModel: model });
+              }
             } catch {
               /* ignore */
             }

@@ -25,6 +25,29 @@ export function chatSessionPath(sessionId: string): string {
   return `/chat/${sessionId}`;
 }
 
+/** Remembered so opening the Chat tab can skip the bare `/chat` hop (which
+ *  remounts the catch-all page and re-fetched sessions). */
+const LAST_CHAT_SESSION_KEY = 'shiba-last-chat';
+
+export function readLastChatSessionId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const id = window.localStorage.getItem(LAST_CHAT_SESSION_KEY)?.trim();
+    return id || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLastChatSessionId(sessionId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(LAST_CHAT_SESSION_KEY, sessionId);
+  } catch {
+    /* private mode */
+  }
+}
+
 export function pathToTab(pathname: string): AppTab {
   const segments = pathname.replace(/\/$/, '').split('/').filter(Boolean);
   const first = segments[0];
