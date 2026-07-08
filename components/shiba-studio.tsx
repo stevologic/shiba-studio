@@ -119,6 +119,9 @@ export default function ShibaStudio() {
   const oauthPopupRef = useRef<Window | null>(null);
   const drivePopupRef = useRef<Window | null>(null);
   const [driveStarting, setDriveStarting] = useState(false);
+  // Drive's Advanced (one-time OAuth client setup) — collapsed by default;
+  // the Sign-in button opens it only if no client is configured yet.
+  const [driveAdvancedOpen, setDriveAdvancedOpen] = useState(false);
   // App origin for OAuth redirect URIs (SSR-safe — filled in after mount).
   const [appOrigin, setAppOrigin] = useState('');
   useEffect(() => { setAppOrigin(window.location.origin); }, []);
@@ -2713,10 +2716,17 @@ export default function ShibaStudio() {
                           )}
                           <button
                             type="button"
-                            onClick={() => void startGoogleDriveLogin()}
-                            disabled={driveStarting || !clientReady}
+                            onClick={() => {
+                              if (!clientReady) {
+                                setDriveAdvancedOpen(true);
+                                toast('One-time: add your Google OAuth client below, Save, then Sign in with Google.');
+                                return;
+                              }
+                              void startGoogleDriveLogin();
+                            }}
+                            disabled={driveStarting}
                             className="grok-btn grok-btn-primary text-xs"
-                            title={clientReady ? 'Open the Google consent popup' : 'Add your Google OAuth client under Advanced first'}
+                            title="Open the Google consent popup"
                           >
                             {driveStarting ? 'Opening Google…' : '🔑 Sign in with Google'}
                           </button>
@@ -2724,11 +2734,8 @@ export default function ShibaStudio() {
                             <button type="button" onClick={() => void disconnectGoogleDrive()} className="grok-btn grok-btn-ghost text-xs text-error">Disconnect</button>
                           )}
                         </div>
-                        {!clientReady && (
-                          <div className="text-[11px] text-warning mb-1">First time? Open <strong>Advanced</strong> to add your Google OAuth client (one-time).</div>
-                        )}
-                        <details className="text-xs mt-1" open={!clientReady && !intTest.googledrive?.ok}>
-                          <summary className="text-dim cursor-pointer select-none">Advanced — OAuth client setup &amp; fallbacks</summary>
+                        <details className="text-xs mt-1" open={driveAdvancedOpen} onToggle={(e) => setDriveAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}>
+                          <summary className="text-dim cursor-pointer select-none">Advanced — one-time OAuth client setup &amp; fallbacks</summary>
                           <div className="mt-2 space-y-2">
                             <div className="text-[11px] text-dim">
                               One-time: <span className="font-mono">Google Cloud Console → APIs &amp; Services → Credentials → Create OAuth client ID</span> —
