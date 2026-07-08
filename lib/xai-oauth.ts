@@ -454,7 +454,13 @@ export async function getOAuthPublicStatus(): Promise<XaiOAuthPublicStatus> {
   };
 }
 
-export async function resolveCloudBearer(cfg?: AppConfig): Promise<{
+export async function resolveCloudBearer(
+  cfg?: AppConfig,
+  /** Pin the credential for this call, overriding cloudAuthMode. Used when a
+   *  model selection carries an explicit source (oauth-tagged vs token-tagged).
+   *  'token' maps to the API key. */
+  preferSource?: 'oauth' | 'token',
+): Promise<{
   token: string | null;
   source: 'api_key' | 'oauth' | null;
   hasCloudAuth: boolean;
@@ -464,6 +470,17 @@ export async function resolveCloudBearer(cfg?: AppConfig): Promise<{
   const hasKey = !!config.xaiApiKey?.trim();
   const session = await loadOAuthSession();
   const hasOAuth = !!(session?.accessToken && session?.refreshToken);
+
+  // A model-pinned source wins over the global preference — but still falls
+  // back to the other credential if the pinned one is unavailable.
+  if (preferSource === 'token' && hasKey) {
+    return { token: config.xaiApiKey.trim(), source: 'api_key', hasCloudAuth: true };
+  }
+  if (preferSource === 'oauth' && hasOAuth) {
+    const token = await getValidAccessToken();
+    if (token) return { token, source: 'oauth', hasCloudAuth: true };
+  }
+
   const mode: CloudAuthMode = config.cloudAuthMode || 'api_key';
 
   if (mode === 'oauth' && hasOAuth) {

@@ -48,12 +48,17 @@ type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local'; re
 function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
   const ref = parseModelRef(modelId || '');
   const cls = size === 'xs' ? 'model-provider-badge model-provider-badge-xs' : 'model-provider-badge';
+  // Cloud models pinned to a credential show that source; plain cloud/local
+  // keep their provider label.
+  const text = ref.authSource === 'oauth' ? 'OAuth' : ref.authSource === 'token' ? 'Token' : providerLabel(ref.provider);
+  const title = ref.provider === 'local'
+    ? 'Local model on this machine — any OpenAI-compatible server'
+    : ref.authSource === 'oauth' ? 'xAI Grok cloud via OAuth 2.0 (SuperGrok / Premium+ quota)'
+    : ref.authSource === 'token' ? 'xAI Grok cloud via your API key (pay-as-you-go)'
+    : 'xAI Grok cloud API';
   return (
-    <span
-      className={`${cls} model-provider-${ref.provider}`}
-      title={ref.provider === 'local' ? 'Local model on this machine — any OpenAI-compatible server' : 'xAI Grok cloud API'}
-    >
-      {providerLabel(ref.provider)}
+    <span className={`${cls} model-provider-${ref.provider}`} title={title}>
+      {text}
     </span>
   );
 }

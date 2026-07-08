@@ -12,12 +12,13 @@ import { resolveCloudBearer } from '@/lib/xai-oauth';
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const cfg = await loadConfig();
-  const auth = await resolveCloudBearer(cfg);
+  const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
+  const parsedModel = parseModelRef(rawModel);
+  const model = parsedModel.encoded;
+  // Honor the model's pinned credential source (OAuth-tagged vs Token-tagged).
+  const auth = await resolveCloudBearer(cfg, parsedModel.authSource);
   if (auth.token) setApiKey(auth.token);
   if (body.key) setApiKey(body.key);
-
-  const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
-  const model = parseModelRef(rawModel).encoded;
 
   const messages: ChatMessagePayload[] = [];
   const systemParts: string[] = [];

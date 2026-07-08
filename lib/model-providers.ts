@@ -2,12 +2,18 @@
 
 export type ModelProvider = 'cloud' | 'local';
 
+/** Which cloud credential a cloud-model selection uses. Undefined = follow the
+ *  global cloudAuthMode preference (back-compat with plain `cloud:` refs). */
+export type CloudAuthSource = 'oauth' | 'token';
+
 export const DEFAULT_LOCAL_GROK_BASE = 'http://127.0.0.1:1234/v1';
 
 export interface ModelRef {
   provider: ModelProvider;
   id: string;
   encoded: string;
+  /** For cloud models only: the pinned credential source, if any. */
+  authSource?: CloudAuthSource;
 }
 
 export interface SelectableModel {
@@ -16,6 +22,8 @@ export interface SelectableModel {
   provider: ModelProvider;
   /** Whether the model accepts reasoning-effort controls. Undefined = unknown. */
   reasoning?: boolean;
+  /** Cloud models: which credential this entry uses (when both are configured). */
+  authSource?: CloudAuthSource;
 }
 
 /**
@@ -43,11 +51,29 @@ export function encodeModelRef(provider: ModelProvider, id: string): string {
   return `${provider}:${clean}`;
 }
 
+/** Encode a cloud model pinned to a specific credential source. */
+export function encodeCloudModel(id: string, source?: CloudAuthSource): string {
+  const clean = id.trim();
+  if (source === 'oauth') return `cloud-oauth:${clean}`;
+  if (source === 'token') return `cloud-token:${clean}`;
+  return `cloud:${clean}`;
+}
+
 export function parseModelRef(value: string): ModelRef {
   const v = (value || '').trim();
   if (v.startsWith('local:')) {
     const id = v.slice('local:'.length);
     return { provider: 'local', id, encoded: encodeModelRef('local', id) };
+  }
+  // Cloud models pinned to a credential source (shown when both OAuth + API
+  // key are configured). The bare `id` is what the xAI API receives.
+  if (v.startsWith('cloud-oauth:')) {
+    const id = v.slice('cloud-oauth:'.length);
+    return { provider: 'cloud', id, authSource: 'oauth', encoded: `cloud-oauth:${id}` };
+  }
+  if (v.startsWith('cloud-token:')) {
+    const id = v.slice('cloud-token:'.length);
+    return { provider: 'cloud', id, authSource: 'token', encoded: `cloud-token:${id}` };
   }
   if (v.startsWith('cloud:')) {
     const id = v.slice('cloud:'.length);
@@ -63,6 +89,14 @@ export function parseModelRef(value: string): ModelRef {
 
 export function providerLabel(provider: ModelProvider): string {
   return provider === 'local' ? 'Local' : 'Cloud';
+}
+
+/** Short label for a model entry's source — used in pickers. */
+export function modelSourceLabel(m: SelectableModel): string {
+  if (m.provider === 'local') return 'Local';
+  if (m.authSource === 'oauth') return 'OAuth';
+  if (m.authSource === 'token') return 'Token';
+  return 'Cloud';
 }
 
 export function modelDisplayName(encodedOrId: string): string {

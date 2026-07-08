@@ -126,6 +126,12 @@ export interface IntegrationCreds {
     // For simplicity support access token (oauth) or service account json string
     accessToken?: string;
     serviceAccountJson?: string; // JSON string
+    // Popup OAuth: user's Google Cloud OAuth client + captured tokens.
+    clientId?: string;
+    clientSecret?: string;
+    refreshToken?: string;
+    tokenExpiry?: string; // ISO — when accessToken expires
+    email?: string;
   };
   discord?: {
     token: string; // Bot token

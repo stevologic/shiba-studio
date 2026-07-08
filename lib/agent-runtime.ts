@@ -482,14 +482,17 @@ async function* agentRunGenerator(
   const { resolveCloudBearer, ensureCloudAuth } = await import('./xai-oauth');
   const modelRef = parseModelRef(agent.model);
   const cfg = await loadConfig();
-  const cloudAuth = await resolveCloudBearer(cfg);
+  const cloudAuth = await resolveCloudBearer(cfg, modelRef.authSource);
   const modelError = modelRef.provider === 'local'
     ? (!cfg.localGrokEnabled ? 'Local Grok is disabled. Enable it in Settings or switch this agent to a Cloud model.' : null)
     : (!cloudAuth.hasCloudAuth
       ? 'No cloud credentials configured. Add an xAI API key, sign in with X (OAuth) in Settings, or switch to a Local model.'
       : null);
   if (!modelError && modelRef.provider !== 'local') {
-    await ensureCloudAuth(cfg);
+    // Pin the same credential the model selection chose, if any.
+    const { setApiKey } = await import('./grok-client');
+    if (cloudAuth.token) setApiKey(cloudAuth.token);
+    else await ensureCloudAuth(cfg);
   }
   if (modelError) {
     yield emit({ id: uuidv4(), ts: startedAt, type: 'error', content: modelError });

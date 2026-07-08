@@ -43,6 +43,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, integrations: next.integrations });
   }
 
+  if (body.action === 'disconnect-drive') {
+    const { disconnectGoogleDrive } = await import('@/lib/google-oauth');
+    await disconnectGoogleDrive();
+    const next = await loadConfig();
+    Ints.setIntegrationCreds(next.integrations || {});
+    audit('integration', 'Google Drive disconnected', '');
+    return NextResponse.json({ ok: true, integrations: next.integrations });
+  }
+
   if (body.action === 'test') {
     Ints.setIntegrationCreds(body.creds || cfg.integrations || {});
     const which = body.which;

@@ -3,6 +3,7 @@
 
 import {
   DEFAULT_LOCAL_GROK_BASE,
+  encodeCloudModel,
   encodeModelRef,
   parseModelRef,
   SelectableModel,
@@ -229,24 +230,54 @@ export async function listAllSelectableModels(cfg?: {
   let localReachable = false;
 
   const { resolveCloudBearer } = await import('./xai-oauth');
+  const { loadOAuthSession } = await import('./xai-oauth');
   const cloudAuth = await resolveCloudBearer(config);
+  const hasKey = !!config.xaiApiKey?.trim();
+  const oauthSession = await loadOAuthSession().catch(() => null);
+  const hasOAuth = !!(oauthSession?.accessToken && oauthSession?.refreshToken);
+  // When BOTH credentials exist, offer each cloud model twice so the user can
+  // pick which one drives it (OAuth = SuperGrok quota, Token = pay-as-you-go).
+  // With only one cloud credential, a plain `cloud:` entry follows it.
+  const cloudVariants: Array<{ source?: 'oauth' | 'token'; tag: string }> =
+    hasKey && hasOAuth
+      ? [{ source: 'oauth', tag: 'OAuth' }, { source: 'token', tag: 'Token' }]
+      : [{ source: undefined, tag: '' }];
+
   if (cloudAuth.hasCloudAuth) {
     const cloud = await listGrokModels();
-    if (cloud.ok) {
-      models.push(
-        ...cloud.models.map((m) => ({
-          id: encodeModelRef('cloud', m.id),
-          label: m.label || m.id,
-          provider: 'cloud' as const,
-          reasoning: m.reasoning,
-        })),
-      );
+    const base = cloud.ok
+      ? cloud.models.map((m) => ({ id: m.id, label: m.label || m.id, reasoning: m.reasoning }))
+      : null;
+    if (base) {
+      for (const variant of cloudVariants) {
+        models.push(
+          ...base.map((m) => ({
+            id: encodeCloudModel(m.id, variant.source),
+            label: variant.tag ? `${m.label} · ${variant.tag}` : m.label,
+            provider: 'cloud' as const,
+            reasoning: m.reasoning,
+            authSource: variant.source,
+          })),
+        );
+      }
     } else {
       cloudError = cloud.error;
       // Live listing unreachable — fall back to the known catalog so models stay
       // selectable. Requests still validate against the real API when sent.
       const { FALLBACK_CLOUD_GROK_MODELS } = await import('./model-providers');
-      models.push(...FALLBACK_CLOUD_GROK_MODELS);
+      for (const variant of cloudVariants) {
+        models.push(
+          ...FALLBACK_CLOUD_GROK_MODELS.map((m) => {
+            const bareId = parseModelRef(m.id).id;
+            return {
+              ...m,
+              id: encodeCloudModel(bareId, variant.source),
+              label: variant.tag ? `${m.label} · ${variant.tag}` : m.label,
+              authSource: variant.source,
+            };
+          }),
+        );
+      }
     }
   }
 

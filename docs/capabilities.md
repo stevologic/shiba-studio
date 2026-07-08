@@ -10,7 +10,7 @@ Provide credentials once; agents with the matching scope can call the service du
 | --- | --- | --- |
 | **GitHub** | Personal access token | `github_create_issue`, `github_list_repos`, `github_create_pr` (+ `/git pr` in chat) |
 | **Slack** | Bot token + default channel | `slack_post` |
-| **Google Drive** | OAuth token or service-account JSON | `drive_list`, `drive_upload` |
+| **Google Drive** | Sign in with Google (popup OAuth) — one-time setup pastes your own Google Cloud OAuth client ID+secret, then tokens are captured and refreshed automatically. Service-account JSON is an advanced fallback | `drive_list`, `drive_upload` |
 | **Discord** | Bot token + channel id | `discord_post` |
 | **X** | API key/secret + access token/secret | `x_post` |
 | **Obsidian** | Local vault path, or Local REST API URL + key | `obsidian_list/read/write/search` (+ `/note` in chat) — scoped agents get the vault's contents as live context |

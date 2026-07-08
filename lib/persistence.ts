@@ -16,6 +16,8 @@ const SENSITIVE_CONFIG_PATHS = [
   'integrations.slack.token',
   'integrations.googledrive.accessToken',
   'integrations.googledrive.serviceAccountJson',
+  'integrations.googledrive.clientSecret',
+  'integrations.googledrive.refreshToken',
   'integrations.discord.token',
   'integrations.x.apiKey',
   'integrations.x.apiSecret',

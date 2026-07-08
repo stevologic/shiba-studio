@@ -114,6 +114,11 @@ export default function ShibaStudio() {
   const tab = pathToTab(pathname);
   const oauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const oauthPollStartedRef = useRef<number | null>(null);
+  // The sign-in popup — the opener force-closes it once tokens are stored
+  // (a popup's own window.close() can be blocked after cross-origin hops).
+  const oauthPopupRef = useRef<Window | null>(null);
+  const drivePopupRef = useRef<Window | null>(null);
+  const [driveStarting, setDriveStarting] = useState(false);
 
   const navigateToTab = useCallback((next: AppTab) => {
     const path = tabToPath(next);
@@ -155,11 +160,28 @@ export default function ShibaStudio() {
 
   const handleOAuthConnected = useCallback(async (message?: string) => {
     stopOAuthPolling();
+    try { oauthPopupRef.current?.close(); } catch { /* already closed */ }
+    oauthPopupRef.current = null;
     toast.success(message || 'Signed in with X (OAuth)');
     await loadAll();
     await loadModels();
     await refreshOAuthStatus();
   }, [stopOAuthPolling]);
+
+  // The Google Drive popup announces success on its own channel; the opener
+  // closes it and refreshes the Drive connection status.
+  const handleDriveConnected = useCallback(async () => {
+    try { drivePopupRef.current?.close(); } catch { /* gone */ }
+    drivePopupRef.current = null;
+    setDriveStarting(false);
+    toast.success('Google Drive connected');
+    await loadAll();
+    try {
+      const res = await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'test', which: 'googledrive' }) });
+      const data = await res.json();
+      setIntTest((t: any) => ({ ...t, googledrive: data }));
+    } catch { /* status refresh is best-effort */ }
+  }, []);
 
   useEffect(() => {
     return () => stopOAuthPolling();
@@ -174,10 +196,11 @@ export default function ShibaStudio() {
       const loopback = /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(e.origin);
       if (e.origin !== window.location.origin && !loopback) return;
       if (e.data === 'shiba-oauth:connected') void handleOAuthConnected();
+      else if (e.data === 'shiba-drive:connected') void handleDriveConnected();
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [handleOAuthConnected]);
+  }, [handleOAuthConnected, handleDriveConnected]);
 
   useEffect(() => {
     if (tab === 'settings') void refreshOAuthStatus();
@@ -186,7 +209,8 @@ export default function ShibaStudio() {
   useEffect(() => {
     if (tab !== 'settings') return;
     const oauth = searchParams.get('oauth');
-    if (!oauth) return;
+    const drive = searchParams.get('drive');
+    if (!oauth && !drive) return;
 
     const message = searchParams.get('message') || undefined;
     if (oauth === 'connected') {
@@ -195,8 +219,13 @@ export default function ShibaStudio() {
       toast.error(message || 'OAuth sign-in failed');
       void refreshOAuthStatus();
     }
+    if (drive === 'connected') {
+      void handleDriveConnected();
+    } else if (drive === 'error') {
+      toast.error(message || 'Google sign-in failed');
+    }
     router.replace('/settings');
-  }, [tab, searchParams, router, handleOAuthConnected]);
+  }, [tab, searchParams, router, handleOAuthConnected, handleDriveConnected]);
 
   // Fetched once on mount — the top bar shows a Grok CLI badge on every tab.
   useEffect(() => {
@@ -551,16 +580,15 @@ export default function ShibaStudio() {
     return () => { cancelled = true; };
   }, [tab, searchParams]);
 
-  // Agents load asynchronously after mount — open the config modal once the
-  // list is in. Fall back to name matching in case the agent was re-created.
+  // Run deep links open the trace modal only — never the agent editor. This
+  // effect just surfaces a note when the run's agent no longer exists.
   useEffect(() => {
     if (!pendingRunAgent || agents.length === 0) return;
     const agent =
       agents.find((a) => a.id === pendingRunAgent.agentId) ||
       agents.find((a) => a.name === pendingRunAgent.agentName);
     setPendingRunAgent(null);
-    if (agent) openEditAgent(agent);
-    else toast.info("This run's agent was deleted — its automation is retired. Showing the historical log.");
+    if (!agent) toast.info("This run's agent was deleted — its automation is retired. Showing the historical log.");
   }, [pendingRunAgent, agents]);
 
   // Per-agent run history (History button on agent cards)
@@ -1208,6 +1236,25 @@ export default function ShibaStudio() {
     toast(data.ok ? 'Valid Grok key!' : 'Invalid: ' + data.error);
   }
 
+  async function clearApiKey() {
+    const ok = await confirmDialog({
+      title: 'Clear the stored xAI API key?',
+      message: 'Cloud Grok falls back to OAuth if connected — otherwise cloud models stop working until a key is saved again.',
+      confirmLabel: 'Clear key',
+      danger: true,
+    });
+    if (!ok) return;
+    await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xaiApiKey: '' }),
+    });
+    setApiKeyInput('');
+    toast.success('API key cleared');
+    await loadAll();
+    await loadModels();
+  }
+
   async function refreshOAuthStatus() {
     try {
       const res = await fetch('/api/xai-oauth/status');
@@ -1254,6 +1301,7 @@ export default function ShibaStudio() {
     // at accounts.x.ai once the PKCE flow is prepared; the callback page
     // postMessages back and closes itself, so nothing is ever pasted.
     const popup = window.open('about:blank', 'shiba-oauth', 'width=520,height=760,menubar=no,toolbar=no,location=yes');
+    oauthPopupRef.current = popup;
     try {
       const res = await fetch('/api/xai-oauth/start', {
         method: 'POST',
@@ -1277,6 +1325,49 @@ export default function ShibaStudio() {
       toast.error(e instanceof Error ? e.message : 'OAuth start failed');
     }
     setOauthStarting(false);
+  }
+
+  async function startGoogleDriveLogin() {
+    // Persist the client id/secret first so the server can build the flow.
+    await saveIntegration('googledrive');
+    setDriveStarting(true);
+    const popup = window.open('about:blank', 'shiba-drive-oauth', 'width=520,height=760,menubar=no,toolbar=no,location=yes');
+    drivePopupRef.current = popup;
+    try {
+      const res = await fetch('/api/google-oauth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.authorizeUrl) throw new Error(data.error || 'Failed to start Google sign-in');
+      if (popup && !popup.closed) {
+        popup.location.href = data.authorizeUrl;
+        popup.focus();
+        toast.success('Approve access in the Google popup — this window updates by itself');
+      } else {
+        window.location.assign(data.authorizeUrl);
+        return;
+      }
+    } catch (e: unknown) {
+      try { popup?.close(); } catch { /* gone */ }
+      toast.error(e instanceof Error ? e.message : 'Google sign-in failed');
+    }
+    setDriveStarting(false);
+  }
+
+  async function disconnectGoogleDrive() {
+    const ok = await confirmDialog({
+      title: 'Disconnect Google Drive?',
+      message: 'The captured tokens are removed. Your saved OAuth client ID/secret stay so you can sign in again.',
+      confirmLabel: 'Disconnect',
+      danger: true,
+    });
+    if (!ok) return;
+    await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'disconnect-drive' }) });
+    setIntTest((t: any) => ({ ...t, googledrive: undefined }));
+    toast.success('Google Drive disconnected');
+    await loadAll();
   }
 
   async function exchangeOAuthCallback() {
@@ -2422,7 +2513,7 @@ export default function ShibaStudio() {
                         // Name fallback keeps history visible when an agent was re-created
                         const log = scheduledRuns.filter((r) => r.agentId === a.id || r.agentName === a.name).slice(0, 5);
                         return log.length === 0 ? (
-                          <div className="text-xs text-dim">No scheduled runs yet — press Run now or wait for the next cron tick.</div>
+                          <div className="text-xs text-dim">No scheduled runs yet — press ▶ on a schedule or wait for the next cron tick.</div>
                         ) : (
                           <div className="space-y-1">
                             {log.map((r) => (
@@ -2442,6 +2533,14 @@ export default function ShibaStudio() {
                                 </span>
                               </button>
                             ))}
+                            <button
+                              type="button"
+                              onClick={() => void openRunHistory(a)}
+                              className="text-[11px] link-accent mt-1"
+                              title="Full run history for this agent"
+                            >
+                              View all runs →
+                            </button>
                           </div>
                         );
                       })()}
@@ -2456,29 +2555,8 @@ export default function ShibaStudio() {
               </div>
               <div className="mt-6 text-xs text-dim">Agents can schedule themselves via the schedule_task tool and message other agents using send_to_peer. Everything is scoped per agent.</div>
 
-              {/* Execution Trace lives in a modal — this bar is the handle */}
-              <div className="mt-8 grok-card p-4 flex flex-wrap items-center gap-3">
-                <Terminal size={16} className="shrink-0"/>
-                <div className="font-medium shrink-0">Execution Trace</div>
-                <InfoHint text="Every step of a run — model thoughts, tool calls, outputs, screenshots — streams into the trace viewer. It opens automatically when you press Run now or follow a run link; open it manually here any time." />
-                {activeRun && !activeRun.projectId ? (
-                  <span className="text-xs text-muted flex items-center gap-2 min-w-0">
-                    <span className={`badge shrink-0 ${activeRun.status === 'running' ? 'badge-accent' : ''}`}>{activeRun.status}</span>
-                    <span className="truncate">{activeRun.agentName}</span>
-                  </span>
-                ) : (
-                  <span className="text-xs text-dim">No run open — press ▶ on an automation or open a run-log entry.</span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setShowTraceModal(true)}
-                  disabled={liveTrace.length === 0 && !activeRun}
-                  className="grok-btn grok-btn-secondary text-xs ml-auto shrink-0"
-                >
-                  View trace
-                </button>
-              </div>
-
+              {/* Execution Trace lives ONLY in this modal — opened by Run now,
+                  run links, and run-details. No inline section on the page. */}
               {showTraceModal && (
                 <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={() => setShowTraceModal(false)}>
                   <div className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Execution trace">
@@ -2617,8 +2695,38 @@ export default function ShibaStudio() {
                     )}
                     {integration.id === 'googledrive' && (
                       <>
-                        <input className="grok-input mb-2" placeholder="OAuth Access Token (optional)" value={intCreds.googledrive?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), accessToken: e.target.value}}))} />
-                        <textarea className="grok-input h-24 font-mono text-xs" placeholder="Paste full Service Account JSON here for server-side auth" value={intCreds.googledrive?.serviceAccountJson || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), serviceAccountJson: e.target.value}}))} />
+                        <div className="text-xs text-dim mb-2">
+                          Sign in with Google in a popup — tokens are captured and refreshed automatically, nothing to paste.
+                          One-time setup: create an OAuth client in <span className="font-mono">Google Cloud Console → Credentials → OAuth client ID → Desktop app</span> and paste its ID and secret below.
+                        </div>
+                        <input className="grok-input mb-2 font-mono text-xs" placeholder="Google OAuth Client ID" value={intCreds.googledrive?.clientId || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), clientId: e.target.value}}))} />
+                        <input className="grok-input mb-2 font-mono text-xs" type="password" placeholder="Google OAuth Client Secret" value={intCreds.googledrive?.clientSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), clientSecret: e.target.value}}))} />
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          {intTest.googledrive?.ok ? (
+                            <span className="status-pill text-success">Connected{intTest.googledrive.email ? ` · ${intTest.googledrive.email}` : ''}</span>
+                          ) : (
+                            <span className="status-pill text-dim">Not signed in</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void startGoogleDriveLogin()}
+                            disabled={driveStarting || !intCreds.googledrive?.clientId?.trim() || !intCreds.googledrive?.clientSecret?.trim()}
+                            className="grok-btn grok-btn-primary text-xs"
+                            title={!intCreds.googledrive?.clientId?.trim() || !intCreds.googledrive?.clientSecret?.trim() ? 'Enter your OAuth client ID and secret first' : 'Open the Google consent popup'}
+                          >
+                            {driveStarting ? 'Opening Google…' : '🔑 Sign in with Google'}
+                          </button>
+                          {intTest.googledrive?.ok && (
+                            <button type="button" onClick={() => void disconnectGoogleDrive()} className="grok-btn grok-btn-ghost text-xs text-error">Disconnect</button>
+                          )}
+                        </div>
+                        <details className="text-xs">
+                          <summary className="text-dim cursor-pointer select-none">Advanced — service account or manual token</summary>
+                          <div className="mt-2">
+                            <input className="grok-input mb-2" placeholder="OAuth Access Token (manual)" value={intCreds.googledrive?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), accessToken: e.target.value}}))} />
+                            <textarea className="grok-input h-24 font-mono text-xs" placeholder="Paste full Service Account JSON for server-side auth" value={intCreds.googledrive?.serviceAccountJson || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), serviceAccountJson: e.target.value}}))} />
+                          </div>
+                        </details>
                       </>
                     )}
                     {integration.id === 'discord' && (
@@ -2804,9 +2912,14 @@ export default function ShibaStudio() {
                     <InfoHint className="ml-auto" text="Get a key at console.x.ai. It is encrypted at rest (AES-256-GCM) with a machine key stored outside the project — never in source code." />
                   </div>
                   <input value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder="xai-..." className="grok-input mb-2 font-mono" />
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button onClick={saveApiKey} className="grok-btn grok-btn-primary">Save &amp; Validate Key</button>
                     <button onClick={quickValidate} className="grok-btn grok-btn-secondary">Test</button>
+                    {(config as any)?.hasKey && (
+                      <button onClick={() => void clearApiKey()} className="grok-btn grok-btn-ghost text-error" title="Remove the stored key from this machine">
+                        Clear
+                      </button>
+                    )}
                   </div>
                   <div className="text-xs mt-1 text-dim">Cloud API key for xAI-hosted Grok models. Local models run separately on your machine.</div>
                   <div className="text-[10px] mt-1.5 text-dim">
@@ -3086,6 +3199,40 @@ export default function ShibaStudio() {
 
                 <div className="grok-card p-5 settings-card">
                   <div className="settings-card-head">
+                    <FolderOpen size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Default Workspace</div>
+                      <div className="text-[11px] text-dim">Root folder for uploads, new agents, and the explorer.</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-1">
+                    <input
+                      className="grok-input flex-1 min-w-0 font-mono text-xs"
+                      value={defaultWorkspaceInput}
+                      onChange={(e) => setDefaultWorkspaceInput(e.target.value)}
+                      placeholder="C:\Users\you\Projects\my-repo"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFolderBrowseFor('workspace')}
+                      className="grok-btn grok-btn-secondary text-xs shrink-0"
+                      title="Browse for workspace folder"
+                    >
+                      <FolderOpen size={14} /> Browse
+                    </button>
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    <button type="button" onClick={saveDefaultWorkspace} className="grok-btn grok-btn-primary text-sm">
+                      Save Workspace
+                    </button>
+                  </div>
+                  <div className="text-xs text-dim mt-1">
+                    Root folder for global uploads, new agents, and workspace explorer. Use Browse to pick a directory on this machine.
+                  </div>
+                </div>
+
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
                     <BarChart3 size={16} className="opacity-70 shrink-0" />
                     <div>
                       <div className="font-medium text-sm">Monthly Usage Quota</div>
@@ -3124,40 +3271,6 @@ export default function ShibaStudio() {
                     >
                       Save Quota
                     </button>
-                  </div>
-                </div>
-
-                <div className="grok-card p-5 settings-card">
-                  <div className="settings-card-head">
-                    <FolderOpen size={16} className="opacity-70 shrink-0" />
-                    <div>
-                      <div className="font-medium text-sm">Default Workspace</div>
-                      <div className="text-[11px] text-dim">Root folder for uploads, new agents, and the explorer.</div>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 mt-1">
-                    <input
-                      className="grok-input flex-1 min-w-0 font-mono text-xs"
-                      value={defaultWorkspaceInput}
-                      onChange={(e) => setDefaultWorkspaceInput(e.target.value)}
-                      placeholder="C:\Users\you\Projects\my-repo"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setFolderBrowseFor('workspace')}
-                      className="grok-btn grok-btn-secondary text-xs shrink-0"
-                      title="Browse for workspace folder"
-                    >
-                      <FolderOpen size={14} /> Browse
-                    </button>
-                  </div>
-                  <div className="flex gap-2 mt-2">
-                    <button type="button" onClick={saveDefaultWorkspace} className="grok-btn grok-btn-primary text-sm">
-                      Save Workspace
-                    </button>
-                  </div>
-                  <div className="text-xs text-dim mt-1">
-                    Root folder for global uploads, new agents, and workspace explorer. Use Browse to pick a directory on this machine.
                   </div>
                 </div>
 

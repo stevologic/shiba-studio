@@ -16,12 +16,19 @@ const g = globalThis as unknown as LoopbackGlobals;
 /** The page the popup lands on after accounts.x.ai redirects back. Opened as a
  *  popup it postMessages the app and closes itself; opened same-tab (popup was
  *  blocked) it bounces back into the app. */
-export function buildHandbackHtml(kind: 'connected' | 'error', appOrigin: string, message?: string): string {
+export function buildHandbackHtml(
+  kind: 'connected' | 'error',
+  appOrigin: string,
+  message?: string,
+  /** postMessage channel — 'shiba-oauth' for X, 'shiba-drive' for Google. */
+  channel: 'shiba-oauth' | 'shiba-drive' = 'shiba-oauth',
+): string {
   const ok = kind === 'connected';
   const detail = (message || '').replace(/</g, '&lt;').slice(0, 300);
+  const qp = channel === 'shiba-drive' ? 'drive' : 'oauth';
   const target = `${appOrigin.replace(/\/$/, '')}${ok
-    ? '/settings?oauth=connected'
-    : `/settings?oauth=error&message=${encodeURIComponent(message || 'OAuth sign-in failed')}`}`;
+    ? `/settings?${qp}=connected`
+    : `/settings?${qp}=error&message=${encodeURIComponent(message || 'Sign-in failed')}`}`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -49,8 +56,9 @@ export function buildHandbackHtml(kind: 'connected' | 'error', appOrigin: string
       var ok = ${ok ? 'true' : 'false'};
       var target = ${JSON.stringify(target)};
       var appOrigin = ${JSON.stringify(appOrigin)};
+      var channel = ${JSON.stringify(channel)};
       if (window.opener && !window.opener.closed) {
-        try { window.opener.postMessage(ok ? 'shiba-oauth:connected' : 'shiba-oauth:error', appOrigin); } catch (e) {}
+        try { window.opener.postMessage(channel + (ok ? ':connected' : ':error'), appOrigin); } catch (e) {}
         setTimeout(function () { window.close(); }, ok ? 1400 : 5000);
       } else {
         setTimeout(function () { window.location.replace(target); }, ok ? 900 : 2600);
@@ -69,8 +77,39 @@ export function stopOAuthLoopback(): void {
   g.__shibaOAuthLoopback = undefined;
 }
 
-/** Bind 127.0.0.1 on a random free port and wait for the OAuth redirect. */
-export async function startOAuthLoopback(appOrigin: string): Promise<{ port: number; redirectUri: string }> {
+/** Called with the redirect's query params; returns success + optional error text. */
+export type LoopbackExchange = (params: {
+  code: string | null;
+  state?: string;
+  error: string | null;
+  errorDescription: string | null;
+}) => Promise<{ ok: boolean; message?: string }>;
+
+/** The default success message posted to the opener. Both providers reuse the
+ *  same client-side hand-back script (postMessage 'shiba-oauth:connected'). */
+const defaultXExchange: LoopbackExchange = async ({ code, state, error, errorDescription }) => {
+  if (error) return { ok: false, message: errorDescription || error };
+  if (!code) return { ok: false, message: 'Missing authorization code' };
+  try {
+    const { exchangeOAuthCode } = await import('./xai-oauth');
+    await exchangeOAuthCode(code, state);
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, message: e instanceof Error ? e.message : 'OAuth exchange failed' };
+  }
+};
+
+/**
+ * Bind 127.0.0.1 on a random free port and wait for the OAuth redirect. The
+ * `exchange` handler turns the code into stored tokens (X by default, or a
+ * provider-specific handler like Google Drive). Any provider's redirect must
+ * point at http://127.0.0.1:{port}/callback.
+ */
+export async function startOAuthLoopback(
+  appOrigin: string,
+  exchange: LoopbackExchange = defaultXExchange,
+  channel: 'shiba-oauth' | 'shiba-drive' = 'shiba-oauth',
+): Promise<{ port: number; redirectUri: string }> {
   stopOAuthLoopback(); // a fresh sign-in gets a fresh listener
 
   const server = createServer(async (req, res) => {
@@ -80,24 +119,13 @@ export async function startOAuthLoopback(appOrigin: string): Promise<{ port: num
         res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
         return;
       }
-      const error = url.searchParams.get('error');
-      const code = url.searchParams.get('code');
-      const state = url.searchParams.get('state') || undefined;
-
-      let page: string;
-      if (error) {
-        page = buildHandbackHtml('error', appOrigin, url.searchParams.get('error_description') || error);
-      } else if (!code) {
-        page = buildHandbackHtml('error', appOrigin, 'Missing authorization code');
-      } else {
-        try {
-          const { exchangeOAuthCode } = await import('./xai-oauth');
-          await exchangeOAuthCode(code, state);
-          page = buildHandbackHtml('connected', appOrigin);
-        } catch (e: unknown) {
-          page = buildHandbackHtml('error', appOrigin, e instanceof Error ? e.message : 'OAuth exchange failed');
-        }
-      }
+      const result = await exchange({
+        code: url.searchParams.get('code'),
+        state: url.searchParams.get('state') || undefined,
+        error: url.searchParams.get('error'),
+        errorDescription: url.searchParams.get('error_description'),
+      });
+      const page = buildHandbackHtml(result.ok ? 'connected' : 'error', appOrigin, result.message, channel);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(page);
       // The redirect only comes once — free the port shortly after replying.
       setTimeout(() => stopOAuthLoopback(), 3000);

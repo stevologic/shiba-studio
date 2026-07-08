@@ -9,7 +9,7 @@ Settings is a card grid; each card maps to a concern:
 | **xAI Grok API Key** | Cloud token from console.x.ai; save & validate, test |
 | **OAuth with X** | OAuth 2.0 sign-in (SuperGrok / X Premium+), manual callback fallback, disconnect, and — when both are configured — which cloud credential to prefer |
 | **Local Models** | Enable any OpenAI-compatible server (LM Studio, Ollama, llama.cpp), base URL, connection test, and a per-model allowlist that filters every picker in the app |
-| **Default Model** | The model used by Grok Chat and new agents (cloud or local) |
+| **Default Model** | The model used by Grok Chat and new agents. When both an API key and OAuth are connected, cloud models appear twice — `· OAuth` (SuperGrok/Premium+ quota) and `· Token` (pay-as-you-go) — so any picker can choose the credential per selection |
 | **Grok Build CLI** | Auto-detected from PATH; version, path, and an update checker (`grok update --check`) |
 | **Agent Behavior** | Tool approval mode (YOLO auto-run vs Ask-before-act), AGENTS.md/CLAUDE.md injection, and global instructions prepended to every agent and chat |
 | **Monthly Usage Quota** | The budget the chat QUOTA pill reports against (estimated from xAI per-token rates; local runs are $0) |

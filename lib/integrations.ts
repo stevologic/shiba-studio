@@ -74,38 +74,50 @@ export async function slackPostMessage(channel: string, text: string, blocks?: a
   return { ok: res.ok, ts: res.ts, channel: res.channel };
 }
 
-export async function testGoogleDrive(): Promise<{ ok: boolean; email?: string; error?: string }> {
-  if (!creds.googledrive?.accessToken && !creds.googledrive?.serviceAccountJson) {
-    return { ok: false, error: 'No Google Drive credentials' };
-  }
-  try {
-    const { google } = await import('googleapis');
-    let auth: any;
-    if (creds.googledrive.serviceAccountJson) {
-      const sa = JSON.parse(creds.googledrive.serviceAccountJson);
-      auth = new google.auth.GoogleAuth({ credentials: sa, scopes: ['https://www.googleapis.com/auth/drive'] });
-    } else {
-      auth = new google.auth.OAuth2();
-      auth.setCredentials({ access_token: creds.googledrive.accessToken });
+/** Build a Drive auth client, preferring the popup-OAuth token (auto-refreshed)
+ *  then a service-account JSON, then a manually-pasted access token. */
+async function driveAuth(): Promise<unknown> {
+  const { google } = await import('googleapis');
+  if (creds.googledrive?.clientId || creds.googledrive?.refreshToken) {
+    const { getValidDriveToken } = await import('./google-oauth');
+    const token = await getValidDriveToken();
+    if (token) {
+      const auth = new google.auth.OAuth2();
+      auth.setCredentials({ access_token: token });
+      return auth;
     }
-    const drive = google.drive({ version: 'v3', auth });
+  }
+  if (creds.googledrive?.serviceAccountJson) {
+    const sa = JSON.parse(creds.googledrive.serviceAccountJson);
+    return new google.auth.GoogleAuth({ credentials: sa, scopes: ['https://www.googleapis.com/auth/drive'] });
+  }
+  if (creds.googledrive?.accessToken) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: creds.googledrive.accessToken });
+    return auth;
+  }
+  return null;
+}
+
+export async function testGoogleDrive(): Promise<{ ok: boolean; email?: string; error?: string }> {
+  try {
+    const auth = await driveAuth();
+    if (!auth) return { ok: false, error: 'No Google Drive credentials — sign in with Google or add a service account' };
+    const { google } = await import('googleapis');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const drive = google.drive({ version: 'v3', auth: auth as any });
     const about = await drive.about.get({ fields: 'user' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return { ok: true, email: (about.data.user as any)?.emailAddress };
-  } catch (e: any) { return { ok: false, error: e.message }; }
+  } catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : 'Drive test failed' }; }
 }
 
 export async function driveListFiles(query = '', max = 8) {
-  if (!creds.googledrive?.accessToken && !creds.googledrive?.serviceAccountJson) throw new Error('Google Drive not configured');
+  const auth = await driveAuth();
+  if (!auth) throw new Error('Google Drive not configured');
   const { google } = await import('googleapis');
-  let auth: any;
-  if (creds.googledrive.serviceAccountJson) {
-    const sa = JSON.parse(creds.googledrive.serviceAccountJson);
-    auth = new google.auth.GoogleAuth({ credentials: sa, scopes: ['https://www.googleapis.com/auth/drive.readonly'] });
-  } else {
-    auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: creds.googledrive.accessToken });
-  }
-  const drive = google.drive({ version: 'v3', auth });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const drive = google.drive({ version: 'v3', auth: auth as any });
   const res = await drive.files.list({ q: query || undefined, pageSize: max, fields: 'files(id,name,mimeType,webViewLink)' });
   return (res.data.files || []).map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType, link: f.webViewLink }));
 }

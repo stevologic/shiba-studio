@@ -54,10 +54,12 @@ export const MCP_PRESETS: McpPreset[] = [
     id: 'fetch',
     name: 'Web Fetch',
     shortLabel: 'Fetch',
-    description: 'Fetch URLs and convert pages to markdown for agents',
+    description: 'Fetch URLs and convert pages to markdown/text/JSON for agents',
     icon: '/integrations/mcp-globe.svg',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-fetch'],
+    // The official fetch server is Python-only (uvx mcp-server-fetch); this is
+    // the maintained npm equivalent, exposing fetch_html/markdown/txt/json.
+    args: ['-y', '@tokenizin/mcp-npx-fetch'],
     envFields: [],
   },
   {
