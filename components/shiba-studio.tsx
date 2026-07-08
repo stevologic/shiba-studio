@@ -2701,7 +2701,11 @@ export default function ShibaStudio() {
                     )}
                     {integration.id === 'googledrive' && (() => {
                       const gd = intCreds.googledrive || {};
-                      const clientReady = !!gd.clientId?.trim() && !!gd.clientSecret?.trim();
+                      // A bundled env-var client (project default) means the user
+                      // needs no setup at all — just sign in. Otherwise fall back
+                      // to a per-user client from Advanced.
+                      const bundled = !!(config as any)?.driveBundledClient;
+                      const clientReady = bundled || (!!gd.clientId?.trim() && !!gd.clientSecret?.trim());
                       return (
                       <>
                         <div className="text-xs text-dim mb-3">
@@ -2734,8 +2738,11 @@ export default function ShibaStudio() {
                             <button type="button" onClick={() => void disconnectGoogleDrive()} className="grok-btn grok-btn-ghost text-xs text-error">Disconnect</button>
                           )}
                         </div>
+                        {bundled && !intTest.googledrive?.ok && (
+                          <div className="text-[11px] text-dim mb-1">Ready — click Sign in with Google, no setup needed.</div>
+                        )}
                         <details className="text-xs mt-1" open={driveAdvancedOpen} onToggle={(e) => setDriveAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}>
-                          <summary className="text-dim cursor-pointer select-none">Advanced — one-time OAuth client setup &amp; fallbacks</summary>
+                          <summary className="text-dim cursor-pointer select-none">{bundled ? 'Advanced — override client or use a service account' : 'Advanced — one-time OAuth client setup & fallbacks'}</summary>
                           <div className="mt-2 space-y-2">
                             <div className="text-[11px] text-dim">
                               One-time: <span className="font-mono">Google Cloud Console → APIs &amp; Services → Credentials → Create OAuth client ID</span> —

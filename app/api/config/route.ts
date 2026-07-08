@@ -8,6 +8,7 @@ export async function GET() {
   const cfg = await loadConfig();
   const oauth = await getOAuthPublicStatus();
   const auth = await resolveCloudBearer(cfg);
+  const { isGoogleClientReady, bundledGoogleClient } = await import('@/lib/google-oauth');
   const safe = {
     ...cfg,
     xaiApiKey: cfg.xaiApiKey ? (cfg.xaiApiKey.slice(0, 6) + '…' + cfg.xaiApiKey.slice(-4)) : '',
@@ -18,6 +19,10 @@ export async function GET() {
     activeCloudSource: auth.source,
     oauthStatus: oauth,
     secretKeyLocation: secretKeyLocation(),
+    // Google Drive sign-in is available if a client exists (bundled env default
+    // or a per-user one); `driveBundledClient` = the zero-setup env default.
+    driveClientReady: await isGoogleClientReady(),
+    driveBundledClient: !!bundledGoogleClient(),
   };
   return NextResponse.json(safe);
 }

@@ -27,6 +27,33 @@ async function driveCreds() {
   return cfg.integrations?.googledrive || {};
 }
 
+/**
+ * The OAuth client to use: a bundled default from the environment
+ * (GOOGLE_OAUTH_CLIENT_ID/SECRET) if present — so users just sign in with zero
+ * setup — otherwise the per-user client pasted in Advanced.
+ */
+export function bundledGoogleClient(): { clientId: string; clientSecret: string } | null {
+  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
+  if (clientId && clientSecret) return { clientId, clientSecret };
+  return null;
+}
+
+async function resolveGoogleClient(): Promise<{ clientId: string; clientSecret: string } | null> {
+  const bundled = bundledGoogleClient();
+  if (bundled) return bundled;
+  const creds = await driveCreds();
+  const clientId = creds.clientId?.trim();
+  const clientSecret = creds.clientSecret?.trim();
+  if (clientId && clientSecret) return { clientId, clientSecret };
+  return null;
+}
+
+/** Whether sign-in is available at all (bundled default or a per-user client). */
+export async function isGoogleClientReady(): Promise<boolean> {
+  return (await resolveGoogleClient()) !== null;
+}
+
 /** Persist a patch onto integrations.googledrive without disturbing the rest. */
 async function patchDriveCreds(patch: Record<string, string | undefined>): Promise<void> {
   const cfg = await loadConfig();
@@ -37,12 +64,11 @@ async function patchDriveCreds(patch: Record<string, string | undefined>): Promi
 
 /** Begin sign-in: build Google's consent URL for the app-origin redirect. */
 export async function startGoogleDriveOAuth(appOrigin: string): Promise<{ authorizeUrl: string; redirectUri: string }> {
-  const creds = await driveCreds();
-  const clientId = creds.clientId?.trim();
-  const clientSecret = creds.clientSecret?.trim();
-  if (!clientId || !clientSecret) {
-    throw new Error('Add your Google OAuth Client ID and Secret first (Google Cloud Console → Credentials → Create OAuth client).');
+  const client = await resolveGoogleClient();
+  if (!client) {
+    throw new Error('No Google OAuth client configured — set GOOGLE_OAUTH_CLIENT_ID/SECRET, or add a client under Advanced.');
   }
+  const { clientId, clientSecret } = client;
 
   const { google } = await import('googleapis');
   const redirectUri = googleRedirectUri(appOrigin);
@@ -62,10 +88,10 @@ export async function startGoogleDriveOAuth(appOrigin: string): Promise<{ author
  * origin. Returns the connected email on success.
  */
 export async function exchangeGoogleDriveCode(code: string, appOrigin: string): Promise<{ email?: string }> {
+  const client = await resolveGoogleClient();
+  if (!client) throw new Error('Google OAuth client is not configured');
+  const { clientId, clientSecret } = client;
   const creds = await driveCreds();
-  const clientId = creds.clientId?.trim();
-  const clientSecret = creds.clientSecret?.trim();
-  if (!clientId || !clientSecret) throw new Error('Google OAuth client is not configured');
 
   const { google } = await import('googleapis');
   const redirectUri = googleRedirectUri(appOrigin);
@@ -100,10 +126,11 @@ export async function getValidDriveToken(): Promise<string | null> {
   const notExpired = creds.tokenExpiry ? new Date(creds.tokenExpiry).getTime() - 60_000 > Date.now() : false;
   if (creds.accessToken && notExpired) return creds.accessToken;
 
-  if (creds.refreshToken && creds.clientId && creds.clientSecret) {
+  const client = await resolveGoogleClient();
+  if (creds.refreshToken && client) {
     try {
       const { google } = await import('googleapis');
-      const oauth2 = new google.auth.OAuth2(creds.clientId, creds.clientSecret);
+      const oauth2 = new google.auth.OAuth2(client.clientId, client.clientSecret);
       oauth2.setCredentials({ refresh_token: creds.refreshToken });
       const { credentials } = await oauth2.refreshAccessToken();
       if (credentials.access_token) {
