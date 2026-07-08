@@ -13,6 +13,34 @@ export function setIntegrationCreds(c: IntegrationCreds) {
 
 export function getIntegrationCreds() { return creds; }
 
+/**
+ * Overlay an agent's per-integration credential overrides on top of the global
+ * creds — the agent's fields win, the global fills any gaps. Only services the
+ * agent actually overrode (with at least one non-empty field) are touched, so
+ * everything else keeps using the global account.
+ */
+export function mergeAgentIntegrationCreds(
+  global: IntegrationCreds,
+  overrides?: IntegrationCreds,
+): IntegrationCreds {
+  if (!overrides) return global;
+  const merged: IntegrationCreds = { ...global };
+  for (const svc of Object.keys(overrides) as Array<keyof IntegrationCreds>) {
+    const ov = overrides[svc] as Record<string, unknown> | undefined;
+    if (!ov) continue;
+    // Overlay only the fields the agent actually filled in — an empty field
+    // falls back to the global account instead of clobbering it with "".
+    const filled: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(ov)) {
+      if (typeof v === 'string' ? v.trim() : v != null) filled[k] = v;
+    }
+    if (!Object.keys(filled).length) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    merged[svc] = { ...(global[svc] as any), ...(filled as any) };
+  }
+  return merged;
+}
+
 export async function testGitHub(): Promise<{ ok: boolean; login?: string; error?: string }> {
   if (!creds.github?.token) return { ok: false, error: 'No GitHub token configured' };
   try {

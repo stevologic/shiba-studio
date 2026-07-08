@@ -107,6 +107,20 @@ const APP_VERSION = pkg.version;
 const GIT_COMMIT = process.env.NEXT_PUBLIC_GIT_COMMIT || 'unreleased';
 const DOGE_DONATION_ADDRESS = 'DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK';
 
+/** Per-agent credential override fields, by integration. Only shown for the
+ *  integrations an agent has enabled — lets an agent use its own account. */
+const AGENT_OVERRIDE_FIELDS: Record<string, Array<{ key: string; label: string; secret?: boolean }>> = {
+  github: [{ key: 'token', label: 'GitHub token (ghp_…)', secret: true }],
+  slack: [{ key: 'token', label: 'Slack bot token (xoxb-…)', secret: true }, { key: 'defaultChannel', label: 'Default channel (#…)' }],
+  discord: [{ key: 'token', label: 'Discord bot token', secret: true }, { key: 'defaultChannelId', label: 'Default channel id' }],
+  x: [
+    { key: 'apiKey', label: 'API Key' }, { key: 'apiSecret', label: 'API Secret', secret: true },
+    { key: 'accessToken', label: 'Access Token' }, { key: 'accessTokenSecret', label: 'Access Token Secret', secret: true },
+  ],
+  obsidian: [{ key: 'restApiUrl', label: 'REST API URL' }, { key: 'restApiKey', label: 'REST API key', secret: true }, { key: 'vaultPath', label: 'Vault path (local mode)' }],
+  googledrive: [{ key: 'accessToken', label: 'OAuth access token', secret: true }, { key: 'serviceAccountJson', label: 'Service account JSON', secret: true }],
+};
+
 export default function ShibaStudio() {
   const pathname = usePathname();
   const router = useRouter();
@@ -811,6 +825,7 @@ export default function ShibaStudio() {
       origin: norm.origin === 'cloud' ? 'cloud' : 'local',
       workspace: { ...norm.workspace },
       integrations: { ...norm.integrations },
+      integrationOverrides: (norm as any).integrationOverrides ? JSON.parse(JSON.stringify((norm as any).integrationOverrides)) : {},
       driveFolders: [...((norm as any).driveFolders || [])],
       peers: [...(norm.peers || [])],
       schedules: (norm.schedules || []).map((s: any) => enrichScheduleForForm(s)),
@@ -3857,6 +3872,41 @@ export default function ShibaStudio() {
                     )}
                   </div>
                 )}
+
+                {(() => {
+                  const enabledAuth = INTEGRATION_IDS.filter((k) => agentForm.integrations?.[k] && AGENT_OVERRIDE_FIELDS[k]);
+                  if (!enabledAuth.length) return null;
+                  const ov = agentForm.integrationOverrides || {};
+                  const setOv = (svc: string, field: string, value: string) => setAgentForm({
+                    ...agentForm,
+                    integrationOverrides: { ...ov, [svc]: { ...(ov[svc] || {}), [field]: value } },
+                  });
+                  return (
+                    <details className="grok-card p-3 bg-black/20">
+                      <summary className="grok-label mb-0 cursor-pointer select-none flex items-center gap-1.5">
+                        Scoped credentials (optional)
+                        <InfoHint text="Give this agent its OWN account for an enabled integration — e.g. its own GitHub token or X account — instead of the global one. Leave a field blank to fall back to the global credentials. Stored AES-256-GCM encrypted." />
+                      </summary>
+                      <div className="mt-2 space-y-3">
+                        <div className="text-[11px] text-dim">Only fills shown for integrations this agent has enabled above. Empty = use the global account.</div>
+                        {enabledAuth.map((svc) => (
+                          <div key={svc}>
+                            <div className="text-xs font-medium flex items-center gap-1.5 mb-1"><IntegrationIcon id={svc} size="sm" /> {getIntegrationMeta(svc)?.label} — this agent&apos;s account</div>
+                            <div className="space-y-1.5">
+                              {AGENT_OVERRIDE_FIELDS[svc].map((f) => (
+                                f.key === 'serviceAccountJson' ? (
+                                  <textarea key={f.key} className="grok-input text-xs font-mono h-16" placeholder={f.label} value={ov[svc]?.[f.key] || ''} onChange={(e) => setOv(svc, f.key, e.target.value)} />
+                                ) : (
+                                  <input key={f.key} type={f.secret ? 'password' : 'text'} className="grok-input text-xs" placeholder={f.label} value={ov[svc]?.[f.key] || ''} onChange={(e) => setOv(svc, f.key, e.target.value)} />
+                                )
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  );
+                })()}
 
                 <div>
                   <div className="grok-label">Peer Agents (inter-agent messaging)</div>
