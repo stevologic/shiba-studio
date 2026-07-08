@@ -2696,21 +2696,16 @@ export default function ShibaStudio() {
                         <input className="grok-input" placeholder="Default channel (#general)" value={intCreds.slack?.defaultChannel || ''} onChange={e => setIntCreds((c:any)=>({...c, slack: {...(c.slack||{}), defaultChannel: e.target.value}}))} />
                       </>
                     )}
-                    {integration.id === 'googledrive' && (
+                    {integration.id === 'googledrive' && (() => {
+                      const gd = intCreds.googledrive || {};
+                      const clientReady = !!gd.clientId?.trim() && !!gd.clientSecret?.trim();
+                      return (
                       <>
-                        <div className="text-xs text-dim mb-2">
-                          Sign in with Google in a popup — tokens are captured and refreshed automatically, nothing to paste.
-                          <br />One-time setup in <span className="font-mono">Google Cloud Console → APIs &amp; Services → Credentials → Create OAuth client ID</span>:
-                          pick <strong>Desktop app</strong> (simplest), or <strong>Web application</strong> and add this exact <strong>Authorized redirect URI</strong>:
+                        <div className="text-xs text-dim mb-3">
+                          A new window opens Google&apos;s sign-in and asks you to grant Drive read/write access, then closes itself.
+                          Tokens are captured and refreshed automatically.
                         </div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <code className="grok-input flex-1 min-w-0 text-[11px] font-mono py-1.5 truncate" title={`${appOrigin}/api/google-oauth/callback`}>{appOrigin}/api/google-oauth/callback</code>
-                          <button type="button" className="grok-btn grok-btn-ghost text-xs shrink-0" onClick={() => { navigator.clipboard.writeText(`${appOrigin}/api/google-oauth/callback`).then(() => toast.success('Redirect URI copied')); }}>Copy</button>
-                        </div>
-                        <div className="text-[11px] text-dim mb-2">Enable the <span className="font-mono">Google Drive API</span> for the project, then paste the client&apos;s ID and secret:</div>
-                        <input className="grok-input mb-2 font-mono text-xs" placeholder="Google OAuth Client ID" value={intCreds.googledrive?.clientId || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), clientId: e.target.value}}))} />
-                        <input className="grok-input mb-2 font-mono text-xs" type="password" placeholder="Google OAuth Client Secret" value={intCreds.googledrive?.clientSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), clientSecret: e.target.value}}))} />
-                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
                           {intTest.googledrive?.ok ? (
                             <span className="status-pill text-success">Connected{intTest.googledrive.email ? ` · ${intTest.googledrive.email}` : ''}</span>
                           ) : (
@@ -2719,9 +2714,9 @@ export default function ShibaStudio() {
                           <button
                             type="button"
                             onClick={() => void startGoogleDriveLogin()}
-                            disabled={driveStarting || !intCreds.googledrive?.clientId?.trim() || !intCreds.googledrive?.clientSecret?.trim()}
+                            disabled={driveStarting || !clientReady}
                             className="grok-btn grok-btn-primary text-xs"
-                            title={!intCreds.googledrive?.clientId?.trim() || !intCreds.googledrive?.clientSecret?.trim() ? 'Enter your OAuth client ID and secret first' : 'Open the Google consent popup'}
+                            title={clientReady ? 'Open the Google consent popup' : 'Add your Google OAuth client under Advanced first'}
                           >
                             {driveStarting ? 'Opening Google…' : '🔑 Sign in with Google'}
                           </button>
@@ -2729,15 +2724,30 @@ export default function ShibaStudio() {
                             <button type="button" onClick={() => void disconnectGoogleDrive()} className="grok-btn grok-btn-ghost text-xs text-error">Disconnect</button>
                           )}
                         </div>
-                        <details className="text-xs">
-                          <summary className="text-dim cursor-pointer select-none">Advanced — service account or manual token</summary>
-                          <div className="mt-2">
-                            <input className="grok-input mb-2" placeholder="OAuth Access Token (manual)" value={intCreds.googledrive?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), accessToken: e.target.value}}))} />
-                            <textarea className="grok-input h-24 font-mono text-xs" placeholder="Paste full Service Account JSON for server-side auth" value={intCreds.googledrive?.serviceAccountJson || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), serviceAccountJson: e.target.value}}))} />
+                        {!clientReady && (
+                          <div className="text-[11px] text-warning mb-1">First time? Open <strong>Advanced</strong> to add your Google OAuth client (one-time).</div>
+                        )}
+                        <details className="text-xs mt-1" open={!clientReady && !intTest.googledrive?.ok}>
+                          <summary className="text-dim cursor-pointer select-none">Advanced — OAuth client setup &amp; fallbacks</summary>
+                          <div className="mt-2 space-y-2">
+                            <div className="text-[11px] text-dim">
+                              One-time: <span className="font-mono">Google Cloud Console → APIs &amp; Services → Credentials → Create OAuth client ID</span> —
+                              pick <strong>Desktop app</strong> (simplest) or <strong>Web application</strong> with this exact <strong>Authorized redirect URI</strong>, and enable the <span className="font-mono">Google Drive API</span>.
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <code className="grok-input flex-1 min-w-0 text-[11px] font-mono py-1.5 truncate" title={`${appOrigin}/api/google-oauth/callback`}>{appOrigin}/api/google-oauth/callback</code>
+                              <button type="button" className="grok-btn grok-btn-ghost text-xs shrink-0" onClick={() => { navigator.clipboard.writeText(`${appOrigin}/api/google-oauth/callback`).then(() => toast.success('Redirect URI copied')); }}>Copy</button>
+                            </div>
+                            <input className="grok-input font-mono text-xs" placeholder="Google OAuth Client ID" value={gd.clientId || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), clientId: e.target.value}}))} />
+                            <input className="grok-input font-mono text-xs" type="password" placeholder="Google OAuth Client Secret" value={gd.clientSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), clientSecret: e.target.value}}))} />
+                            <div className="text-[10px] text-dim pt-1">Save after pasting, then Sign in with Google above. Or skip OAuth entirely with a service account / manual token:</div>
+                            <input className="grok-input" placeholder="OAuth Access Token (manual)" value={gd.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), accessToken: e.target.value}}))} />
+                            <textarea className="grok-input h-24 font-mono text-xs" placeholder="Paste full Service Account JSON for server-side auth" value={gd.serviceAccountJson || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), serviceAccountJson: e.target.value}}))} />
                           </div>
                         </details>
                       </>
-                    )}
+                      );
+                    })()}
                     {integration.id === 'discord' && (
                       <>
                         <input className="grok-input mb-2" placeholder="Discord Bot Token" value={intCreds.discord?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, discord: {...(c.discord||{}), token: e.target.value}}))} />
