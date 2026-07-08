@@ -3823,8 +3823,8 @@ export default function ShibaStudio() {
                   <div className="grok-card p-3 bg-black/20">
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <div className="grok-label mb-0 flex items-center gap-1.5">
-                        Drive folder scope
-                        <InfoHint text="Restrict this agent's Drive tools to specific folders. It will only list files inside them and upload into the first. Leave empty for full Drive access. This is workspace isolation enforced in the tool layer, not a hard API boundary." />
+                        Google Drive folder scope
+                        <InfoHint text="Restrict this agent's Google Drive tools to specific Drive folders. It will only list files inside them and upload into the first. Leave empty for full Google Drive access. This is workspace isolation enforced in the tool layer, not a hard API boundary." />
                       </div>
                       <button type="button" className="grok-btn grok-btn-ghost text-xs" onClick={() => void loadDriveFolders()} disabled={driveFoldersLoading}>
                         {driveFoldersLoading ? 'Loading…' : (driveFolderOptions ? 'Refresh folders' : 'Load folders')}
@@ -3840,7 +3840,7 @@ export default function ShibaStudio() {
                         ))}
                       </div>
                     ) : (
-                      <div className="text-[11px] text-warning mb-2">Full Drive access — this agent can read and write anywhere. Pick folders below to isolate it.</div>
+                      <div className="text-[11px] text-warning mb-2">Full Google Drive access — this agent can read and write anywhere in Drive. Pick folders below to isolate it.</div>
                     )}
                     {driveFolderOptions && driveFolderOptions.length > 0 && (
                       <div className="workspace-dir-list max-h-40 overflow-auto">
@@ -3868,7 +3868,7 @@ export default function ShibaStudio() {
                       </div>
                     )}
                     {driveFolderOptions && driveFolderOptions.length === 0 && (
-                      <div className="text-[11px] text-dim">No folders found (or Drive not signed in). Sign in on the Capabilities page, then Load folders.</div>
+                      <div className="text-[11px] text-dim">No folders found (or Google Drive not signed in). Sign in on the Capabilities page, then Load folders.</div>
                     )}
                   </div>
                 )}
