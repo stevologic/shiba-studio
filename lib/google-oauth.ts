@@ -1,27 +1,26 @@
-// Google Drive OAuth via the same popup + 127.0.0.1 loopback pattern as X.
+// Google Drive OAuth via the same popup + self-closing hand-back pattern as X.
 // Google has no public client we can borrow, so the user provides their own
 // OAuth client (created once in Google Cloud Console) — client id + secret are
-// stored encrypted. Sign-in then opens a popup to Google's consent screen,
-// captures the code on a disposable loopback listener, exchanges it for
-// access + refresh tokens, stores them, and closes the popup.
+// stored encrypted.
+//
+// Unlike X, Google uses a FIXED redirect on the app's own origin
+// (`/api/google-oauth/callback`) rather than a random-port loopback. That URL
+// works for BOTH Google client types: "Desktop app" (localhost is a permitted
+// loopback) and "Web application" (the user registers this exact URL). A
+// random port only works for Desktop clients and is the usual cause of
+// "redirect_uri does not match".
 
 import { loadConfig, saveConfig } from './persistence';
-import { startOAuthLoopback } from './oauth-loopback';
 
 const DRIVE_SCOPES = [
   'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/userinfo.email',
 ];
 
-interface PendingGoogle {
-  clientId: string;
-  clientSecret: string;
-  redirectUri: string;
-  createdAt: number;
+/** The redirect URI Google must send the user back to. Fixed per app origin. */
+export function googleRedirectUri(appOrigin: string): string {
+  return `${appOrigin.replace(/\/$/, '')}/api/google-oauth/callback`;
 }
-
-// Kept in module memory only for the ~seconds between authorize and callback.
-let pendingGoogle: PendingGoogle | null = null;
 
 async function driveCreds() {
   const cfg = await loadConfig();
@@ -36,58 +35,61 @@ async function patchDriveCreds(patch: Record<string, string | undefined>): Promi
   await saveConfig({ integrations });
 }
 
-/** Begin sign-in: bind a loopback listener and build Google's consent URL. */
-export async function startGoogleDriveOAuth(appOrigin: string): Promise<{ authorizeUrl: string }> {
+/** Begin sign-in: build Google's consent URL for the app-origin redirect. */
+export async function startGoogleDriveOAuth(appOrigin: string): Promise<{ authorizeUrl: string; redirectUri: string }> {
   const creds = await driveCreds();
   const clientId = creds.clientId?.trim();
   const clientSecret = creds.clientSecret?.trim();
   if (!clientId || !clientSecret) {
-    throw new Error('Add your Google OAuth Client ID and Secret first (create one in Google Cloud Console → Credentials → OAuth client → Desktop app).');
+    throw new Error('Add your Google OAuth Client ID and Secret first (Google Cloud Console → Credentials → Create OAuth client).');
   }
 
   const { google } = await import('googleapis');
-
-  const { redirectUri } = await startOAuthLoopback(appOrigin, async ({ code, error, errorDescription }) => {
-    if (error) return { ok: false, message: errorDescription || error };
-    if (!code) return { ok: false, message: 'Missing authorization code' };
-    if (!pendingGoogle) return { ok: false, message: 'Sign-in expired — start again' };
-    try {
-      const oauth2 = new google.auth.OAuth2(pendingGoogle.clientId, pendingGoogle.clientSecret, pendingGoogle.redirectUri);
-      const { tokens } = await oauth2.getToken(code);
-      if (!tokens.access_token) return { ok: false, message: 'Google returned no access token' };
-      oauth2.setCredentials(tokens);
-
-      let email: string | undefined;
-      try {
-        const oauth2Api = google.oauth2({ version: 'v2', auth: oauth2 });
-        const info = await oauth2Api.userinfo.get();
-        email = info.data.email || undefined;
-      } catch { /* email is best-effort */ }
-
-      await patchDriveCreds({
-        accessToken: tokens.access_token,
-        // Google only returns refresh_token on the first consent (prompt=consent
-        // forces it); keep any existing one if this response omits it.
-        refreshToken: tokens.refresh_token || (await driveCreds()).refreshToken,
-        tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : undefined,
-        email,
-      });
-      pendingGoogle = null;
-      return { ok: true };
-    } catch (e: unknown) {
-      return { ok: false, message: e instanceof Error ? e.message : 'Google token exchange failed' };
-    }
-  }, 'shiba-drive');
-
-  pendingGoogle = { clientId, clientSecret, redirectUri, createdAt: Date.now() };
-
+  const redirectUri = googleRedirectUri(appOrigin);
   const oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
   const authorizeUrl = oauth2.generateAuthUrl({
     access_type: 'offline',      // request a refresh token
     prompt: 'consent',           // force refresh_token even on repeat sign-ins
     scope: DRIVE_SCOPES,
+    include_granted_scopes: true,
   });
-  return { authorizeUrl };
+  return { authorizeUrl, redirectUri };
+}
+
+/**
+ * Exchange the authorization code (called by the callback route). The redirect
+ * URI must byte-match the one used to start, so it is rebuilt from the same
+ * origin. Returns the connected email on success.
+ */
+export async function exchangeGoogleDriveCode(code: string, appOrigin: string): Promise<{ email?: string }> {
+  const creds = await driveCreds();
+  const clientId = creds.clientId?.trim();
+  const clientSecret = creds.clientSecret?.trim();
+  if (!clientId || !clientSecret) throw new Error('Google OAuth client is not configured');
+
+  const { google } = await import('googleapis');
+  const redirectUri = googleRedirectUri(appOrigin);
+  const oauth2 = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  const { tokens } = await oauth2.getToken(code);
+  if (!tokens.access_token) throw new Error('Google returned no access token');
+  oauth2.setCredentials(tokens);
+
+  let email: string | undefined;
+  try {
+    const oauth2Api = google.oauth2({ version: 'v2', auth: oauth2 });
+    const info = await oauth2Api.userinfo.get();
+    email = info.data.email || undefined;
+  } catch { /* email is best-effort */ }
+
+  await patchDriveCreds({
+    accessToken: tokens.access_token,
+    // Google only returns refresh_token on the first consent (prompt=consent
+    // forces it); keep any existing one if this response omits it.
+    refreshToken: tokens.refresh_token || creds.refreshToken,
+    tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : undefined,
+    email,
+  });
+  return { email };
 }
 
 /** A valid Drive access token, refreshing via the refresh token if expired. */

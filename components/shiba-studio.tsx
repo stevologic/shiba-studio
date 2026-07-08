@@ -119,6 +119,9 @@ export default function ShibaStudio() {
   const oauthPopupRef = useRef<Window | null>(null);
   const drivePopupRef = useRef<Window | null>(null);
   const [driveStarting, setDriveStarting] = useState(false);
+  // App origin for OAuth redirect URIs (SSR-safe — filled in after mount).
+  const [appOrigin, setAppOrigin] = useState('');
+  useEffect(() => { setAppOrigin(window.location.origin); }, []);
 
   const navigateToTab = useCallback((next: AppTab) => {
     const path = tabToPath(next);
@@ -2697,8 +2700,14 @@ export default function ShibaStudio() {
                       <>
                         <div className="text-xs text-dim mb-2">
                           Sign in with Google in a popup — tokens are captured and refreshed automatically, nothing to paste.
-                          One-time setup: create an OAuth client in <span className="font-mono">Google Cloud Console → Credentials → OAuth client ID → Desktop app</span> and paste its ID and secret below.
+                          <br />One-time setup in <span className="font-mono">Google Cloud Console → APIs &amp; Services → Credentials → Create OAuth client ID</span>:
+                          pick <strong>Desktop app</strong> (simplest), or <strong>Web application</strong> and add this exact <strong>Authorized redirect URI</strong>:
                         </div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <code className="grok-input flex-1 min-w-0 text-[11px] font-mono py-1.5 truncate" title={`${appOrigin}/api/google-oauth/callback`}>{appOrigin}/api/google-oauth/callback</code>
+                          <button type="button" className="grok-btn grok-btn-ghost text-xs shrink-0" onClick={() => { navigator.clipboard.writeText(`${appOrigin}/api/google-oauth/callback`).then(() => toast.success('Redirect URI copied')); }}>Copy</button>
+                        </div>
+                        <div className="text-[11px] text-dim mb-2">Enable the <span className="font-mono">Google Drive API</span> for the project, then paste the client&apos;s ID and secret:</div>
                         <input className="grok-input mb-2 font-mono text-xs" placeholder="Google OAuth Client ID" value={intCreds.googledrive?.clientId || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), clientId: e.target.value}}))} />
                         <input className="grok-input mb-2 font-mono text-xs" type="password" placeholder="Google OAuth Client Secret" value={intCreds.googledrive?.clientSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), clientSecret: e.target.value}}))} />
                         <div className="flex flex-wrap items-center gap-2 mb-2">
