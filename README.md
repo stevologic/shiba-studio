@@ -15,9 +15,9 @@ Build, orchestrate, and schedule AI agents with full computer use — chat, code
 
 <br/>
 
-<img src="docs/images/chat.png" alt="Grok Chat: an element annotated in the sub-browser answered with a syntax-highlighted CSS refactor, reasoning trace, and token count" width="880" />
+<img src="docs/images/chat.png" alt="Grok Chat: annotated sub-browser element request with selector, HTML snippet, and mic-enabled composer" width="880" />
 
-*Grok Chat in action — an element annotated in the sub-browser, refactored with reasoning, code, and a one-command PR.*
+*Grok Chat in action — annotate the app you're building, refine with Grok, dictate messages, and ship from the same session.*
 
 *Upgrading from an older install? Legacy `~/.grokdesk` data (key, credentials, runs, chats) migrates to `~/.shiba-studio` automatically on first start.*
 
@@ -42,8 +42,8 @@ All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAut
 
 | Mission-control dashboard | Automations with run logs |
 | :---: | :---: |
-| <img src="docs/images/dashboard.png" alt="Dashboard: per-source readiness badges, quick stats, and the recent agent runs table with statuses and view-answer links" /> | <img src="docs/images/automations.png" alt="Automations: scheduled agents with per-schedule run logs, Active and Paused states, and Run now" /> |
-| Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Cron-scheduled agents with per-schedule run logs — they keep firing headless as long as the server is up. |
+| <img src="docs/images/dashboard.png" alt="Dashboard: hero, readiness badges, quick stats, and recent agent runs with statuses and view-answer links" /> | <img src="docs/images/automations.png" alt="Automations: scheduled agents with Active/Paused states, per-schedule Run/Edit/Delete, and compact run-log icon" /> |
+| Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Cron-scheduled agents with compact run-log access — they keep firing headless as long as the server is up. |
 
 ## Quick start
 
