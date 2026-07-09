@@ -15,6 +15,7 @@ const SENSITIVE_CONFIG_PATHS = [
   'xaiManagementKey',
   'integrations.github.token',
   'integrations.slack.token',
+  'integrations.slack.appToken',
   'integrations.googledrive.accessToken',
   'integrations.googledrive.serviceAccountJson',
   'integrations.googledrive.clientSecret',

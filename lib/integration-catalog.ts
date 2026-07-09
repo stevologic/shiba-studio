@@ -34,9 +34,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     label: 'Slack',
     shortLabel: 'Slack',
     icon: '/integrations/slack.svg',
-    description: 'Post messages to channels',
+    description: 'Post messages and reply to @mentions',
     docsUrl: 'https://api.slack.com/docs',
-    setupUrl: 'https://api.slack.com/authentication/token-types#bot',
+    setupUrl: 'https://api.slack.com/apis/connections/socket',
     docsLabel: 'Slack API',
   },
   {
@@ -54,9 +54,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     label: 'Discord',
     shortLabel: 'Discord',
     icon: '/integrations/discord.svg',
-    description: 'Post messages to channels via bot',
+    description: 'Post messages and reply to @mentions',
     docsUrl: 'https://discord.com/developers/docs/intro',
-    setupUrl: 'https://discord.com/developers/docs/topics/oauth2#bot-vs-user-accounts',
+    setupUrl: 'https://discord.com/developers/docs/topics/gateway',
     docsLabel: 'Discord API',
   },
   {

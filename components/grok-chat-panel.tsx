@@ -481,6 +481,8 @@ export default function GrokChatPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** Keep the transcript pinned to the latest message unless the user scrolls up. */
+  const stickToBottomRef = useRef(true);
   const chatModelRef = useRef(chatModel);
   useEffect(() => { chatModelRef.current = chatModel; }, [chatModel]);
 
@@ -1564,17 +1566,40 @@ export default function GrokChatPanel({
     };
   }, [session?.id]);
 
-  const scrollToBottom = useCallback((smooth = true) => {
-    bottomRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+  // "Jump to latest" when the reader scrolls away from the tail.
+  const [awayFromLatest, setAwayFromLatest] = useState(false);
+
+  const scrollToBottom = useCallback((smooth = false) => {
+    const el = scrollRef.current;
+    if (el) {
+      // Direct scrollTop is more reliable than scrollIntoView during rapid stream updates.
+      if (smooth) {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+    }
   }, []);
 
-  // Stick to the bottom while streaming, but respect the user scrolling up to read.
+  // Pin to the latest bubble on every message/stream update while stick is on.
+  // Use rAF so layout has applied the new content height first.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
-    if (nearBottom) scrollToBottom();
-  }, [messages, scrollToBottom]);
+    if (!stickToBottomRef.current) return;
+    const id = requestAnimationFrame(() => {
+      if (stickToBottomRef.current) scrollToBottom(false);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [messages, streaming, scrollToBottom]);
+
+  // When a stream starts, re-pin so the user always sees the new reply.
+  useEffect(() => {
+    if (!streaming) return;
+    stickToBottomRef.current = true;
+    setAwayFromLatest(false);
+    scrollToBottom(false);
+  }, [streaming, scrollToBottom]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -1607,12 +1632,13 @@ export default function GrokChatPanel({
     return () => window.clearTimeout(t);
   }, [input, draftKey]);
 
-  // "Jump to latest" appears when the reader scrolls away from the tail (C5).
-  const [awayFromLatest, setAwayFromLatest] = useState(false);
   const onMessagesScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    setAwayFromLatest(el.scrollHeight - el.scrollTop - el.clientHeight > 220);
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nearBottom = dist < 120;
+    stickToBottomRef.current = nearBottom;
+    setAwayFromLatest(!nearBottom);
   }, []);
 
   /** Export the conversation as Markdown — roles, models, reasoning, tokens (C4). */
@@ -2574,6 +2600,10 @@ export default function GrokChatPanel({
       sendingFromVoiceRef.current = false;
       return;
     }
+    // Always follow the new reply as it streams (user can scroll up to unpin).
+    stickToBottomRef.current = true;
+    setAwayFromLatest(false);
+    scrollToBottom(false);
     stopDictation();
 
     // Slash commands always win over a normal send — attachments stay pending
@@ -3042,8 +3072,9 @@ export default function GrokChatPanel({
           type="button"
           className="chat-jump-latest"
           onClick={() => {
-            scrollToBottom();
+            stickToBottomRef.current = true;
             setAwayFromLatest(false);
+            scrollToBottom(false);
           }}
           title="Scroll to the newest message"
         >

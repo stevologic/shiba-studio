@@ -5,7 +5,12 @@ import { audit } from '@/lib/audit-log';
 
 export async function GET() {
   const cfg = await loadConfig();
-  return NextResponse.json({ integrations: cfg.integrations });
+  let listeners = null;
+  try {
+    const { getChannelListenerStatuses } = await import('@/lib/channel-listeners');
+    listeners = getChannelListenerStatuses();
+  } catch { /* optional */ }
+  return NextResponse.json({ integrations: cfg.integrations, listeners });
 }
 
 export async function POST(req: NextRequest) {
@@ -29,8 +34,15 @@ export async function POST(req: NextRequest) {
       }
     }
     const next = await saveConfig({ integrations: partial });
+    Ints.setIntegrationCreds(next.integrations || {});
     audit('integration', 'credentials saved', which || Object.keys(partial).join(', '));
-    return NextResponse.json({ ok: true, integrations: next.integrations });
+    // Restart mention listeners when Slack/Discord creds change.
+    let listeners = null;
+    try {
+      const { syncChannelListeners } = await import('@/lib/channel-listeners');
+      listeners = await syncChannelListeners();
+    } catch { /* non-fatal */ }
+    return NextResponse.json({ ok: true, integrations: next.integrations, listeners });
   }
 
   if (body.action === 'delete') {
@@ -40,7 +52,28 @@ export async function POST(req: NextRequest) {
     const next = await saveConfig({ integrations: { [which]: cleared } });
     Ints.setIntegrationCreds(next.integrations || {});
     audit('integration', 'credentials removed', which);
-    return NextResponse.json({ ok: true, integrations: next.integrations });
+    let listeners = null;
+    try {
+      const { syncChannelListeners } = await import('@/lib/channel-listeners');
+      listeners = await syncChannelListeners();
+    } catch { /* non-fatal */ }
+    return NextResponse.json({ ok: true, integrations: next.integrations, listeners });
+  }
+
+  if (body.action === 'listeners') {
+    try {
+      const { getChannelListenerStatuses, syncChannelListeners } = await import('@/lib/channel-listeners');
+      if (body.resync) {
+        const listeners = await syncChannelListeners();
+        return NextResponse.json({ ok: true, listeners });
+      }
+      return NextResponse.json({ ok: true, listeners: getChannelListenerStatuses() });
+    } catch (e: unknown) {
+      return NextResponse.json({
+        ok: false,
+        error: e instanceof Error ? e.message : 'listeners unavailable',
+      }, { status: 500 });
+    }
   }
 
   if (body.action === 'disconnect-drive') {

@@ -139,6 +139,16 @@ export interface IntegrationCreds {
   slack?: {
     token: string; // xoxb-...
     defaultChannel?: string;
+    /**
+     * App-level token (xapp-…) for Socket Mode — required to listen for
+     * @mentions without a public webhook URL. Create under Slack app →
+     * Basic Information → App-Level Tokens (connections:write).
+     */
+    appToken?: string;
+    /** When true (and appToken set), listen for app_mention events and reply. */
+    listenEnabled?: boolean;
+    /** Agent id that answers Slack @mentions (falls back to first slack-scoped agent). */
+    mentionAgentId?: string;
   };
   googledrive?: {
     // For simplicity support access token (oauth) or service account json string
@@ -154,6 +164,10 @@ export interface IntegrationCreds {
   discord?: {
     token: string; // Bot token
     defaultChannelId?: string;
+    /** When true, open a Discord Gateway connection and reply to @mentions. */
+    listenEnabled?: boolean;
+    /** Agent id that answers Discord @mentions (falls back to first discord-scoped agent). */
+    mentionAgentId?: string;
   };
   x?: {
     apiKey: string;
