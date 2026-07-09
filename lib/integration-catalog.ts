@@ -1,6 +1,6 @@
 /** UI catalog for Shiba Studio integrations. */
 
-export type IntegrationId = 'github' | 'slack' | 'googledrive' | 'discord' | 'x' | 'obsidian';
+export type IntegrationId = 'github' | 'slack' | 'googledrive' | 'discord' | 'x' | 'obsidian' | 'vercel';
 
 export interface IntegrationMeta {
   id: IntegrationId;
@@ -79,6 +79,16 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     docsUrl: 'https://coddingtonbear.github.io/obsidian-local-rest-api/',
     setupUrl: 'https://help.obsidian.md/',
     docsLabel: 'Local REST API',
+  },
+  {
+    id: 'vercel',
+    label: 'Vercel',
+    shortLabel: 'Vercel',
+    icon: '/integrations/vercel.svg',
+    description: 'Deploy apps, list projects, and manage env vars',
+    docsUrl: 'https://vercel.com/docs/rest-api',
+    setupUrl: 'https://vercel.com/account/tokens',
+    docsLabel: 'Vercel REST API',
   },
 ];
 

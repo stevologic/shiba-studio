@@ -79,6 +79,10 @@ export async function POST(req: NextRequest) {
       const r = await Ints.testObsidian(body.creds || cfg.integrations || {});
       return NextResponse.json(r);
     }
+    if (which === 'vercel') {
+      const r = await Ints.testVercel(body.creds || cfg.integrations || {});
+      return NextResponse.json(r);
+    }
   }
   return NextResponse.json({ error: 'bad action' }, { status: 400 });
 }

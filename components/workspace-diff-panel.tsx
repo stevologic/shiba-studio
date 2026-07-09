@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { GitCompare, RotateCcw, FileDiff } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 
 interface DiffFile {

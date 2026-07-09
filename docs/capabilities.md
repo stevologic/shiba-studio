@@ -14,6 +14,7 @@ Provide credentials once; agents with the matching scope can call the service du
 | **Discord** | Bot token + channel id | `discord_post` |
 | **X** | API key/secret + access token/secret | `x_post` |
 | **Obsidian** | Local vault path, or Local REST API URL + key | `obsidian_list/read/write/search` (+ `/note` in chat) — scoped agents get the vault's contents as live context |
+| **Vercel** | Access token from [vercel.com/account/tokens](https://vercel.com/account/tokens); optional team id/slug and default project | `vercel_list_projects`, `vercel_list_deployments`, `vercel_get_deployment`, `vercel_deploy`, `vercel_set_env` — deploy/redeploy git-linked projects, check status, manage env vars |
 
 Every credential is AES-256-GCM encrypted at rest. *Test Connection* verifies each one; *Remove* deletes stored credentials.
 

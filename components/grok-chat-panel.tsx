@@ -16,7 +16,7 @@ import {
   textForSpeech,
 } from '@/lib/xai-tts';
 import dynamic from 'next/dynamic';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import ChatMarkdown from '@/components/chat-markdown-lazy';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
@@ -95,6 +95,8 @@ interface GrokChatPanelProps {
   onSessionUpdated?: () => void;
   projects?: Project[];
   onProjectLinkChange?: (projectId: string | null) => void;
+  /** Settings default workspace — picker opens here when chat has no binding. */
+  defaultWorkspace?: string;
 }
 
 type AgentPerspective = { agentId: string; name: string; content: string };
@@ -265,6 +267,7 @@ export default function GrokChatPanel({
   onSessionUpdated,
   projects = [],
   onProjectLinkChange,
+  defaultWorkspace = '',
 }: GrokChatPanelProps) {
   const isSessionMode = !!session && !onProjectUpdated;
   const init = sessionToInitialState(session, project, agents);
@@ -334,6 +337,11 @@ export default function GrokChatPanel({
   const BARGE_IN_HOLD_MS = 2000;
   /** If word activity gaps longer than this, restart the 2s barge-in hold. */
   const BARGE_IN_GAP_RESET_MS = 450;
+  /**
+   * After a soft interrupt, wait this long for real user words.
+   * Silence / noise → resume the paused reply from where it left off.
+   */
+  const FALSE_BARGE_IN_RESUME_MS = 2200;
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingFromVoiceRef = useRef(false);
   const inputRef = useRef(input);
@@ -365,10 +373,24 @@ export default function GrokChatPanel({
   const voiceSpokenLenRef = useRef(0);
   const voiceMsgIdRef = useRef<string | null>(null);
   const ttsQueueRef = useRef<string[]>([]);
+  /** Chunk currently playing (re-queued on soft barge-in so we can resume). */
+  const currentTtsChunkRef = useRef<string | null>(null);
   const ttsPlayingRef = useRef(false);
   const ttsFetchGenRef = useRef(0);
-  /** Skip finishVoiceStream / auto-resume after user barge-in. */
+  /** Hard barge-in confirmed — skip residual TTS for an aborted turn. */
   const voiceBargeInRef = useRef(false);
+  /**
+   * Soft interrupt pending: TTS paused, waiting to see if the user actually said
+   * something. Noise/silence → resume speech from ttsResumeRef.
+   */
+  const softBargeInPendingRef = useRef(false);
+  const softBargeInTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ttsResumeRef = useRef<{
+    msgId: string;
+    queue: string[];
+    spokenLen: number;
+    streamBuf: string;
+  } | null>(null);
   /** Earliest time barge-in is accepted (avoids TTS echo right after audio starts). */
   const bargeInReadyAtRef = useRef(0);
   /**
@@ -381,6 +403,8 @@ export default function GrokChatPanel({
   /** Last time we saw word content while the assistant was busy. */
   const bargeInLastWordAtRef = useRef(0);
   const interruptVoiceRef = useRef<() => void>(() => {});
+  const confirmRealBargeInRef = useRef<() => void>(() => {});
+  const resumeAfterFalseBargeInRef = useRef<() => void>(() => {});
   // Multi-agent voice group: round-robin agent turns when chatTarget === 'all'.
   const voiceGroupCursorRef = useRef(0);
   const voiceGroupLastAgentIdRef = useRef<string | null>(null);
@@ -513,6 +537,19 @@ export default function GrokChatPanel({
     // Only auto-send in hands-free Grok voice mode (auto-speak on).
     if (!autoSpeakRef.current) return;
     if (Date.now() < voiceIgnoreUntilRef.current) return;
+    // Soft barge-in must be confirmed as real speech before we send.
+    if (softBargeInPendingRef.current) {
+      const candidate = (dictationFinalRef.current || '').trim();
+      let meaningful = false;
+      try {
+        const words = candidate.split(/\s+/).filter((w) => /[\p{L}\p{N}]{2,}/u.test(w));
+        meaningful = words.length >= 2 || candidate.replace(/\s+/g, '').length >= 12;
+      } catch {
+        meaningful = candidate.replace(/[^a-zA-Z0-9]/g, '').length >= 12;
+      }
+      if (!meaningful) return;
+      confirmRealBargeInRef.current();
+    }
     // Don't auto-send while Grok is still generating/speaking (unless barge-in already cut it).
     if (
       streamingRef.current
@@ -553,6 +590,8 @@ export default function GrokChatPanel({
 
   /** True while Grok is generating or speaking — user speech can barge in. */
   const isAssistantVoiceBusy = useCallback(() => {
+    // Soft-paused: treat as not busy so we can confirm real words vs noise.
+    if (softBargeInPendingRef.current) return false;
     return (
       streamingRef.current
       || ttsPlayingRef.current
@@ -687,6 +726,27 @@ export default function GrokChatPanel({
         setInput(next);
         setDictationInterim(interimBit);
 
+        // Soft barge-in confirmation: real words cancel resume; noise does not.
+        if (autoSpeakRef.current && softBargeInPendingRef.current) {
+          const candidate = (finals || finalChunk || '').trim();
+          let meaningful = false;
+          try {
+            const words = candidate.split(/\s+/).filter((w) => /[\p{L}\p{N}]{2,}/u.test(w));
+            meaningful = words.length >= 2 || candidate.replace(/\s+/g, '').length >= 12;
+          } catch {
+            meaningful = candidate.replace(/[^a-zA-Z0-9]/g, '').length >= 12;
+          }
+          if (meaningful) {
+            confirmRealBargeInRef.current();
+            clearSilenceTimer();
+            if (dictationFinalRef.current.trim()) scheduleVoiceAutoSend();
+            return;
+          }
+          // Still waiting — do not auto-send scraps; timer may resume speech.
+          clearSilenceTimer();
+          return;
+        }
+
         clearSilenceTimer();
         if (autoSpeakRef.current && dictationFinalRef.current.trim() && !isAssistantVoiceBusy()) {
           scheduleVoiceAutoSend();
@@ -781,11 +841,7 @@ export default function GrokChatPanel({
       rec.start();
       setDictating(true);
       textareaRef.current?.focus();
-      if (!opts?.quiet) {
-        toast.success(autoSpeakRef.current
-          ? 'Grok voice on — mic off while Grok talks (avoids speaker echo)'
-          : 'Listening — speak your message');
-      }
+      // Voice/mic state is visible in the HUD — no toast popups.
     } catch (e: unknown) {
       if (!opts?.quiet) toast.error(e instanceof Error ? e.message : 'Could not start dictation');
       stopDictation();
@@ -889,6 +945,7 @@ export default function GrokChatPanel({
   const stopSpeaking = useCallback(() => {
     ttsFetchGenRef.current += 1;
     ttsQueueRef.current = [];
+    currentTtsChunkRef.current = null;
     ttsPlayingRef.current = false;
     try {
       audioRef.current?.pause();
@@ -900,41 +957,67 @@ export default function GrokChatPanel({
     setTtsLoadingId(null);
   }, []);
 
+  const clearSoftBargeInTimer = useCallback(() => {
+    if (softBargeInTimerRef.current) {
+      clearTimeout(softBargeInTimerRef.current);
+      softBargeInTimerRef.current = null;
+    }
+  }, []);
+
+  /** Snapshot remaining speech so a false barge-in can pick up where it left off. */
+  function snapshotTtsForResume() {
+    const remaining = [...ttsQueueRef.current];
+    if (currentTtsChunkRef.current) {
+      remaining.unshift(currentTtsChunkRef.current);
+    }
+    const msgId = voiceMsgIdRef.current || '';
+    // Prefer rebuilding from stream buffer when queue is empty but text remains.
+    ttsResumeRef.current = {
+      msgId,
+      queue: remaining,
+      spokenLen: voiceSpokenLenRef.current,
+      streamBuf: voiceStreamBufRef.current,
+    };
+  }
+
   /**
-   * User spoke while Grok was thinking or speaking — cut audio, abort the
-   * in-flight reply, and keep the mic open so the new utterance can be sent.
+   * Soft interrupt: pause TTS, keep the reply, listen briefly.
+   * Real user words → hard barge-in. Silence/noise → resume speech.
    */
   const interruptVoiceForBargeIn = useCallback(() => {
     if (!autoSpeakRef.current) return;
+    if (softBargeInPendingRef.current) return;
     if (!isAssistantVoiceBusy() && !voiceGroupBusyRef.current) return;
-    // Only suppress stream-end TTS flush when a generation is still in flight.
-    const wasStreaming = streamingRef.current;
-    voiceBargeInRef.current = wasStreaming || ttsPlayingRef.current || ttsQueueRef.current.length > 0;
-    bargeInReadyAtRef.current = Number.MAX_SAFE_INTEGER; // pause further barge-in until re-armed
+
+    const wasSpeaking = ttsPlayingRef.current || ttsQueueRef.current.length > 0 || !!currentTtsChunkRef.current;
+    snapshotTtsForResume();
+
+    softBargeInPendingRef.current = true;
+    // Do not set voiceBargeInRef yet — stream may still finish / TTS may resume.
+    bargeInReadyAtRef.current = Number.MAX_SAFE_INTEGER;
     clearVoiceGroupSilenceTimer();
     voiceGroupChainRef.current = 0;
-    voiceGroupBusyRef.current = false;
-    // Kill progressive TTS mid-queue (long answers often have many chunks).
-    stopSpeaking();
-    voiceStreamBufRef.current = '';
-    voiceSpokenLenRef.current = 0;
-    voiceMsgIdRef.current = null;
+    // Pause audio only — do not wipe stream buffers (needed to resume).
+    ttsFetchGenRef.current += 1;
+    ttsPlayingRef.current = false;
     ttsQueueRef.current = [];
-    if (speakVoiceRestoreRef.current) {
-      speakVoiceRef.current = speakVoiceRestoreRef.current;
-      speakVoiceRestoreRef.current = null;
-    }
-    if (wasStreaming) {
-      try {
-        abortRef.current?.abort();
-      } catch { /* ignore */ }
-    }
-    // Wipe echo, mute briefly, then open a clean listen session for the user.
+    currentTtsChunkRef.current = null;
+    try {
+      audioRef.current?.pause();
+      if (audioRef.current?.src?.startsWith('blob:')) URL.revokeObjectURL(audioRef.current.src);
+    } catch { /* ignore */ }
+    audioRef.current = null;
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    setTtsLoadingId(null);
+    // Keep speakingMsgId for resume continuity when possible.
+    if (!wasSpeaking) setSpeakingMsgId(null);
+
     clearVoiceTranscript();
     bargeInSpeechStartedAtRef.current = 0;
     bargeInLastWordAtRef.current = 0;
-    voiceIgnoreUntilRef.current = Date.now() + VOICE_ECHO_MUTE_MS;
-    bargeInReadyAtRef.current = Date.now() + VOICE_ECHO_MUTE_MS;
+    voiceIgnoreUntilRef.current = Date.now() + Math.min(VOICE_ECHO_MUTE_MS, 500);
+    bargeInReadyAtRef.current = Date.now() + 400;
+
     if (recognitionRef.current) {
       const rec = recognitionRef.current;
       recognitionRef.current = null;
@@ -942,22 +1025,122 @@ export default function GrokChatPanel({
       try { rec.abort(); } catch { /* ignore */ }
       setDictating(false);
     }
+
+    clearSoftBargeInTimer();
+    softBargeInTimerRef.current = setTimeout(() => {
+      softBargeInTimerRef.current = null;
+      resumeAfterFalseBargeInRef.current();
+    }, FALSE_BARGE_IN_RESUME_MS);
+
     window.setTimeout(() => {
       if (!autoSpeakRef.current) return;
       startDictation({ quiet: true, fresh: true });
-    }, VOICE_ECHO_MUTE_MS);
-  }, [clearVoiceGroupSilenceTimer, clearVoiceTranscript, startDictation, stopSpeaking]);
+    }, 280);
+  }, [clearSoftBargeInTimer, clearVoiceGroupSilenceTimer, clearVoiceTranscript, isAssistantVoiceBusy, startDictation]);
+
+  /** User really said something after soft interrupt — abandon paused speech. */
+  const confirmRealBargeIn = useCallback(() => {
+    if (!softBargeInPendingRef.current && !ttsResumeRef.current) return;
+    clearSoftBargeInTimer();
+    softBargeInPendingRef.current = false;
+    ttsResumeRef.current = null;
+    voiceBargeInRef.current = true;
+    voiceStreamBufRef.current = '';
+    voiceSpokenLenRef.current = 0;
+    voiceMsgIdRef.current = null;
+    ttsQueueRef.current = [];
+    currentTtsChunkRef.current = null;
+    setSpeakingMsgId(null);
+    if (streamingRef.current) {
+      try {
+        abortRef.current?.abort();
+      } catch { /* ignore */ }
+    }
+    if (speakVoiceRestoreRef.current) {
+      speakVoiceRef.current = speakVoiceRestoreRef.current;
+      speakVoiceRestoreRef.current = null;
+    }
+  }, [clearSoftBargeInTimer]);
+
+  /** Soft interrupt was noise — continue the paused reply. */
+  const resumeAfterFalseBargeIn = useCallback(() => {
+    if (!softBargeInPendingRef.current) return;
+    if (!autoSpeakRef.current) {
+      softBargeInPendingRef.current = false;
+      ttsResumeRef.current = null;
+      return;
+    }
+    // Real words already in the composer → treat as a real interrupt instead.
+    const pending = (dictationFinalRef.current || inputRef.current || '').trim();
+    if (pending.length >= 8) {
+      confirmRealBargeIn();
+      return;
+    }
+
+    clearSoftBargeInTimer();
+    softBargeInPendingRef.current = false;
+    voiceBargeInRef.current = false;
+    clearVoiceTranscript();
+
+    const snap = ttsResumeRef.current;
+    ttsResumeRef.current = null;
+    if (!snap) {
+      if (!streamingRef.current) resumeListeningAfterVoice();
+      return;
+    }
+
+    voiceMsgIdRef.current = snap.msgId || voiceMsgIdRef.current;
+    voiceSpokenLenRef.current = snap.spokenLen;
+    voiceStreamBufRef.current = snap.streamBuf;
+
+    let queue = snap.queue.filter(Boolean);
+    if (!queue.length && snap.streamBuf) {
+      const speakable = textForSpeech(snap.streamBuf);
+      const rest = speakable.slice(snap.spokenLen).trim();
+      if (rest) queue = splitSpeechChunks(rest, 240);
+    }
+    // Also pull any unsent tail from the live message if stream finished while paused.
+    if (!queue.length && snap.msgId) {
+      const msg = messagesRef.current.find((m) => m.id === snap.msgId);
+      if (msg?.content && !msg.streaming) {
+        const speakable = textForSpeech(msg.content);
+        const rest = speakable.slice(snap.spokenLen).trim();
+        if (rest) {
+          queue = splitSpeechChunks(rest, 240);
+          voiceSpokenLenRef.current = speakable.length;
+        }
+      }
+    }
+
+    if (queue.length && snap.msgId) {
+      ttsQueueRef.current = queue;
+      void pumpTtsQueue(snap.msgId);
+      return;
+    }
+
+    // Nothing left to say (or still streaming — deltas will re-enqueue).
+    if (!streamingRef.current) resumeListeningAfterVoice();
+  }, [clearSoftBargeInTimer, clearVoiceTranscript, confirmRealBargeIn, resumeListeningAfterVoice]);
 
   useEffect(() => {
     interruptVoiceRef.current = interruptVoiceForBargeIn;
   }, [interruptVoiceForBargeIn]);
+  useEffect(() => {
+    confirmRealBargeInRef.current = confirmRealBargeIn;
+  }, [confirmRealBargeIn]);
+  useEffect(() => {
+    resumeAfterFalseBargeInRef.current = resumeAfterFalseBargeIn;
+  }, [resumeAfterFalseBargeIn]);
 
   // Stop mic + TTS when this chat panel unmounts (session switch). Navigation
   // keep-alive avoids unmounting while voice is still active on another tab.
   useEffect(() => () => {
+    clearSoftBargeInTimer();
+    softBargeInPendingRef.current = false;
+    ttsResumeRef.current = null;
     stopDictation();
     stopSpeaking();
-  }, [stopDictation, stopSpeaking]);
+  }, [clearSoftBargeInTimer, stopDictation, stopSpeaking]);
 
   function persistTtsVoice(id: string) {
     const next = id.trim().toLowerCase() || DEFAULT_TTS_VOICE;
@@ -973,10 +1156,7 @@ export default function GrokChatPanel({
     ttsSpeedRef.current = next;
     try { window.localStorage.setItem('shiba-tts-speed', String(next)); } catch { /* private mode */ }
     patchVoiceAgentUi({ speechSpeed: next });
-    if (!opts?.quiet) {
-      const opt = GROK_TTS_SPEEDS.find((s) => Math.abs(s.value - next) < 0.01);
-      toast.success(`Speech speed ${opt?.label || `${next}×`}${opt?.hint ? ` · ${opt.hint}` : ''}`);
-    }
+    // Speed is shown on the voice HUD chip — no toast.
   }
 
   function persistAutoSpeak(on: boolean) {
@@ -1065,6 +1245,7 @@ export default function GrokChatPanel({
   /** Play queued TTS chunks; fetch next while current plays. */
   async function pumpTtsQueue(msgId: string) {
     if (ttsPlayingRef.current) return;
+    if (softBargeInPendingRef.current) return;
     ttsPlayingRef.current = true;
     // Keep mic open for barge-in; require ~2s of words before cutting speech.
     armBargeInForTts();
@@ -1074,7 +1255,9 @@ export default function GrokChatPanel({
 
     try {
       while (ttsQueueRef.current.length > 0 && gen === ttsFetchGenRef.current) {
+        if (softBargeInPendingRef.current) break;
         const chunk = ttsQueueRef.current.shift()!;
+        currentTtsChunkRef.current = chunk;
         // Prefetch next while we synthesize current when possible
         const nextPrefetch = ttsQueueRef.current[0]
           ? fetchTtsBlob(ttsQueueRef.current[0], gen).catch(() => null)
@@ -1088,7 +1271,7 @@ export default function GrokChatPanel({
             toast.message('Using browser voice — connect xAI for Grok voices.');
             const rest = [chunk, ...ttsQueueRef.current].join(' ');
             ttsQueueRef.current = [];
-            // speakWithBrowser also mutes mic
+            currentTtsChunkRef.current = null;
             ttsPlayingRef.current = false;
             speakWithBrowser(rest, msgId);
             return;
@@ -1108,16 +1291,17 @@ export default function GrokChatPanel({
           audio.onended = () => {
             URL.revokeObjectURL(url);
             if (audioRef.current === audio) audioRef.current = null;
+            if (currentTtsChunkRef.current === chunk) currentTtsChunkRef.current = null;
             resolve();
           };
           audio.onerror = () => {
             URL.revokeObjectURL(url);
+            if (currentTtsChunkRef.current === chunk) currentTtsChunkRef.current = null;
             reject(new Error('Audio playback failed'));
           };
           void audio.play().catch(reject);
         });
 
-        // If we prefetched the next chunk, inject it as already-fetched? Simpler: just await prefetch to warm connection.
         if (nextPrefetch) void nextPrefetch;
       }
     } catch (e: unknown) {
@@ -1128,16 +1312,19 @@ export default function GrokChatPanel({
       if (gen === ttsFetchGenRef.current) {
         ttsPlayingRef.current = false;
         setTtsLoadingId(null);
+        if (softBargeInPendingRef.current) {
+          // Soft interrupt owns resume — do not clear speaking state here.
+          return;
+        }
         if (ttsQueueRef.current.length === 0) {
+          currentTtsChunkRef.current = null;
           setSpeakingMsgId(null);
           if (speakVoiceRestoreRef.current) {
             speakVoiceRef.current = speakVoiceRestoreRef.current;
             speakVoiceRestoreRef.current = null;
           }
-          // Only resume mic / group continuation when stream is also done.
           if (!streamingRef.current) {
             resumeListeningAfterVoice();
-            // Multi-agent voice: if user stays quiet, agents keep talking.
             if (isVoiceGroupMode() && !voiceBargeInRef.current) {
               scheduleVoiceGroupContinuation();
             }
@@ -1152,6 +1339,12 @@ export default function GrokChatPanel({
   function enqueueTtsChunks(msgId: string, chunks: string[]) {
     const cleaned = chunks.map((c) => c.trim()).filter(Boolean);
     if (!cleaned.length) return;
+    // While waiting to confirm a soft barge-in, only buffer text — don't play yet.
+    if (softBargeInPendingRef.current) {
+      voiceMsgIdRef.current = msgId;
+      ttsQueueRef.current.push(...cleaned);
+      return;
+    }
     if (autoSpeakRef.current) {
       armBargeInForTts();
     } else {
@@ -1178,6 +1371,8 @@ export default function GrokChatPanel({
     if (!autoSpeakRef.current || !delta) return;
     if (voiceMsgIdRef.current !== msgId) beginVoiceStream(msgId);
     voiceStreamBufRef.current += delta;
+    // Soft barge-in: keep buffering text so we can resume speaking, but don't play yet.
+    if (softBargeInPendingRef.current) return;
     const speakable = textForSpeech(voiceStreamBufRef.current);
     let unsent = speakable.slice(voiceSpokenLenRef.current);
     // Emit complete utterances as soon as they form (first one uses a lower bar for TTFA).
@@ -1201,10 +1396,29 @@ export default function GrokChatPanel({
   /** After stream ends: speak whatever hasn't been spoken yet. */
   function finishVoiceStream(msgId: string, fullContent: string) {
     if (!autoSpeakRef.current) return;
-    // User interrupted — do not speak the aborted reply's remainder.
+    // Hard barge-in confirmed — do not speak the aborted reply's remainder.
     if (voiceBargeInRef.current) {
       voiceBargeInRef.current = false;
       if (!recognitionRef.current) resumeListeningAfterVoice();
+      return;
+    }
+    // Soft barge-in still pending: stash remaining text into resume snapshot.
+    if (softBargeInPendingRef.current) {
+      voiceMsgIdRef.current = msgId;
+      voiceStreamBufRef.current = fullContent || voiceStreamBufRef.current;
+      const speakable = textForSpeech(voiceStreamBufRef.current);
+      const rest = speakable.slice(voiceSpokenLenRef.current).trim();
+      const queue = rest ? splitSpeechChunks(rest, 240) : [];
+      ttsResumeRef.current = {
+        msgId,
+        queue: [
+          ...(ttsResumeRef.current?.queue || []),
+          ...queue,
+        ],
+        spokenLen: voiceSpokenLenRef.current,
+        streamBuf: voiceStreamBufRef.current,
+      };
+      if (rest) voiceSpokenLenRef.current = speakable.length;
       return;
     }
     const speakable = textForSpeech(fullContent || '');
@@ -1290,7 +1504,6 @@ export default function GrokChatPanel({
       if (e.key === 'Escape') {
         e.preventDefault();
         persistAutoSpeak(false);
-        toast.success('Grok voice off');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -1322,7 +1535,6 @@ export default function GrokChatPanel({
     return registerVoiceAgentHandlers({
       onClose: () => {
         persistAutoSpeak(false);
-        toast.success('Grok voice off');
       },
       onToggleMic: () => {
         if (recognitionRef.current) stopDictation();
@@ -3002,11 +3214,7 @@ export default function GrokChatPanel({
           onClick={() => {
             const next = !autoSpeak;
             persistAutoSpeak(next);
-            const speedLabel = GROK_TTS_SPEEDS.find((s) => Math.abs(s.value - clampTtsSpeed(ttsSpeed)) < 0.01)?.label
-              || `${clampTtsSpeed(ttsSpeed)}×`;
-            toast.success(next
-              ? `Grok voice on · ${effectiveVoiceLabel} · ${speedLabel} — click speed in HUD to change`
-              : 'Grok voice off');
+            // HUD shows voice/voice/speed — no success toast popup.
           }}
           disabled={streaming && !autoSpeak}
           title={autoSpeak
@@ -3195,6 +3403,7 @@ export default function GrokChatPanel({
         <WorkspacePicker
           open={showWorkspacePicker}
           value={workspaceDir}
+          defaultPath={defaultWorkspace || project?.workspacePath || null}
           onClose={() => setShowWorkspacePicker(false)}
           onSelect={updateWorkspaceDir}
         />

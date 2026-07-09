@@ -216,6 +216,50 @@ export async function executeAgentTool(
         const r = await Ints.obsidianSearch(creds, args.query);
         return { result: r, sideEffect: `Obsidian search "${args.query}" → ${r.length} hits` };
       }
+      case 'vercel_list_projects': {
+        const r = await Ints.vercelListProjects(args.limit ? Number(args.limit) : 20);
+        return { result: r, sideEffect: `listed ${r.length} Vercel project(s)` };
+      }
+      case 'vercel_list_deployments': {
+        const r = await Ints.vercelListDeployments(
+          args.project ? String(args.project) : undefined,
+          args.limit ? Number(args.limit) : 10,
+        );
+        return { result: r, sideEffect: `listed ${r.length} Vercel deployment(s)` };
+      }
+      case 'vercel_get_deployment': {
+        const r = await Ints.vercelGetDeployment(String(args.id_or_url || ''));
+        return {
+          result: r,
+          sideEffect: `Vercel deployment ${r.readyState || 'unknown'}${r.url ? `: ${r.url}` : ''}`,
+        };
+      }
+      case 'vercel_deploy': {
+        const r = await Ints.vercelDeploy({
+          project: args.project ? String(args.project) : undefined,
+          target: args.target ? String(args.target) : undefined,
+          gitRef: args.git_ref ? String(args.git_ref) : undefined,
+          deploymentId: args.deployment_id ? String(args.deployment_id) : undefined,
+        });
+        return {
+          result: r,
+          sideEffect: `Vercel deploy started${r.url ? `: ${r.url}` : ''}${r.readyState ? ` (${r.readyState})` : ''}`,
+        };
+      }
+      case 'vercel_set_env': {
+        const targetRaw = args.target ? String(args.target) : undefined;
+        const target = targetRaw
+          ? targetRaw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean)
+          : undefined;
+        const r = await Ints.vercelSetEnv({
+          project: args.project ? String(args.project) : '',
+          key: String(args.key || ''),
+          value: String(args.value ?? ''),
+          target,
+          type: args.type as 'plain' | 'secret' | 'encrypted' | undefined,
+        });
+        return { result: r, sideEffect: `set Vercel env ${r.key}` };
+      }
       case 'send_to_peer': {
         postToAgentInbox(args.agentId, agent.id, args.message);
         return { result: 'message queued to peer', sideEffect: `sent message to agent ${args.agentId}` };

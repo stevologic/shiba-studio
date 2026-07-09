@@ -7,7 +7,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Wrench, TerminalSquare, Globe, Plug2, Workflow, Boxes, Search, Compass, Brain, Image as ImageIcon } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import InfoHint from '@/components/info-hint';
 
 interface ToolEntry {
@@ -186,7 +186,7 @@ export default function ToolsCatalog() {
           <div className="page-section-sub">
             Built-in abilities every agent can call during runs — use the switch on each tile to disable a function globally.
             {disabledCount > 0 && (
-              <span className="ml-1 text-dim">· {disabledCount} disabled</span>
+              <span className="ml-1 cap-card-meta inline">· {disabledCount} disabled</span>
             )}
           </div>
         </div>
@@ -217,12 +217,12 @@ export default function ToolsCatalog() {
               <div key={group} className="grok-card p-4 tool-group">
                 <div className="tool-group-head">
                   <Icon size={16} className="opacity-70 shrink-0" />
-                  <span className="font-medium text-sm">{group}</span>
-                  <span className="text-[11px] text-dim tool-group-blurb">{GROUP_BLURBS[group] || ''}</span>
+                  <span className="cap-card-title">{group}</span>
+                  <span className="tool-group-blurb">{GROUP_BLURBS[group] || ''}</span>
                   <div className="ml-auto shrink-0 flex items-center gap-2">
                     <button
                       type="button"
-                      className="text-[10px] text-dim hover:text-muted underline-offset-2 hover:underline"
+                      className="cap-card-meta hover:text-muted underline-offset-2 hover:underline"
                       onClick={() => void setGroupEnabled(group, true)}
                       disabled={allOn}
                       title="Enable all tools in this group"
@@ -231,14 +231,14 @@ export default function ToolsCatalog() {
                     </button>
                     <button
                       type="button"
-                      className="text-[10px] text-dim hover:text-muted underline-offset-2 hover:underline"
+                      className="cap-card-meta hover:text-muted underline-offset-2 hover:underline"
                       onClick={() => void setGroupEnabled(group, false)}
                       disabled={allOff}
                       title="Disable all tools in this group"
                     >
                       All off
                     </button>
-                    <span className="text-[10px] text-dim font-mono">
+                    <span className="cap-card-meta font-mono">
                       {groupTools.filter((t) => t.enabled).length}/{groupTools.length}
                     </span>
                   </div>
@@ -253,7 +253,7 @@ export default function ToolsCatalog() {
                         className={`tool-tile ${tool.enabled ? '' : 'tool-tile-disabled'}`}
                       >
                         <div className="tool-tile-head">
-                          <span className="font-mono text-[11px] tool-row-name">{tool.name}</span>
+                          <span className="font-mono tool-row-name">{tool.name}</span>
                           <label
                             className={`tool-toggle ${busy ? 'tool-toggle-busy' : ''}`}
                             title={tool.enabled ? `Disable ${tool.name}` : `Enable ${tool.name}`}

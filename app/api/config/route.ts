@@ -54,6 +54,10 @@ export async function POST(req: NextRequest) {
       const { clearXaiUsageCache } = await import('@/lib/xai-billing-usage');
       clearXaiUsageCache();
     } catch { /* */ }
+    try {
+      const { clearNavUsageCostCache } = await import('@/lib/nav-stats');
+      clearNavUsageCostCache();
+    } catch { /* */ }
     return NextResponse.json({
       ok: true,
       hasManagementKey: !!cfg.xaiManagementKey?.trim(),

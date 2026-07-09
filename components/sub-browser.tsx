@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Crosshair, Globe, Loader2, MousePointer, RefreshCw, Send, X } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 
 interface InspectedElement {
   selector: string;

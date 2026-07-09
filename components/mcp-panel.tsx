@@ -5,7 +5,7 @@ import {
   BookOpen, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Plus, Plug,
   RefreshCw, Server, Trash2, Wrench, Zap,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { McpPreset } from '@/lib/mcp-catalog';
 import { MCP_PROTOCOL_DOCS_URL, MCP_SERVERS_REGISTRY_URL, getMcpPreset } from '@/lib/mcp-catalog';
@@ -263,8 +263,8 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       <div className="mcp-step-label">
         <span className="mcp-step-num">1</span>
         <div>
-          <div className="font-medium text-sm">Browse &amp; add a server</div>
-          <div className="text-[11px] text-dim">Public presets include docs. Click a card to configure, or open Docs without adding.</div>
+          <div className="cap-card-title">Browse &amp; add a server</div>
+          <div className="cap-card-desc">Public presets include docs. Click a card to configure, or open Docs without adding.</div>
         </div>
       </div>
 
@@ -286,7 +286,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                   <img src={preset.icon} alt="" className="integration-icon" width={24} height={24} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm">{preset.name}</span>
+                      <span className="cap-card-title">{preset.name}</span>
                       {preset.category && (
                         <span className="mcp-cat-chip">{preset.category}</span>
                       )}
@@ -296,9 +296,9 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px] text-dim mt-1 line-clamp-2">{preset.description}</div>
+                    <div className="cap-card-desc mt-1 line-clamp-2">{preset.description}</div>
                     {preset.toolsHint && (
-                      <div className="text-[10px] text-muted mt-1.5 flex items-start gap-1">
+                      <div className="cap-card-meta mt-1.5 flex items-start gap-1">
                         <Wrench size={10} className="mt-0.5 shrink-0 opacity-60" />
                         <span className="line-clamp-1">{preset.toolsHint}</span>
                       </div>
@@ -308,16 +308,16 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
               </button>
               <div className="mcp-preset-card-footer">
                 {preset.docsUrl ? (
-                  <ExternalDocsLink href={preset.docsUrl} stopPropagation className="text-[11px]">
+                  <ExternalDocsLink href={preset.docsUrl} stopPropagation className="cap-card-meta">
                     <BookOpen size={12} />
                     Docs
                   </ExternalDocsLink>
                 ) : (
-                  <span className="text-[11px] text-dim">Private / custom</span>
+                  <span className="cap-card-meta">Private / custom</span>
                 )}
                 <button
                   type="button"
-                  className="grok-btn grok-btn-secondary text-[11px] py-0.5 px-2"
+                  className="grok-btn grok-btn-secondary text-xs py-0.5 px-2"
                   onClick={() => openPreset(preset)}
                 >
                   {configured ? 'Add another' : 'Add'}
@@ -339,11 +339,11 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
             <div className="flex items-start gap-3">
               <img src="/integrations/mcp-custom.svg" alt="" className="integration-icon" width={24} height={24} />
               <div className="min-w-0 flex-1">
-                <div className="font-medium text-sm flex items-center gap-2">
+                <div className="cap-card-title flex items-center gap-2 flex-wrap">
                   Custom server
                   <span className="mcp-cat-chip">Advanced</span>
                 </div>
-                <div className="text-[11px] text-dim mt-1">
+                <div className="cap-card-desc mt-1">
                   Any stdio MCP — command, args, and env. Paste from a package README.
                 </div>
               </div>
@@ -351,13 +351,13 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
             </div>
           </button>
           <div className="mcp-preset-card-footer">
-            <ExternalDocsLink href={MCP_PROTOCOL_DOCS_URL} stopPropagation className="text-[11px]">
+            <ExternalDocsLink href={MCP_PROTOCOL_DOCS_URL} stopPropagation className="cap-card-meta">
               <BookOpen size={12} />
               How MCP works
             </ExternalDocsLink>
             <button
               type="button"
-              className="grok-btn grok-btn-secondary text-[11px] py-0.5 px-2"
+              className="grok-btn grok-btn-secondary text-xs py-0.5 px-2"
               onClick={() => {
                 setAddingPreset(null);
                 setShowCustom(true);
@@ -376,9 +376,9 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
             <div className="flex items-center gap-2 min-w-0">
               <img src={activePreset.icon} alt="" width={20} height={20} className="integration-icon" />
               <div>
-                <div className="font-medium text-sm">Configure {activePreset.name}</div>
+                <div className="cap-card-title">Configure {activePreset.name}</div>
                 {activePreset.packageName && (
-                  <div className="text-[10px] font-mono text-dim mt-0.5">{activePreset.packageName}</div>
+                  <div className="cap-card-meta font-mono mt-0.5">{activePreset.packageName}</div>
                 )}
               </div>
             </div>
@@ -398,18 +398,18 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
           </div>
 
           {activePreset.envFields.length === 0 ? (
-            <div className="text-xs text-dim mb-3 p-2 rounded border border-default bg-elev">
+            <div className="cap-card-desc mb-3 p-2 rounded border border-default bg-elev">
               No credentials required — click Add server to install and enable it for agents.
             </div>
           ) : (
             <div className="space-y-3 mb-3">
               {activePreset.envFields.map((field) => (
                 <div key={field.key}>
-                  <div className="grok-label text-[10px]">
+                  <div className="grok-label">
                     {field.label}
                     {field.required ? <span className="text-error"> *</span> : null}
                   </div>
-                  {field.help && <div className="text-[10px] text-dim mb-1">{field.help}</div>}
+                  {field.help && <div className="cap-card-meta mb-1">{field.help}</div>}
                   <div className="flex gap-2">
                     <input
                       className="grok-input text-xs flex-1"
@@ -443,13 +443,13 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       {showCustom && (
         <div className="grok-card p-4 mb-6 space-y-2 mcp-config-panel">
           <div className="flex items-center justify-between gap-2">
-            <div className="font-medium text-sm">Custom MCP server</div>
+            <div className="cap-card-title">Custom MCP server</div>
             <ExternalDocsLink href={MCP_PROTOCOL_DOCS_URL} className="text-xs">
               <BookOpen size={12} />
               MCP docs
             </ExternalDocsLink>
           </div>
-          <div className="text-[11px] text-dim">
+          <div className="cap-card-desc">
             Run any local stdio server. Typical pattern: <span className="font-mono">npx -y @scope/package</span>
           </div>
           <input className="grok-input text-xs" placeholder="Display name" value={customForm.name} onChange={(e) => setCustomForm((f) => ({ ...f, name: e.target.value }))} />
@@ -468,8 +468,8 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       <div className="mcp-step-label mt-8">
         <span className="mcp-step-num">2</span>
         <div>
-          <div className="font-medium text-sm">Your installed servers</div>
-          <div className="text-[11px] text-dim">
+          <div className="cap-card-title">Your installed servers</div>
+          <div className="cap-card-desc">
             Enable for agents, Test to list tools, open Docs for public packages. Disabled servers stay saved but unused.
           </div>
         </div>
@@ -478,8 +478,8 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       {servers.length === 0 && (
         <div className="grok-card p-8 text-center mcp-empty">
           <Plug size={28} className="mx-auto mb-3 opacity-40" />
-          <div className="text-sm font-medium mb-1">No MCP servers yet</div>
-          <div className="text-xs text-dim max-w-sm mx-auto">
+          <div className="cap-card-title mb-1">No MCP servers yet</div>
+          <div className="cap-card-desc max-w-sm mx-auto">
             Pick a preset above — most public servers only need an API key or folder path.
             After adding, hit <strong>Test</strong> to verify tools load.
           </div>
@@ -509,7 +509,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                     <Server size={18} className="opacity-50 shrink-0" />
                   )}
                   <div className="min-w-0 flex-1 text-left">
-                    <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
+                    <div className="cap-card-title flex items-center gap-2 flex-wrap">
                       <span className="truncate">{server.name}</span>
                       {server.enabled ? (
                         <span className="mcp-badge-on">On</span>
@@ -525,7 +525,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                         <span className="mcp-badge-err">Failed</span>
                       )}
                     </div>
-                    <div className="text-[11px] font-mono text-dim mt-0.5 truncate">
+                    <div className="cap-card-meta font-mono mt-0.5 truncate">
                       {server.command} {server.args.join(' ')}
                     </div>
                   </div>
@@ -565,7 +565,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                   {preset?.docsUrl && (
                     <div className="mcp-server-docs-row">
                       <BookOpen size={13} className="opacity-60 shrink-0" />
-                      <span className="text-xs text-dim">Public documentation</span>
+                      <span className="cap-card-meta">Public documentation</span>
                       <ExternalDocsLink href={preset.docsUrl} className="text-xs ml-auto">
                         Open docs
                       </ExternalDocsLink>
@@ -577,7 +577,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                     </div>
                   )}
                   {!preset?.docsUrl && server.presetId == null && (
-                    <div className="text-[11px] text-dim mb-2">
+                    <div className="cap-card-desc mb-2">
                       Custom server — documentation lives with the package you installed.
                       See the{' '}
                       <ExternalDocsLink href={MCP_PROTOCOL_DOCS_URL}>MCP docs</ExternalDocsLink>
@@ -586,12 +586,12 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                   )}
 
                   {server.notes && (
-                    <div className="text-[11px] text-muted mb-2">{server.notes}</div>
+                    <div className="cap-card-desc mb-2">{server.notes}</div>
                   )}
 
                   {test?.ok && test.tools && test.tools.length > 0 && (
                     <div>
-                      <div className="text-[10px] uppercase tracking-wide text-dim mb-1.5">Tools exposed</div>
+                      <div className="skills-card-guidance-label mb-1.5">Tools exposed</div>
                       <div className="mcp-tool-chips">
                         {test.tools.map((tool) => (
                           <span key={tool} className="mcp-tool-chip font-mono">{tool}</span>
@@ -600,12 +600,12 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                     </div>
                   )}
                   {test && !test.ok && test.error && (
-                    <div className="text-xs text-error mt-1 p-2 rounded border border-default bg-elev">
+                    <div className="cap-card-desc text-error mt-1 p-2 rounded border border-default bg-elev">
                       {test.error}
                     </div>
                   )}
                   {!test && (
-                    <div className="text-[11px] text-dim">
+                    <div className="cap-card-desc">
                       Click <strong>Test</strong> to spawn the server and list tools agents can call.
                     </div>
                   )}

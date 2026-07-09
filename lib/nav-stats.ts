@@ -28,30 +28,43 @@ export { formatUsageCostUsd } from './nav-stats-types';
 // Usage aggregation / xAI billing pull — cache 15 minutes.
 // Entity counts stay live (they're cheap directory/JSON reads).
 const USAGE_CACHE_MS = 15 * 60_000;
-let usageCostCache: { at: number; costUsd: number } | null = null;
+let usageCostCache: { at: number; costUsd: number; source: 'xai' | 'local' } | null = null;
 
-async function getCachedUsageCost(): Promise<number> {
+/** Drop the nav usage cache (e.g. after saving a management key). */
+export function clearNavUsageCostCache() {
+  usageCostCache = null;
+}
+
+async function getCachedUsageCost(): Promise<{ costUsd: number; source: 'xai' | 'local' }> {
   if (usageCostCache && Date.now() - usageCostCache.at < USAGE_CACHE_MS) {
-    return usageCostCache.costUsd;
+    return { costUsd: usageCostCache.costUsd, source: usageCostCache.source };
   }
   // Prefer authoritative month-to-date from xAI billing; fall back to local estimate.
   try {
     const { fetchXaiAccountUsage } = await import('./xai-billing-usage');
     const xai = await fetchXaiAccountUsage({ days: 30 });
-    if (xai.available && xai.monthToDateCostUsd != null) {
-      usageCostCache = { at: Date.now(), costUsd: xai.monthToDateCostUsd };
-      return usageCostCache.costUsd;
+    if (xai.available && typeof xai.monthToDateCostUsd === 'number' && Number.isFinite(xai.monthToDateCostUsd)) {
+      usageCostCache = {
+        at: Date.now(),
+        costUsd: Math.max(0, xai.monthToDateCostUsd),
+        source: 'xai',
+      };
+      return { costUsd: usageCostCache.costUsd, source: 'xai' };
     }
   } catch {
     /* fall through to local ledger */
   }
   const usage = await getUsageSummary();
-  usageCostCache = { at: Date.now(), costUsd: usage.estimatedCostUsd };
-  return usageCostCache.costUsd;
+  usageCostCache = {
+    at: Date.now(),
+    costUsd: usage.estimatedCostUsd,
+    source: 'local',
+  };
+  return { costUsd: usageCostCache.costUsd, source: 'local' };
 }
 
 export async function getNavStats(integrations: IntegrationCreds): Promise<NavStats> {
-  const [sessions, projects, uploads, agents, mcpServers, usageCostUsd, cfg] = await Promise.all([
+  const [sessions, projects, uploads, agents, mcpServers, usage, cfg] = await Promise.all([
     listChatSessions(),
     listProjects(),
     listGlobalUploadFiles(),
@@ -79,7 +92,8 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
     workspaceFiles: uploads.length,
     automationsScheduled,
     integrationsConfigured: countConfiguredIntegrations(integrations) + mcpConfigured,
-    usageCostUsd,
+    usageCostUsd: usage.costUsd,
+    usageCostSource: usage.source,
     usageBudgetUsd: cfg.usageBudgetUsd ?? DEFAULT_USAGE_BUDGET_USD,
   };
 }

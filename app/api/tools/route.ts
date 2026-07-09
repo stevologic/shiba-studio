@@ -36,6 +36,11 @@ const TOOL_GROUPS: Record<string, { group: string; requires?: string; localOnly?
   obsidian_read: { group: 'Integrations', requires: 'obsidian' },
   obsidian_write: { group: 'Integrations', requires: 'obsidian' },
   obsidian_search: { group: 'Integrations', requires: 'obsidian' },
+  vercel_list_projects: { group: 'Integrations', requires: 'vercel' },
+  vercel_list_deployments: { group: 'Integrations', requires: 'vercel' },
+  vercel_get_deployment: { group: 'Integrations', requires: 'vercel' },
+  vercel_deploy: { group: 'Integrations', requires: 'vercel' },
+  vercel_set_env: { group: 'Integrations', requires: 'vercel' },
   send_to_peer: { group: 'Orchestration', requires: 'peers' },
   schedule_task: { group: 'Orchestration' },
   grok_cli: { group: 'Orchestration', localOnly: true },
@@ -59,7 +64,7 @@ export async function GET() {
   const cli = await detectGrokCli();
   const defs = [
     ...getToolDefinitions(
-      { github: true, slack: true, googledrive: true, discord: true, x: true, obsidian: true },
+      { github: true, slack: true, googledrive: true, discord: true, x: true, obsidian: true, vercel: true },
       true,
       'local',
     ),

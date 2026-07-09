@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageSquare, Pencil, Plus, X, Search, Archive, ArchiveRestore, ChevronsLeft, ChevronsRight } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import GrokChatPanel from '@/components/grok-chat-panel';
 import type { ChatSession } from '@/lib/chat-session-types';
@@ -42,6 +42,8 @@ interface ChatSessionsPanelProps {
   modelsError: string | null;
   onRefreshModels: () => void;
   defaultChatModel: string;
+  /** Settings default workspace for the chat workspace picker. */
+  defaultWorkspace?: string;
 }
 
 export default function ChatSessionsPanel({
@@ -54,6 +56,7 @@ export default function ChatSessionsPanel({
   modelsError,
   onRefreshModels,
   defaultChatModel,
+  defaultWorkspace = '',
 }: ChatSessionsPanelProps) {
   const [sessions, setSessions] = useState<ChatSession[]>(() => sessionCache.sessions);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(() => sessionCache.active);
@@ -464,7 +467,7 @@ export default function ChatSessionsPanel({
 
   if (bootstrapping && !activeSession) {
     return (
-      <div className="chat-sessions-page">
+      <div className="chat-sessions-page page-content">
         <div className="chat-sessions-page-head">
           <div className="page-title">
             Grok Chat
@@ -483,7 +486,7 @@ export default function ChatSessionsPanel({
   }
 
   return (
-    <div className="chat-sessions-page">
+    <div className="chat-sessions-page page-content">
       <div className="chat-sessions-page-head">
         <div className="page-title">
           Grok Chat
@@ -663,6 +666,7 @@ export default function ChatSessionsPanel({
           modelsError={modelsError}
           onRefreshModels={onRefreshModels}
           agents={agents}
+          defaultWorkspace={defaultWorkspace}
         />
       )}
       </div>

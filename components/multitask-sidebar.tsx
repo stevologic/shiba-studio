@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { FolderKanban, MessageSquare, Clock, ChevronRight, Pencil, Trash2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import type { AppTab } from '@/lib/app-navigation';
 import type { Agent } from '@/lib/types';

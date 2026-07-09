@@ -55,7 +55,7 @@ export default function RootLayout({
           expand={false}
           visibleToasts={4}
           gap={8}
-          offset={{ bottom: '4.75rem', left: '0.55rem' }}
+          offset={{ bottom: '11.5rem', left: '0.55rem' }}
           className="studio-toaster"
           toastOptions={{
             className: 'studio-toast',

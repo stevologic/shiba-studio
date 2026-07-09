@@ -6,7 +6,7 @@ import {
   AlertTriangle, Check, CloudDownload, CloudUpload, Clock, FolderKanban, FolderOpen, Loader2,
   MessageSquare, RefreshCw, Server, Users, X,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 
 type SyncKind = 'agents' | 'automations' | 'projects' | 'chats' | 'workspace' | 'models';
 type ItemStatus = 'pending' | 'syncing' | 'done' | 'error' | 'skipped';

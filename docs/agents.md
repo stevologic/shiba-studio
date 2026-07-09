@@ -18,7 +18,7 @@ Cloud agents are labeled `CLOUD` and are safe to sync from your xAI account (*Sy
 
 - **Model** — any Cloud (xAI) or Local model; a provider badge shows which.
 - **Workspace** — the directory the agent works in. Enable **worktree** to give every run an isolated git worktree of the repo instead of the live checkout.
-- **Integration scopes** — per-agent switches for GitHub, Slack, Google Drive, Discord, X, and Obsidian. A scope both unlocks the matching tools *and* injects live context (an Obsidian-scoped agent gets its vault's contents in every run and chat).
+- **Integration scopes** — per-agent switches for GitHub, Slack, Google Drive, Discord, X, Obsidian, and Vercel. A scope both unlocks the matching tools *and* injects live context (an Obsidian-scoped agent gets its vault's contents in every run and chat; Vercel-scoped agents see projects and can deploy).
 - **Skills** — reusable prompt capabilities from the Capabilities page, plus a free-form *chat Skill* that defines the agent's voice when you chat as it.
 - **Peers** — other agents it may message via `send_to_peer`; inboxes drain at the start of the next run.
 - **Schedules** — cron entries with their own instructions (see [Automations](automations.md)).

@@ -213,15 +213,6 @@ function DailyChart({ byDay }: { byDay: UsageSummary['byDay'] }) {
   );
 }
 
-interface LiveXaiStatus {
-  connected: boolean;
-  checkedAt: string;
-  keyName?: string;
-  teamId?: string;
-  modelCount?: number;
-  error?: string;
-}
-
 interface XaiAccountUsage {
   available: boolean;
   checkedAt: string;
@@ -374,7 +365,6 @@ function XaiAccountSection({ xai }: { xai: XaiAccountUsage }) {
 
 export default function UsageDashboard() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
-  const [live, setLive] = useState<LiveXaiStatus | null>(null);
   const [xaiAccount, setXaiAccount] = useState<XaiAccountUsage | null>(null);
   const [authoritativeCostUsd, setAuthoritativeCostUsd] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -388,7 +378,6 @@ export default function UsageDashboard() {
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Failed to load usage');
       setSummary(data as UsageSummary);
-      setLive((data.live as LiveXaiStatus) || null);
       setXaiAccount((data.xaiAccount as XaiAccountUsage) || null);
       setAuthoritativeCostUsd(
         typeof data.authoritativeCostUsd === 'number' ? data.authoritativeCostUsd : null,
@@ -431,17 +420,6 @@ export default function UsageDashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {live && (
-            <span
-              className={`usage-live-pill ${live.connected ? 'usage-live-connected' : 'usage-live-offline'}`}
-              title={live.connected
-                ? `Connected to api.x.ai${live.keyName ? ` · key: ${live.keyName}` : ''}${live.modelCount ? ` · ${live.modelCount} models` : ''} · checked ${new Date(live.checkedAt).toLocaleTimeString()}`
-                : `xAI API check failed: ${live.error || 'unreachable'}`}
-            >
-              <span className="usage-live-dot" />
-              {live.connected ? 'xAI API · live' : 'xAI API · offline'}
-            </span>
-          )}
           <button onClick={() => void load(true)} disabled={loading} className="grok-btn grok-btn-secondary text-xs">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>

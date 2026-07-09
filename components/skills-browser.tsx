@@ -5,7 +5,7 @@ import {
   Check, ChevronDown, ChevronUp, Code2, MessageSquare, Palette, Pencil, Plus,
   RefreshCw, Search, Sparkles, Trash2, Users, Wand2, Zap,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { SKILL_CATEGORIES, SKILL_PRESETS, type SkillCategory, type SkillPreset } from '@/lib/skills-catalog';
 
@@ -458,8 +458,8 @@ export default function SkillsBrowser({
                   </span>
                   <div className="skills-card-head min-w-0 flex-1">
                     <div className="skills-card-title-row">
-                      <h3 className="skills-card-title">{skill.name}</h3>
-                      {skill.custom && <span className="badge badge-muted text-[10px]">custom</span>}
+                      <h3 className="skills-card-title cap-card-title">{skill.name}</h3>
+                      {skill.custom && <span className="cap-chip cap-chip-muted">custom</span>}
                       {has && (
                         <span className="skills-card-installed">
                           {count > 0 ? `${count} agent${count === 1 ? '' : 's'}` : 'In use'}
@@ -475,7 +475,7 @@ export default function SkillsBrowser({
                   </div>
                 </div>
 
-                <p className="skills-card-desc">{skill.description || 'No description yet.'}</p>
+                <p className="skills-card-desc cap-card-desc">{skill.description || 'No description yet.'}</p>
 
                 {open && skill.promptHint && (
                   <div className="skills-card-guidance">

@@ -280,6 +280,95 @@ export function getToolDefinitions(
       },
     });
   }
+  if (scope.vercel) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_list_projects',
+        description: 'List Vercel projects accessible with the configured token (name, framework, git link, latest deploy).',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Max projects (1-100, default 20)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_list_deployments',
+        description: 'List recent Vercel deployments for a project (or the default project on Capabilities).',
+        parameters: {
+          type: 'object',
+          properties: {
+            project: { type: 'string', description: 'Project name or id (optional if default project is set)' },
+            limit: { type: 'number', description: 'Max deployments (1-50, default 10)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_get_deployment',
+        description: 'Get status and URL for a Vercel deployment by id or hostname.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id_or_url: { type: 'string', description: 'Deployment id (dpl_…) or deployment hostname' },
+          },
+          required: ['id_or_url'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_deploy',
+        description:
+          'Deploy or redeploy a Vercel project to production or preview. Uses the git-linked repo (latest commit) by default. Prefer this to ship an app after code changes are pushed.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project: { type: 'string', description: 'Project name or id (optional if default project is set)' },
+            target: {
+              type: 'string',
+              enum: ['production', 'preview'],
+              description: "Deploy target — 'production' or 'preview' (default preview-style when omitted)",
+            },
+            git_ref: { type: 'string', description: 'Optional git branch or tag to deploy (e.g. main)' },
+            deployment_id: { type: 'string', description: 'Optional existing deployment id to redeploy with latest commit' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_set_env',
+        description: 'Create or update a Vercel project environment variable (upsert). Use for deploy secrets and config.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project: { type: 'string', description: 'Project name or id (optional if default project is set)' },
+            key: { type: 'string', description: 'Environment variable name' },
+            value: { type: 'string', description: 'Environment variable value' },
+            target: {
+              type: 'string',
+              description: "Comma-separated targets: production, preview, development (default all three)",
+            },
+            type: {
+              type: 'string',
+              enum: ['encrypted', 'plain', 'secret'],
+              description: 'Storage type (default encrypted)',
+            },
+          },
+          required: ['key', 'value'],
+        },
+      },
+    });
+  }
   if (hasPeers) {
     tools.push({
       type: 'function',

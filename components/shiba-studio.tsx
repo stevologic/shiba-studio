@@ -39,7 +39,7 @@ const SyncModal = dynamic(() => import('@/components/sync-modal'));
 const CommandPalette = dynamic(() => import('@/components/command-palette'));
 const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
 const ToolApprovalModal = dynamic(() => import('@/components/tool-approval-modal'));
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { getTerminalOpen, setTerminalOpen, toggleTerminalOpen, subscribeTerminalOpen } from '@/lib/terminal-ui-store';
 import {
   endVoiceIfSessionChanges,
@@ -145,6 +145,12 @@ const AGENT_OVERRIDE_FIELDS: Record<string, Array<{ key: string; label: string; 
   ],
   obsidian: [{ key: 'restApiUrl', label: 'REST API URL' }, { key: 'restApiKey', label: 'REST API key', secret: true }, { key: 'vaultPath', label: 'Vault path (local mode)' }],
   googledrive: [{ key: 'accessToken', label: 'OAuth access token', secret: true }, { key: 'serviceAccountJson', label: 'Service account JSON', secret: true }],
+  vercel: [
+    { key: 'token', label: 'Vercel access token', secret: true },
+    { key: 'teamId', label: 'Team id (team_…, optional)' },
+    { key: 'teamSlug', label: 'Team slug (optional)' },
+    { key: 'defaultProject', label: 'Default project name or id' },
+  ],
 };
 
 export default function ShibaStudio() {
@@ -407,7 +413,7 @@ export default function ShibaStudio() {
   const [wsSyncing, setWsSyncing] = useState<'upload' | 'download' | null>(null);
 
   // Integrations form state
-  const [intCreds, setIntCreds] = useState<any>({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' } });
+  const [intCreds, setIntCreds] = useState<any>({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, vercel: {} });
   const [intTest, setIntTest] = useState<any>({});
   const [intSaving, setIntSaving] = useState<Record<string, boolean>>({});
   const [expandedIntegration, setExpandedIntegration] = useState<string | null>(null);
@@ -423,6 +429,25 @@ export default function ShibaStudio() {
 
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [managementKeyInput, setManagementKeyInput] = useState('');
+  /** Persistent "Tested" badges for Settings probe buttons (localStorage). */
+  type SettingsTestId = 'apiKey' | 'managementKey' | 'localGrok';
+  const SETTINGS_TESTED_LS = 'shiba-settings-tested';
+  const [settingsTested, setSettingsTested] = useState<Partial<Record<SettingsTestId, boolean>>>({});
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SETTINGS_TESTED_LS);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<Record<SettingsTestId, boolean>>;
+      if (parsed && typeof parsed === 'object') setSettingsTested(parsed);
+    } catch { /* private mode / bad JSON */ }
+  }, []);
+  function markSettingsTested(id: SettingsTestId, ok: boolean) {
+    setSettingsTested((prev) => {
+      const next = { ...prev, [id]: ok };
+      try { window.localStorage.setItem(SETTINGS_TESTED_LS, JSON.stringify(next)); } catch { /* private mode */ }
+      return next;
+    });
+  }
   const [oauthStatus, setOauthStatus] = useState<{
     connected: boolean;
     expired: boolean;
@@ -453,10 +478,10 @@ export default function ShibaStudio() {
     automationsScheduled: 0,
     integrationsConfigured: 0,
     usageCostUsd: 0,
+    usageCostSource: 'local',
     usageBudgetUsd: 0,
   });
   const [navStatsLoaded, setNavStatsLoaded] = useState(false);
-  const [usageBudgetInput, setUsageBudgetInput] = useState('25');
   const [cliUpdate, setCliUpdate] = useState<{ checking: boolean; text?: string; available?: boolean }>({ checking: false });
   /** Live commit of the tree this server process is serving (refreshed via /api/version). */
   const [runtimeVersion, setRuntimeVersion] = useState<{
@@ -518,6 +543,7 @@ export default function ShibaStudio() {
           automationsScheduled: data.automationsScheduled ?? 0,
           integrationsConfigured: data.integrationsConfigured ?? 0,
           usageCostUsd: data.usageCostUsd ?? 0,
+          usageCostSource: data.usageCostSource === 'xai' ? 'xai' : 'local',
           usageBudgetUsd: data.usageBudgetUsd ?? 0,
         });
         setNavStatsLoaded(true);
@@ -651,7 +677,6 @@ export default function ShibaStudio() {
       if (cfg.toolApprovalMode) setToolApprovalMode(cfg.toolApprovalMode);
       if (cfg.globalInstructions != null) setGlobalInstructionsInput(cfg.globalInstructions);
       if (cfg.useAgentsMd != null) setUseAgentsMd(!!cfg.useAgentsMd);
-      setUsageBudgetInput(String(cfg.usageBudgetUsd ?? 25));
       // Boot ping — hydrates server config; schedule arming is idempotent
       // (instrumentation.ts already armed everything at server start).
       // Also carries live commit SHA of the tree Node is serving.
@@ -689,7 +714,11 @@ export default function ShibaStudio() {
         const res = await fetch('/api/nav-stats');
         const data = await res.json();
         if (data.ok) {
-          setNavStats((prev) => ({ ...prev, usageCostUsd: data.usageCostUsd ?? prev.usageCostUsd }));
+          setNavStats((prev) => ({
+            ...prev,
+            usageCostUsd: data.usageCostUsd ?? prev.usageCostUsd,
+            usageCostSource: data.usageCostSource === 'xai' ? 'xai' : (data.usageCostSource === 'local' ? 'local' : prev.usageCostSource),
+          }));
         }
       } catch {
         /* keep previous figure */
@@ -707,8 +736,17 @@ export default function ShibaStudio() {
   }, [tab, localGrokEnabled]);
 
   useEffect(() => {
-    if ((config as any)?.hasCloudAuth || (config as any)?.localGrokEnabled) loadModels();
-  }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled]);
+    if ((config as any)?.hasCloudAuth || (config as any)?.localGrokEnabled || localGrokEnabled) {
+      void loadModels();
+    }
+  }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled, localGrokEnabled]);
+
+  // Keep Local badge accurate: probe the local server when enabled, even if models list is empty.
+  useEffect(() => {
+    if (!localGrokEnabled && !(config as any)?.localGrokEnabled) return;
+    void fetchLocalModelOptions({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localGrokEnabled, (config as any)?.localGrokEnabled]);
 
   /**
    * A run hyperlink targets its agent's configuration + log. Execution traces
@@ -1454,10 +1492,12 @@ export default function ShibaStudio() {
     const res = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'validate', key: apiKeyInput }) });
     const data = await res.json();
     if (data.ok) {
+      markSettingsTested('apiKey', true);
       toast.success('Grok API key validated & saved');
       await loadAll();
       await loadModels();
     } else {
+      markSettingsTested('apiKey', false);
       toast.error('Key validation failed: ' + (data.error || 'bad key'));
     }
   }
@@ -1465,6 +1505,7 @@ export default function ShibaStudio() {
   async function quickValidate() {
     const res = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'validate', key: apiKeyInput }) });
     const data = await res.json();
+    markSettingsTested('apiKey', !!data.ok);
     toast(data.ok ? 'Valid Grok key!' : 'Invalid: ' + data.error);
   }
 
@@ -1482,6 +1523,7 @@ export default function ShibaStudio() {
       body: JSON.stringify({ xaiApiKey: '' }),
     });
     setApiKeyInput('');
+    markSettingsTested('apiKey', false);
     toast.success('API key cleared');
     await loadAll();
     await loadModels();
@@ -1499,6 +1541,7 @@ export default function ShibaStudio() {
       toast.success('Management key saved — Usage will pull xAI billing data');
       setManagementKeyInput('••••••••');
       await loadAll();
+      await loadNavStats();
     } else {
       toast.error(data.error || 'Failed to save management key');
     }
@@ -1523,13 +1566,16 @@ export default function ShibaStudio() {
       });
       const data = await res.json().catch(() => ({}));
       if (data.ok) {
+        markSettingsTested('managementKey', true);
         toast.success(data.note || 'Management key is valid');
       } else {
+        markSettingsTested('managementKey', false);
         toast.error(
           [data.error, data.note].filter(Boolean).join(' — ') || 'Management key test failed',
         );
       }
     } catch (e: unknown) {
+      markSettingsTested('managementKey', false);
       toast.error(e instanceof Error ? e.message : 'Management key test failed');
     }
   }
@@ -1548,6 +1594,7 @@ export default function ShibaStudio() {
       body: JSON.stringify({ xaiManagementKey: '' }),
     });
     setManagementKeyInput('');
+    markSettingsTested('managementKey', false);
     toast.success('Management key cleared');
     await loadAll();
   }
@@ -1748,16 +1795,23 @@ export default function ShibaStudio() {
       if (data.ok) {
         setLocalGrokReachable(true);
         setLocalModelOptions(((data.models || []) as Array<{ id?: string; label?: string }>).map(localIdOf).filter(Boolean));
-        if (!opts?.silent) toast.success(`Local server reachable — ${data.models?.length || 0} model(s) found`);
+        if (!opts?.silent) {
+          markSettingsTested('localGrok', true);
+          toast.success(`Local server reachable — ${data.models?.length || 0} model(s) found`);
+        }
       } else {
         setLocalGrokReachable(false);
         setLocalModelOptions([]);
-        if (!opts?.silent) toast.error(data.error || 'Local server not reachable');
+        if (!opts?.silent) {
+          markSettingsTested('localGrok', false);
+          toast.error(data.error || 'Local server not reachable');
+        }
       }
       return !!data.ok;
     } catch {
       setLocalGrokReachable(false);
       setLocalModelOptions([]);
+      if (!opts?.silent) markSettingsTested('localGrok', false);
       return false;
     } finally {
       setLocalModelsFetching(false);
@@ -2166,7 +2220,16 @@ export default function ShibaStudio() {
             { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
             { id: 'integrations', label: 'Capabilities', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
-            { id: 'usage', label: 'Usage', icon: BarChart3, stat: navStats.usageCostUsd > 0 ? formatUsageCostUsd(navStats.usageCostUsd) : null },
+            {
+              id: 'usage',
+              label: 'Usage',
+              icon: BarChart3,
+              // Always show a cost badge when xAI account usage is configured (even $0.00);
+              // otherwise only show local studio metering when spend is non-zero.
+              stat: (navStats.usageCostSource === 'xai' || navStats.usageCostUsd > 0)
+                ? formatUsageCostUsd(navStats.usageCostUsd)
+                : null,
+            },
             { id: 'logs', label: 'Logs', icon: ScrollText, stat: null },
             { id: 'settings', label: 'Settings', icon: Settings, stat: null },
           ] as const).map(item => {
@@ -2178,21 +2241,25 @@ export default function ShibaStudio() {
                 key={item.id}
                 href={linkHref}
                 className={`nav-item ${active ? 'active' : ''} ${navCollapsed ? 'nav-item-collapsed' : ''}`}
-                title={navCollapsed ? item.label : undefined}
+                title={item.label}
+                aria-label={item.label}
               >
-                <Icon size={16} className="nav-item-icon" aria-hidden />
+                <Icon size={16} strokeWidth={1.75} className="nav-item-icon" aria-hidden />
                 <span className="nav-item-label">{item.label}</span>
-                {!navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
+                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
                   <span className="data-spinner nav-item-meta ml-auto" aria-label={`Loading ${item.label} count`} />
                 )}
-                {item.stat != null && (
+                {!navCollapsed && item.stat != null && (
                   <span className={`nav-stat-badge nav-item-meta ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
                     item.id === 'chat' ? `${item.stat} open session(s)`
                     : item.id === 'projects' ? `${item.stat} project(s)`
                     : item.id === 'workspace' ? `${item.stat} file(s) in workspace`
                     : item.id === 'automations' ? `${item.stat} scheduled automation(s)`
                     : item.id === 'integrations' ? `${item.stat} configured integration(s)`
-                    : item.id === 'usage' ? `${formatUsageCostUsd(navStats.usageCostUsd)} consumed`
+                    : item.id === 'usage'
+                      ? (navStats.usageCostSource === 'xai'
+                        ? `${formatUsageCostUsd(navStats.usageCostUsd)} month-to-date (xAI account)`
+                        : `${formatUsageCostUsd(navStats.usageCostUsd)} studio metering`)
                     : undefined
                   }>
                     {item.stat}
@@ -2216,6 +2283,96 @@ export default function ShibaStudio() {
             onDataChanged={() => { void refreshAgents(); void loadNavStats(); }}
           />
         )}
+
+        {/* Model-source status — bottom of left nav, above footer separator */}
+        {(() => {
+          // Prefer live form/state mirrors of config so badges stay correct after save/load.
+          const hasKey = !!(config as any)?.hasKey || apiKeyInput === '••••••••';
+          const oauthOn = !!oauthStatus.connected;
+          const oauthExpired = !!oauthStatus.expired && !oauthOn;
+          const cliOn = !!grokCliStatus?.installed;
+          const localOn = !!(localGrokEnabled || (config as any)?.localGrokEnabled);
+          const localOk = localOn && localGrokReachable;
+          const activeCloud = ((config as any)?.activeCloudSource as 'api_key' | 'oauth' | null | undefined) || null;
+          const keyIsActive = hasKey && activeCloud !== 'oauth';
+          const oauthIsActive = oauthOn && activeCloud === 'oauth';
+          const ready = !!(config as any)?.hasCloudAuth || hasKey || oauthOn || localOk;
+          type SourceTone = 'active' | 'on' | 'warn' | 'off';
+          const sources: Array<{
+            id: string;
+            label: string;
+            short: string;
+            tone: SourceTone;
+            detail: string;
+          }> = [
+            {
+              id: 'xai',
+              label: 'xAI',
+              short: 'X',
+              tone: keyIsActive ? 'active' : hasKey ? 'on' : 'off',
+              detail: keyIsActive ? 'Active' : hasKey ? 'Token' : 'Off',
+            },
+            {
+              id: 'oauth',
+              label: 'OAuth',
+              short: 'O',
+              tone: oauthIsActive ? 'active' : oauthOn ? 'on' : oauthExpired ? 'warn' : 'off',
+              detail: oauthIsActive ? 'Active' : oauthOn ? 'Signed in' : oauthExpired ? 'Expired' : 'Off',
+            },
+            {
+              id: 'cli',
+              label: 'CLI',
+              short: 'C',
+              tone: cliOn ? 'on' : 'off',
+              detail: cliOn
+                ? (grokCliStatus?.version
+                  ? grokCliStatus.version.replace(/^grok\s*/i, '').split(/\s+/)[0]
+                  : 'On')
+                : 'Off',
+            },
+            {
+              id: 'local',
+              label: 'Local',
+              short: 'L',
+              tone: localOk ? 'on' : localOn ? 'warn' : 'off',
+              detail: localOk ? 'Online' : localOn ? 'Offline' : 'Off',
+            },
+          ];
+          return (
+            <div className={`nav-status-rail ${navCollapsed ? 'nav-status-rail-collapsed' : ''}`}>
+              <button
+                type="button"
+                className="nav-status-panel"
+                onClick={() => navigateToTab('settings')}
+                aria-label={ready ? 'Model providers ready — open Settings' : 'No model provider ready — open Settings'}
+              >
+                {!navCollapsed && (
+                  <div className="nav-status-head">
+                    <span className="nav-status-head-label">Providers</span>
+                    <span className={`nav-status-ready ${ready ? 'nav-status-ready-ok' : 'nav-status-ready-warn'}`}>
+                      {ready ? 'Ready' : 'Needs setup'}
+                    </span>
+                  </div>
+                )}
+                <div className={`nav-status-grid ${navCollapsed ? 'nav-status-grid-collapsed' : ''}`}>
+                  {sources.map((s) => (
+                    <div key={s.id} className={`nav-status-chip nav-status-${s.tone}`}>
+                      <span className="nav-status-dot" aria-hidden />
+                      {navCollapsed ? (
+                        <span className="nav-status-short">{s.short}</span>
+                      ) : (
+                        <>
+                          <span className="nav-status-name">{s.label}</span>
+                          <span className="nav-status-detail">{s.detail}</span>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </button>
+            </div>
+          );
+        })()}
 
         {!navCollapsed && (
           <div className={`sidebar-foot p-4 border-t border-default text-xs text-dim ${process.env.NODE_ENV === 'development' ? 'sidebar-foot-dev' : ''}`}>
@@ -2249,64 +2406,8 @@ export default function ShibaStudio() {
               <Menu size={18} />
             </button>
             <div className="font-medium text-sm tracking-tight">{TAB_LABELS[tab] || tab}</div>
-            {/* Readiness — one badge per model source */}
-            <div className="readiness-badges hidden sm:flex items-center gap-1.5">
-              <div
-                className={`status-pill ${(config as any)?.hasKey ? 'text-success' : 'status-pill-off'}`}
-                title={(config as any)?.hasKey
-                  ? `xAI API key configured${(config as any)?.activeCloudSource !== 'oauth' ? ' — active cloud source' : ''}`
-                  : 'No xAI API key — add one in Settings'}
-              >
-                XAI TOKEN{(config as any)?.hasKey ? '' : ' · OFF'}
-              </div>
-              <div
-                className={`status-pill ${oauthStatus.connected ? 'text-success' : 'status-pill-off'}`}
-                title={oauthStatus.connected
-                  ? `Signed in with X (OAuth 2.0)${(config as any)?.activeCloudSource === 'oauth' ? ' — active cloud source' : ''}`
-                  : 'OAuth 2.0 not connected — sign in with X from Settings'}
-              >
-                OAUTH 2.0{oauthStatus.connected ? '' : ' · OFF'}
-              </div>
-              <div
-                className={`status-pill ${grokCliStatus?.installed ? 'text-success' : 'status-pill-off'}`}
-                title={grokCliStatus?.installed
-                  ? `Grok CLI on this machine${grokCliStatus.version ? ` — ${grokCliStatus.version}` : ''}. Route chats through it with the composer's terminal toggle.`
-                  : 'Grok CLI not detected on this machine'}
-              >
-                GROK CLI{grokCliStatus?.installed
-                  ? (grokCliStatus.version ? ` · ${grokCliStatus.version.replace(/^grok\s*/i, '').split(' ')[0]}` : '')
-                  : ' · OFF'}
-              </div>
-              <div
-                className={`status-pill ${(config as any)?.localGrokEnabled ? (localGrokReachable ? 'text-success' : 'text-warning') : 'status-pill-off'}`}
-                title={(config as any)?.localGrokEnabled
-                  ? (localGrokReachable ? 'Local model server reachable' : 'Local models enabled but the server is not responding')
-                  : 'Local models disabled — enable an OpenAI-compatible server in Settings'}
-              >
-                LOCAL{(config as any)?.localGrokEnabled ? (localGrokReachable ? '' : ' · OFFLINE') : ' · OFF'}
-              </div>
-            </div>
-            {/* Compact summary for the smallest screens */}
-            <div className="sm:hidden">
-              {(config as any)?.hasCloudAuth || ((config as any)?.localGrokEnabled && localGrokReachable)
-                ? <div className="status-pill text-success">READY</div>
-                : <div className="status-pill text-warning">NO MODEL SOURCE</div>}
-            </div>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            {/* Chat quota — spend as a share of the monthly budget */}
-            {tab === 'chat' && navStats.usageBudgetUsd > 0 && (() => {
-              const pct = Math.min(999, (navStats.usageCostUsd / navStats.usageBudgetUsd) * 100);
-              const tone = pct >= 90 ? 'text-error' : pct >= 60 ? 'text-warning' : 'text-success';
-              return (
-                <div
-                  className={`status-pill ${tone}`}
-                  title={`${formatUsageCostUsd(navStats.usageCostUsd)} used of your $${navStats.usageBudgetUsd}/month quota (set it in Settings). Refreshes every 15 minutes.`}
-                >
-                  QUOTA {pct < 0.05 ? '<0.1' : pct.toFixed(pct < 10 ? 1 : 0)}%
-                </div>
-              );
-            })()}
             <button
               type="button"
               onClick={() => setShowCommandPalette(true)}
@@ -2341,7 +2442,7 @@ export default function ShibaStudio() {
         >
           {/* DASHBOARD */}
           {tab === 'dashboard' && (
-            <div className="relative dashboard-page">
+            <div className="relative dashboard-page page-content">
             <div className="space-y-5 relative z-[1]">
               {/* First-run: nothing connected yet → one-click OAuth, no key hunting */}
               {config && !(config as any).hasCloudAuth && !oauthStatus.connected && !welcomeDismissed && (
@@ -2498,6 +2599,7 @@ export default function ShibaStudio() {
                 modelsError={modelsError}
                 onRefreshModels={loadModels}
                 agents={agents}
+                defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''}
               />
             </div>
           )}
@@ -2523,7 +2625,7 @@ export default function ShibaStudio() {
 
           {/* AGENTS + RUNS + TRACE — the heart */}
           {tab === 'agents' && (
-            <div className="page-content-wide">
+            <div className="page-content">
               <div className="page-head-row">
                 <div className="min-w-0">
                   <div className="page-title">
@@ -2860,7 +2962,7 @@ export default function ShibaStudio() {
 
           {/* CAPABILITIES — core integrations, skills, MCP servers, tools */}
           {tab === 'integrations' && (
-            <div className="integrations-page page-content-wide">
+            <div className="integrations-page page-content">
               <div className="page-title">
                 Capabilities
                 <InfoHint text="Everything on this page becomes available to agents during runs and to Grok Chat when the matching scope is enabled on the agent." />
@@ -2872,7 +2974,7 @@ export default function ShibaStudio() {
                 Core Integrations
                 <InfoHint text="Credentials are AES-256-GCM encrypted at rest on this machine and never leave it except toward the service itself." />
               </div>
-              <div className="page-section-sub">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, and Obsidian during runs.</div>
+              <div className="page-section-sub">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, Obsidian, and Vercel during runs.</div>
 
               <div className="integrations-grid">
                 {INTEGRATION_CATALOG.map((integration) => {
@@ -2900,13 +3002,13 @@ export default function ShibaStudio() {
                     >
                       <IntegrationIcon id={integration.id} size="lg" />
                       <div className="integration-card-meta min-w-0">
-                        <div className="font-semibold flex items-center gap-2 flex-wrap">
+                        <div className="cap-card-title flex items-center gap-2 flex-wrap">
                           {integration.label}
                           <span className={`integration-status-chip ${connected ? 'integration-chip-connected' : configured ? 'integration-chip-configured' : 'integration-chip-unset'}`}>
                             {connected ? 'Connected' : configured ? 'Configured' : 'Not set up'}
                           </span>
                         </div>
-                        <div className="text-xs text-dim">{integration.description}</div>
+                        <div className="cap-card-desc mt-0.5">{integration.description}</div>
                         {integration.docsUrl && (
                           <a
                             href={integration.docsUrl}
@@ -2936,6 +3038,12 @@ export default function ShibaStudio() {
                           <span className="integration-card-status text-success">
                             {intTest.obsidian.mode === 'cloud' ? 'cloud REST' : 'local vault'}
                             {intTest.obsidian.noteCount != null ? ` · ${intTest.obsidian.noteCount} notes` : ''}
+                          </span>
+                        )}
+                        {integration.id === 'vercel' && intTest.vercel?.ok && (
+                          <span className="integration-card-status text-success">
+                            connected as {intTest.vercel.user}
+                            {intTest.vercel.team ? ` · ${intTest.vercel.team}` : ''}
                           </span>
                         )}
                       </div>
@@ -3030,6 +3138,44 @@ export default function ShibaStudio() {
                         <input className="grok-input mb-2" placeholder="Access Token" value={intCreds.x?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessToken: e.target.value}}))} />
                         <input className="grok-input" placeholder="Access Token Secret" value={intCreds.x?.accessTokenSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessTokenSecret: e.target.value}}))} />
                         <div className="mt-2 text-xs text-dim">Create an app at developer.x.com with Read and Write permissions, then generate user access tokens.</div>
+                      </>
+                    )}
+                    {integration.id === 'vercel' && (
+                      <>
+                        <div className="text-xs text-dim mb-2">
+                          Create a token at{' '}
+                          <a href="https://vercel.com/account/tokens" className="link-accent" target="_blank" rel="noreferrer">vercel.com/account/tokens</a>
+                          {' '}with access to the team/account that owns your apps. Agents can list projects, deploy, and set env vars when Vercel scope is enabled.
+                        </div>
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          type="password"
+                          placeholder="Vercel access token"
+                          value={intCreds.vercel?.token || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, vercel: { ...(c.vercel || {}), token: e.target.value } }))}
+                          autoComplete="off"
+                        />
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          placeholder="Team id (team_…, optional — for team-scoped tokens)"
+                          value={intCreds.vercel?.teamId || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, vercel: { ...(c.vercel || {}), teamId: e.target.value } }))}
+                        />
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          placeholder="Team slug (optional alternative to team id)"
+                          value={intCreds.vercel?.teamSlug || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, vercel: { ...(c.vercel || {}), teamSlug: e.target.value } }))}
+                        />
+                        <input
+                          className="grok-input font-mono text-xs"
+                          placeholder="Default project name or id (optional)"
+                          value={intCreds.vercel?.defaultProject || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, vercel: { ...(c.vercel || {}), defaultProject: e.target.value } }))}
+                        />
+                        <div className="mt-2 text-xs text-dim">
+                          Default project is used when agents call deploy/list tools without a project argument. Git-linked projects redeploy the latest commit; production target promotes aliases.
+                        </div>
                       </>
                     )}
                     {integration.id === 'obsidian' && (() => {
@@ -3157,7 +3303,7 @@ export default function ShibaStudio() {
                 })}
               </div>
 
-              <div className="mt-5 text-xs text-dim">Credentials are stored locally on your machine only. Never sent anywhere except to the services you authorize.</div>
+              <div className="mt-5 cap-card-meta">Credentials are stored locally on your machine only. Never sent anywhere except to the services you authorize.</div>
 
               <SkillsBrowser
                 installed={[...new Set(agents.flatMap((a) => a.skills || []))]}
@@ -3210,7 +3356,7 @@ export default function ShibaStudio() {
             <div className="page-content settings-page">
               <div className="page-title">Settings</div>
               <div className="page-subtitle">
-                Model sources, agent behavior, quotas, and workspace — everything lives on this machine.
+                Model sources, agent behavior, and workspace — everything lives on this machine.
               </div>
 
               <div className="settings-grid">
@@ -3218,7 +3364,10 @@ export default function ShibaStudio() {
                   <div className="settings-card-head">
                     <KeyRound size={16} className="opacity-70 shrink-0" />
                     <div>
-                      <div className="font-medium text-sm">xAI Grok API Key</div>
+                      <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
+                        xAI Grok API Key
+                        {settingsTested.apiKey && <span className="settings-tested-badge">Tested</span>}
+                      </div>
                       <div className="text-[11px] text-dim">Cloud Grok via console.x.ai token — encrypted at rest.</div>
                     </div>
                     <InfoHint className="ml-auto" text="Get a key at console.x.ai. It is encrypted at rest (AES-256-GCM) with a machine key stored outside the project — never in source code." />
@@ -3244,7 +3393,10 @@ export default function ShibaStudio() {
                   <div className="settings-card-head">
                     <BarChart3 size={16} className="opacity-70 shrink-0" />
                     <div>
-                      <div className="font-medium text-sm">xAI Management Key</div>
+                      <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
+                        xAI Management Key
+                        {settingsTested.managementKey && <span className="settings-tested-badge">Tested</span>}
+                      </div>
                       <div className="text-[11px] text-dim">Backports official team usage &amp; billing into the Usage page.</div>
                     </div>
                   </div>
@@ -3351,7 +3503,10 @@ export default function ShibaStudio() {
                   <div className="settings-card-head">
                     <Server size={16} className="opacity-70 shrink-0" />
                     <div>
-                      <div className="font-medium text-sm">Local Models</div>
+                      <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
+                        Local Models
+                        {settingsTested.localGrok && <span className="settings-tested-badge">Tested</span>}
+                      </div>
                       <div className="text-[11px] text-dim">LM Studio, Ollama, llama.cpp — any OpenAI-compatible server.</div>
                     </div>
                   </div>
@@ -3649,49 +3804,6 @@ export default function ShibaStudio() {
                   </div>
                   <div className="text-xs text-dim mt-1">
                     Root folder for global uploads, new agents, and workspace explorer. Use Browse to pick a directory on this machine.
-                  </div>
-                </div>
-
-                <div className="grok-card p-5 settings-card">
-                  <div className="settings-card-head">
-                    <BarChart3 size={16} className="opacity-70 shrink-0" />
-                    <div>
-                      <div className="font-medium text-sm">Monthly Usage Quota</div>
-                      <div className="text-[11px] text-dim">Grok Chat reports spend as a share of this budget.</div>
-                    </div>
-                    <InfoHint className="ml-auto" text="Green under 60%, amber under 90%, red past it. Estimated from xAI per-token rates; local models are $0." />
-                  </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-sm text-dim">$</span>
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      className="grok-input w-28"
-                      value={usageBudgetInput}
-                      onChange={(e) => setUsageBudgetInput(e.target.value)}
-                    />
-                    <span className="text-xs text-dim">per month</span>
-                    <button
-                      type="button"
-                      className="grok-btn grok-btn-secondary text-xs ml-auto"
-                      onClick={async () => {
-                        const budget = Math.max(0, Number(usageBudgetInput) || 0);
-                        const res = await fetch('/api/config', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ usageBudgetUsd: budget }),
-                        }).then((r) => r.json()).catch(() => null);
-                        if (res?.ok) {
-                          toast.success(`Monthly quota set to $${budget}`);
-                          void loadNavStats();
-                        } else {
-                          toast.error('Could not save quota');
-                        }
-                      }}
-                    >
-                      Save Quota
-                    </button>
                   </div>
                 </div>
 

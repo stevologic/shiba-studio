@@ -176,7 +176,7 @@ async function main() {
     model: 'grok-3',
     description: 'Verification agent exercising full paths',
     workspace: { path: process.cwd(), useWorktree: false },
-    integrations: { github: true, slack: true, googledrive: false, discord: false, x: false, obsidian: false },
+    integrations: { github: true, slack: true, googledrive: false, discord: false, x: false, obsidian: false, vercel: false },
     peers: [],
     skills: ['research', 'coder', 'browser-automation'],
     schedules: [

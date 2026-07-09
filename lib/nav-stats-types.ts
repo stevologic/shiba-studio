@@ -5,6 +5,12 @@ export interface NavStats {
   automationsScheduled: number;
   integrationsConfigured: number;
   usageCostUsd: number;
+  /**
+   * Where usageCostUsd came from.
+   * `xai` = month-to-date from xAI billing (management key / account usage).
+   * `local` = studio metering only.
+   */
+  usageCostSource: 'xai' | 'local';
   /** Monthly spend quota (USD) from settings — 0 disables the quota display */
   usageBudgetUsd: number;
 }

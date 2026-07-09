@@ -5,7 +5,7 @@ import {
   FolderKanban, Pencil, Plus, Trash2, Upload, RefreshCw, FolderOpen, Save,
   MessageSquare, Bot, Globe, FileText, Layers, Sparkles,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import type { Project } from '@/lib/project-types';
 import { resolveProjectWorkspace } from '@/lib/project-types';

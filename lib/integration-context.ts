@@ -5,7 +5,7 @@
 // Everything is best-effort, time-boxed, and briefly cached.
 
 import type { IntegrationScope } from './types';
-import { getIntegrationCreds, testGitHub, githubListRepos, testSlack, driveListFiles, testDiscord, testX } from './integrations';
+import { getIntegrationCreds, testGitHub, githubListRepos, testSlack, driveListFiles, testDiscord, testX, testVercel, vercelListProjects } from './integrations';
 import { obsidianListNotes, obsidianReadNote, getObsidianConfig } from './obsidian';
 
 const CACHE_MS = 60_000;
@@ -111,6 +111,24 @@ async function xContext(): Promise<string> {
   return `### X\nPosting as @${t.username}.`;
 }
 
+async function vercelContext(): Promise<string> {
+  const t = await withTimeout(testVercel());
+  if (!t.ok) return '';
+  const creds = getIntegrationCreds().vercel;
+  let projectsLine = '';
+  try {
+    const projects = await withTimeout(vercelListProjects(12));
+    if (projects.length) {
+      projectsLine = `\nProjects: ${projects.map((p) => p.name).join(', ')}`;
+    }
+  } catch {
+    /* optional */
+  }
+  const team = t.team ? ` · team ${t.team}` : '';
+  const def = creds?.defaultProject ? `\nDefault project: ${creds.defaultProject}.` : '';
+  return `### Vercel\nAuthenticated as ${t.user || 'token user'}${team}.${def}${projectsLine}\nUse vercel_deploy to ship; vercel_list_deployments / vercel_get_deployment to check status.`;
+}
+
 /**
  * Live context for every enabled integration in the scope. Returns '' when
  * nothing is enabled or nothing is reachable — callers can append verbatim.
@@ -136,6 +154,7 @@ export async function buildIntegrationContext(
     googledrive: () => driveContext(driveFolders),
     discord: discordContext,
     x: xContext,
+    vercel: vercelContext,
   };
 
   const sections = await Promise.all(

@@ -25,6 +25,7 @@ const SENSITIVE_CONFIG_PATHS = [
   'integrations.x.accessToken',
   'integrations.x.accessTokenSecret',
   'integrations.obsidian.restApiKey',
+  'integrations.vercel.token',
 ] as const;
 
 function getAtPath(obj: Record<string, unknown>, dotPath: string): unknown {
@@ -100,6 +101,7 @@ const AGENT_OVERRIDE_SECRET_FIELDS: Record<string, string[]> = {
   x: ['apiKey', 'apiSecret', 'accessToken', 'accessTokenSecret'],
   obsidian: ['restApiKey'],
   googledrive: ['accessToken', 'serviceAccountJson', 'clientSecret', 'refreshToken'],
+  vercel: ['token'],
 };
 
 function transformAgentOverrideSecrets(agent: Agent, fn: (v: string) => string): Agent {

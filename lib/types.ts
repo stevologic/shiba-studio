@@ -10,6 +10,7 @@ export interface IntegrationScope {
   discord: boolean;
   x: boolean;
   obsidian: boolean;
+  vercel: boolean;
 }
 
 export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
@@ -19,6 +20,7 @@ export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
   discord: false,
   x: false,
   obsidian: false,
+  vercel: false,
 };
 
 export interface ScheduleConfig {
@@ -168,6 +170,17 @@ export interface IntegrationCreds {
     restApiUrl?: string;
     /** API key from Local REST API plugin settings. */
     restApiKey?: string;
+  };
+  /** Vercel access token — deploy and manage projects via REST API. */
+  vercel?: {
+    /** Personal or team access token from vercel.com/account/tokens */
+    token: string;
+    /** Optional team id (team_…) when the token is team-scoped */
+    teamId?: string;
+    /** Optional team slug (alternative to teamId) */
+    teamSlug?: string;
+    /** Default project name or id for deploy tools when not specified */
+    defaultProject?: string;
   };
 }
 
