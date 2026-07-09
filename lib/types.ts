@@ -188,6 +188,17 @@ export interface AppConfig {
   defaultWorkspace: string;
   /** Default model ref (cloud:id or local:id) for new agents and Grok Chat */
   defaultGrokModel?: string;
+  /**
+   * App-wide default Grok TTS voice id (e.g. "eve", "ara").
+   * Used by Grok Chat voice mode when the user has not picked a session override,
+   * and as the "App default" option for agent default voices.
+   */
+  defaultTtsVoice?: string;
+  /**
+   * App-wide default speech rate for Grok TTS (xAI range 0.7–1.5, default 1.0).
+   * Seeds Grok Chat / voice HUD when the user has not set a session override.
+   */
+  defaultTtsSpeed?: number;
   /** Enable OpenAI-compatible local Grok runtime (LM Studio, Ollama, etc.) */
   localGrokEnabled?: boolean;
   /** Base URL for local Grok server, e.g. http://127.0.0.1:1234/v1 */

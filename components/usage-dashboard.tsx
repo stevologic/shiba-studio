@@ -420,17 +420,17 @@ export default function UsageDashboard() {
   const hasXai = !!xaiAccount?.available;
 
   return (
-    <div className="usage-dashboard max-w-5xl">
-      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
-        <div>
-          <div className="text-xl font-semibold">Usage &amp; Cost</div>
-          <div className="text-sm text-muted">
+    <div className="usage-dashboard page-content">
+      <div className="page-head-row">
+        <div className="min-w-0">
+          <div className="page-title">Usage &amp; Cost</div>
+          <div className="page-subtitle">
             {hasXai
               ? 'Account spend from the xAI Billing API, plus this app’s local metering'
               : 'Local metering from API responses — connect billing to backport official model usage'}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {live && (
             <span
               className={`usage-live-pill ${live.connected ? 'usage-live-connected' : 'usage-live-offline'}`}

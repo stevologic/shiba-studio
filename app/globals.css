@@ -91,6 +91,202 @@ body::before {
 .link-accent { color: var(--accent); }
 .link-accent:hover { color: var(--accent-hover); text-decoration: underline; }
 
+/* ── Studio toasts — rise from bottom-left nav, just above the footer separator ── */
+.studio-toaster[data-sonner-toaster],
+[data-sonner-toaster].studio-toaster {
+  --width: min(15.25rem, calc(100vw - 1.1rem));
+  width: var(--width) !important;
+  max-width: var(--width) !important;
+  /* Sit over the left nav column, above .sidebar-foot border-t */
+  left: 0.55rem !important;
+  right: auto !important;
+  bottom: 4.75rem !important;
+  top: auto !important;
+  z-index: 65 !important;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+.studio-toaster [data-sonner-toast],
+[data-sonner-toaster] .studio-toast {
+  --normal-bg: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  --normal-border: var(--border-light);
+  --normal-text: var(--text);
+  --success-bg: color-mix(in srgb, var(--bg-card) 88%, rgba(34, 197, 94, 0.12));
+  --success-border: color-mix(in srgb, var(--success) 45%, var(--border));
+  --success-text: var(--text);
+  --error-bg: color-mix(in srgb, var(--bg-card) 88%, rgba(239, 68, 68, 0.12));
+  --error-border: color-mix(in srgb, var(--error) 45%, var(--border));
+  --error-text: var(--text);
+  --warning-bg: color-mix(in srgb, var(--bg-card) 88%, rgba(249, 115, 22, 0.1));
+  --warning-border: color-mix(in srgb, var(--fun-orange) 40%, var(--border));
+  --warning-text: var(--text);
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0.55rem 0.7rem !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--normal-border) !important;
+  background: var(--normal-bg) !important;
+  color: var(--normal-text) !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 12px 32px -10px rgba(0, 0, 0, 0.75),
+    0 4px 12px rgba(0, 0, 0, 0.45) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  font-size: 0.78rem !important;
+  line-height: 1.35 !important;
+  font-weight: 500 !important;
+  gap: 0.4rem !important;
+}
+
+.studio-toaster [data-sonner-toast][data-type='success'],
+[data-sonner-toaster] .studio-toast[data-type='success'] {
+  border-color: var(--success-border) !important;
+  background: var(--success-bg) !important;
+}
+
+.studio-toaster [data-sonner-toast][data-type='error'],
+[data-sonner-toaster] .studio-toast[data-type='error'] {
+  border-color: var(--error-border) !important;
+  background: var(--error-bg) !important;
+}
+
+.studio-toaster [data-sonner-toast][data-type='warning'],
+[data-sonner-toaster] .studio-toast[data-type='warning'] {
+  border-color: var(--warning-border) !important;
+  background: var(--warning-bg) !important;
+}
+
+.studio-toaster [data-sonner-toast] [data-title],
+.studio-toaster [data-sonner-toast] [data-description] {
+  color: inherit !important;
+  font-size: inherit !important;
+}
+
+.studio-toaster [data-sonner-toast] [data-description] {
+  opacity: 0.72;
+  font-weight: 400 !important;
+  font-size: 0.72rem !important;
+}
+
+.studio-toaster [data-sonner-toast] [data-icon] {
+  margin: 0 !important;
+  width: 1rem;
+  height: 1rem;
+  opacity: 0.85;
+}
+
+.studio-toaster [data-sonner-toast] [data-close-button] {
+  left: auto !important;
+  right: 0.25rem !important;
+  top: 0.25rem !important;
+  transform: none !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  color: var(--text-dim) !important;
+  opacity: 0.55;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 6px;
+}
+
+.studio-toaster [data-sonner-toast] [data-close-button]:hover {
+  opacity: 1;
+  color: var(--text) !important;
+  background: var(--bg-hover) !important;
+  border-color: var(--border) !important;
+}
+
+/* Rise from the footer rail instead of dropping from the top */
+.studio-toaster [data-sonner-toast][data-y-position='bottom'] {
+  --y: translateY(10px);
+}
+
+@media (max-width: 900px) {
+  /* Mobile drawer: keep toasts readable above system chrome */
+  .studio-toaster[data-sonner-toaster],
+  [data-sonner-toaster].studio-toaster {
+    left: 0.75rem !important;
+    bottom: 1rem !important;
+    --width: min(18rem, calc(100vw - 1.5rem));
+  }
+}
+
+/* ── Shared page chrome (title + muted subtitle) — secondary tabs ── */
+.page-title {
+  font-size: 1.5rem;
+  line-height: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  margin: 0 0 0.25rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--text);
+}
+
+.page-subtitle {
+  font-size: 0.875rem;
+  line-height: 1.35rem;
+  color: var(--text-muted);
+  margin: 0 0 1.5rem;
+  max-width: 42rem;
+}
+
+.page-head-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.page-head-row .page-subtitle {
+  max-width: 36rem;
+}
+
+.page-head-row .page-section-sub {
+  margin-bottom: 0;
+}
+
+/* Workspace header owns bottom spacing via .ws-header */
+.ws-header .page-subtitle {
+  margin-bottom: 0;
+  max-width: 42rem;
+}
+
+.page-section-title {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--text);
+}
+
+.page-section-sub {
+  font-size: 0.875rem;
+  line-height: 1.35rem;
+  color: var(--text-muted);
+  margin: 0 0 1.25rem;
+  max-width: 42rem;
+}
+
+.page-content {
+  max-width: 64rem; /* ~ max-w-5xl */
+  width: 100%;
+}
+
+.page-content-wide {
+  max-width: 72rem;
+  width: 100%;
+}
+
 /* Polished app surfaces */
 .grok-card {
   background: var(--bg-card);
@@ -191,23 +387,41 @@ body::before {
 .sidebar {
   background: var(--bg-elev);
   border-right: 1px solid var(--border);
-  transition: width 0.18s ease;
+  /* Width only — avoid animating layout children (no icon morph / text squash) */
+  transition: width 0.2s ease;
+  overflow-x: hidden;
 }
 
 /* Collapsed icon rail — .sidebar.sidebar-collapsed outranks the w-64 utility */
 .sidebar.sidebar-collapsed {
-  width: 64px;
+  width: 3.5rem; /* 56px: icon + symmetric padding, matches expanded icon size */
 }
 
+.nav-item-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: block;
+}
+
+.nav-item-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+/* Collapsed: keep the same icon size/padding; hide label + badges instantly (no morph) */
 .nav-item-collapsed {
   justify-content: center;
-  /* Narrow rail: horizontal padding must leave room for the 22px icon */
-  padding: 10px 4px;
+  gap: 0;
+  padding: 9px 0;
 }
 
-.nav-item-collapsed svg {
-  opacity: 0.9;
-  flex-shrink: 0;
+.nav-item-collapsed .nav-item-label,
+.nav-item-collapsed .nav-item-meta {
+  display: none;
 }
 
 /* Dev only: the Next.js devtools badge floats at the viewport's bottom-left.
@@ -289,7 +503,8 @@ body::before {
   color: var(--text-muted);
   cursor: pointer;
   text-decoration: none;
-  transition: all .1s;
+  /* Only color/bg — never size/padding (those caused janky collapse morph) */
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
   margin: 1px 6px;
 }
 .nav-item:hover { background: var(--bg-hover); color: var(--text); }
@@ -641,10 +856,11 @@ body::before {
   background: var(--bg-elev);
 }
 
+/* Cloud chip stays legible as a status accent within monochrome UI */
 .agent-origin-cloud {
-  color: #93c5fd;
-  border-color: rgba(147, 197, 253, 0.35);
-  background: rgba(147, 197, 253, 0.08);
+  color: var(--accent-2);
+  border-color: var(--border-light);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* ── Mobile navigation drawer ── */
@@ -936,22 +1152,29 @@ body::before {
 .trace-step.approval { border-color: var(--warning); }
 
 /* ── Workspace page (quiet shell — monochrome, low chrome) ── */
+/* Fill the content area; never scroll the outer page — lists scroll inside. */
 .ws-shell {
   display: flex;
   flex-direction: column;
   gap: 0;
-  min-height: calc(100vh - 160px);
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .ws-header {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.5rem 1rem;
-  padding: 0 0 0.75rem;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 0.75rem;
+  padding: 0;
+  border-bottom: none;
+  /* Match Capabilities / Settings / Automations: title + subtitle then content */
+  margin-bottom: 1.5rem;
+  flex-shrink: 0;
 }
 
 .ws-header-path {
@@ -959,6 +1182,7 @@ body::before {
   align-items: center;
   gap: 0.35rem;
   max-width: min(100%, 28rem);
+  margin-top: 0.35rem;
   padding: 0.15rem 0;
   color: var(--text-dim);
   border: none;
@@ -1027,13 +1251,24 @@ body::before {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  overflow: hidden;
 }
 
 .ws-panel {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0.85rem 1rem 0;
+}
+
+/* File / card lists scroll here — not the page shell */
+.ws-panel-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
-  padding: 0.85rem 1rem 1.25rem;
+  padding-bottom: 1.25rem;
 }
 
 .ws-panel-head {
@@ -1043,6 +1278,7 @@ body::before {
   justify-content: space-between;
   gap: 0.65rem;
   margin-bottom: 0.85rem;
+  flex-shrink: 0;
 }
 
 .ws-panel-title {
@@ -1068,6 +1304,7 @@ body::before {
   background: transparent;
   transition: border-color 0.15s, background 0.15s;
   margin-bottom: 0.85rem;
+  flex-shrink: 0;
 }
 
 .ws-dropzone-active {
@@ -1229,6 +1466,7 @@ body::before {
   padding: 0.55rem 0.75rem;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elev) 70%, transparent);
+  flex-shrink: 0;
 }
 
 .ws-breadcrumb {
@@ -1288,10 +1526,11 @@ body::before {
 
 .ws-explorer-split {
   flex: 1;
-  min-height: min(70vh, 640px);
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(200px, 260px) 1fr;
   min-width: 0;
+  overflow: hidden;
 }
 
 .ws-explorer-split-open {
@@ -1302,16 +1541,19 @@ body::before {
   .ws-explorer-split,
   .ws-explorer-split-open {
     grid-template-columns: 1fr;
-    min-height: auto;
+    grid-template-rows: minmax(10rem, 38%) 1fr;
+    min-height: 0;
   }
   .ws-tree {
-    max-height: 240px;
+    max-height: none;
     border-right: none !important;
     border-bottom: 1px solid var(--border);
+    min-height: 0;
   }
   .ws-activity {
     flex-direction: row;
     width: auto;
+    flex-shrink: 0;
     border-right: none;
     border-bottom: 1px solid var(--border);
     justify-content: center;
@@ -1326,6 +1568,7 @@ body::before {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.18);
 }
@@ -1336,6 +1579,7 @@ body::before {
   gap: 0.4rem;
   padding: 0.45rem 0.55rem;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .ws-tree-search-input {
@@ -1377,8 +1621,8 @@ body::before {
 }
 
 .ws-tree-item-active {
-  background: rgba(56, 189, 248, 0.14);
-  color: #e0f2fe;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
 }
 
 .ws-tree-item-dir {
@@ -1388,16 +1632,18 @@ body::before {
 .ws-tree-footer {
   border-top: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
 }
 
 .ws-explorer-welcome {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 2rem 1rem;
-  min-height: 280px;
+  overflow: auto;
   background: rgba(0, 0, 0, 0.12);
 }
 
@@ -1407,6 +1653,7 @@ body::before {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -1466,11 +1713,12 @@ body::before {
 
 .ws-editor-area {
   flex: 1;
-  min-height: 280px;
+  min-height: 0;
   width: 100%;
   border: none;
   resize: none;
   outline: none;
+  overflow: auto;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -3137,6 +3385,14 @@ body::before {
   padding: 0.25rem 0.4rem;
   height: 32px;
 }
+.grok-chat-composer-speed {
+  max-width: 7.25rem;
+  min-width: 5.5rem;
+  font-size: 11px;
+  padding: 0.25rem 0.35rem;
+  height: 32px;
+  font-variant-numeric: tabular-nums;
+}
 .grok-chat-msg-action-speaking {
   color: var(--accent) !important;
 }
@@ -3590,6 +3846,11 @@ body::before {
 }
 
 .projects-page {
+  /* Page header uses standard title/subtitle; body is the master–detail layout */
+  width: 100%;
+}
+
+.projects-page-body {
   align-items: stretch;
 }
 
@@ -5153,12 +5414,29 @@ body::before {
   color: var(--text-dim);
 }
 
+/* ── Chat page shell — same title/subtitle alignment as other secondary pages ── */
+.chat-sessions-page {
+  display: flex;
+  flex-direction: column;
+  /* Top bar (~3.5rem) + content padding (~2.5rem) + a little slack */
+  height: calc(100vh - 7.5rem);
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.chat-sessions-page-head {
+  flex-shrink: 0;
+}
+
 /* ── Chat session rail — expandable pane replacing the horizontal tab strip ── */
 .chat-sessions-layout {
   position: relative;
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  display: flex;
+  min-height: 0;
 }
 
 /* Main chat column: always fill remaining space — never shrink/grow with message content */
@@ -5167,6 +5445,7 @@ body::before {
   min-width: 0;
   width: 100%;
   max-width: 100%;
+  min-height: 0;
 }
 
 .grok-chat-panel {
@@ -5479,7 +5758,9 @@ body::before {
 .voice-jarvis-brand {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.4rem;
+  min-width: 0;
   font-size: 0.65rem;
   font-weight: 750;
   letter-spacing: 0.16em;
@@ -5695,11 +5976,49 @@ body::before {
   min-height: 2.2em;
   padding: 0 0.25rem;
 }
+.voice-jarvis-speed-tag {
+  opacity: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+/* Clickable speed chip in the HUD chrome — tap to cycle rates */
+button.voice-jarvis-speed-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0.1rem 0.45rem;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-transform: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  appearance: none;
+  -webkit-appearance: none;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, transform 0.1s ease;
+}
+button.voice-jarvis-speed-chip:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.32);
+  color: var(--text);
+}
+button.voice-jarvis-speed-chip:active {
+  transform: scale(0.96);
+}
+button.voice-jarvis-speed-chip:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.4);
+  outline-offset: 2px;
+}
 .voice-jarvis-footer {
   position: relative;
   z-index: 1;
-  margin-top: 0.75rem;
-  padding-top: 0.65rem;
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   text-align: center;
 }
@@ -5726,6 +6045,153 @@ body::before {
 @keyframes voice-jarvis-twinkle {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 0.55; }
+}
+
+/* Minimized Grok Voice — docked in left sidebar under primary nav */
+.voice-nav-dock {
+  flex-shrink: 0;
+  margin: 0.35rem 0.5rem 0.5rem;
+  padding: 0.45rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.voice-nav-dock-collapsed {
+  margin: 0.35rem 0.4rem;
+  padding: 0.25rem;
+  align-items: center;
+  border: none;
+  background: transparent;
+}
+.voice-nav-dock-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 0.15rem;
+  border-radius: var(--radius-sm);
+}
+.voice-nav-dock-main:hover {
+  background: var(--bg-hover);
+}
+.voice-nav-dock-core {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.14), transparent 55%),
+    #0f0f0f;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.voice-nav-dock-phase-listening .voice-nav-dock-core,
+.voice-nav-dock-phase-listening.voice-nav-dock-icon-btn {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent);
+}
+.voice-nav-dock-phase-speaking .voice-nav-dock-core,
+.voice-nav-dock-phase-speaking.voice-nav-dock-icon-btn {
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.12);
+}
+.voice-nav-dock-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.05rem;
+  flex: 1;
+}
+.voice-nav-dock-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.voice-nav-dock-phase {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+.voice-nav-dock-caption {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.voice-nav-dock-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding-left: 0.15rem;
+}
+.voice-nav-dock-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.voice-nav-dock-action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.voice-nav-dock-action-exit:hover {
+  color: var(--error);
+}
+.voice-nav-dock-icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+}
+.voice-nav-dock-icon-btn:hover {
+  border-color: var(--border-light);
+  background: var(--bg-hover);
+}
+.voice-nav-dock-pulse {
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+  animation: voice-nav-dock-pulse 2.4s ease-in-out infinite;
+}
+@keyframes voice-nav-dock-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-nav-dock-pulse { animation: none; }
 }
 
 /* -- Global real host terminal (xterm + node-pty) -- */
@@ -5763,7 +6229,7 @@ body::before {
   border-bottom: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.55);
   flex-shrink: 0;
-  font-family: var(--font-terminal), "VT323", "Lucida Console", monospace;
+  font-family: var(--font-terminal), "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
 }
 .studio-terminal-bar-left {
   display: flex;
@@ -5778,10 +6244,10 @@ body::before {
   flex-shrink: 0;
 }
 .studio-terminal-title {
-  font-family: var(--font-terminal), "VT323", "Lucida Console", monospace;
-  font-size: 16px;
-  font-weight: 400;
-  letter-spacing: 0.08em;
+  font-family: var(--font-terminal), "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
   white-space: nowrap;
@@ -5792,8 +6258,7 @@ body::before {
   min-height: 0;
   padding: 0.35rem 0.5rem 0.5rem;
   overflow: hidden;
-  /* Ensure xterm canvas/DOM layers pick up the CRT face */
-  font-family: var(--font-terminal), "VT323", "Perfect DOS VGA 437", "Fixedsys", "Terminal", "Lucida Console", "Courier New", monospace;
+  font-family: var(--font-terminal), "IBM Plex Mono", "Cascadia Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
 }
 .studio-terminal-xterm .xterm {
   height: 100%;

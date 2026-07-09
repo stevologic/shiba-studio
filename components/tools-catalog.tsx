@@ -176,14 +176,14 @@ export default function ToolsCatalog() {
 
   return (
     <div className="tools-section mt-10 pt-8 border-t border-default">
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
-        <div>
-          <div className="text-xl font-semibold flex items-center gap-2">
+      <div className="page-head-row mb-4">
+        <div className="min-w-0">
+          <div className="page-section-title">
             <Wrench size={18} className="opacity-70" />
             Tools
             <InfoHint text="Toggle any tool off to hide it from agents and workspace chat. Disabled tools are never offered to the model and are blocked if still called. Changes apply to the next run." />
           </div>
-          <div className="text-sm text-muted mt-1">
+          <div className="page-section-sub">
             Built-in abilities every agent can call during runs — use the switch on each tile to disable a function globally.
             {disabledCount > 0 && (
               <span className="ml-1 text-dim">· {disabledCount} disabled</span>

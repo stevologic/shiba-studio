@@ -12,6 +12,7 @@ const LOG = path.join(GOAL_SCRATCH, 'functional-npm-test.log');
 
 const CHAIN = [
   'verify-theme.ts',
+  'verify-page-chrome.ts',
   'verify-runtime.ts',
   'verify-xai-oauth.ts',
   'verify-competitor-features.ts',

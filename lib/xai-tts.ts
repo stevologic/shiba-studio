@@ -15,6 +15,26 @@ export const GROK_TTS_VOICES: Array<{ id: string; name: string; description: str
 
 export const DEFAULT_TTS_VOICE = 'eve';
 
+/** xAI TTS speed range is 0.7–1.5 (1.0 = normal). */
+export const TTS_SPEED_MIN = 0.7;
+export const TTS_SPEED_MAX = 1.5;
+export const DEFAULT_TTS_SPEED = 1;
+
+export const GROK_TTS_SPEEDS: Array<{ value: number; label: string; hint: string }> = [
+  { value: 0.75, label: '0.75×', hint: 'Slower' },
+  { value: 0.9, label: '0.9×', hint: 'Slightly slow' },
+  { value: 1, label: '1×', hint: 'Normal' },
+  { value: 1.15, label: '1.15×', hint: 'Slightly fast' },
+  { value: 1.25, label: '1.25×', hint: 'Faster' },
+  { value: 1.5, label: '1.5×', hint: 'Fastest' },
+];
+
+export function clampTtsSpeed(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_TTS_SPEED;
+  return Math.min(TTS_SPEED_MAX, Math.max(TTS_SPEED_MIN, Math.round(n * 100) / 100));
+}
+
 /**
  * Remove emojis / pictographs so TTS never verbalizes them
  * ("smiling face", "thumbs up", etc.). Natural language only.

@@ -7,7 +7,7 @@
  *  • Folder explorer with optional editor (opens only when a file is selected)
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   Bot, CalendarClock, ChevronRight, ChevronsUp, Cloud, CloudDownload, CloudUpload,
@@ -121,13 +121,16 @@ export default function WorkspacePage({
   const [isGitRepo, setIsGitRepo] = useState(false);
   const [wtLoading, setWtLoading] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  /** Once the user Browse… / navigates, stop overriding with Settings default. */
+  const userPickedPathRef = useRef(false);
 
+  // Follow the global default workspace until the user picks another folder.
   useEffect(() => {
-    if (defaultWorkspace && !wsPath) {
-      setWsPath(defaultWorkspace);
-      setPathInput(defaultWorkspace);
-    }
-  }, [defaultWorkspace, wsPath]);
+    const next = (defaultWorkspace || '').trim();
+    if (!next || userPickedPathRef.current) return;
+    setWsPath(next);
+    setPathInput(next);
+  }, [defaultWorkspace]);
 
   const loadUploads = useCallback(async () => {
     try {
@@ -167,23 +170,48 @@ export default function WorkspacePage({
     setWtLoading(false);
   }, [wsPath, defaultWorkspace]);
 
-  const loadExplorer = useCallback(async (dir?: string) => {
-    const p = (dir ?? wsPath ?? defaultWorkspace ?? '').trim();
+  const loadExplorer = useCallback(async (
+    dir?: string,
+    opts?: { userInitiated?: boolean },
+  ) => {
+    if (opts?.userInitiated) userPickedPathRef.current = true;
+    // Non-user opens always prefer the studio default workspace directory.
+    const p = (
+      opts?.userInitiated
+        ? (dir ?? wsPath ?? defaultWorkspace ?? '')
+        : (dir ?? defaultWorkspace ?? wsPath ?? '')
+    ).trim();
     if (!p) return;
     setExplorerLoading(true);
     try {
       const res = await fetch(`/api/workspace?dir=${encodeURIComponent(p)}`);
       const data = await res.json();
+      if (data.error) throw new Error(data.error);
       setWsFiles(data.files || []);
       if (data.resolved) {
         setWsPath(data.resolved);
         setPathInput(data.resolved);
+      } else {
+        setWsPath(p);
+        setPathInput(p);
       }
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Could not open folder');
     }
     setExplorerLoading(false);
   }, [wsPath, defaultWorkspace]);
+
+  /** Open Explorer and land on the global workspace unless the user already navigated elsewhere. */
+  const openExplorer = useCallback((opts?: { forceDefault?: boolean }) => {
+    if (opts?.forceDefault) userPickedPathRef.current = false;
+    setView('explorer');
+    const target = (
+      userPickedPathRef.current && !opts?.forceDefault
+        ? (wsPath || defaultWorkspace || '')
+        : (defaultWorkspace || wsPath || '')
+    ).trim();
+    if (target) void loadExplorer(target, { userInitiated: userPickedPathRef.current && !opts?.forceDefault });
+  }, [wsPath, defaultWorkspace, loadExplorer]);
 
   useEffect(() => {
     void loadUploads();
@@ -192,8 +220,40 @@ export default function WorkspacePage({
 
   useEffect(() => {
     if (view === 'worktrees') void loadWorktrees();
-    if (view === 'explorer' && (wsPath || defaultWorkspace)) void loadExplorer();
-  }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, loadWorktrees]);
+
+  // Explorer defaults to the global workspace; reload when that default arrives after mount.
+  useEffect(() => {
+    if (view !== 'explorer') return;
+    if (userPickedPathRef.current) {
+      const cur = (wsPath || '').trim();
+      if (cur) void loadExplorer(cur, { userInitiated: true });
+      return;
+    }
+    const target = (defaultWorkspace || wsPath || '').trim();
+    if (!target) return;
+    void loadExplorer(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- enter-view / default seed only
+  }, [view, defaultWorkspace]);
+
+  // If Settings default was empty at first paint, fetch config so Explorer can open it.
+  useEffect(() => {
+    if (defaultWorkspace?.trim()) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/config');
+        const cfg = await res.json();
+        const path = String(cfg?.defaultWorkspace || '').trim();
+        if (cancelled || !path || userPickedPathRef.current) return;
+        setWsPath(path);
+        setPathInput(path);
+        if (view === 'explorer') void loadExplorer(path);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultWorkspace]);
 
   async function deleteUpload(name: string) {
     const ok = await confirmDialog({
@@ -286,7 +346,7 @@ export default function WorkspacePage({
       setFileContent('');
       setFileDirty(false);
       setFileBinary(false);
-      await loadExplorer(fpath);
+      await loadExplorer(fpath, { userInitiated: true });
       return;
     }
 
@@ -435,15 +495,15 @@ export default function WorkspacePage({
   return (
     <div className="ws-shell">
       <header className="ws-header">
-        <div className="min-w-0">
-          <div className="text-lg font-semibold tracking-tight">Workspace</div>
-          <div className="text-xs text-dim mt-0.5">
-            Uploads, worktrees, and files
+        <div className="min-w-0 flex-1">
+          <div className="page-title">Workspace</div>
+          <div className="page-subtitle">
+            Uploads, worktrees, and files — shared context, agent sandboxes, and a folder explorer.
           </div>
         </div>
-        <div className="ws-header-path">
+        <div className="ws-header-path" title={wsPath || defaultWorkspace || undefined}>
           <HardDrive size={14} className="opacity-50 shrink-0" />
-          <span className="font-mono text-xs truncate" title={wsPath || defaultWorkspace}>
+          <span className="font-mono text-xs truncate">
             {wsPath || defaultWorkspace || 'No folder open'}
           </span>
         </div>
@@ -463,7 +523,10 @@ export default function WorkspacePage({
                 title={item.hint}
                 aria-label={item.label}
                 aria-current={active ? 'page' : undefined}
-                onClick={() => setView(item.id)}
+                onClick={() => {
+                  if (item.id === 'explorer') openExplorer();
+                  else setView(item.id);
+                }}
               >
                 <Icon size={20} />
                 <span className="ws-activity-label">{item.label}</span>
@@ -540,47 +603,49 @@ export default function WorkspacePage({
                 )}
               </div>
 
-              <div className="ws-upload-grid">
-                {wsUploads.length === 0 && (
-                  <div className="ws-empty col-span-full">
-                    No uploads yet — drag files above or use <strong>Add files</strong>.
+              <div className="ws-panel-scroll">
+                <div className="ws-upload-grid">
+                  {wsUploads.length === 0 && (
+                    <div className="ws-empty col-span-full">
+                      No uploads yet — drag files above or use <strong>Add files</strong>.
+                    </div>
+                  )}
+                  {wsUploads.map((u) => (
+                    <div key={u.path} className="ws-upload-card">
+                      <div className="flex items-start gap-2 min-w-0">
+                        <FileText size={16} className="opacity-50 shrink-0 mt-0.5" />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-xs font-medium truncate" title={u.name}>{u.name}</div>
+                          <div className="text-[10px] text-dim mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
+                            <span>{formatBytes(u.size || 0)}</span>
+                            {u.uploadedAt && <span>{new Date(u.uploadedAt).toLocaleDateString()}</span>}
+                            {u.cloud ? (
+                              <span className="text-success inline-flex items-center gap-0.5">
+                                <Cloud size={10} /> synced
+                              </span>
+                            ) : (
+                              <span>local only</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="grok-btn grok-btn-ghost text-error p-1 shrink-0"
+                          title="Remove"
+                          onClick={() => void deleteUpload(u.name)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {cloudFiles.length > 0 && (
+                  <div className="text-xs text-dim mt-3">
+                    {cloudFiles.length} file(s) also in xAI Grok cloud storage
                   </div>
                 )}
-                {wsUploads.map((u) => (
-                  <div key={u.path} className="ws-upload-card">
-                    <div className="flex items-start gap-2 min-w-0">
-                      <FileText size={16} className="opacity-50 shrink-0 mt-0.5" />
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono text-xs font-medium truncate" title={u.name}>{u.name}</div>
-                        <div className="text-[10px] text-dim mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
-                          <span>{formatBytes(u.size || 0)}</span>
-                          {u.uploadedAt && <span>{new Date(u.uploadedAt).toLocaleDateString()}</span>}
-                          {u.cloud ? (
-                            <span className="text-success inline-flex items-center gap-0.5">
-                              <Cloud size={10} /> synced
-                            </span>
-                          ) : (
-                            <span>local only</span>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="grok-btn grok-btn-ghost text-error p-1 shrink-0"
-                        title="Remove"
-                        onClick={() => void deleteUpload(u.name)}
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
               </div>
-              {cloudFiles.length > 0 && (
-                <div className="text-xs text-dim mt-3">
-                  {cloudFiles.length} file(s) also in xAI Grok cloud storage
-                </div>
-              )}
             </div>
           )}
 
@@ -604,6 +669,7 @@ export default function WorkspacePage({
                 </button>
               </div>
 
+              <div className="ws-panel-scroll">
               {!isGitRepo ? (
                 <div className="ws-empty">
                   This workspace is not a git repository. Point default workspace at a repo (Settings) or open one in Explorer.
@@ -638,7 +704,7 @@ export default function WorkspacePage({
                                 title="Open in Explorer"
                                 onClick={() => {
                                   setView('explorer');
-                                  void loadExplorer(wt.path);
+                                  void loadExplorer(wt.path, { userInitiated: true });
                                 }}
                               >
                                 <FolderOpen size={13} /> Open
@@ -732,6 +798,7 @@ export default function WorkspacePage({
                   </div>
                 </div>
               )}
+              </div>
             </div>
           )}
 
@@ -767,7 +834,7 @@ export default function WorkspacePage({
                           type="button"
                           className={`ws-crumb ${isLast ? 'ws-crumb-current' : ''}`}
                           disabled={isLast}
-                          onClick={() => void loadExplorer(rebuilt)}
+                          onClick={() => void loadExplorer(rebuilt, { userInitiated: true })}
                         >
                           {seg}
                         </button>
@@ -784,7 +851,7 @@ export default function WorkspacePage({
                     className="grok-btn grok-btn-ghost text-xs p-1.5"
                     disabled={!parentPath}
                     title="Parent folder"
-                    onClick={() => parentPath && void loadExplorer(parentPath)}
+                    onClick={() => parentPath && void loadExplorer(parentPath, { userInitiated: true })}
                   >
                     <ChevronsUp size={14} />
                   </button>
@@ -938,7 +1005,10 @@ export default function WorkspacePage({
                         <button
                           type="button"
                           className="grok-btn grok-btn-secondary text-xs"
-                          onClick={() => void loadExplorer(defaultWorkspace || wsPath)}
+                          onClick={() => {
+                            userPickedPathRef.current = false;
+                            void loadExplorer(defaultWorkspace || wsPath);
+                          }}
                         >
                           Open default workspace
                         </button>
@@ -948,7 +1018,7 @@ export default function WorkspacePage({
                           key={w.agentId}
                           type="button"
                           className="grok-btn grok-btn-ghost text-xs"
-                          onClick={() => void loadExplorer(w.path)}
+                          onClick={() => void loadExplorer(w.path, { userInitiated: true })}
                         >
                           {agentById.get(w.agentId)?.name || 'Worktree'}
                         </button>
@@ -971,7 +1041,7 @@ export default function WorkspacePage({
           onSelect={(p) => {
             setShowFolderBrowse(false);
             setView('explorer');
-            void loadExplorer(p);
+            void loadExplorer(p, { userInitiated: true });
           }}
         />
       )}

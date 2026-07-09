@@ -119,6 +119,108 @@ async function resolveTeamId(token: string): Promise<string | null> {
   }
 }
 
+/** Pull a team id from any loosely-shaped JSON payload. */
+function pickTeamId(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const o = data as Record<string, unknown>;
+  const direct = o.team_id || o.teamId || o.teamID;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const team = o.team;
+  if (team && typeof team === 'object') {
+    const t = team as Record<string, unknown>;
+    const id = t.id || t.team_id || t.teamId;
+    if (typeof id === 'string' && id.trim()) return id.trim();
+  }
+  const key = o.apiKey || o.managementKey || o.management_key || o.key;
+  if (key && typeof key === 'object') {
+    const nested = pickTeamId(key);
+    if (nested) return nested;
+  }
+  // Some list endpoints return { teams: [...] }
+  const teams = o.teams;
+  if (Array.isArray(teams) && teams[0]) {
+    const first = pickTeamId(teams[0]);
+    if (first) return first;
+  }
+  return null;
+}
+
+/**
+ * Official management-key probe — does not require ACL permissions or team id.
+ * Docs: GET https://management-api.x.ai/auth/management-keys/validation
+ */
+async function validateManagementKeyEndpoint(token: string): Promise<{
+  ok: boolean;
+  teamId?: string;
+  raw?: unknown;
+  error?: string;
+  status?: number;
+}> {
+  try {
+    const res = await managementFetch('/auth/management-keys/validation', token, {
+      method: 'GET',
+    });
+    const status = res.status;
+    const txt = await res.text().catch(() => '');
+    let data: unknown = null;
+    try {
+      data = txt ? JSON.parse(txt) : null;
+    } catch {
+      data = { raw: txt.slice(0, 200) };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        status,
+        error: `validation ${status}${txt ? `: ${txt.slice(0, 160)}` : ''}`,
+        raw: data,
+      };
+    }
+    const teamId = pickTeamId(data) || undefined;
+    return { ok: true, teamId, raw: data, status };
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : 'validation request failed',
+    };
+  }
+}
+
+/**
+ * Best-effort team id for billing paths.
+ * Management keys usually cannot call api.x.ai/v1/api-key — use validation
+ * payload, then inference credentials, then a few management list endpoints.
+ */
+async function resolveTeamIdForManagement(token: string): Promise<string | null> {
+  // 1) Validation response may include team binding
+  const validation = await validateManagementKeyEndpoint(token);
+  if (validation.teamId) return validation.teamId;
+
+  // 2) Inference key metadata (only works if `token` is actually an API key)
+  const fromApiKey = await resolveTeamId(token);
+  if (fromApiKey) return fromApiKey;
+
+  // 3) Try common management endpoints that list teams or return team context
+  const probes = [
+    '/auth/teams',
+    '/v1/auth/teams',
+    '/auth/me',
+    '/v1/auth/me',
+  ];
+  for (const path of probes) {
+    try {
+      const res = await managementFetch(path, token, { method: 'GET' });
+      if (!res.ok) continue;
+      const data = await res.json().catch(() => null);
+      const id = pickTeamId(data);
+      if (id) return id;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
 async function managementFetch(
   path: string,
   token: string,
@@ -308,6 +410,90 @@ async function fetchPostpaidPreview(teamId: string, token: string): Promise<{
 }
 
 /**
+ * Probe an xAI Management key against management-api.x.ai.
+ * Primary check: GET /auth/management-keys/validation (no team id required).
+ * Optional enrichment: billing snapshot when a team id can be resolved.
+ */
+export async function validateManagementKey(opts?: {
+  key?: string;
+}): Promise<{
+  ok: boolean;
+  teamId?: string;
+  prepaidBalanceUsd?: number;
+  monthToDateCostUsd?: number;
+  error?: string;
+  note?: string;
+}> {
+  try {
+    const { loadConfig } = await import('./persistence');
+    const { resolveCloudBearer } = await import('./xai-oauth');
+    const cfg = await loadConfig();
+    const raw = typeof opts?.key === 'string' ? opts.key.trim() : '';
+    const token = raw && !raw.startsWith('••••')
+      ? raw
+      : (cfg as { xaiManagementKey?: string }).xaiManagementKey?.trim() || '';
+
+    if (!token) {
+      return {
+        ok: false,
+        error: 'No management key',
+        note: 'Paste a management key from console.x.ai → Settings → Management Keys, or save one first.',
+      };
+    }
+
+    // 1) Official validation — proves the key is a valid management key.
+    const validation = await validateManagementKeyEndpoint(token);
+    if (!validation.ok) {
+      return {
+        ok: false,
+        error: validation.error || 'Invalid management key',
+        note: validation.status === 401 || validation.status === 403
+          ? 'Key was rejected — copy a Management Key (not an inference API key) from console.x.ai → Settings → Management Keys.'
+          : 'Could not reach management-api.x.ai or the key is not authorized.',
+      };
+    }
+
+    // 2) Resolve team id for optional billing enrichment (not required for "ok").
+    const auth = await resolveCloudBearer(cfg);
+    let teamId = validation.teamId
+      || await resolveTeamIdForManagement(token)
+      || (auth.token ? await resolveTeamId(auth.token) : null)
+      || undefined;
+
+    let prepaidBalanceUsd: number | undefined;
+    let monthToDateCostUsd: number | undefined;
+    if (teamId) {
+      prepaidBalanceUsd = await fetchPrepaidBalance(teamId, token);
+      const postpaid = await fetchPostpaidPreview(teamId, token);
+      monthToDateCostUsd = postpaid.monthCostUsd;
+    }
+
+    const parts: string[] = ['Management key is valid'];
+    if (teamId) parts.push(`team ${teamId}`);
+    else {
+      parts.push(
+        'team id not auto-detected (billing snapshot skipped — optional: save an inference API key / OAuth so we can resolve the team)',
+      );
+    }
+    if (prepaidBalanceUsd != null) parts.push(`prepaid ~$${prepaidBalanceUsd.toFixed(2)}`);
+    if (monthToDateCostUsd != null) parts.push(`MTD ~$${monthToDateCostUsd.toFixed(2)}`);
+
+    return {
+      ok: true,
+      teamId,
+      prepaidBalanceUsd,
+      monthToDateCostUsd,
+      note: parts.join(' · '),
+    };
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : 'Management key test failed',
+    };
+  }
+}
+
+/**
  * Pull authoritative usage from xAI billing. Cached ~10 minutes.
  * Requires cloud auth; management key (Settings) is preferred when set.
  */
@@ -354,14 +540,19 @@ export async function fetchXaiAccountUsage(opts?: {
 
     let lastError = '';
     for (const attempt of tokensToTry) {
-      const teamId = await resolveTeamId(attempt.token);
-      // Management keys may not work on /v1/api-key — fall back to other token for team id.
-      let resolvedTeam = teamId;
-      if (!resolvedTeam && attempt.source === 'management_key' && auth.token) {
-        resolvedTeam = await resolveTeamId(auth.token);
+      // Management keys usually cannot call api.x.ai/v1/api-key — use management
+      // validation + list probes, then fall back to inference credentials for team id.
+      let resolvedTeam: string | null = null;
+      if (attempt.source === 'management_key') {
+        resolvedTeam = await resolveTeamIdForManagement(attempt.token);
+        if (!resolvedTeam && auth.token) {
+          resolvedTeam = await resolveTeamId(auth.token);
+        }
+      } else {
+        resolvedTeam = await resolveTeamId(attempt.token);
       }
       if (!resolvedTeam) {
-        lastError = 'Could not resolve team id from xAI API key metadata';
+        lastError = 'Could not resolve team id (management key needs team context from validation, inference API key, or OAuth)';
         continue;
       }
 

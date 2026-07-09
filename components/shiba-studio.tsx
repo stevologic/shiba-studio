@@ -7,12 +7,13 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
   CloudUpload, CloudDownload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
 import ConfirmHost, { confirmDialog } from '@/components/confirm-dialog';
 import MultitaskSidebar from '@/components/multitask-sidebar';
+import VoiceAgentNavDock from '@/components/voice-agent-nav-dock';
 import type { PendingToolApproval } from '@/components/tool-approval-modal';
 import type { ToolApprovalMode } from '@/lib/types';
 import MultimodalBadge from '@/components/multimodal-badge';
@@ -40,6 +41,11 @@ const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal
 const ToolApprovalModal = dynamic(() => import('@/components/tool-approval-modal'));
 import { toast } from 'sonner';
 import { getTerminalOpen, setTerminalOpen, toggleTerminalOpen, subscribeTerminalOpen } from '@/lib/terminal-ui-store';
+import {
+  endVoiceIfSessionChanges,
+  getVoiceAgentUiState,
+  subscribeVoiceAgentUi,
+} from '@/lib/voice-agent-ui-store';
 import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { THEME_IDENTITY } from '@/lib/theme';
 import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
@@ -66,7 +72,13 @@ import {
   writeLastChatSessionId,
 } from '@/lib/app-navigation';
 import { formatUsageCostUsd, type NavStats } from '@/lib/nav-stats-types';
-import { DEFAULT_TTS_VOICE, GROK_TTS_VOICES } from '@/lib/xai-tts';
+import {
+  DEFAULT_TTS_SPEED,
+  DEFAULT_TTS_VOICE,
+  GROK_TTS_SPEEDS,
+  GROK_TTS_VOICES,
+  clampTtsSpeed,
+} from '@/lib/xai-tts';
 import pkg from '@/package.json';
 
 type ModelOption = { id: string; label: string; provider?: ModelProvider; reasoning?: boolean };
@@ -176,6 +188,8 @@ export default function ShibaStudio() {
 
   const navigateToChatSession = useCallback((id: string) => {
     const path = chatSessionPath(id);
+    // Switching chats (or opening a different session from elsewhere) ends voice.
+    endVoiceIfSessionChanges(id);
     if (pathname === path) return;
     writeLastChatSessionId(id);
     // `/chat` → `/chat/:id` is a bootstrap rewrite, not a user navigation.
@@ -193,6 +207,8 @@ export default function ShibaStudio() {
       });
       const data = await res.json();
       if (!data.ok || !data.session) throw new Error(data.error || 'Could not create chat');
+      // New chat ends any active Grok Voice session.
+      endVoiceIfSessionChanges(data.session.id);
       navigateToChatSession(data.session.id);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Could not create chat');
@@ -299,6 +315,12 @@ export default function ShibaStudio() {
   useEffect(() => {
     setShowTerminalLocal(getTerminalOpen());
     return subscribeTerminalOpen(() => setShowTerminalLocal(getTerminalOpen()));
+  }, []);
+  // Keep Chat mounted (hidden) while Grok Voice is active so the engine survives navigation.
+  const [voiceAgentActive, setVoiceAgentActiveLocal] = useState(false);
+  useEffect(() => {
+    setVoiceAgentActiveLocal(getVoiceAgentUiState().active);
+    return subscribeVoiceAgentUi(() => setVoiceAgentActiveLocal(getVoiceAgentUiState().active));
   }, []);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -412,6 +434,8 @@ export default function ShibaStudio() {
   const [oauthCallbackInput, setOauthCallbackInput] = useState('');
   const [oauthStarting, setOauthStarting] = useState(false);
   const [defaultModelInput, setDefaultModelInput] = useState('');
+  const [defaultTtsVoiceInput, setDefaultTtsVoiceInput] = useState(DEFAULT_TTS_VOICE);
+  const [defaultTtsSpeedInput, setDefaultTtsSpeedInput] = useState(DEFAULT_TTS_SPEED);
   const [defaultWorkspaceInput, setDefaultWorkspaceInput] = useState('');
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -604,6 +628,21 @@ export default function ShibaStudio() {
             ? cfg.defaultGrokModel
             : current
         ) as GrokModel);
+      }
+      {
+        const studioVoice = String(cfg.defaultTtsVoice || '').trim().toLowerCase() || DEFAULT_TTS_VOICE;
+        setDefaultTtsVoiceInput(studioVoice);
+        const studioSpeed = clampTtsSpeed(cfg.defaultTtsSpeed ?? DEFAULT_TTS_SPEED);
+        setDefaultTtsSpeedInput(studioSpeed);
+        // Seed chat prefs when the user has never chosen a session override.
+        try {
+          if (!window.localStorage.getItem('shiba-tts-voice')) {
+            window.localStorage.setItem('shiba-tts-voice', studioVoice);
+          }
+          if (!window.localStorage.getItem('shiba-tts-speed')) {
+            window.localStorage.setItem('shiba-tts-speed', String(studioSpeed));
+          }
+        } catch { /* private mode */ }
       }
       if (cfg.defaultWorkspace) {
         setDefaultWorkspaceInput(cfg.defaultWorkspace);
@@ -1465,6 +1504,36 @@ export default function ShibaStudio() {
     }
   }
 
+  async function testManagementKey() {
+    const key = managementKeyInput?.trim() || '';
+    const usingSaved = !key || key.startsWith('••••');
+    if (usingSaved && !(config as any)?.hasManagementKey) {
+      toast.error('Paste a management key (or save one) before testing');
+      return;
+    }
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'testManagementKey',
+          // Only send a real key; masked placeholder uses the saved secret server-side.
+          ...(usingSaved ? {} : { key }),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.ok) {
+        toast.success(data.note || 'Management key is valid');
+      } else {
+        toast.error(
+          [data.error, data.note].filter(Boolean).join(' — ') || 'Management key test failed',
+        );
+      }
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Management key test failed');
+    }
+  }
+
   async function clearManagementKey() {
     const ok = await confirmDialog({
       title: 'Clear the xAI Management key?',
@@ -1792,6 +1861,50 @@ export default function ShibaStudio() {
     toast.success(`Default model set to ${defaultModelInput}`);
   }
 
+  async function saveDefaultTtsVoice() {
+    const voice = (defaultTtsVoiceInput || DEFAULT_TTS_VOICE).trim().toLowerCase() || DEFAULT_TTS_VOICE;
+    const speed = clampTtsSpeed(defaultTtsSpeedInput);
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultTtsVoice: voice, defaultTtsSpeed: speed }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      toast.error('Failed to save default voice settings');
+      return;
+    }
+    setDefaultTtsVoiceInput(voice);
+    setDefaultTtsSpeedInput(speed);
+    setConfig((c: any) => ({ ...c, defaultTtsVoice: voice, defaultTtsSpeed: speed }));
+    try {
+      window.localStorage.setItem('shiba-tts-voice', voice);
+      window.localStorage.setItem('shiba-tts-speed', String(speed));
+    } catch { /* private mode */ }
+    const label = agentVoiceOptions.find((v) => v.id === voice)?.name
+      || GROK_TTS_VOICES.find((v) => v.id === voice)?.name
+      || voice;
+    const speedLabel = GROK_TTS_SPEEDS.find((s) => Math.abs(s.value - speed) < 0.01)?.label || `${speed}×`;
+    toast.success(`Default voice ${label} · ${speedLabel}`);
+  }
+
+  // Load TTS voices when Settings is open (default voice picker).
+  useEffect(() => {
+    if (tab !== 'settings') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/tts');
+        const data = await res.json();
+        if (cancelled || !data.ok || !Array.isArray(data.voices) || !data.voices.length) return;
+        setAgentVoiceOptions(data.voices);
+      } catch {
+        /* keep built-in list */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tab]);
+
   // Schedule run from UI
   /** Flip one schedule entry's Active/Paused state — each cron row has its own pill. */
   async function toggleScheduleEntry(agent: Agent, index: number) {
@@ -2067,12 +2180,13 @@ export default function ShibaStudio() {
                 className={`nav-item ${active ? 'active' : ''} ${navCollapsed ? 'nav-item-collapsed' : ''}`}
                 title={navCollapsed ? item.label : undefined}
               >
-                <Icon size={navCollapsed ? 22 : 16} /> {!navCollapsed && item.label}
-                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
-                  <span className="data-spinner ml-auto" aria-label={`Loading ${item.label} count`} />
+                <Icon size={16} className="nav-item-icon" aria-hidden />
+                <span className="nav-item-label">{item.label}</span>
+                {!navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
+                  <span className="data-spinner nav-item-meta ml-auto" aria-label={`Loading ${item.label} count`} />
                 )}
-                {!navCollapsed && item.stat != null && (
-                  <span className={`nav-stat-badge ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
+                {item.stat != null && (
+                  <span className={`nav-stat-badge nav-item-meta ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
                     item.id === 'chat' ? `${item.stat} open session(s)`
                     : item.id === 'projects' ? `${item.stat} project(s)`
                     : item.id === 'workspace' ? `${item.stat} file(s) in workspace`
@@ -2088,6 +2202,9 @@ export default function ShibaStudio() {
             );
           })}
         </div>
+
+        {/* Minimized Grok Voice — docks cleanly under primary nav */}
+        <VoiceAgentNavDock navCollapsed={navCollapsed} />
 
         {!navCollapsed && (
           <MultitaskSidebar
@@ -2214,8 +2331,14 @@ export default function ShibaStudio() {
           </div>
         </div>
 
-        {/* Content surfaces */}
-        <div className="flex-1 overflow-auto p-3 sm:p-5 space-y-5 relative z-[1]">
+        {/* Content surfaces — workspace locks outer scroll; lists scroll inside */}
+        <div
+          className={
+            tab === 'workspace'
+              ? 'flex-1 min-h-0 overflow-hidden p-3 sm:p-5 relative z-[1] flex flex-col'
+              : 'flex-1 overflow-auto p-3 sm:p-5 space-y-5 relative z-[1]'
+          }
+        >
           {/* DASHBOARD */}
           {tab === 'dashboard' && (
             <div className="relative dashboard-page">
@@ -2275,8 +2398,8 @@ export default function ShibaStudio() {
               </div>
 
               <div>
-                <div className="flex justify-between items-center mb-2">
-                  <div className="font-medium flex items-center gap-1.5">
+                <div className="flex justify-between items-center mb-3 gap-2 flex-wrap">
+                  <div className="page-section-title mb-0">
                     Recent Agent Runs
                     <InfoHint text="Click a row to open the run's full execution log and its agent's configuration. 'view answer' shows just the final output." />
                   </div>
@@ -2349,19 +2472,34 @@ export default function ShibaStudio() {
             </div>
           )}
 
-          {/* GROK CHAT — direct interaction like Grok Desktop */}
-          {tab === 'chat' && (
-            <ChatSessionsPanel
-              sessionId={pathToChatSessionId(pathname)}
-              onSessionChange={navigateToChatSession}
-              onStatsChange={loadNavStats}
-              defaultChatModel={chatModel}
-              availableModels={availableModels}
-              modelsLoading={modelsLoading}
-              modelsError={modelsError}
-              onRefreshModels={loadModels}
-              agents={agents}
-            />
+          {/* GROK CHAT — keep mounted while voice is active so mic/TTS keep running off-tab.
+              Freeze the bound session id off-chat so pathname changes don't remount the engine. */}
+          {(tab === 'chat' || voiceAgentActive) && (
+            <div
+              className={tab === 'chat' ? undefined : 'voice-agent-chat-keepalive'}
+              aria-hidden={tab !== 'chat'}
+              style={tab === 'chat' ? undefined : { display: 'none' }}
+            >
+              <ChatSessionsPanel
+                sessionId={(() => {
+                  const fromUrl = pathToChatSessionId(pathname);
+                  if (tab === 'chat') return fromUrl || readLastChatSessionId();
+                  // Off chat with live voice: pin the bound session so the panel never remounts.
+                  if (voiceAgentActive) {
+                    return getVoiceAgentUiState().boundSessionId || readLastChatSessionId();
+                  }
+                  return fromUrl;
+                })()}
+                onSessionChange={navigateToChatSession}
+                onStatsChange={loadNavStats}
+                defaultChatModel={chatModel}
+                availableModels={availableModels}
+                modelsLoading={modelsLoading}
+                modelsError={modelsError}
+                onRefreshModels={loadModels}
+                agents={agents}
+              />
+            </div>
           )}
 
           {tab === 'projects' && (
@@ -2385,13 +2523,18 @@ export default function ShibaStudio() {
 
           {/* AGENTS + RUNS + TRACE — the heart */}
           {tab === 'agents' && (
-            <div>
-              <div className="flex justify-between mb-4 flex-wrap gap-2">
-                <div className="text-xl font-semibold tracking-tighter flex items-center gap-2">
-                  Your Grok Agents
-                  <InfoHint text="Local agents get full machine access (files, shell, browser, MCP); cloud agents run against Grok cloud services only. Each agent has its own model, workspace, integrations, schedules, and peers." />
+            <div className="page-content-wide">
+              <div className="page-head-row">
+                <div className="min-w-0">
+                  <div className="page-title">
+                    Agents
+                    <InfoHint text="Local agents get full machine access (files, shell, browser, MCP); cloud agents run against Grok cloud services only. Each agent has its own model, workspace, integrations, schedules, and peers." />
+                  </div>
+                  <div className="page-subtitle">
+                    Local and cloud Grok agents — models, workspaces, schedules, integrations, and peers.
+                  </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 shrink-0">
                   <button
                     onClick={syncCloudAgents}
                     disabled={cloudAgentSyncing}
@@ -2407,7 +2550,7 @@ export default function ShibaStudio() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {agents.map(agent => (
-                  <div key={agent.id} className="grok-card p-4 flex flex-col min-w-0">
+                  <div key={agent.id} className="grok-card p-5 flex flex-col min-w-0">
                     <div className="flex items-start gap-3 min-w-0">
                       <img src={resolveAgentAvatarPath(agent)} alt="" className="agent-avatar shrink-0" width={40} height={40} />
                       <div className="min-w-0 flex-1">
@@ -2509,7 +2652,11 @@ export default function ShibaStudio() {
                     </div>
                   </div>
                 ))}
-                {agents.length === 0 && <div className="text-sm text-muted">No agents yet. Create one to start orchestrating.</div>}
+                {agents.length === 0 && (
+                  <div className="grok-card p-8 text-center text-dim text-sm col-span-full">
+                    No agents yet. Create one to start orchestrating.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -2518,7 +2665,7 @@ export default function ShibaStudio() {
           {tab === 'workspace' && (
             <WorkspacePage
               agents={agents}
-              defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || wsPath || ''}
+              defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''}
               hasCloudAuth={!!(config as any)?.hasCloudAuth}
               onOpenAgent={(id) => {
                 const a = agents.find((x) => x.id === id);
@@ -2529,10 +2676,13 @@ export default function ShibaStudio() {
 
           {/* AUTOMATIONS — schedules & orchestration */}
           {tab === 'automations' && (
-            <div>
-              <div className="mb-3 font-medium flex items-center gap-1.5">
-                Scheduled &amp; Orchestrated Agents
+            <div className="page-content">
+              <div className="page-title">
+                Automations
                 <InfoHint text="Automations run agents on cron schedules with their own instructions. Open an agent’s run log to inspect past executions — each entry opens a full details modal." />
+              </div>
+              <div className="page-subtitle">
+                Scheduled &amp; orchestrated agents — cron jobs with their own instructions, run logs, and one-click replay.
               </div>
               <div className="space-y-3">
                 {/* Only agents with actual schedules — no placeholder cards */}
@@ -2542,7 +2692,7 @@ export default function ShibaStudio() {
                     ? scheduledRuns.filter((r) => r.agentId === a.id || r.agentName === a.name).length
                     : null;
                   return (
-                  <div key={a.id} className="grok-card p-4 automation-card">
+                  <div key={a.id} className="grok-card p-5 automation-card">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
                         <img src={resolveAgentAvatarPath(a)} alt="" className="agent-avatar-sm" width={28} height={28} />
@@ -2637,7 +2787,9 @@ export default function ShibaStudio() {
                   </div>
                 )}
               </div>
-              <div className="mt-6 text-xs text-dim">Agents can schedule themselves via the schedule_task tool and message other agents using send_to_peer. Everything is scoped per agent.</div>
+              <div className="mt-6 text-xs text-dim">
+                Agents can schedule themselves via the <span className="font-mono">schedule_task</span> tool and message other agents using <span className="font-mono">send_to_peer</span>. Everything is scoped per agent.
+              </div>
 
               {/* Execution Trace — top of the stack. Closing returns to run
                   details (if any) or the page; never leaves run log visible under it. */}
@@ -2708,19 +2860,19 @@ export default function ShibaStudio() {
 
           {/* CAPABILITIES — core integrations, skills, MCP servers, tools */}
           {tab === 'integrations' && (
-            <div className="integrations-page">
-              <div className="text-2xl font-semibold tracking-tighter mb-1 flex items-center gap-2">
+            <div className="integrations-page page-content-wide">
+              <div className="page-title">
                 Capabilities
                 <InfoHint text="Everything on this page becomes available to agents during runs and to Grok Chat when the matching scope is enabled on the agent." />
               </div>
-              <div className="text-sm text-muted mb-6">Everything your agents can reach — core integrations, skills, MCP servers, and built-in tools.</div>
+              <div className="page-subtitle">Everything your agents can reach — core integrations, skills, MCP servers, and built-in tools.</div>
 
-              <div className="text-xl font-semibold flex items-center gap-2 mb-1">
+              <div className="page-section-title">
                 <Plug size={18} className="opacity-70" />
                 Core Integrations
                 <InfoHint text="Credentials are AES-256-GCM encrypted at rest on this machine and never leave it except toward the service itself." />
               </div>
-              <div className="text-sm text-muted mb-5">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, and Obsidian during runs.</div>
+              <div className="page-section-sub">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, and Obsidian during runs.</div>
 
               <div className="integrations-grid">
                 {INTEGRATION_CATALOG.map((integration) => {
@@ -3055,9 +3207,9 @@ export default function ShibaStudio() {
           )}
 
           {tab === 'settings' && (
-            <div className="max-w-5xl settings-page">
-              <div className="text-2xl font-semibold tracking-tighter mb-1">Settings</div>
-              <div className="text-sm text-muted mb-6">
+            <div className="page-content settings-page">
+              <div className="page-title">Settings</div>
+              <div className="page-subtitle">
                 Model sources, agent behavior, quotas, and workspace — everything lives on this machine.
               </div>
 
@@ -3106,6 +3258,14 @@ export default function ShibaStudio() {
                     <button type="button" onClick={() => void saveManagementKey()} className="grok-btn grok-btn-primary text-xs">
                       Save Management Key
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => void testManagementKey()}
+                      className="grok-btn grok-btn-secondary text-xs"
+                      title="Call management-api.x.ai with this key (or the saved one) to verify billing access"
+                    >
+                      Test
+                    </button>
                     {(config as any)?.hasManagementKey && (
                       <button type="button" onClick={() => void clearManagementKey()} className="grok-btn grok-btn-ghost text-xs text-error">
                         Clear
@@ -3116,6 +3276,7 @@ export default function ShibaStudio() {
                     Separate from your inference API key. Used only to read{' '}
                     <span className="font-mono">management-api.x.ai</span> billing / usage (models, spend, prepaid balance).
                     Without it, Usage still tries your API key / OAuth, then falls back to studio metering.
+                    Test checks billing read access (team invoices / balance).
                   </div>
                 </div>
 
@@ -3306,6 +3467,75 @@ export default function ShibaStudio() {
                       <ModelLine modelId={defaultModelInput} />
                     </div>
                   )}
+                </div>
+
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <Volume2 size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Default Grok voice &amp; speed</div>
+                      <div className="text-[11px] text-dim">Studio-wide TTS for Grok Chat and voice mode.</div>
+                    </div>
+                    <InfoHint
+                      className="ml-auto"
+                      text="Used when speaking assistant replies. Agents can override voice. Chat and the Grok Voice HUD can change speed live for the session."
+                    />
+                  </div>
+                  <div className="grok-label mt-2 mb-1">Voice</div>
+                  <select
+                    className="grok-select w-full"
+                    value={defaultTtsVoiceInput || DEFAULT_TTS_VOICE}
+                    onChange={(e) => setDefaultTtsVoiceInput(e.target.value)}
+                    aria-label="Default Grok TTS voice"
+                  >
+                    {defaultTtsVoiceInput
+                      && !agentVoiceOptions.some((v) => v.id === defaultTtsVoiceInput)
+                      && !GROK_TTS_VOICES.some((v) => v.id === defaultTtsVoiceInput)
+                      && (
+                        <option value={defaultTtsVoiceInput}>
+                          {defaultTtsVoiceInput} (saved)
+                        </option>
+                      )}
+                    {(agentVoiceOptions.length ? agentVoiceOptions : GROK_TTS_VOICES).map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name}{v.description ? ` — ${v.description}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="grok-label mt-3 mb-1">Speech speed</div>
+                  <select
+                    className="grok-select w-full"
+                    value={String(clampTtsSpeed(defaultTtsSpeedInput))}
+                    onChange={(e) => setDefaultTtsSpeedInput(clampTtsSpeed(e.target.value))}
+                    aria-label="Default speech speed"
+                  >
+                    {GROK_TTS_SPEEDS.map((s) => (
+                      <option key={s.value} value={String(s.value)}>
+                        {s.label} · {s.hint}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex gap-2 mt-3">
+                    <button type="button" onClick={() => void saveDefaultTtsVoice()} className="grok-btn grok-btn-primary text-sm">
+                      Save Voice Defaults
+                    </button>
+                  </div>
+                  <div className="text-xs mt-1.5 text-dim">
+                    Seeds Grok Chat and the voice HUD. Speed range 0.7–1.5× (xAI TTS).
+                    {' '}Currently{' '}
+                    <span className="font-medium text-primary">
+                      {agentVoiceOptions.find((v) => v.id === defaultTtsVoiceInput)?.name
+                        || GROK_TTS_VOICES.find((v) => v.id === defaultTtsVoiceInput)?.name
+                        || defaultTtsVoiceInput
+                        || DEFAULT_TTS_VOICE}
+                    </span>
+                    {' · '}
+                    <span className="font-medium text-primary">
+                      {GROK_TTS_SPEEDS.find((s) => Math.abs(s.value - clampTtsSpeed(defaultTtsSpeedInput)) < 0.01)?.label
+                        || `${clampTtsSpeed(defaultTtsSpeedInput)}×`}
+                    </span>
+                    .
+                  </div>
                 </div>
 
                 <div className="grok-card p-5 settings-card">
@@ -3961,7 +4191,14 @@ export default function ShibaStudio() {
                     onChange={(e) => setAgentForm({ ...agentForm, voiceId: e.target.value })}
                     aria-label="Default Grok TTS voice for this agent"
                   >
-                    <option value="">App default (chat voice picker)</option>
+                    <option value="">
+                      Studio default
+                      {defaultTtsVoiceInput
+                        ? ` (${agentVoiceOptions.find((v) => v.id === defaultTtsVoiceInput)?.name
+                          || GROK_TTS_VOICES.find((v) => v.id === defaultTtsVoiceInput)?.name
+                          || defaultTtsVoiceInput})`
+                        : ''}
+                    </option>
                     {/* Ensure a saved custom/unknown id still appears even if not in the live list */}
                     {agentForm.voiceId
                       && !agentVoiceOptions.some((v) => v.id === agentForm.voiceId)

@@ -220,13 +220,13 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
   return (
     <div className="mcp-section mt-10 pt-8 border-t border-default">
       {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
+      <div className="page-head-row mb-2">
         <div className="min-w-0">
-          <div className="text-xl font-semibold flex items-center gap-2">
+          <div className="page-section-title">
             <Server size={18} className="opacity-70" />
             MCP Servers
           </div>
-          <div className="text-sm text-muted mt-1 max-w-2xl">
+          <div className="page-section-sub">
             Plug-in tools for agents via the{' '}
             <ExternalDocsLink href={MCP_PROTOCOL_DOCS_URL}>Model Context Protocol</ExternalDocsLink>
             . Add a public preset (with docs), or connect any stdio MCP server.

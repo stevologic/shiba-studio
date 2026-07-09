@@ -1,12 +1,13 @@
 'use client';
 
 /**
- * Jarvis-style floating HUD for Grok Voice mode.
- * Shows listening / thinking / speaking state with a radial core and status line.
+ * Jarvis-style HUD for Grok Voice mode.
+ * Full HUD when expanded; minimized control docks in the left nav.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Mic, MicOff, Volume2, X, Zap } from 'lucide-react';
+import { Mic, MicOff, Minimize2, Volume2, X, Zap } from 'lucide-react';
+import { GROK_TTS_SPEEDS, clampTtsSpeed, DEFAULT_TTS_SPEED } from '@/lib/xai-tts';
 
 export type VoiceAgentPhase = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -22,14 +23,38 @@ export interface VoiceAgentOverlayProps {
   /** Mute / stop listening without fully exiting voice mode */
   onToggleMic?: () => void;
   micActive?: boolean;
+  minimized?: boolean;
+  onMinimizedChange?: (minimized: boolean) => void;
+  /** Multi-agent voice circle (All agents + Grok Voice) */
+  groupMode?: boolean;
+  /** Current speech rate (0.7–1.5) */
+  speechSpeed?: number;
+  /** Live change speech rate (applies to next utterance) */
+  onSpeechSpeedChange?: (speed: number) => void;
 }
 
 const PHASE_COPY: Record<VoiceAgentPhase, { title: string; hint: string }> = {
   idle: { title: 'Standby', hint: 'Voice online — speak when ready' },
   listening: { title: 'Listening', hint: 'Speak naturally · pause to send' },
-  thinking: { title: 'Processing', hint: 'Working… · speak to interrupt' },
-  speaking: { title: 'Speaking', hint: 'Speak anytime to interrupt' },
+  thinking: { title: 'Processing', hint: 'Working… · speak ~2s to interrupt' },
+  speaking: { title: 'Speaking', hint: 'Speak ~2 seconds of words to interrupt' },
 };
+
+function phaseCopy(phase: VoiceAgentPhase, groupMode?: boolean, speaker?: string) {
+  if (groupMode) {
+    if (phase === 'listening') {
+      return { title: 'Listening', hint: 'Agents keep the discussion going if you stay quiet' };
+    }
+    if (phase === 'thinking') {
+      return { title: speaker ? `${speaker} thinking` : 'Agent thinking', hint: 'Group table — speak ~2s to jump in' };
+    }
+    if (phase === 'speaking') {
+      return { title: speaker ? speaker : 'Agent speaking', hint: 'Speak ~2 seconds of words to interrupt' };
+    }
+    return { title: 'Group voice', hint: 'Multi-agent table — stay quiet and they continue' };
+  }
+  return PHASE_COPY[phase];
+}
 
 export default function VoiceAgentOverlay({
   open,
@@ -40,9 +65,29 @@ export default function VoiceAgentOverlay({
   onClose,
   onToggleMic,
   micActive,
+  minimized = false,
+  onMinimizedChange,
+  groupMode = false,
+  speechSpeed = DEFAULT_TTS_SPEED,
+  onSpeechSpeedChange,
 }: VoiceAgentOverlayProps) {
   const [tick, setTick] = useState(0);
   const [mounted, setMounted] = useState(false);
+  const speed = clampTtsSpeed(speechSpeed);
+  const speedLabel = GROK_TTS_SPEEDS.find((s) => Math.abs(s.value - speed) < 0.01)?.label
+    || `${speed}×`;
+
+  /** Click the speed chip to cycle: 0.75 → 0.9 → 1 → 1.15 → 1.25 → 1.5 → … */
+  function cycleSpeed() {
+    if (!onSpeechSpeedChange) return;
+    const vals = GROK_TTS_SPEEDS.map((s) => s.value);
+    const idx = vals.findIndex((v) => Math.abs(v - speed) < 0.01);
+    const base = idx >= 0 ? idx : vals.indexOf(DEFAULT_TTS_SPEED);
+    const next = vals[(base + 1) % vals.length];
+    onSpeechSpeedChange(next);
+  }
+
+  const speedHint = GROK_TTS_SPEEDS.find((s) => Math.abs(s.value - speed) < 0.01)?.hint || 'Normal';
 
   useEffect(() => {
     if (!open) {
@@ -60,16 +105,18 @@ export default function VoiceAgentOverlay({
     return () => clearInterval(id);
   }, [open]);
 
-  const copy = PHASE_COPY[phase];
+  const copy = phaseCopy(phase, groupMode, voiceName);
   const caption = useMemo(() => {
-    // Show live transcript during barge-in (thinking / speaking) as well as listening.
     if (interim?.trim() && (phase === 'listening' || phase === 'speaking' || phase === 'thinking')) {
       return phase === 'listening' ? `“${interim.trim()}”` : `Interrupting… “${interim.trim()}”`;
     }
     if (phase === 'listening' && lastHeard?.trim()) return `Heard: “${lastHeard.trim()}”`;
-    if (phase === 'thinking') return lastHeard?.trim() ? `Re: “${lastHeard.trim()}”` : copy.hint;
+    if (phase === 'thinking') return lastHeard?.trim() ? `${lastHeard.trim()}` : copy.hint;
+    if (phase === 'speaking' && groupMode && voiceName) {
+      return `${voiceName} is speaking · ${copy.hint}`;
+    }
     return copy.hint;
-  }, [phase, interim, lastHeard, copy.hint]);
+  }, [phase, interim, lastHeard, copy.hint, voiceName, groupMode]);
 
   if (!open) return null;
 
@@ -81,6 +128,21 @@ export default function VoiceAgentOverlay({
         ? 1 + 0.03 * Math.sin(tick / 1.6)
         : 1;
 
+  const phaseIcon =
+    phase === 'speaking' ? (
+      <Volume2 size={minimized ? 16 : 28} />
+    ) : phase === 'listening' ? (
+      <Mic size={minimized ? 16 : 28} />
+    ) : phase === 'thinking' ? (
+      <span className={minimized ? 'voice-jarvis-core-spin voice-jarvis-core-spin-sm' : 'voice-jarvis-core-spin'} />
+    ) : (
+      <Zap size={minimized ? 16 : 26} />
+    );
+
+  // Minimized UI lives in the left sidebar (VoiceAgentNavDock), not a floating pill.
+  if (minimized) return null;
+
+  // ── Full HUD ──
   return (
     <div
       className={`voice-jarvis-root ${mounted ? 'voice-jarvis-mounted' : ''}`}
@@ -88,18 +150,38 @@ export default function VoiceAgentOverlay({
       aria-modal="false"
       aria-label="Grok Voice assistant"
     >
-      <div className="voice-jarvis-backdrop" onClick={onClose} aria-hidden>
+      {/* Backdrop does not steal the page — click minimizes so you can keep working */}
+      <div
+        className="voice-jarvis-backdrop"
+        onClick={() => onMinimizedChange?.(true)}
+        aria-hidden
+      >
         <div className="voice-jarvis-stars voice-jarvis-stars-far" />
         <div className="voice-jarvis-stars voice-jarvis-stars-near" />
       </div>
 
-      <div className="voice-jarvis-panel">
+      <div className="voice-jarvis-panel" onClick={(e) => e.stopPropagation()}>
         <div className="voice-jarvis-panel-stars" aria-hidden />
         <div className="voice-jarvis-chrome">
           <div className="voice-jarvis-brand">
             <Zap size={12} className="voice-jarvis-brand-icon" />
-            <span>GROK VOICE</span>
+            <span>{groupMode ? 'VOICE GROUP' : 'GROK VOICE'}</span>
             <span className="voice-jarvis-voice-tag">{voiceName}</span>
+            {onSpeechSpeedChange ? (
+              <button
+                type="button"
+                className="voice-jarvis-voice-tag voice-jarvis-speed-tag voice-jarvis-speed-chip"
+                onClick={cycleSpeed}
+                title={`Speech speed ${speedLabel} (${speedHint}) — click to change`}
+                aria-label={`Speech speed ${speedLabel}. Click to cycle.`}
+              >
+                {speedLabel}
+              </button>
+            ) : (
+              <span className="voice-jarvis-voice-tag voice-jarvis-speed-tag" title="Speech speed">
+                {speedLabel}
+              </span>
+            )}
           </div>
           <div className="voice-jarvis-chrome-actions">
             {onToggleMic && (
@@ -113,6 +195,15 @@ export default function VoiceAgentOverlay({
                 {micActive ? <Mic size={14} /> : <MicOff size={14} />}
               </button>
             )}
+            <button
+              type="button"
+              className="voice-jarvis-icon-btn"
+              onClick={() => onMinimizedChange?.(true)}
+              title="Minimize — keep voice on while you browse"
+              aria-label="Minimize Grok Voice"
+            >
+              <Minimize2 size={14} />
+            </button>
             <button
               type="button"
               className="voice-jarvis-icon-btn"
@@ -142,17 +233,7 @@ export default function VoiceAgentOverlay({
 
           <div className="voice-jarvis-core">
             <div className="voice-jarvis-core-glow" />
-            <div className="voice-jarvis-core-face">
-              {phase === 'speaking' ? (
-                <Volume2 size={28} />
-              ) : phase === 'listening' ? (
-                <Mic size={28} />
-              ) : phase === 'thinking' ? (
-                <span className="voice-jarvis-core-spin" />
-              ) : (
-                <Zap size={26} />
-              )}
-            </div>
+            <div className="voice-jarvis-core-face">{phaseIcon}</div>
           </div>
 
           {(phase === 'speaking' || phase === 'listening') && (
@@ -182,7 +263,11 @@ export default function VoiceAgentOverlay({
         </div>
 
         <div className="voice-jarvis-footer">
-          <span className="voice-jarvis-hint">Pause briefly to send · Esc or ✕ to exit</span>
+          <span className="voice-jarvis-hint">
+            {onSpeechSpeedChange
+              ? `Click ${speedLabel} to change speed · applies to next reply · Esc exits`
+              : 'Minimize docks in the left nav · Esc exits'}
+          </span>
         </div>
       </div>
     </div>

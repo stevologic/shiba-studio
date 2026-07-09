@@ -9,8 +9,10 @@ import type { ChatSession } from '@/lib/chat-session-types';
 import type { Project } from '@/lib/project-types';
 import type { Agent } from '@/lib/types';
 import { writeLastChatSessionId } from '@/lib/app-navigation';
+import { endVoiceIfSessionChanges } from '@/lib/voice-agent-ui-store';
+import InfoHint from '@/components/info-hint';
 
-type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' };
+type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' | 'cli' };
 
 /**
  * Survives catch-all route remounts when the URL rewrites `/chat` → `/chat/:id`.
@@ -92,10 +94,18 @@ export default function ChatSessionsPanel({
   }
 
   function commitActive(session: ChatSession | null) {
+    // Switching chats ends Grok Voice; same session keep-alive is a no-op.
+    endVoiceIfSessionChanges(session?.id ?? null);
     sessionCache.active = session;
     sessionCache.loadedId = session?.id ?? null;
     setActiveSession(session);
     if (session?.id) writeLastChatSessionId(session.id);
+  }
+
+  /** Navigate to another chat — ends voice when the bound session changes. */
+  function selectSession(id: string) {
+    endVoiceIfSessionChanges(id);
+    onSessionChange(id);
   }
 
   function toggleRail() {
@@ -314,6 +324,7 @@ export default function ChatSessionsPanel({
       if (data.error) throw new Error(data.error);
       const created = data.session as ChatSession;
       commitSessions([created, ...sessionsRef.current.filter((s) => s.id !== created.id)]);
+      endVoiceIfSessionChanges(created.id);
       commitActive(created);
       setLinkedProject(null);
       onStatsChange?.();
@@ -453,15 +464,37 @@ export default function ChatSessionsPanel({
 
   if (bootstrapping && !activeSession) {
     return (
-      <div className="flex items-center justify-center gap-3 h-[calc(100vh-120px)] text-dim text-sm">
-        <span className="data-spinner data-spinner-lg" />
-        Loading chat sessions…
+      <div className="chat-sessions-page">
+        <div className="chat-sessions-page-head">
+          <div className="page-title">
+            Grok Chat
+            <InfoHint text="Talk to Grok, route to agents, or run a multi-agent group chat. Sessions, tools, voice, and project context all live here." />
+          </div>
+          <div className="page-subtitle">
+            Sessions with tools, voice, and project context — Grok, a single agent, or the whole team.
+          </div>
+        </div>
+        <div className="flex items-center justify-center gap-3 flex-1 min-h-0 text-dim text-sm">
+          <span className="data-spinner data-spinner-lg" />
+          Loading chat sessions…
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="chat-sessions-layout flex h-[calc(100vh-120px)] w-full gap-3">
+    <div className="chat-sessions-page">
+      <div className="chat-sessions-page-head">
+        <div className="page-title">
+          Grok Chat
+          <InfoHint text="Talk to Grok, route to agents, or run a multi-agent group chat. Sessions, tools, voice, and project context all live here." />
+        </div>
+        <div className="page-subtitle">
+          Sessions with tools, voice, and project context — Grok, a single agent, or the whole team.
+        </div>
+      </div>
+
+      <div className="chat-sessions-layout flex flex-1 min-h-0 w-full gap-3">
       {/* Session rail — expandable pane; scales to hundreds of chats */}
       {railOpen ? (
         <div className="chat-session-rail">
@@ -514,11 +547,11 @@ export default function ChatSessionsPanel({
                   key={s.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => onSessionChange(s.id)}
+                  onClick={() => selectSession(s.id)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      onSessionChange(s.id);
+                      selectSession(s.id);
                     }
                   }}
                   className={`chat-session-item ${active ? 'chat-session-item-active' : ''}`}
@@ -632,6 +665,7 @@ export default function ChatSessionsPanel({
           agents={agents}
         />
       )}
+      </div>
       </div>
     </div>
   );

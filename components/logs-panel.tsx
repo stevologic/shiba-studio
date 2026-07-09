@@ -206,22 +206,22 @@ export default function LogsPanel() {
   }
 
   return (
-    <div className="max-w-5xl">
-      <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
-        <div>
-          <div className="text-xl font-semibold flex items-center gap-2">
-            <ScrollText size={18} className="opacity-70" />
+    <div className="page-content">
+      <div className="page-head-row">
+        <div className="min-w-0">
+          <div className="page-title">
+            <ScrollText size={20} className="opacity-70" />
             Logs
             <InfoHint text="Every consequential action lands here — runs, chats, config, integrations, sync. Run entries link to their full execution log; a UFO avatar means the agent has since been deleted." />
           </div>
-          <div className="text-sm text-muted mt-1">
+          <div className="page-subtitle">
             Full audit trail of actions taken —
             {searchQ
               ? ` ${total.toLocaleString()} match${total === 1 ? '' : 'es'} for “${searchQ}”`
               : ` ${total.toLocaleString()} event${total === 1 ? '' : 's'} recorded`}.
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
           <button
             type="button"
             onClick={() => exportLogs('csv')}

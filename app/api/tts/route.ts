@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  DEFAULT_TTS_SPEED,
   DEFAULT_TTS_VOICE,
   GROK_TTS_VOICES,
+  clampTtsSpeed,
   stripEmojisForSpeech,
   textForSpeech,
   XAI_TTS_URL,
@@ -77,6 +79,10 @@ export async function POST(req: NextRequest) {
     }
     const voiceId = String(body.voice_id || body.voiceId || DEFAULT_TTS_VOICE).toLowerCase() || DEFAULT_TTS_VOICE;
     const language = String(body.language || 'en');
+    // Speech rate multiplier (xAI: 0.7–1.5, default 1.0).
+    const speed = clampTtsSpeed(
+      body.speed != null ? body.speed : body.speech_speed != null ? body.speech_speed : DEFAULT_TTS_SPEED,
+    );
     // fast=true → lower bitrate / sample rate + streaming latency hint for voice agent.
     const fast = body.fast === true || body.fast === 1 || body.fast === 'true';
 
@@ -93,6 +99,7 @@ export async function POST(req: NextRequest) {
       text,
       voice_id: voiceId,
       language,
+      speed,
       // Skip extra normalization pass in voice chat (saves latency).
       text_normalization: body.text_normalization === true,
       output_format: fast

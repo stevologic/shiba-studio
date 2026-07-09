@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const changedKeys = [
     'xaiApiKey', 'xaiManagementKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel',
+    'defaultTtsVoice', 'defaultTtsSpeed',
     'localGrokEnabled', 'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode',
     'disabledTools', 'globalInstructions', 'useAgentsMd', 'usageBudgetUsd',
   ].filter((k) => body[k] !== undefined);
@@ -75,6 +76,25 @@ export async function POST(req: NextRequest) {
     const cfg = await saveConfig({ defaultGrokModel: String(body.defaultGrokModel || '') });
     return NextResponse.json({ ok: true, defaultGrokModel: cfg.defaultGrokModel });
   }
+  if (body.defaultTtsVoice !== undefined || body.defaultTtsSpeed !== undefined) {
+    const partial: { defaultTtsVoice?: string; defaultTtsSpeed?: number } = {};
+    if (body.defaultTtsVoice !== undefined) {
+      partial.defaultTtsVoice = String(body.defaultTtsVoice || '').trim().toLowerCase() || '';
+    }
+    if (body.defaultTtsSpeed !== undefined) {
+      const n = Number(body.defaultTtsSpeed);
+      // Clamp to xAI TTS range without importing client-only helpers here.
+      partial.defaultTtsSpeed = Number.isFinite(n)
+        ? Math.min(1.5, Math.max(0.7, Math.round(n * 100) / 100))
+        : 1;
+    }
+    const cfg = await saveConfig(partial);
+    return NextResponse.json({
+      ok: true,
+      defaultTtsVoice: cfg.defaultTtsVoice || '',
+      defaultTtsSpeed: cfg.defaultTtsSpeed ?? 1,
+    });
+  }
   if (body.usageBudgetUsd !== undefined) {
     const budget = Math.max(0, Number(body.usageBudgetUsd) || 0);
     const cfg = await saveConfig({ usageBudgetUsd: budget });
@@ -95,6 +115,13 @@ export async function POST(req: NextRequest) {
     const base = body.localGrokBaseUrl as string | undefined;
     const r = await listLocalGrokModels(base);
     return NextResponse.json({ ok: r.ok, models: r.models, error: r.error });
+  }
+  // Probe management-api.x.ai with a pasted key or the saved management key.
+  if (body.action === 'testManagementKey') {
+    const { validateManagementKey } = await import('@/lib/xai-billing-usage');
+    const key = typeof body.key === 'string' ? body.key : undefined;
+    const result = await validateManagementKey({ key });
+    return NextResponse.json(result);
   }
   if (body.localGrokEnabled !== undefined || body.localGrokBaseUrl !== undefined) {
     const cfg = await saveConfig({

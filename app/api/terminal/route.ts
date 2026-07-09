@@ -48,7 +48,13 @@ export async function POST(req: NextRequest) {
 
     if (action === 'restart') {
       const r = restartMainSession();
-      return NextResponse.json({ ok: r.ok, pid: r.pid, error: r.error, ...getTerminalServerInfo() });
+      const info = getTerminalServerInfo();
+      return NextResponse.json({
+        ...info,
+        ok: r.ok,
+        pid: r.pid ?? info.pid,
+        error: r.error,
+      });
     }
 
     if (action === 'write') {
@@ -68,8 +74,8 @@ export async function POST(req: NextRequest) {
     const timeoutMs = body.timeoutMs != null ? Number(body.timeoutMs) : undefined;
     const result = await runTerminalCommand(command, { timeoutMs });
     return NextResponse.json({
-      ok: result.ok && !result.timedOut && (result.code === 0 || result.code === null),
       ...result,
+      ok: result.ok && !result.timedOut && (result.code === 0 || result.code === null),
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

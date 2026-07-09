@@ -140,6 +140,8 @@ const DEFAULT_CONFIG: AppConfig = {
   integrations: {},
   defaultWorkspace: projectRoot(),
   defaultGrokModel: '',
+  defaultTtsVoice: '',
+  defaultTtsSpeed: 1,
   localGrokEnabled: false,
   localGrokBaseUrl: 'http://127.0.0.1:1234/v1',
   localModelAllowlist: [],

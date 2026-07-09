@@ -30,10 +30,14 @@ const DEFAULT_HEIGHT = 320;
 const MIN_HEIGHT = 160;
 const MAX_HEIGHT_RATIO = 0.75;
 
-/** CRT / DOS-style faces — VT323 is loaded via next/font as --font-terminal. */
+/**
+ * Traditional readable monospace — IBM Plex Mono (--font-terminal) with
+ * classic system fallbacks (Cascadia / Consolas / Menlo / SF Mono).
+ */
 const TERMINAL_FONT_FAMILY =
-  'var(--font-terminal), "VT323", "Perfect DOS VGA 437", "MS Gothic", "Fixedsys", "Terminal", "Lucida Console", "Courier New", monospace';
-const TERMINAL_FONT_SIZE = 18;
+  'var(--font-terminal), "IBM Plex Mono", "Cascadia Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", "Courier New", monospace';
+const TERMINAL_FONT_SIZE = 13;
+const TERMINAL_LETTER_SPACING = 0;
 
 /** Module-level connection — survives component remounts across navigations. */
 type TerminalRuntime = {
@@ -240,9 +244,9 @@ async function ensureXterm(host: HTMLDivElement) {
     try {
       runtime.term.options.fontFamily = TERMINAL_FONT_FAMILY;
       runtime.term.options.fontSize = TERMINAL_FONT_SIZE;
-      runtime.term.options.lineHeight = 1.1;
-      runtime.term.options.letterSpacing = 0.5;
-      runtime.term.options.cursorStyle = 'underline';
+      runtime.term.options.lineHeight = 1.25;
+      runtime.term.options.letterSpacing = TERMINAL_LETTER_SPACING;
+      runtime.term.options.cursorStyle = 'block';
     } catch {
       /* ignore */
     }
@@ -263,19 +267,21 @@ async function ensureXterm(host: HTMLDivElement) {
 
   if (runtime.term) {
     // Race: another mount finished first
-    if (!host.contains(runtime.term.element || null)) runtime.term.open(host);
+    const existing = runtime.term as import('@xterm/xterm').Terminal;
+    if (!host.contains((existing as { element?: HTMLElement | null }).element || null)) {
+      existing.open(host);
+    }
     fitTerminal();
     return;
   }
 
   const term = new Terminal({
     cursorBlink: true,
-    cursorStyle: 'underline',
-    // Old-school CRT / DOS terminal face (VT323) with classic system fallbacks.
+    cursorStyle: 'block',
     fontFamily: TERMINAL_FONT_FAMILY,
     fontSize: TERMINAL_FONT_SIZE,
-    lineHeight: 1.1,
-    letterSpacing: 0.5,
+    lineHeight: 1.25,
+    letterSpacing: TERMINAL_LETTER_SPACING,
     theme: {
       background: '#0a0a0a',
       foreground: '#f5f5f5',
