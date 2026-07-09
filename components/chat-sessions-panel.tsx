@@ -10,6 +10,12 @@ import type { Project } from '@/lib/project-types';
 import type { Agent } from '@/lib/types';
 import { writeLastChatSessionId } from '@/lib/app-navigation';
 import { endVoiceIfSessionChanges } from '@/lib/voice-agent-ui-store';
+import {
+  abortLiveChatRun,
+  getLiveChatRun,
+  listLiveChatSessionIds,
+  subscribeLiveChatRuns,
+} from '@/lib/chat-live-runs';
 import InfoHint from '@/components/info-hint';
 
 type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' | 'cli' };
@@ -79,6 +85,22 @@ export default function ChatSessionsPanel({
     } catch { /* private mode */ }
   }, []);
 
+  // Background turns: pulse rail rows while a session is still generating.
+  const [liveRunIds, setLiveRunIds] = useState<string[]>(() => listLiveChatSessionIds());
+  const prevLiveCountRef = useRef(liveRunIds.length);
+  const prevLiveIdsRef = useRef<string[]>(liveRunIds);
+  useEffect(() => {
+    const sync = () => {
+      const next = listLiveChatSessionIds();
+      setLiveRunIds((prev) => {
+        if (prev.length === next.length && prev.every((id, i) => id === next[i])) return prev;
+        return next;
+      });
+    };
+    sync();
+    return subscribeLiveChatRuns(sync);
+  }, []);
+
   // Parent callbacks via refs — never put them in effect deps (identity churn
   // used to re-bootstrap /chat on every parent render).
   const onSessionChangeRef = useRef(onSessionChange);
@@ -91,10 +113,78 @@ export default function ChatSessionsPanel({
   sessionsRef.current = sessions;
   useEffect(() => { defaultChatModelRef.current = defaultChatModel; }, [defaultChatModel]);
 
+  /**
+   * Stable agent label under each chat title in the left rail.
+   * Captured once per session when the list first loads; NOT recomputed when
+   * you click another session. Only updates when that session's chatTarget
+   * changes (user picked a new agent in the dropdown and sent a message).
+   */
+  const railAgentLabelRef = useRef<Map<string, string | null>>(new Map());
+  const agentsByIdRef = useRef<Map<string, string>>(new Map());
+  const [railLabelTick, setRailLabelTick] = useState(0);
+
+  function agentLabelForTarget(chatTarget: string | undefined | null): string | null {
+    const t = (chatTarget || 'grok').trim();
+    if (!t || t === 'grok') return null;
+    if (t === 'all') return 'All agents';
+    return agentsByIdRef.current.get(t) || null;
+  }
+
+  useEffect(() => {
+    const map = new Map<string, string>();
+    for (const a of agents) map.set(a.id, a.name);
+    agentsByIdRef.current = map;
+    // Agents often arrive after the session list — fill in null labels once.
+    const labels = railAgentLabelRef.current;
+    let filled = false;
+    for (const s of sessionsRef.current) {
+      const current = labels.get(s.id);
+      if (current) continue;
+      const next = agentLabelForTarget(s.chatTarget);
+      if (next) {
+        labels.set(s.id, next);
+        filled = true;
+      } else if (!labels.has(s.id) && (!s.chatTarget || s.chatTarget === 'grok')) {
+        labels.set(s.id, null);
+      }
+    }
+    if (filled) setRailLabelTick((n) => n + 1);
+  }, [agents]);
+
+  /** Merge sessions into state without wiping frozen rail agent labels. */
   function commitSessions(next: ChatSession[]) {
+    const labels = railAgentLabelRef.current;
+    for (const s of next) {
+      const prev = sessionCache.sessions.find((x) => x.id === s.id)
+        || sessionsRef.current.find((x) => x.id === s.id);
+      // First time we see this session → capture label once.
+      if (!labels.has(s.id)) {
+        labels.set(s.id, agentLabelForTarget(s.chatTarget));
+        continue;
+      }
+      // Only refresh label when chatTarget actually changed (send with new agent).
+      if (prev && prev.chatTarget !== s.chatTarget) {
+        labels.set(s.id, agentLabelForTarget(s.chatTarget));
+        setRailLabelTick((n) => n + 1);
+      }
+    }
+    // Drop labels for deleted sessions.
+    for (const id of [...labels.keys()]) {
+      if (!next.some((s) => s.id === id)) labels.delete(id);
+    }
     sessionCache.sessions = next;
     setSessions(next);
   }
+
+  /**
+   * Last session the user explicitly picked. Bootstrap/load races must not
+   * commit a different session over this (classic “click B, still stuck on A”).
+   */
+  const preferredSessionIdRef = useRef<string | null>(sessionId);
+  // External navigations (Quick access, New Chat, URL) update the prop — mirror that.
+  useEffect(() => {
+    if (sessionId) preferredSessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   function commitActive(session: ChatSession | null) {
     // Switching chats ends Grok Voice; same session keep-alive is a no-op.
@@ -105,9 +195,40 @@ export default function ChatSessionsPanel({
     if (session?.id) writeLastChatSessionId(session.id);
   }
 
+  /** True when an async bootstrap/load is still allowed to apply this id. */
+  function mayApplySession(id: string | null | undefined): boolean {
+    if (!id) return true;
+    const pref = preferredSessionIdRef.current;
+    if (pref && pref !== id) return false;
+    return true;
+  }
+
   /** Navigate to another chat — ends voice when the bound session changes. */
   function selectSession(id: string) {
+    if (!id) return;
+    preferredSessionIdRef.current = id;
+    if (id === activeSession?.id) {
+      // Same chat: still ensure URL/sessionId stay in sync (e.g. bare `/chat`).
+      if (id !== sessionId) onSessionChange(id);
+      return;
+    }
     endVoiceIfSessionChanges(id);
+    // Optimistic switch from the already-loaded list — no network for the rail.
+    // Messages come from the cached session object (list entries include history).
+    const cached =
+      sessionsRef.current.find((s) => s.id === id)
+      || sessionCache.sessions.find((s) => s.id === id)
+      || null;
+    if (cached) {
+      commitActive(cached);
+      // Project link is rare; only fetch when this session actually has one.
+      if (cached.projectId) void loadLinkedProject(cached.projectId);
+      else setLinkedProject(null);
+    } else {
+      sessionCache.loadedId = id;
+      void loadSession(id);
+    }
+    // URL sync only — must not trigger loadNavStats / loadAll.
     onSessionChange(id);
   }
 
@@ -158,7 +279,12 @@ export default function ChatSessionsPanel({
       const data = await res.json();
       if (data.ok && data.session) {
         const session = data.session as ChatSession;
-        commitActive(session);
+        if (!mayApplySession(id)) return session;
+        // Only swap the active panel when this id is still preferred.
+        if (preferredSessionIdRef.current === id || sessionCache.active?.id === id) {
+          commitActive(session);
+        }
+        // Patch this row in the list (label freezes unless chatTarget changed).
         commitSessions(
           sessionsRef.current.some((s) => s.id === id)
             ? sessionsRef.current.map((s) => (s.id === id ? session : s))
@@ -171,6 +297,21 @@ export default function ChatSessionsPanel({
     }
     return null;
   }, []);
+
+  // When a background turn finishes, refresh only that session (title/running),
+  // not the whole rail — full reloads made agent labels under titles flicker.
+  useEffect(() => {
+    const prev = prevLiveCountRef.current;
+    const prevIds = prevLiveIdsRef.current;
+    const nextIds = liveRunIds;
+    prevLiveCountRef.current = nextIds.length;
+    prevLiveIdsRef.current = nextIds;
+    if (prev <= 0 || nextIds.length >= prev) return;
+    const finished = prevIds.filter((id) => !nextIds.includes(id));
+    for (const id of finished) {
+      void loadSession(id);
+    }
+  }, [liveRunIds, loadSession]);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -211,25 +352,36 @@ export default function ChatSessionsPanel({
   useEffect(() => {
     let cancelled = false;
     const listKey = showArchived ? 'archived' : 'active';
+    // Track the sessionId this effect instance is responsible for.
+    const effectSessionId = sessionId;
 
     (async () => {
       let list: ChatSession[] | undefined;
 
       // Warm path after `/chat` → `/chat/:id` remount — no network.
+      // Require a non-empty list cache; empty means a prior failed load (or
+      // corrupt store) and must hit the network again.
       if (
-        sessionId
-        && sessionCache.loadedId === sessionId
-        && sessionCache.active?.id === sessionId
+        effectSessionId
+        && sessionCache.loadedId === effectSessionId
+        && sessionCache.active?.id === effectSessionId
         && sessionCache.listKey === listKey
+        && sessionCache.sessions.length > 0
       ) {
-        if (sessionCache.sessions.length && sessionsRef.current.length === 0) {
+        if (sessionsRef.current.length === 0) {
           setSessions(sessionCache.sessions);
         }
         if (!cancelled) setBootstrapping(false);
         return;
       }
 
-      if (sessionCache.listKey !== listKey) {
+      // Reload when archive filter changes, or when the cache is empty (e.g. a
+      // prior parse of a corrupt store returned []). Never stick on a blank rail.
+      const cacheMiss =
+        sessionCache.listKey !== listKey
+        || sessionCache.sessions.length === 0
+        || sessionsRef.current.length === 0;
+      if (cacheMiss) {
         setBootstrapping(true);
         list = await loadSessions();
         if (cancelled) return;
@@ -239,7 +391,13 @@ export default function ChatSessionsPanel({
       }
 
       // --- no URL session: pick/create, hydrate, navigate ---
-      if (!sessionId) {
+      if (!effectSessionId) {
+        // User already picked a chat while we were loading — don't hijack,
+        // but still keep the rail list if we just loaded it.
+        if (preferredSessionIdRef.current) {
+          if (!cancelled) setBootstrapping(false);
+          return;
+        }
         setBootstrapping(true);
         if (!list?.length) {
           list = await loadSessions();
@@ -275,7 +433,12 @@ export default function ChatSessionsPanel({
           if (!cancelled) setBootstrapping(false);
           return;
         }
+        if (!mayApplySession(chosen.id)) {
+          if (!cancelled) setBootstrapping(false);
+          return;
+        }
 
+        preferredSessionIdRef.current = chosen.id;
         commitActive(chosen);
         await loadLinkedProject(chosen.projectId);
         if (cancelled) return;
@@ -285,8 +448,18 @@ export default function ChatSessionsPanel({
         return;
       }
 
+      // User clicked a different chat while this effect was in flight for an older id.
+      if (!mayApplySession(effectSessionId)) {
+        if (!cancelled) setBootstrapping(false);
+        return;
+      }
+
       // --- URL has sessionId ---
-      if (sessionCache.loadedId === sessionId && sessionCache.active?.id === sessionId) {
+      if (sessionCache.loadedId === effectSessionId && sessionCache.active?.id === effectSessionId) {
+        // Keep the rail populated even on the warm path.
+        if (sessionCache.sessions.length && sessionsRef.current.length === 0) {
+          setSessions(sessionCache.sessions);
+        }
         setActiveSession(sessionCache.active);
         if (!cancelled) setBootstrapping(false);
         return;
@@ -294,19 +467,23 @@ export default function ChatSessionsPanel({
 
       setBootstrapping(true);
       const cached =
-        list?.find((s) => s.id === sessionId)
-        || sessionCache.sessions.find((s) => s.id === sessionId)
-        || sessionsRef.current.find((s) => s.id === sessionId);
+        list?.find((s) => s.id === effectSessionId)
+        || sessionCache.sessions.find((s) => s.id === effectSessionId)
+        || sessionsRef.current.find((s) => s.id === effectSessionId);
       if (cached) {
+        if (!mayApplySession(cached.id)) {
+          if (!cancelled) setBootstrapping(false);
+          return;
+        }
         commitActive(cached);
         await loadLinkedProject(cached.projectId);
         if (!cancelled) setBootstrapping(false);
         return;
       }
 
-      const session = await loadSession(sessionId);
+      const session = await loadSession(effectSessionId);
       if (cancelled) return;
-      if (session) await loadLinkedProject(session.projectId);
+      if (session && mayApplySession(session.id)) await loadLinkedProject(session.projectId);
       if (!cancelled) setBootstrapping(false);
     })();
 
@@ -412,6 +589,7 @@ export default function ChatSessionsPanel({
     });
     if (!ok) return;
     try {
+      abortLiveChatRun(id);
       await fetch('/api/chat-sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -437,10 +615,13 @@ export default function ChatSessionsPanel({
   }
 
   async function onSessionUpdated() {
-    if (!sessionId) return;
-    await loadSession(sessionId);
-    await loadSessions();
-    onStatsChange?.();
+    // Prefer the chat the user is actually viewing (optimistic), not a stale URL.
+    const id = activeSession?.id || sessionId;
+    if (!id) return;
+    if (!mayApplySession(id)) return;
+    // Patch only this session into the rail — never re-fetch the full list
+    // and never refresh left-nav badges (counts didn't change).
+    await loadSession(id);
   }
 
   async function onProjectLinkChange(projectId: string | null) {
@@ -500,7 +681,7 @@ export default function ChatSessionsPanel({
       <div className="chat-sessions-layout flex flex-1 min-h-0 w-full gap-3">
       {/* Session rail — expandable pane; scales to hundreds of chats */}
       {railOpen ? (
-        <div className="chat-session-rail">
+        <div className="chat-session-rail" data-testid="chat-session-rail">
           <div className="chat-session-rail-head">
             <span className="chat-session-rail-title">Chats</span>
             <span className="chat-session-rail-count">{sessions.length}</span>
@@ -539,30 +720,49 @@ export default function ChatSessionsPanel({
             Show archived
           </label>
           <div className="chat-session-rail-list">
+            {/* railLabelTick: re-paint when a frozen label is filled or chatTarget changes */}
             {sessions.map((s) => {
-              const active = s.id === sessionId;
-              const agentName = s.chatTarget !== 'grok' && s.chatTarget !== 'all'
-                ? agents.find((a) => a.id === s.chatTarget)?.name
-                : null;
+              void railLabelTick;
+              // Prefer optimistic activeSession; fall back to URL sessionId.
+              const active = s.id === (activeSession?.id ?? sessionId);
+              // Agent under the title: frozen at page-load (or after a send that
+              // changed chatTarget). Selecting another session never re-resolves it.
+              if (!railAgentLabelRef.current.has(s.id)) {
+                railAgentLabelRef.current.set(s.id, agentLabelForTarget(s.chatTarget));
+              }
+              const agentName = railAgentLabelRef.current.get(s.id) ?? null;
               const label = s.title || 'New chat';
+              const isRunning = liveRunIds.includes(s.id)
+                || !!getLiveChatRun(s.id)?.streaming
+                || !!s.running;
               return (
                 <div
                   key={s.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => selectSession(s.id)}
+                  onClick={(e) => {
+                    // Ignore clicks that originated on rename/archive/delete.
+                    if ((e.target as HTMLElement).closest('.chat-session-item-action')) return;
+                    selectSession(s.id);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       selectSession(s.id);
                     }
                   }}
-                  className={`chat-session-item ${active ? 'chat-session-item-active' : ''}`}
-                  title={agentName ? `${label} · ${agentName}` : label}
+                  className={`chat-session-item ${active ? 'chat-session-item-active' : ''} ${isRunning ? 'chat-session-item-running' : ''}`}
+                  title={isRunning
+                    ? `${label} · working…`
+                    : (agentName ? `${label} · ${agentName}` : label)}
+                  aria-current={active ? 'true' : undefined}
                 >
-                  <MessageSquare size={13} className="shrink-0 opacity-50" />
+                  <MessageSquare size={13} className={`shrink-0 ${isRunning ? 'opacity-90 text-accent' : 'opacity-50'}`} />
                   <span className="chat-session-item-body">
-                    <span className="chat-session-item-title">{label}</span>
+                    <span className="chat-session-item-title">
+                      {label}
+                      {isRunning && <span className="chat-session-item-live"> · working</span>}
+                    </span>
                     {agentName && <span className="chat-session-item-meta">{agentName}</span>}
                   </span>
                   <span className="chat-session-item-actions">
@@ -633,10 +833,12 @@ export default function ChatSessionsPanel({
         </div>
       )}
 
-      <div className="chat-sessions-main flex flex-col flex-1 min-w-0 w-full">
+      <div className="chat-sessions-main flex flex-col flex-1 min-w-0">
       {activeSession && (
         <GrokChatPanel
-          key={activeSession.id}
+          // No key={session.id}: remounting the whole panel on every rail click
+          // re-fetched config/tts/cli and felt like a full app reload. Session
+          // switches hydrate messages via props + sessionSync instead.
           session={activeSession}
           onSessionUpdated={onSessionUpdated}
           project={linkedProject}

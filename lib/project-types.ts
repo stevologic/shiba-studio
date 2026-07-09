@@ -22,6 +22,8 @@ export interface ProjectChatMessage {
   perspectives?: Array<{ agentId: string; name: string; content: string }>;
   /** Token usage reported by the xAI API for this reply. */
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /** True while a background session turn is still generating this message. */
+  streaming?: boolean;
   createdAt: string;
 }
 

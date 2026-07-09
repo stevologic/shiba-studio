@@ -46,6 +46,11 @@ import {
   getVoiceAgentUiState,
   subscribeVoiceAgentUi,
 } from '@/lib/voice-agent-ui-store';
+import {
+  hasLiveChatRuns,
+  primaryLiveChatSessionId,
+  subscribeLiveChatRuns,
+} from '@/lib/chat-live-runs';
 import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { THEME_IDENTITY } from '@/lib/theme';
 import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
@@ -73,6 +78,23 @@ import {
 } from '@/lib/app-navigation';
 import { formatUsageCostUsd, type NavStats } from '@/lib/nav-stats-types';
 import {
+  getCachedNavStats,
+  isNavStatsLoaded,
+  writeCachedNavStats,
+} from '@/lib/nav-stats-store';
+import {
+  getCachedAgents,
+  hasCachedAgents,
+  setCachedAgents,
+} from '@/lib/agents-ui-store';
+import {
+  getProvidersUiSnapshot,
+  hasProvidersUiSnapshot,
+  patchProvidersUiSnapshot,
+  setProvidersUiSnapshot,
+  type CachedOauthStatus,
+} from '@/lib/providers-ui-store';
+import {
   DEFAULT_TTS_SPEED,
   DEFAULT_TTS_VOICE,
   GROK_TTS_SPEEDS,
@@ -96,6 +118,9 @@ const TAB_LABELS: Record<string, string> = {
   workspace: 'Workspace', automations: 'Automations', integrations: 'Capabilities',
   usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
+
+/** Survives React remounts so chat session URL changes never re-bootstrap the shell. */
+let studioBootstrapped = false;
 
 function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
   const ref = parseModelRef(modelId || '');
@@ -211,6 +236,11 @@ const AGENT_OVERRIDE_FIELDS: Record<string, Array<{ key: string; label: string; 
     { key: 'teamSlug', label: 'Team slug (optional)' },
     { key: 'defaultProject', label: 'Default project name or id' },
   ],
+  netlify: [
+    { key: 'token', label: 'Netlify personal access token', secret: true },
+    { key: 'accountSlug', label: 'Account slug (optional)' },
+    { key: 'defaultSite', label: 'Default site id or name' },
+  ],
 };
 
 export default function ShibaStudio() {
@@ -258,9 +288,17 @@ export default function ShibaStudio() {
     endVoiceIfSessionChanges(id);
     if (pathname === path) return;
     writeLastChatSessionId(id);
-    // `/chat` → `/chat/:id` is a bootstrap rewrite, not a user navigation.
-    if (pathname === '/chat' || pathname === '/chat/') router.replace(path);
-    else router.push(path);
+    // Prefer replace for session switches so the App Router doesn't treat each
+    // click as a heavy navigation. Layout holds ShibaStudio so badges stay put.
+    if (
+      pathname === '/chat'
+      || pathname === '/chat/'
+      || pathname.startsWith('/chat/')
+    ) {
+      router.replace(path);
+    } else {
+      router.push(path);
+    }
   }, [pathname, router]);
 
   /** Top-bar New Chat — create a fresh session and jump straight into it. */
@@ -362,9 +400,14 @@ export default function ShibaStudio() {
     router.replace('/settings');
   }, [tab, searchParams, router, handleOAuthConnected, handleDriveConnected]);
 
-  const [agents, setAgents] = useState<Agent[]>([]);
+  // Seed from module cache so remounts/tab hops never show a false empty list.
+  const [agents, setAgents] = useState<Agent[]>(() => getCachedAgents() ?? []);
+  const [agentsReady, setAgentsReady] = useState(() => hasCachedAgents());
   const [runs, setRuns] = useState<AgentRun[]>([]);
-  const [config, setConfig] = useState<AppConfig | null>(null);
+  // Providers / auth — same remount cache so the rail doesn't flash "off".
+  const [config, setConfig] = useState<AppConfig | null>(
+    () => (getProvidersUiSnapshot()?.config as AppConfig | null) ?? null,
+  );
   const [loading, setLoading] = useState(false);
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [liveTrace, setLiveTrace] = useState<any[]>([]);
@@ -380,6 +423,12 @@ export default function ShibaStudio() {
   useEffect(() => {
     setVoiceAgentActiveLocal(getVoiceAgentUiState().active);
     return subscribeVoiceAgentUi(() => setVoiceAgentActiveLocal(getVoiceAgentUiState().active));
+  }, []);
+  // Same keep-alive for background chat turns: leave Chat and the session keeps working.
+  const [chatRunActive, setChatRunActive] = useState(false);
+  useEffect(() => {
+    setChatRunActive(hasLiveChatRuns());
+    return subscribeLiveChatRuns(() => setChatRunActive(hasLiveChatRuns()));
   }, []);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -466,7 +515,7 @@ export default function ShibaStudio() {
   const [wsSyncing, setWsSyncing] = useState<'upload' | 'download' | null>(null);
 
   // Integrations form state
-  const [intCreds, setIntCreds] = useState<any>({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, vercel: {} });
+  const [intCreds, setIntCreds] = useState<any>({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, vercel: {}, netlify: {} });
   const [intTest, setIntTest] = useState<any>({});
   const [intSaving, setIntSaving] = useState<Record<string, boolean>>({});
   const [expandedIntegration, setExpandedIntegration] = useState<string | null>(null);
@@ -478,10 +527,16 @@ export default function ShibaStudio() {
   }
   const [folderBrowseFor, setFolderBrowseFor] = useState<'obsidian' | 'workspace' | 'mcp' | null>(null);
   const [mcpBrowsePath, setMcpBrowsePath] = useState<string | null>(null);
-  const [grokCliStatus, setGrokCliStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(null);
+  const [grokCliStatus, setGrokCliStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(
+    () => getProvidersUiSnapshot()?.grokCli ?? null,
+  );
 
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [managementKeyInput, setManagementKeyInput] = useState('');
+  const [apiKeyInput, setApiKeyInput] = useState(() =>
+    getProvidersUiSnapshot()?.hasApiKeyMasked ? '••••••••' : '',
+  );
+  const [managementKeyInput, setManagementKeyInput] = useState(() =>
+    getProvidersUiSnapshot()?.hasManagementKeyMasked ? '••••••••' : '',
+  );
   /** Persistent "Tested" badges for Settings probe buttons (localStorage). */
   type SettingsTestId = 'apiKey' | 'managementKey' | 'localGrok';
   const SETTINGS_TESTED_LS = 'shiba-settings-tested';
@@ -501,37 +556,59 @@ export default function ShibaStudio() {
       return next;
     });
   }
-  const [oauthStatus, setOauthStatus] = useState<{
-    connected: boolean;
-    expired: boolean;
-    email?: string;
-    displayName?: string;
-    error?: string;
-  }>({ connected: false, expired: false });
-  const [cloudAuthMode, setCloudAuthMode] = useState<'api_key' | 'oauth'>('api_key');
+  const [oauthStatus, setOauthStatus] = useState<CachedOauthStatus>(() =>
+    getProvidersUiSnapshot()?.oauthStatus ?? { connected: false, expired: false },
+  );
+  const [cloudAuthMode, setCloudAuthMode] = useState<'api_key' | 'oauth'>(() =>
+    getProvidersUiSnapshot()?.cloudAuthMode ?? 'api_key',
+  );
   const [oauthCallbackInput, setOauthCallbackInput] = useState('');
   const [oauthStarting, setOauthStarting] = useState(false);
   const [defaultModelInput, setDefaultModelInput] = useState('');
   const [defaultTtsVoiceInput, setDefaultTtsVoiceInput] = useState(DEFAULT_TTS_VOICE);
   const [defaultTtsSpeedInput, setDefaultTtsSpeedInput] = useState(DEFAULT_TTS_SPEED);
   const [defaultWorkspaceInput, setDefaultWorkspaceInput] = useState('');
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>(() =>
+    (getProvidersUiSnapshot()?.availableModels as ModelOption[] | undefined) ?? [],
+  );
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
-  const [localGrokEnabled, setLocalGrokEnabled] = useState(false);
-  const [localGrokBaseUrl, setLocalGrokBaseUrl] = useState('http://127.0.0.1:1234/v1');
-  const [localGrokReachable, setLocalGrokReachable] = useState(false);
-  const [localModelOptions, setLocalModelOptions] = useState<string[]>([]);
-  const [localModelAllowlist, setLocalModelAllowlist] = useState<string[]>([]);
+  const [modelsError, setModelsError] = useState<string | null>(() =>
+    getProvidersUiSnapshot()?.modelsError ?? null,
+  );
+  const [localGrokEnabled, setLocalGrokEnabled] = useState(() =>
+    getProvidersUiSnapshot()?.localGrokEnabled ?? false,
+  );
+  const [localGrokBaseUrl, setLocalGrokBaseUrl] = useState(() =>
+    getProvidersUiSnapshot()?.localGrokBaseUrl ?? 'http://127.0.0.1:1234/v1',
+  );
+  const [localGrokReachable, setLocalGrokReachable] = useState(() => {
+    const snap = getProvidersUiSnapshot();
+    if (snap) return snap.localGrokReachable;
+    const cache = typeof window !== 'undefined' ? readProviderStatusCache() : null;
+    return cache?.localGrokReachable ?? false;
+  });
+  const [localModelOptions, setLocalModelOptions] = useState<string[]>(() =>
+    getProvidersUiSnapshot()?.localModelOptions ?? [],
+  );
+  const [localModelAllowlist, setLocalModelAllowlist] = useState<string[]>(() =>
+    getProvidersUiSnapshot()?.localModelAllowlist ?? [],
+  );
   const [localModelsFetching, setLocalModelsFetching] = useState(false);
 
-  // Providers probes (CLI + local) — hydrate from 10‑min cache; only re-probe when stale.
+  // Providers probes (CLI + local) — hydrate from module + 10‑min LS cache; only re-probe when stale.
   useEffect(() => {
-    const cache = readProviderStatusCache();
-    if (cache?.localGrokReachable != null) setLocalGrokReachable(!!cache.localGrokReachable);
-    if (cache?.grokCli) setGrokCliStatus(cache.grokCli);
+    const snap = getProvidersUiSnapshot();
+    if (snap?.grokCli) setGrokCliStatus(snap.grokCli);
+    if (snap?.localGrokReachable != null) setLocalGrokReachable(!!snap.localGrokReachable);
 
-    if (providerStatusCacheFresh(cache) && cache?.grokCli) return;
+    const cache = readProviderStatusCache();
+    if (cache?.localGrokReachable != null && !snap) setLocalGrokReachable(!!cache.localGrokReachable);
+    if (cache?.grokCli && !snap?.grokCli) setGrokCliStatus(cache.grokCli);
+
+    // Fresh probe cache + we already have CLI status → skip network.
+    if (providerStatusCacheFresh(cache) && (cache?.grokCli || snap?.grokCli)) return;
+    // Module snapshot already has CLI from this tab session → skip re-probe on remount.
+    if (snap?.grokCli) return;
 
     fetch('/api/grok-cli/status')
       .then((r) => r.json())
@@ -543,24 +620,18 @@ export default function ShibaStudio() {
         };
         setGrokCliStatus(next);
         writeProviderStatusCache({ grokCli: next });
+        patchProvidersUiSnapshot({ grokCli: next });
       })
       .catch(() => {
         const next = { installed: false as const };
         setGrokCliStatus(next);
         writeProviderStatusCache({ grokCli: next });
+        patchProvidersUiSnapshot({ grokCli: next });
       });
   }, []);
-  const [navStats, setNavStats] = useState<NavStats>({
-    chatSessions: 0,
-    projects: 0,
-    workspaceFiles: 0,
-    automationsScheduled: 0,
-    integrationsConfigured: 0,
-    usageCostUsd: 0,
-    usageCostSource: 'local',
-    usageBudgetUsd: 0,
-  });
-  const [navStatsLoaded, setNavStatsLoaded] = useState(false);
+  // Seed from module cache so tab switches / remounts never flash zeros or spinners.
+  const [navStats, setNavStats] = useState<NavStats>(() => getCachedNavStats());
+  const [navStatsLoaded, setNavStatsLoaded] = useState(() => isNavStatsLoaded());
   const [cliUpdate, setCliUpdate] = useState<{ checking: boolean; text?: string; available?: boolean }>({ checking: false });
   /** Live commit of the tree this server process is serving (refreshed via /api/version). */
   const [runtimeVersion, setRuntimeVersion] = useState<{
@@ -610,12 +681,17 @@ export default function ShibaStudio() {
     }
   }
 
+  /**
+   * Full badge refresh — only call after a mutation that can change counts
+   * (create/delete chat, project, automation, integration, sync, etc.).
+   * Never call on plain tab / session navigation.
+   */
   async function loadNavStats() {
     try {
       const res = await fetch('/api/nav-stats');
       const data = await res.json();
       if (data.ok) {
-        setNavStats({
+        const next: NavStats = {
           chatSessions: data.chatSessions ?? 0,
           projects: data.projects ?? 0,
           workspaceFiles: data.workspaceFiles ?? 0,
@@ -624,7 +700,10 @@ export default function ShibaStudio() {
           usageCostUsd: data.usageCostUsd ?? 0,
           usageCostSource: data.usageCostSource === 'xai' ? 'xai' : 'local',
           usageBudgetUsd: data.usageBudgetUsd ?? 0,
-        });
+        };
+        // Skip setState when nothing changed — avoids badge flicker / re-paint.
+        if (!writeCachedNavStats(next) && isNavStatsLoaded()) return;
+        setNavStats(next);
         setNavStatsLoaded(true);
       }
     } catch {
@@ -651,12 +730,14 @@ export default function ShibaStudio() {
       const res = await fetch('/api/models');
       const data = await res.json();
       if (data.ok && Array.isArray(data.models) && data.models.length > 0) {
-        setAvailableModels(data.models.map((m: ModelOption) => ({
+        const mapped: ModelOption[] = data.models.map((m: ModelOption) => ({
           id: m.id,
           label: m.label || modelDisplayName(m.id),
           provider: m.provider || (m.id.startsWith('local:') ? 'local' : 'cloud'),
           reasoning: m.reasoning,
-        })));
+        }));
+        setAvailableModels(mapped);
+        patchProvidersUiSnapshot({ availableModels: mapped, modelsError: null });
         // Only refresh Local badge from this probe when cache is stale or forced —
         // still always apply when the server reports a definitive localReachable.
         if (typeof data.localReachable === 'boolean') {
@@ -664,6 +745,7 @@ export default function ShibaStudio() {
           if (opts?.forceProviderProbe || !providerStatusCacheFresh(cache) || data.localReachable === false) {
             setLocalGrokReachable(!!data.localReachable);
             writeProviderStatusCache({ localGrokReachable: !!data.localReachable });
+            patchProvidersUiSnapshot({ localGrokReachable: !!data.localReachable });
           }
         }
         setChatModel((current) => pickDefaultModel(current));
@@ -673,22 +755,27 @@ export default function ShibaStudio() {
         setAgentForm((f: any) => ({ ...f, model: pickDefaultModel(f.model) }));
       } else {
         setAvailableModels([]);
-        setModelsError(data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings'));
+        const errMsg = data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings');
+        setModelsError(errMsg);
+        patchProvidersUiSnapshot({ availableModels: [], modelsError: errMsg });
         // Failed / empty model list with local enabled → mark Local offline
         if (data.localEnabled || localGrokEnabled || (config as any)?.localGrokEnabled) {
           if (data.localReachable === false || data.error) {
             setLocalGrokReachable(false);
             writeProviderStatusCache({ localGrokReachable: false });
+            patchProvidersUiSnapshot({ localGrokReachable: false });
           }
         }
       }
     } catch (e: any) {
       setAvailableModels([]);
       setModelsError(e.message);
+      patchProvidersUiSnapshot({ availableModels: [], modelsError: e.message });
       // Network/API failure — don't claim Local is healthy
       if (localGrokEnabled || (config as any)?.localGrokEnabled) {
         setLocalGrokReachable(false);
         writeProviderStatusCache({ localGrokReachable: false });
+        patchProvidersUiSnapshot({ localGrokReachable: false });
       }
     }
     setModelsLoading(false);
@@ -732,7 +819,10 @@ export default function ShibaStudio() {
         fetch('/api/config').then(r => r.json()),
         fetch('/api/integrations').then(r => r.json()),
       ]);
-      setAgents(aRes.agents || []);
+      const nextAgents = (aRes.agents || []) as Agent[];
+      setCachedAgents(nextAgents);
+      setAgents(nextAgents);
+      setAgentsReady(true);
       setRuns(rRes.runs || []);
       const cfg = cRes;
       setConfig(cfg as any);
@@ -741,11 +831,37 @@ export default function ShibaStudio() {
       }
       if ((cfg as any).hasKey) setApiKeyInput('••••••••'); // masked
       if ((cfg as any).hasManagementKey) setManagementKeyInput('••••••••');
-      if ((cfg as any).oauthStatus) setOauthStatus((cfg as any).oauthStatus);
-      if ((cfg as any).cloudAuthMode) setCloudAuthMode((cfg as any).cloudAuthMode);
-      if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(!!cfg.localGrokEnabled);
+      const nextOauth: CachedOauthStatus = (cfg as any).oauthStatus
+        ? (cfg as any).oauthStatus
+        : { connected: false, expired: false };
+      if ((cfg as any).oauthStatus) setOauthStatus(nextOauth);
+      const nextAuthMode = ((cfg as any).cloudAuthMode === 'oauth' ? 'oauth' : 'api_key') as 'api_key' | 'oauth';
+      if ((cfg as any).cloudAuthMode) setCloudAuthMode(nextAuthMode);
+      const nextLocalEnabled = cfg.localGrokEnabled !== undefined ? !!cfg.localGrokEnabled : localGrokEnabled;
+      if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(nextLocalEnabled);
+      const nextLocalBase = cfg.localGrokBaseUrl || localGrokBaseUrl;
       if (cfg.localGrokBaseUrl) setLocalGrokBaseUrl(cfg.localGrokBaseUrl);
-      if (Array.isArray(cfg.localModelAllowlist)) setLocalModelAllowlist(cfg.localModelAllowlist);
+      const nextAllowlist = Array.isArray(cfg.localModelAllowlist) ? cfg.localModelAllowlist : localModelAllowlist;
+      if (Array.isArray(cfg.localModelAllowlist)) setLocalModelAllowlist(nextAllowlist);
+      // Persist Providers rail picture for remounts / tab hops (skip full loadAll).
+      const probe = readProviderStatusCache();
+      setProvidersUiSnapshot({
+        config: cfg as Record<string, unknown>,
+        oauthStatus: nextOauth,
+        cloudAuthMode: nextAuthMode,
+        localGrokEnabled: nextLocalEnabled,
+        localGrokBaseUrl: nextLocalBase,
+        localGrokReachable: probe?.localGrokReachable
+          ?? getProvidersUiSnapshot()?.localGrokReachable
+          ?? false,
+        localModelOptions: getProvidersUiSnapshot()?.localModelOptions ?? [],
+        localModelAllowlist: nextAllowlist,
+        grokCli: getProvidersUiSnapshot()?.grokCli ?? probe?.grokCli ?? null,
+        availableModels: getProvidersUiSnapshot()?.availableModels ?? [],
+        modelsError: getProvidersUiSnapshot()?.modelsError ?? null,
+        hasApiKeyMasked: !!(cfg as any).hasKey,
+        hasManagementKeyMasked: !!(cfg as any).hasManagementKey,
+      });
       if (cfg.defaultGrokModel) {
         setDefaultModelInput(cfg.defaultGrokModel);
         setChatModel((current) => (
@@ -798,26 +914,63 @@ export default function ShibaStudio() {
     }
   }
 
-  // Nav counts load ONCE at startup; afterwards only mutation sites refresh
-  // them (delete/create/sync handlers call loadNavStats directly).
+  // Catalog + badges + providers load ONCE per browser tab. On remount, restore
+  // from module caches — never leave agents empty or Providers all-off.
   useEffect(() => {
+    if (studioBootstrapped) {
+      if (isNavStatsLoaded()) {
+        setNavStats(getCachedNavStats());
+        setNavStatsLoaded(true);
+      }
+      if (hasCachedAgents()) {
+        setAgents(getCachedAgents() ?? []);
+        setAgentsReady(true);
+      }
+      const snap = getProvidersUiSnapshot();
+      if (snap) {
+        if (snap.config) setConfig(snap.config as unknown as AppConfig);
+        setOauthStatus(snap.oauthStatus);
+        setCloudAuthMode(snap.cloudAuthMode);
+        setLocalGrokEnabled(snap.localGrokEnabled);
+        setLocalGrokBaseUrl(snap.localGrokBaseUrl);
+        setLocalGrokReachable(snap.localGrokReachable);
+        setLocalModelOptions(snap.localModelOptions);
+        setLocalModelAllowlist(snap.localModelAllowlist);
+        if (snap.grokCli) setGrokCliStatus(snap.grokCli);
+        if (snap.availableModels?.length) setAvailableModels(snap.availableModels as ModelOption[]);
+        if (snap.modelsError != null) setModelsError(snap.modelsError);
+        if (snap.hasApiKeyMasked) setApiKeyInput('••••••••');
+        if (snap.hasManagementKeyMasked) setManagementKeyInput('••••••••');
+      }
+      // Cold caches (HMR / partial remount) — full hydrate once.
+      if (!hasCachedAgents() && !hasProvidersUiSnapshot()) {
+        void loadAll();
+      }
+      return;
+    }
+    studioBootstrapped = true;
     loadAll();
     void loadNavStats();
   }, []);
 
-  // The usage badge alone refreshes on a 15-minute cadence (server caches the
-  // ledger aggregation for the same window).
+  // Usage badge alone: refresh the cost figure every 15 minutes (not entity counts).
   useEffect(() => {
     const t = setInterval(async () => {
       try {
         const res = await fetch('/api/nav-stats');
         const data = await res.json();
         if (data.ok) {
-          setNavStats((prev) => ({
-            ...prev,
-            usageCostUsd: data.usageCostUsd ?? prev.usageCostUsd,
-            usageCostSource: data.usageCostSource === 'xai' ? 'xai' : (data.usageCostSource === 'local' ? 'local' : prev.usageCostSource),
-          }));
+          setNavStats((prev) => {
+            const next: NavStats = {
+              ...prev,
+              usageCostUsd: data.usageCostUsd ?? prev.usageCostUsd,
+              usageCostSource: data.usageCostSource === 'xai'
+                ? 'xai'
+                : (data.usageCostSource === 'local' ? 'local' : prev.usageCostSource),
+            };
+            writeCachedNavStats(next);
+            return next;
+          });
         }
       } catch {
         /* keep previous figure */
@@ -830,8 +983,9 @@ export default function ShibaStudio() {
     if (tab === 'workspace') loadUploads();
   }, [tab]);
 
-  // Model catalog: load once when cloud/local becomes available (not every 22s tick).
-  const modelsBootstrappedRef = useRef(false);
+  // Model catalog: load once when cloud/local becomes available (not every poll tick).
+  // If remount restored models from providers cache, skip a redundant fetch.
+  const modelsBootstrappedRef = useRef(!!(getProvidersUiSnapshot()?.availableModels?.length));
   useEffect(() => {
     const cloud = !!(config as any)?.hasCloudAuth;
     const local = !!(localGrokEnabled || (config as any)?.localGrokEnabled);
@@ -1082,7 +1236,10 @@ export default function ShibaStudio() {
   // Agents CRUD
   async function refreshAgents() {
     const res = await fetch('/api/agents').then(r => r.json());
-    setAgents(res.agents || []);
+    const nextAgents = (res.agents || []) as Agent[];
+    setCachedAgents(nextAgents);
+    setAgents(nextAgents);
+    setAgentsReady(true);
   }
 
   const [cloudAgentSyncing, setCloudAgentSyncing] = useState(false);
@@ -1804,13 +1961,15 @@ export default function ShibaStudio() {
       const res = await fetch('/api/xai-oauth/status');
       const data = await res.json();
       if (data.ok) {
-        setOauthStatus({
+        const next: CachedOauthStatus = {
           connected: !!data.connected,
           expired: !!data.expired,
           email: data.email,
           displayName: data.displayName,
           error: data.error,
-        });
+        };
+        setOauthStatus(next);
+        patchProvidersUiSnapshot({ oauthStatus: next });
       }
     } catch {
       /* ignore */
@@ -1942,6 +2101,7 @@ export default function ShibaStudio() {
     stopOAuthPolling();
     await fetch('/api/xai-oauth/logout', { method: 'POST' });
     setOauthStatus({ connected: false, expired: false });
+    patchProvidersUiSnapshot({ oauthStatus: { connected: false, expired: false } });
     toast.success('OAuth disconnected');
     await loadAll();
     await loadModels();
@@ -1949,6 +2109,7 @@ export default function ShibaStudio() {
 
   async function saveCloudAuthMode(mode: 'api_key' | 'oauth') {
     setCloudAuthMode(mode);
+    patchProvidersUiSnapshot({ cloudAuthMode: mode });
     const res = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1956,7 +2117,11 @@ export default function ShibaStudio() {
     });
     const data = await res.json();
     if (data.ok) {
-      setConfig((c: any) => ({ ...c, cloudAuthMode: mode, activeCloudSource: data.activeCloudSource }));
+      setConfig((c: any) => {
+        const next = { ...c, cloudAuthMode: mode, activeCloudSource: data.activeCloudSource };
+        patchProvidersUiSnapshot({ config: next as Record<string, unknown> });
+        return next;
+      });
       toast.success(mode === 'oauth' ? 'Using OAuth for cloud Grok' : 'Using API key for cloud Grok');
       await loadModels();
     }
@@ -1973,7 +2138,15 @@ export default function ShibaStudio() {
       toast.error('Failed to save local model settings');
       return;
     }
-    setConfig((c: any) => ({ ...c, localGrokEnabled, localGrokBaseUrl }));
+    setConfig((c: any) => {
+      const next = { ...c, localGrokEnabled, localGrokBaseUrl };
+      patchProvidersUiSnapshot({
+        config: next as Record<string, unknown>,
+        localGrokEnabled,
+        localGrokBaseUrl,
+      });
+      return next;
+    });
     toast.success(localGrokEnabled ? 'Local models enabled' : 'Local models disabled');
     invalidateProviderStatusCache();
     modelsBootstrappedRef.current = false;
@@ -1982,6 +2155,7 @@ export default function ShibaStudio() {
     } else {
       setLocalGrokReachable(false);
       writeProviderStatusCache({ localGrokReachable: false });
+      patchProvidersUiSnapshot({ localGrokReachable: false });
     }
     await loadModels({ forceProviderProbe: true });
   }
@@ -2003,7 +2177,9 @@ export default function ShibaStudio() {
       if (data.ok) {
         setLocalGrokReachable(true);
         writeProviderStatusCache({ localGrokReachable: true });
-        setLocalModelOptions(((data.models || []) as Array<{ id?: string; label?: string }>).map(localIdOf).filter(Boolean));
+        const optsList = ((data.models || []) as Array<{ id?: string; label?: string }>).map(localIdOf).filter(Boolean);
+        setLocalModelOptions(optsList);
+        patchProvidersUiSnapshot({ localGrokReachable: true, localModelOptions: optsList });
         if (!opts?.silent) {
           markSettingsTested('localGrok', true);
           toast.success(`Local server reachable — ${data.models?.length || 0} model(s) found`);
@@ -2012,6 +2188,7 @@ export default function ShibaStudio() {
         setLocalGrokReachable(false);
         writeProviderStatusCache({ localGrokReachable: false });
         setLocalModelOptions([]);
+        patchProvidersUiSnapshot({ localGrokReachable: false, localModelOptions: [] });
         if (!opts?.silent) {
           markSettingsTested('localGrok', false);
           toast.error(data.error || 'Local server not reachable');
@@ -2022,6 +2199,7 @@ export default function ShibaStudio() {
       setLocalGrokReachable(false);
       writeProviderStatusCache({ localGrokReachable: false });
       setLocalModelOptions([]);
+      patchProvidersUiSnapshot({ localGrokReachable: false, localModelOptions: [] });
       if (!opts?.silent) markSettingsTested('localGrok', false);
       return false;
     } finally {
@@ -2207,25 +2385,52 @@ export default function ShibaStudio() {
     toast('Automation deleted');
   }
 
-  // Seed a sample agent if none
+  // Seed a sample agent only after the first successful agents fetch returned [].
+  // Never seed while agents are still loading (that looked like "no agents" and
+  // could race a real list still on disk).
+  // Deps are always exactly 3 primitives so HMR / remount never trips
+  // "useEffect dependency array changed size".
+  const hasConfig = !!config;
+  const agentCount = agents.length;
+  const seededEmptyAgentsRef = useRef(false);
   useEffect(() => {
-    if (agents.length === 0 && config) {
-      // seed one demo
-      (async () => {
-        await fetch('/api/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-          name: 'Explorer Agent', model: config?.defaultGrokModel || pickDefaultModel(), description: 'Default exploration + automation agent',
-          workspace: { path: config.defaultWorkspace || '.', useWorktree: true },
+    if (!agentsReady || !hasConfig) return;
+    if (agentCount > 0) return;
+    if (seededEmptyAgentsRef.current) return;
+    seededEmptyAgentsRef.current = true;
+    let cancelled = false;
+    const cfg = config;
+    (async () => {
+      await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Explorer Agent',
+          model: cfg?.defaultGrokModel || pickDefaultModel(),
+          description: 'Default exploration + automation agent',
+          workspace: { path: cfg?.defaultWorkspace || '.', useWorktree: true },
           integrations: { ...EMPTY_INTEGRATION_SCOPE },
-          peers: [], schedule: { enabled: true, cron: '0 */2 * * *' }
-        }) });
-        await refreshAgents();
-      })();
-    }
-  }, [agents.length, config]);
+          peers: [],
+          schedule: { enabled: true, cron: '0 */2 * * *' },
+        }),
+      });
+      if (!cancelled) await refreshAgents();
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- config read once when hasConfig flips true
+  }, [agentsReady, agentCount, hasConfig]);
 
-  // Poll runs occasionally
+  // Light poll: runs list only (not full loadAll agents/config/integrations).
+  // Full loadAll was a major nav jank source every 22s; runs need fresher data.
   useEffect(() => {
-    const t = setInterval(() => { loadAll(); }, 22000);
+    const t = setInterval(async () => {
+      try {
+        const rRes = await fetch('/api/runs').then((r) => r.json());
+        if (Array.isArray(rRes.runs)) setRuns(rRes.runs);
+      } catch {
+        /* keep last runs */
+      }
+    }, 30_000);
     return () => clearInterval(t);
   }, []);
 
@@ -2452,6 +2657,12 @@ export default function ShibaStudio() {
               <Link
                 key={item.id}
                 href={linkHref}
+                prefetch={false}
+                onClick={(e) => {
+                  // Client navigate without re-bootstrapping badges/catalog.
+                  e.preventDefault();
+                  navigateToTab(item.id as AppTab);
+                }}
                 className={`nav-item ${active ? 'active' : ''} ${navCollapsed ? 'nav-item-collapsed' : ''}`}
                 title={item.label}
                 aria-label={item.label}
@@ -2799,9 +3010,10 @@ export default function ShibaStudio() {
             </div>
           )}
 
-          {/* GROK CHAT — keep mounted while voice is active so mic/TTS keep running off-tab.
-              Freeze the bound session id off-chat so pathname changes don't remount the engine. */}
-          {(tab === 'chat' || voiceAgentActive) && (
+          {/* GROK CHAT — keep mounted while voice is active or a session turn is still
+              streaming so work continues after navigating to Agents / Settings / etc.
+              Freeze the bound session id off-chat so pathname changes don't remount. */}
+          {(tab === 'chat' || voiceAgentActive || chatRunActive) && (
             <div
               className={tab === 'chat' ? undefined : 'voice-agent-chat-keepalive'}
               aria-hidden={tab !== 'chat'}
@@ -2810,10 +3022,16 @@ export default function ShibaStudio() {
               <ChatSessionsPanel
                 sessionId={(() => {
                   const fromUrl = pathToChatSessionId(pathname);
+                  // On the Chat tab the URL (or last-opened id) always wins so the
+                  // rail can switch sessions freely — never pin to a live run here.
                   if (tab === 'chat') return fromUrl || readLastChatSessionId();
                   // Off chat with live voice: pin the bound session so the panel never remounts.
                   if (voiceAgentActive) {
                     return getVoiceAgentUiState().boundSessionId || readLastChatSessionId();
+                  }
+                  // Off chat with a background turn: pin that session's panel.
+                  if (chatRunActive) {
+                    return primaryLiveChatSessionId() || readLastChatSessionId();
                   }
                   return fromUrl;
                 })()}
@@ -2835,8 +3053,10 @@ export default function ShibaStudio() {
               agents={agents}
               defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''}
               defaultChatModel={chatModel}
+              projectActiveRun={activeRun?.projectId ? activeRun : null}
+              projectLiveTrace={activeRun?.projectId ? liveTrace : []}
               onOpenProjectChat={(sessionId) => {
-                void loadNavStats();
+                // Opening a chat does not change badge counts.
                 navigateToChatSession(sessionId);
               }}
               onCreateAgentFromProject={openCreateAgentFromProject}
@@ -3450,6 +3670,12 @@ export default function ShibaStudio() {
                             {intTest.vercel.team ? ` · ${intTest.vercel.team}` : ''}
                           </span>
                         )}
+                        {integration.id === 'netlify' && intTest.netlify?.ok && (
+                          <span className="integration-card-status text-success">
+                            connected as {intTest.netlify.user}
+                            {intTest.netlify.account ? ` · ${intTest.netlify.account}` : ''}
+                          </span>
+                        )}
                       </div>
                       <span className="integration-card-chevron" aria-hidden>
                         {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -3635,6 +3861,38 @@ export default function ShibaStudio() {
                         />
                         <div className="mt-2 text-xs text-dim">
                           Default project is used when agents call deploy/list tools without a project argument. Git-linked projects redeploy the latest commit; production target promotes aliases.
+                        </div>
+                      </>
+                    )}
+                    {integration.id === 'netlify' && (
+                      <>
+                        <div className="text-xs text-dim mb-2">
+                          Create a personal access token at{' '}
+                          <a href="https://app.netlify.com/user/applications#personal-access-tokens" className="link-accent" target="_blank" rel="noreferrer">app.netlify.com/user/applications</a>
+                          . Agents can list sites, trigger deploys for git-linked sites, and set env vars when Netlify scope is enabled — a deploy path for vibe-coded projects alongside Vercel.
+                        </div>
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          type="password"
+                          placeholder="Netlify personal access token"
+                          value={intCreds.netlify?.token || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, netlify: { ...(c.netlify || {}), token: e.target.value } }))}
+                          autoComplete="off"
+                        />
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          placeholder="Account slug (optional — for team env API)"
+                          value={intCreds.netlify?.accountSlug || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, netlify: { ...(c.netlify || {}), accountSlug: e.target.value } }))}
+                        />
+                        <input
+                          className="grok-input font-mono text-xs"
+                          placeholder="Default site id or name (optional)"
+                          value={intCreds.netlify?.defaultSite || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, netlify: { ...(c.netlify || {}), defaultSite: e.target.value } }))}
+                        />
+                        <div className="mt-2 text-xs text-dim">
+                          Default site is used when agents call deploy/list tools without a site argument. Prefer git-linked sites so netlify_deploy can trigger a build after code is pushed.
                         </div>
                       </>
                     )}

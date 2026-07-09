@@ -29,6 +29,10 @@ interface ProjectsPanelProps {
   onOpenProjectChat: (sessionId: string) => void;
   /** Open the agent editor pre-filled from this project. */
   onCreateAgentFromProject: (project: Project) => void;
+  /** Active agent run scoped to the selected project (stays on Projects tab). */
+  projectActiveRun?: { id?: string; status?: string; agentName?: string; model?: string; finalOutput?: string; projectId?: string } | null;
+  /** Live execution steps for the scoped project run. */
+  projectLiveTrace?: Array<{ ts?: string; type?: string; content?: string }>;
 }
 
 export default function ProjectsPanel({
@@ -39,6 +43,8 @@ export default function ProjectsPanel({
   onStatsChange,
   onOpenProjectChat,
   onCreateAgentFromProject,
+  projectActiveRun = null,
+  projectLiveTrace = [],
 }: ProjectsPanelProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -437,6 +443,38 @@ export default function ProjectsPanel({
                   </button>
                 </div>
               </div>
+
+              {/* Scoped project run trace — stays on this page when a project-bound agent runs. */}
+              {projectActiveRun && projectActiveRun.projectId === selectedProject.id && (
+                <div className="grok-card p-3 mt-4 border border-default">
+                  <div className="flex items-center gap-2 text-xs font-semibold mb-2">
+                    <span>Project run</span>
+                    <span className={`badge ${projectActiveRun.status === 'running' ? 'badge-accent' : ''}`}>
+                      {projectActiveRun.status || 'idle'}
+                    </span>
+                    {projectActiveRun.agentName && (
+                      <span className="text-dim font-normal">{projectActiveRun.agentName}</span>
+                    )}
+                  </div>
+                  <div className="projectLiveTrace max-h-40 overflow-y-auto space-y-1 text-[11px] font-mono text-dim">
+                    {(projectLiveTrace || []).slice(-40).map((step, idx) => (
+                      <div key={`${step.ts || 't'}-${idx}`}>
+                        <span className="opacity-60">{step.type || 'step'}</span>
+                        {' '}
+                        {(step.content || '').slice(0, 200)}
+                      </div>
+                    ))}
+                    {(!projectLiveTrace || projectLiveTrace.length === 0) && (
+                      <div className="text-dim">Waiting for execution steps…</div>
+                    )}
+                  </div>
+                  {projectActiveRun.finalOutput && (
+                    <div className="text-xs mt-2 pt-2 border-t border-default">
+                      Final: {projectActiveRun.finalOutput.slice(0, 280)}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="project-action-row mt-4">
                 <button

@@ -5941,15 +5941,19 @@ body::before {
   min-width: 0;
   display: flex;
   min-height: 0;
+  /* Keep rail + main as true columns; never let main paint over the list */
+  align-items: stretch;
 }
 
-/* Main chat column: always fill remaining space — never shrink/grow with message content */
+/* Main chat column: fill leftover flex space only — do NOT set width:100% or it
+   expands to the full parent and steals clicks from the session rail. */
 .chat-sessions-main {
   flex: 1 1 0%;
   min-width: 0;
-  width: 100%;
   max-width: 100%;
   min-height: 0;
+  position: relative;
+  z-index: 0;
 }
 
 .grok-chat-panel {
@@ -5962,8 +5966,11 @@ body::before {
   display: flex;
   flex-direction: column;
   width: 240px;
-  flex-shrink: 0;
+  flex: 0 0 240px;
+  min-width: 240px;
   min-height: 0;
+  position: relative;
+  z-index: 2; /* above main so row clicks always hit the list */
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(13, 13, 13, 0.72), rgba(6, 6, 6, 0.55));
@@ -5972,6 +5979,10 @@ body::before {
 
 .chat-session-rail-collapsed {
   width: 44px;
+  flex: 0 0 44px;
+  min-width: 44px;
+  position: relative;
+  z-index: 2;
   align-items: center;
   padding: 8px 0;
   gap: 6px;
@@ -6072,6 +6083,17 @@ body::before {
 .chat-session-item-active {
   background: rgba(255, 255, 255, 0.07);
   border-color: rgba(255, 255, 255, 0.12);
+}
+
+.chat-session-item-running {
+  border-color: color-mix(in srgb, var(--accent, #7dd3fc) 35%, transparent);
+  background: color-mix(in srgb, var(--accent, #7dd3fc) 8%, transparent);
+}
+
+.chat-session-item-live {
+  color: var(--accent, #7dd3fc);
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .chat-session-item-body {

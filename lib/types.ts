@@ -11,6 +11,7 @@ export interface IntegrationScope {
   x: boolean;
   obsidian: boolean;
   vercel: boolean;
+  netlify: boolean;
 }
 
 export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
@@ -21,6 +22,7 @@ export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
   x: false,
   obsidian: false,
   vercel: false,
+  netlify: false,
 };
 
 export interface ScheduleConfig {
@@ -195,6 +197,15 @@ export interface IntegrationCreds {
     teamSlug?: string;
     /** Default project name or id for deploy tools when not specified */
     defaultProject?: string;
+  };
+  /** Netlify personal access token — deploy sites and manage env vars. */
+  netlify?: {
+    /** Personal access token from app.netlify.com/user/applications */
+    token: string;
+    /** Optional account slug (team) for account-scoped env API */
+    accountSlug?: string;
+    /** Default site id or name for deploy tools when not specified */
+    defaultSite?: string;
   };
 }
 

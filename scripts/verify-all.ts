@@ -14,10 +14,12 @@ const CHAIN = [
   'verify-theme.ts',
   'verify-page-chrome.ts',
   'verify-runtime.ts',
+  'verify-shell-state.ts',
   'verify-xai-oauth.ts',
   'verify-competitor-features.ts',
   'verify-backlog-features.ts',
   'verify-project-builder.ts',
+  'verify-netlify.ts',
 ] as const;
 
 async function main() {

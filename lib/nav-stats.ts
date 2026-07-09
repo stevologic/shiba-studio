@@ -17,6 +17,8 @@ function countConfiguredIntegrations(creds: IntegrationCreds): number {
   if (creds.discord?.token?.trim()) n++;
   if (creds.x?.accessToken?.trim() && creds.x?.apiKey?.trim()) n++;
   if (creds.obsidian?.vaultPath?.trim() || (creds.obsidian?.restApiUrl?.trim() && creds.obsidian?.restApiKey?.trim())) n++;
+  if (creds.vercel?.token?.trim()) n++;
+  if (creds.netlify?.token?.trim()) n++;
   return n;
 }
 

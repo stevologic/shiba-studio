@@ -389,6 +389,16 @@ export {
   vercelSetEnv,
 } from './vercel';
 
+export {
+  testNetlify,
+  netlifyListSites,
+  netlifyGetSite,
+  netlifyListDeploys,
+  netlifyGetDeploy,
+  netlifyDeploy,
+  netlifySetEnv,
+} from './netlify';
+
 export async function driveUploadText(name: string, content: string, allowedFolders?: string[]) {
   const auth = await driveAuth();
   if (!auth) throw new Error('Google Drive not configured');

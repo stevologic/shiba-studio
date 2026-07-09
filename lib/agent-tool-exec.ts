@@ -260,6 +260,44 @@ export async function executeAgentTool(
         });
         return { result: r, sideEffect: `set Vercel env ${r.key}` };
       }
+      case 'netlify_list_sites': {
+        const r = await Ints.netlifyListSites(args.limit ? Number(args.limit) : 20);
+        return { result: r, sideEffect: `listed ${r.length} Netlify site(s)` };
+      }
+      case 'netlify_list_deploys': {
+        const r = await Ints.netlifyListDeploys(
+          args.site ? String(args.site) : undefined,
+          args.limit ? Number(args.limit) : 10,
+        );
+        return { result: r, sideEffect: `listed ${r.length} Netlify deploy(s)` };
+      }
+      case 'netlify_get_deploy': {
+        const r = await Ints.netlifyGetDeploy(String(args.deploy_id || ''));
+        return {
+          result: r,
+          sideEffect: `Netlify deploy ${r.state || 'unknown'}${r.url ? `: ${r.url}` : ''}`,
+        };
+      }
+      case 'netlify_deploy': {
+        const r = await Ints.netlifyDeploy({
+          site: args.site ? String(args.site) : undefined,
+          clearCache: args.clear_cache === true || args.clear_cache === 'true',
+          title: args.title ? String(args.title) : undefined,
+        });
+        return {
+          result: r,
+          sideEffect: `Netlify deploy started${r.url ? `: ${r.url}` : ''}${r.state ? ` (${r.state})` : ''}`,
+        };
+      }
+      case 'netlify_set_env': {
+        const r = await Ints.netlifySetEnv({
+          site: args.site ? String(args.site) : '',
+          key: String(args.key || ''),
+          value: String(args.value ?? ''),
+          context: args.context ? String(args.context) : undefined,
+        });
+        return { result: r, sideEffect: `set Netlify env ${r.key}` };
+      }
       case 'send_to_peer': {
         postToAgentInbox(args.agentId, agent.id, args.message);
         return { result: 'message queued to peer', sideEffect: `sent message to agent ${args.agentId}` };

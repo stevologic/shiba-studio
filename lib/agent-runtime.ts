@@ -369,6 +369,85 @@ export function getToolDefinitions(
       },
     });
   }
+  if (scope.netlify) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_list_sites',
+        description: 'List Netlify sites accessible with the configured token (name, URL, git link, published deploy).',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Max sites (1-100, default 20)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_list_deploys',
+        description: 'List recent Netlify deploys for a site (or the default site on Capabilities).',
+        parameters: {
+          type: 'object',
+          properties: {
+            site: { type: 'string', description: 'Site id or name (optional if default site is set)' },
+            limit: { type: 'number', description: 'Max deploys (1-50, default 10)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_get_deploy',
+        description: 'Get status and URL for a Netlify deploy by id.',
+        parameters: {
+          type: 'object',
+          properties: {
+            deploy_id: { type: 'string', description: 'Deploy id' },
+          },
+          required: ['deploy_id'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_deploy',
+        description:
+          'Trigger a Netlify site build/deploy (git-linked sites). Prefer this to ship after code is pushed to the linked repo — same as “Trigger deploy” in the Netlify UI.',
+        parameters: {
+          type: 'object',
+          properties: {
+            site: { type: 'string', description: 'Site id or name (optional if default site is set)' },
+            clear_cache: { type: 'boolean', description: 'Clear build cache before deploy (default false)' },
+            title: { type: 'string', description: 'Optional build title / note' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_set_env',
+        description: 'Create or update a Netlify site environment variable. Use for deploy secrets and config.',
+        parameters: {
+          type: 'object',
+          properties: {
+            site: { type: 'string', description: 'Site id or name (optional if default site is set)' },
+            key: { type: 'string', description: 'Environment variable name' },
+            value: { type: 'string', description: 'Environment variable value' },
+            context: {
+              type: 'string',
+              description: 'Env context: all (default), production, deploy-preview, branch-deploy, dev',
+            },
+          },
+          required: ['key', 'value'],
+        },
+      },
+    });
+  }
   if (hasPeers) {
     tools.push({
       type: 'function',

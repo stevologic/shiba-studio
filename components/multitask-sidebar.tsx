@@ -6,6 +6,7 @@ import { toast } from '@/lib/toast';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import type { AppTab } from '@/lib/app-navigation';
 import type { Agent } from '@/lib/types';
+import { getLiveChatRun, listLiveChatSessionIds, subscribeLiveChatRuns } from '@/lib/chat-live-runs';
 
 interface MultitaskSidebarProps {
   agents: Agent[];
@@ -56,6 +57,8 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
   const [projects, setProjects] = useState(() => multitaskCache.projects);
   const [sessions, setSessions] = useState(() => multitaskCache.sessions);
   const [loaded, setLoaded] = useState(() => multitaskCache.at > 0);
+  const [liveChatIds, setLiveChatIds] = useState<string[]>(() => listLiveChatSessionIds());
+  useEffect(() => subscribeLiveChatRuns(() => setLiveChatIds(listLiveChatSessionIds())), []);
 
   const load = useCallback(async (force = false) => {
     if (!force && multitaskCache.at && Date.now() - multitaskCache.at < MULTITASK_TTL_MS) {
@@ -235,16 +238,19 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
           <div className="data-loading-row px-3 py-1"><span className="data-spinner" /> Loading…</div>
         ) : sessions.length === 0 ? (
           <div className="text-[10px] text-dim px-3 py-1">No sessions</div>
-        ) : sessions.map((s) => (
-          <QuickItem
-            key={s.id}
-            label={s.title}
-            onOpen={() => onNavigate('chat', { sessionId: s.id })}
-            onRename={() => void renameChat(s.id, s.title)}
-            onDelete={() => void deleteChat(s.id, s.title)}
-            deleteTitle="Delete chat"
-          />
-        ))}
+        ) : sessions.map((s) => {
+          const running = liveChatIds.includes(s.id) || !!getLiveChatRun(s.id)?.streaming;
+          return (
+            <QuickItem
+              key={s.id}
+              label={running ? `${s.title} · working` : s.title}
+              onOpen={() => onNavigate('chat', { sessionId: s.id })}
+              onRename={() => void renameChat(s.id, s.title)}
+              onDelete={() => void deleteChat(s.id, s.title)}
+              deleteTitle="Delete chat"
+            />
+          );
+        })}
       </div>
 
       <div>

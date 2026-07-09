@@ -42,6 +42,16 @@ import {
   VOICE_GROUP_AGENT_SILENCE_MS,
   VOICE_GROUP_MAX_CHAIN,
 } from '@/lib/voice-group-chat';
+import {
+  abortLiveChatRun,
+  beginLiveChatRun,
+  finishLiveChatRun,
+  getLiveChatRun,
+  subscribeLiveChatSession,
+  updateLiveChatRun,
+  type LiveChatUiMessage,
+} from '@/lib/chat-live-runs';
+import { getStickyChatTarget, setStickyChatTarget } from '@/lib/chat-target-store';
 import { v4 as uuidv4 } from 'uuid';
 
 const SubBrowser = dynamic(() => import('@/components/sub-browser'));
@@ -127,16 +137,37 @@ function projectMessagesToUi(messages: ProjectChatMessage[]): UiMessage[] {
     agentName: m.agentName,
     perspectives: m.perspectives,
     usage: m.usage,
-    streaming: false,
+    // Preserve in-progress assistant turns after leave/return or reload.
+    streaming: !!m.streaming,
   }));
 }
 
 function uiToProjectMessages(messages: UiMessage[]): ProjectChatMessage[] {
   return messages
-    .filter((m) => m.id !== 'welcome' && !m.streaming && m.content)
+    .filter((m) => m.id !== 'welcome' && (m.role === 'user' || m.role === 'assistant'))
+    .filter((m) => m.streaming || (m.content && m.content.trim()) || m.attachments?.length)
     .map((m) => ({
       id: m.id,
       role: m.role as 'user' | 'assistant',
+      content: m.content || '',
+      thinking: m.thinking,
+      attachments: m.attachments,
+      model: m.model,
+      agentId: m.agentId,
+      agentName: m.agentName,
+      perspectives: m.perspectives,
+      usage: m.usage,
+      streaming: !!m.streaming,
+      createdAt: new Date().toISOString(),
+    }));
+}
+
+function toLiveMessages(messages: UiMessage[]): LiveChatUiMessage[] {
+  return messages
+    .filter((m) => m.id !== 'welcome')
+    .map((m) => ({
+      id: m.id,
+      role: m.role,
       content: m.content,
       thinking: m.thinking,
       attachments: m.attachments,
@@ -145,7 +176,7 @@ function uiToProjectMessages(messages: UiMessage[]): ProjectChatMessage[] {
       agentName: m.agentName,
       perspectives: m.perspectives,
       usage: m.usage,
-      createdAt: new Date().toISOString(),
+      streaming: m.streaming,
     }));
 }
 
@@ -228,8 +259,13 @@ function sessionToInitialState(
   session: ChatSession | null | undefined,
   project: Project | null | undefined,
   agents: Agent[],
+  /** Sticky agent picker — never taken from session.chatTarget on switch. */
+  stickyTarget: ChatTarget = 'grok',
 ) {
-  const target = (session?.chatTarget || 'grok') as ChatTarget;
+  // Agent/target is sticky across chat sessions (picker + send). Session disk
+  // still records chatTarget when a turn is sent, but opening another chat
+  // must not flip the dropdown.
+  const target = stickyTarget;
   // Multi-agent mode never routes through the local CLI — clamp at the source
   // so every state-set path (init + session sync) holds the invariant.
   const useGrokCli = !!session?.useGrokCli && target !== 'all';
@@ -270,7 +306,14 @@ export default function GrokChatPanel({
   defaultWorkspace = '',
 }: GrokChatPanelProps) {
   const isSessionMode = !!session && !onProjectUpdated;
-  const init = sessionToInitialState(session, project, agents);
+  // Sticky agent for session chats — survives remount when switching sessions.
+  // Project/direct mode still uses local init only.
+  const init = sessionToInitialState(
+    session,
+    project,
+    agents,
+    isSessionMode ? (getStickyChatTarget() as ChatTarget) : ((session?.chatTarget || 'grok') as ChatTarget),
+  );
   const [chatTarget, setChatTarget] = useState<ChatTarget>(init.target);
   const [messages, setMessages] = useState<UiMessage[]>(init.messages);
   // Drafts survive tab switches and reloads (C6). Scoped per session/project;
@@ -1608,11 +1651,40 @@ export default function GrokChatPanel({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [input]);
 
-  // Cancel any in-flight stream when this panel unmounts (e.g. session switch).
+  // Non-session (project / direct) streams die with the panel. Session turns
+  // keep running in the live-run registry so you can leave Chat and come back.
   useEffect(() => {
     const ref = abortRef;
-    return () => ref.current?.abort();
-  }, []);
+    const sessionId = session?.id;
+    return () => {
+      if (sessionId && getLiveChatRun(sessionId)?.streaming) return;
+      ref.current?.abort();
+    };
+  }, [session?.id]);
+
+  // Reattach to a background session turn (or hydrate live messages) when this
+  // panel mounts / the session key changes.
+  useEffect(() => {
+    if (!session?.id) return;
+    const sid = session.id;
+    const applyLive = () => {
+      const live = getLiveChatRun(sid);
+      if (!live) return;
+      const ui = live.messages.map((m) => ({ ...m, streaming: !!m.streaming })) as UiMessage[];
+      setMessages(ui);
+      messagesRef.current = ui;
+      setStreaming(live.streaming);
+      if (live.streaming) {
+        abortRef.current = live.abort;
+        const last = ui[ui.length - 1];
+        if (last?.streaming) {
+          setExpandedThinking((prev) => ({ ...prev, [last.id]: true }));
+        }
+      }
+    };
+    applyLive();
+    return subscribeLiveChatSession(sid, applyLive);
+  }, [session?.id]);
 
   // Keep the composer ready to type — on mount and whenever a stream finishes.
   useEffect(() => {
@@ -1673,22 +1745,51 @@ export default function GrokChatPanel({
     toast.success('Chat exported as Markdown');
   }
 
-  // Resync from the stored session only when the session itself actually changes.
-  // Guarded by a key so unrelated re-renders (e.g. the 22s agents poll upstream
-  // producing a new array identity) can never clobber an in-progress conversation.
+  // Resync messages from disk when the session snapshot changes.
+  // Never re-apply chatTarget/agent from the session — sticky picker owns that.
+  // Live background turns win over disk snapshots until they finish.
   const sessionSyncKeyRef = useRef<string | null>(session ? `${session.id}:${session.updatedAt}` : null);
+  const sessionIdOnlyRef = useRef<string | null>(session?.id ?? null);
   useEffect(() => {
     if (!session || streaming) return;
+    if (getLiveChatRun(session.id)?.streaming) return;
     const syncKey = `${session.id}:${session.updatedAt}`;
     if (sessionSyncKeyRef.current === syncKey) return;
     sessionSyncKeyRef.current = syncKey;
-    const next = sessionToInitialState(session, project, agents);
-    setChatTarget(next.target);
+
+    const sessionIdChanged = sessionIdOnlyRef.current !== session.id;
+    sessionIdOnlyRef.current = session.id;
+
+    // Keep the sticky agent; only session-local prefs rehydrate on switch.
+    const next = sessionToInitialState(
+      session,
+      project,
+      agents,
+      getStickyChatTarget() as ChatTarget,
+    );
+    if (sessionIdChanged) {
+      // Workspace / reasoning / CLI are per-session; agent picker is not.
+      setUseGrokCli(next.useGrokCli);
+      setReasoningEffort(next.reasoningEffort);
+      setWorkspaceDir(next.workspaceDir);
+      // Re-bind local state to sticky on remount paths (key=session.id).
+      setChatTarget(next.target);
+    }
     setMessages(next.messages);
-    setUseGrokCli(next.useGrokCli);
-    setReasoningEffort(next.reasoningEffort);
-    setWorkspaceDir(next.workspaceDir);
     setExpandedThinking({});
+    // Disk said a turn was still running but nothing is live (reload mid-turn).
+    if (session.running || next.messages.some((m) => m.streaming)) {
+      setMessages((msgs) =>
+        msgs.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+      );
+      // Quiet patch — must not cascade into nav-stats / full-list reloads.
+      void patchSession({
+        running: false,
+        messages: uiToProjectMessages(
+          next.messages.map((m) => ({ ...m, streaming: false })),
+        ),
+      }, { notify: false });
+    }
   }, [session, project, agents, streaming]);
 
   // Same guard for non-session (direct / project) mode: only reset when the
@@ -1703,7 +1804,7 @@ export default function GrokChatPanel({
     setExpandedThinking({});
   }, [chatTarget, project, session, agents, streaming]);
 
-  async function patchSession(patch: Record<string, unknown>) {
+  async function patchSession(patch: Record<string, unknown>, opts?: { notify?: boolean }) {
     if (!session) return;
     try {
       await fetch('/api/chat-sessions', {
@@ -1711,24 +1812,34 @@ export default function GrokChatPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update', id: session.id, patch }),
       });
-      onSessionUpdated?.();
+      // Default: refresh this session row only. Callers that don't need a
+      // rail refresh (e.g. clearing a stale running flag) can pass notify:false.
+      if (opts?.notify !== false) onSessionUpdated?.();
     } catch {
       /* ignore */
     }
   }
 
-  async function persistSessionMessages(msgs: UiMessage[]) {
+  async function persistSessionMessages(msgs: UiMessage[], opts?: { running?: boolean }) {
     if (!session) return;
     const saved = uiToProjectMessages(msgs);
     const wasUntitled = !session.title || session.title === 'New chat';
+    const running = opts?.running ?? saved.some((m) => m.streaming);
     await patchSession({
       messages: saved,
+      running,
       title: deriveSessionTitle(saved, session.title),
     });
     // First exchange of a fresh chat → have a low-end model write a real
     // title (server picks a fast/cheap model; falls back to the default).
+    // Background turns also auto-title via finishLiveChatRun.
     const userCount = saved.filter((m) => m.role === 'user').length;
-    if (wasUntitled && userCount === 1 && saved.some((m) => m.role === 'assistant')) {
+    if (
+      wasUntitled
+      && userCount === 1
+      && saved.some((m) => m.role === 'assistant' && !m.streaming)
+      && !getLiveChatRun(session.id)?.streaming
+    ) {
       try {
         await fetch('/api/chat-sessions', {
           method: 'POST',
@@ -1742,10 +1853,47 @@ export default function GrokChatPanel({
     }
   }
 
+  /**
+   * Synchronous message updates for stream deltas. Uses the live-run snapshot
+   * (or messagesRef) as source of truth so chunks stay ordered under React
+   * batching and keep applying after this panel unmounts.
+   */
+  function mapMessages(updater: (msgs: UiMessage[]) => UiMessage[], opts?: { streaming?: boolean; persist?: boolean }) {
+    const live = session?.id ? getLiveChatRun(session.id) : undefined;
+    const current: UiMessage[] = live?.messages?.length
+      ? (live.messages as UiMessage[])
+      : (messagesRef.current.length ? messagesRef.current : []);
+    const next = updater(current);
+    messagesRef.current = next.filter((m) => m.id !== 'welcome');
+    if (session?.id && (getLiveChatRun(session.id) || opts?.streaming)) {
+      updateLiveChatRun(session.id, toLiveMessages(next), {
+        streaming: opts?.streaming,
+        persist: opts?.persist,
+      });
+    }
+    setMessages(next);
+  }
+
+  /**
+   * User explicitly picked Grok / an agent / All in the chat chrome.
+   * Updates the sticky global picker immediately; session.chatTarget is only
+   * written when a turn is actually sent.
+   */
   function updateChatTarget(next: ChatTarget) {
     setChatTarget(next);
+    if (isSessionMode) setStickyChatTarget(next);
     if (next === 'all') setUseGrokCli(false);
-    if (isSessionMode) void patchSession({ chatTarget: next });
+    // Seed TTS voice only on explicit agent pick (not on session select/remount).
+    if (next !== 'grok' && next !== 'all') {
+      const agent = agents.find((a) => a.id === next);
+      const voice = agent?.voiceId?.trim().toLowerCase() || '';
+      if (voice) {
+        setTtsVoice(voice);
+        ttsVoiceRef.current = voice;
+        speakVoiceRef.current = voice;
+        try { window.localStorage.setItem('shiba-tts-voice', voice); } catch { /* private mode */ }
+      }
+    }
   }
 
   function updateReasoningEffort(next: ReasoningEffort) {
@@ -1818,27 +1966,12 @@ export default function GrokChatPanel({
     ? agents.find((a) => a.id === chatTarget)
     : undefined;
 
-  /** Agent's configured default (if any) — chat dropdown can still override it. */
+  /** Agent's configured default (if any) — applied only when user picks the agent. */
   const agentDefaultVoiceId = selectedAgent?.voiceId?.trim().toLowerCase() || '';
-  // Chat picker is always the live choice; agent default only seeds on switch.
+  // Chat picker is always the live choice; agent default is not auto-applied on chat select.
   const effectiveTtsVoice = ttsVoice;
   const effectiveVoiceLabel =
     ttsVoices.find((v) => v.id === effectiveTtsVoice)?.name || effectiveTtsVoice;
-
-  // When switching to an agent that has a default voice, apply it once.
-  // User can still change the dropdown anytime afterward.
-  const lastVoiceSeedTargetRef = useRef<string | null>(null);
-  useEffect(() => {
-    const targetKey = selectedAgent?.id || chatTarget;
-    if (lastVoiceSeedTargetRef.current === targetKey) return;
-    lastVoiceSeedTargetRef.current = targetKey;
-    if (agentDefaultVoiceId) {
-      setTtsVoice(agentDefaultVoiceId);
-      ttsVoiceRef.current = agentDefaultVoiceId;
-      speakVoiceRef.current = agentDefaultVoiceId;
-      try { window.localStorage.setItem('shiba-tts-voice', agentDefaultVoiceId); } catch { /* private mode */ }
-    }
-  }, [selectedAgent?.id, chatTarget, agentDefaultVoiceId]);
 
   useEffect(() => {
     speakVoiceRef.current = effectiveTtsVoice;
@@ -2037,26 +2170,29 @@ export default function GrokChatPanel({
           }
 
           if (event.type === 'thinking' && event.delta) {
-            setMessages((msgs) =>
+            mapMessages((msgs) =>
               msgs.map((m) =>
                 m.id === assistantId ? { ...m, thinking: (m.thinking || '') + event.delta } : m,
               ),
+              { streaming: true },
             );
           } else if (event.type === 'agent-perspective' && event.agentId && event.name && event.content) {
             const perspective = { agentId: event.agentId, name: event.name, content: event.content };
             onPerspective?.(perspective);
-            setMessages((msgs) =>
+            mapMessages((msgs) =>
               msgs.map((m) =>
                 m.id === assistantId
                   ? { ...m, perspectives: [...(m.perspectives || []), perspective] }
                   : m,
               ),
+              { streaming: true },
             );
           } else if (event.type === 'content' && event.delta) {
-            setMessages((msgs) =>
+            mapMessages((msgs) =>
               msgs.map((m) =>
                 m.id === assistantId ? { ...m, content: m.content + event.delta } : m,
               ),
+              { streaming: true },
             );
             // Voice agent: start TTS on the first complete sentence while still streaming.
             if (autoSpeakRef.current) onVoiceStreamDelta(assistantId, event.delta);
@@ -2066,31 +2202,35 @@ export default function GrokChatPanel({
             const completionTokens = Number(u.completion_tokens ?? u.output_tokens ?? 0) || 0;
             const totalTokens = Number(u.total_tokens ?? promptTokens + completionTokens) || 0;
             if (totalTokens > 0) {
-              setMessages((msgs) =>
+              mapMessages((msgs) =>
                 msgs.map((m) =>
                   m.id === assistantId ? { ...m, usage: { promptTokens, completionTokens, totalTokens } } : m,
                 ),
+                { streaming: true, persist: false },
               );
             }
           } else if (event.type === 'error') {
             throw new Error(event.message || 'Stream error');
           } else if (event.type === 'done' && event.model) {
-            setMessages((msgs) =>
+            mapMessages((msgs) =>
               msgs.map((m) =>
                 m.id === assistantId ? { ...m, model: event.model, streaming: false } : m,
               ),
+              { streaming: true },
             );
           }
         }
       }
     }
 
-    setMessages((msgs) =>
-      msgs.map((m) => (m.id === assistantId ? { ...m, streaming: false } : m)),
+    mapMessages(
+      (msgs) => msgs.map((m) => (m.id === assistantId ? { ...m, streaming: false } : m)),
+      { streaming: false },
     );
   }
 
   function stopStreaming() {
+    if (session?.id) abortLiveChatRun(session.id);
     abortRef.current?.abort();
   }
 
@@ -2273,9 +2413,32 @@ export default function GrokChatPanel({
       perspectives: chatTarget === 'all' ? [] : undefined,
     };
 
-    setMessages([...history, assistantPlaceholder]);
+    const turnMessages = [...history, assistantPlaceholder];
+    messagesRef.current = turnMessages.filter((m) => m.id !== 'welcome');
+    setMessages(turnMessages);
     setStreaming(true);
     setExpandedThinking((prev) => ({ ...prev, [assistantId]: true }));
+
+    // Persist the agent/target binding only when a turn is actually used — not
+    // when browsing sessions or flipping the dropdown alone. Skip onSessionUpdated
+    // here so we don't re-hydrate the panel mid-send (finish path refreshes later).
+    if (isSessionMode && session) {
+      void fetch('/api/chat-sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update',
+          id: session.id,
+          patch: {
+            chatTarget,
+            useGrokCli,
+            cliModel: useCli ? (cliModel || cliDefaultModel || undefined) : undefined,
+            chatModel: useModel,
+          },
+        }),
+      }).catch(() => { /* ignore */ });
+    }
+
     // Voice mode: reset progressive TTS so we can speak mid-stream.
     // Keep (or reopen) the mic so the user can interrupt by speaking.
     if (autoSpeakRef.current) {
@@ -2293,8 +2456,15 @@ export default function GrokChatPanel({
       }
     }
 
-    abortRef.current?.abort();
-    const ac = new AbortController();
+    // Session turns: register a background live-run so leave/return keeps the
+    // stream alive. Non-session turns still abort with the panel.
+    let ac: AbortController;
+    if (isSessionMode && session) {
+      ac = beginLiveChatRun(session.id, toLiveMessages(turnMessages));
+    } else {
+      abortRef.current?.abort();
+      ac = new AbortController();
+    }
     abortRef.current = ac;
 
     const payloadMessages = history.map((m) => ({
@@ -2304,6 +2474,7 @@ export default function GrokChatPanel({
       thinking: m.thinking,
     }));
 
+    let turnError: string | undefined;
     try {
       const endpoint = useCli
         ? '/api/grok-cli/stream'
@@ -2351,26 +2522,32 @@ export default function GrokChatPanel({
     } catch (e: unknown) {
       const aborted = e instanceof Error && e.name === 'AbortError';
       const msg = e instanceof Error ? e.message : 'Request failed';
-      setMessages((msgs) =>
-        msgs.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: aborted ? m.content : m.content || `Error: ${msg}`,
-                streaming: false,
-              }
-            : m,
-        ),
+      if (!aborted) turnError = msg;
+      mapMessages(
+        (msgs) =>
+          msgs.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content: aborted ? m.content : m.content || `Error: ${msg}`,
+                  streaming: false,
+                }
+              : m,
+          ),
+        { streaming: false },
       );
     }
 
     setStreaming(false);
     setExpandedThinking((prev) => ({ ...prev, [assistantId]: false }));
-    if (isSessionMode) {
-      setMessages((msgs) => {
-        void persistSessionMessages(msgs);
-        return msgs;
-      });
+
+    const finalMsgs = (session?.id && getLiveChatRun(session.id)?.messages?.length)
+      ? (getLiveChatRun(session.id)!.messages as UiMessage[])
+      : messagesRef.current;
+
+    if (isSessionMode && session) {
+      await finishLiveChatRun(session.id, toLiveMessages(finalMsgs), { error: turnError });
+      onSessionUpdated?.();
     } else if (project) {
       setMessages((msgs) => {
         void persistProjectChat(msgs);
@@ -2596,7 +2773,8 @@ export default function GrokChatPanel({
   async function sendChat() {
     // Prefer live composer ref so voice auto-send isn't racing a stale state close.
     const text = (inputRef.current || input).trim();
-    if ((!text && pendingAttachments.length === 0) || streaming) {
+    const liveBusy = !!(session?.id && getLiveChatRun(session.id)?.streaming);
+    if ((!text && pendingAttachments.length === 0) || streaming || liveBusy) {
       sendingFromVoiceRef.current = false;
       return;
     }

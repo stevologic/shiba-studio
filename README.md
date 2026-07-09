@@ -8,7 +8,8 @@
 
 Build, orchestrate, and schedule AI agents with full computer use — chat, code, browse, annotate, and automate, all from a beautiful space-themed cockpit that never leaves your machine.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-white.svg?style=flat-square&labelColor=000)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-white.svg?style=flat-square&labelColor=000)](LICENSE-AGPL-3.0)
+[![Commercial available](https://img.shields.io/badge/Commercial-available-white.svg?style=flat-square&labelColor=000)](LICENSE-COMMERCIAL.md)
 [![Node ≥ 22.5](https://img.shields.io/badge/Node-%E2%89%A5%2022.5-white.svg?style=flat-square&labelColor=000)](docs/getting-started.md)
 [![Platforms](https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-supported-white.svg?style=flat-square&labelColor=000)](docs/getting-started.md)
 [![Website](https://img.shields.io/badge/site-shiba--studio.io-white.svg?style=flat-square&labelColor=000)](http://shiba-studio.io)
@@ -33,7 +34,7 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, peers, and schedules. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Automations** — cron-scheduled agent runs with live execution traces, per-schedule run logs, and headless operation (schedules fire as long as the server is up — no browser required).
 - **Annotation sub-browser** — load the web app *you're* building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot straight into chat for code refinement.
-- **Capabilities** — GitHub, Slack, Google Drive, Discord, X, and Obsidian integrations; custom skills; MCP servers; and a live catalog of 30+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, …).
+- **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, and Netlify integrations; custom skills; MCP servers; and a live catalog of 30+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, deploys, …).
 - **Everything local** — credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, zero telemetry.
 
 All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAuth 2.0 with X, the local Grok CLI, or any OpenAI-compatible local model server (LM Studio, Ollama, llama.cpp).
@@ -113,4 +114,9 @@ All credentials (xAI API key, OAuth tokens, integration secrets) are **encrypted
 
 ## License
 
-[MIT](LICENSE) — free to use, fork, and ship. Much freedom. Very open source.
+**Dual licensed:**
+
+- **[AGPL-3.0-or-later](LICENSE-AGPL-3.0)** — open source; if you run a modified version as a network service, you must offer source to users.
+- **[Commercial](LICENSE-COMMERCIAL.md)** — for closed-source / SaaS use without AGPL obligations (contact the copyright holder).
+
+See [LICENSE](LICENSE) for the dual-license notice.

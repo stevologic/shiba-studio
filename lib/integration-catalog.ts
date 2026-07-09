@@ -1,6 +1,6 @@
 /** UI catalog for Shiba Studio integrations. */
 
-export type IntegrationId = 'github' | 'slack' | 'googledrive' | 'discord' | 'x' | 'obsidian' | 'vercel';
+export type IntegrationId = 'github' | 'slack' | 'googledrive' | 'discord' | 'x' | 'obsidian' | 'vercel' | 'netlify';
 
 export interface IntegrationMeta {
   id: IntegrationId;
@@ -89,6 +89,16 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     docsUrl: 'https://vercel.com/docs/rest-api',
     setupUrl: 'https://vercel.com/account/tokens',
     docsLabel: 'Vercel REST API',
+  },
+  {
+    id: 'netlify',
+    label: 'Netlify',
+    shortLabel: 'Netlify',
+    icon: '/integrations/netlify.svg',
+    description: 'Deploy sites, list deploys, and manage env vars',
+    docsUrl: 'https://docs.netlify.com/api/get-started/',
+    setupUrl: 'https://app.netlify.com/user/applications#personal-access-tokens',
+    docsLabel: 'Netlify API',
   },
 ];
 

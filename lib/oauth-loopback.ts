@@ -56,9 +56,10 @@ export function buildHandbackHtml(
       var ok = ${ok ? 'true' : 'false'};
       var target = ${JSON.stringify(target)};
       var appOrigin = ${JSON.stringify(appOrigin)};
-      var channel = ${JSON.stringify(channel)};
+      // Full message type is baked in so openers and tests can assert the contract.
+      var messageType = ${JSON.stringify(ok ? `${channel}:connected` : `${channel}:error`)};
       if (window.opener && !window.opener.closed) {
-        try { window.opener.postMessage(channel + (ok ? ':connected' : ':error'), appOrigin); } catch (e) {}
+        try { window.opener.postMessage(messageType, appOrigin); } catch (e) {}
         setTimeout(function () { window.close(); }, ok ? 1400 : 5000);
       } else {
         setTimeout(function () { window.location.replace(target); }, ok ? 900 : 2600);

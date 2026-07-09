@@ -5,13 +5,17 @@
  */
 
 import type { IntegrationCreds } from './types';
+// Lazy runtime import avoids circular init with integrations.ts re-exports.
+import { getIntegrationCreds } from './integrations';
 
 const VERCEL_API = 'https://api.vercel.com';
 
 export type VercelCreds = NonNullable<IntegrationCreds['vercel']>;
 
 function getCreds(from?: IntegrationCreds): VercelCreds | null {
-  const c = from?.vercel;
+  // Prefer explicit creds (Test Connection / one-off), else the in-memory
+  // store populated by agent runs and the integrations API.
+  const c = from?.vercel ?? getIntegrationCreds().vercel;
   if (!c?.token?.trim()) return null;
   return {
     token: c.token.trim(),

@@ -1,21 +1,42 @@
-MIT License
+Shiba Studio dual license
+=========================
 
-Copyright (c) 2026 Stephen M Abbott (stevologic)
+Copyright (c) 2025–2026 Stephen M Abbott (stevologic)
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software is available under **two** licensing options. You may choose
+**one** of them for your use of the software.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1. AGPL-3.0 (open source)
+-------------------------
+
+You may use, modify, and distribute this software under the terms of the
+**GNU Affero General Public License v3.0 or later** (AGPL-3.0-or-later).
+
+The full text is in **LICENSE-AGPL-3.0**.
+
+Under the AGPL, if you run a modified version of this software as a network
+service that users interact with remotely, you must offer those users the
+corresponding source code of your version under AGPL-3.0 (or later).
+
+
+2. Commercial license
+---------------------
+
+If you want to use Shiba Studio **without** AGPL obligations (for example in a
+closed-source product, SaaS, or internal deployment where you cannot or prefer
+not to share source), you may obtain a separate **commercial license** from
+the copyright holder.
+
+Terms for commercial use are summarized in **LICENSE-COMMERCIAL.md**. Contact
+the copyright holder to purchase or negotiate a commercial agreement.
+
+Until a commercial agreement is in force, the AGPL-3.0-or-later terms apply.
+
+
+Third-party code
+----------------
+
+Dependencies under `node_modules/` and other third-party packages retain their
+own licenses. This dual-license notice applies to the Shiba Studio project
+source as published by stevologic, not to third-party dependencies.

@@ -1,21 +1,14 @@
-MIT License
+# License
 
-Copyright (c) 2025 stevologic
+**Copyright (c) 2025–2026 Stephen M Abbott (stevologic)**
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Shiba Studio is dual-licensed:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+| Option | File | Use when |
+| --- | --- | --- |
+| **AGPL-3.0-or-later** | [LICENSE-AGPL-3.0](LICENSE-AGPL-3.0) | Open source / copyleft; network use requires offering source |
+| **Commercial** | [LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md) | Closed source / SaaS without AGPL obligations (paid agreement) |
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+See **[LICENSE](LICENSE)** for the dual-license notice and how to choose.
+
+Until a commercial agreement is in force, **AGPL-3.0-or-later** applies.
