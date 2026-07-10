@@ -2,6 +2,8 @@
 
 Grok Chat is a working surface, not just a conversation: it streams reasoning, renders rich markdown, accepts images and files, and can act on your repo, your vault, and the web through slash commands.
 
+<img src="images/chat.png" alt="Grok Chat: session rail, streaming reasoning, slash-command composer, and the annotation sub-browser" width="880" />
+
 ## Sessions
 
 - Chats live in the **collapsible session rail** on the left — searchable, archivable, and scalable to hundreds of sessions. Each session keeps its own model, chat target, reasoning effort, and full history.

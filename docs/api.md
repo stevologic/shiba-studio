@@ -9,6 +9,8 @@ runs, saving config — is a call you can make yourself.
 > requests against your instance and shows the responses. (It must be served
 > from the app's own origin — see Access & security below.)
 
+<img src="images/api-docs.png" alt="API Explorer at /api-docs: endpoints grouped by concern with GET/POST badges and a live request/response panel" width="880" />
+
 ## Access & security
 
 - **Base URL:** `http://127.0.0.1:3000` (whatever host/port you run on).

@@ -2,6 +2,8 @@
 
 The Capabilities page is everything your agents can reach: core integrations, skills, MCP servers, and the built-in tool catalog. The in-app catalog is sourced live from the runtime — what you see is exactly what agents can call.
 
+<img src="images/capabilities.png" alt="Capabilities: core integrations (GitHub, Slack, Drive, Discord, X, Obsidian, Vercel, Netlify), skills, MCP servers, and the tool catalog" width="880" />
+
 ## Core integrations
 
 Provide credentials once; agents with the matching scope can call the service during runs, and scoped context is injected into their prompts.

@@ -1,5 +1,7 @@
 # Configuration
 
+<img src="images/settings.png" alt="Settings: model sources, agent behavior, cost & safety guardrails, and backup & restore" width="880" />
+
 ## Settings reference
 
 Settings is a card grid; each card maps to a concern:

@@ -13,30 +13,23 @@ const outDir = path.join(root, 'docs', 'images');
 const base = process.env.BASE_URL || 'http://localhost:3000';
 
 const shots = [
-  {
-    file: 'dashboard.png',
-    path: '/',
-    alt: 'Dashboard',
-    waitMs: 2500,
-  },
-  {
-    file: 'chat.png',
-    path: '/chat',
-    alt: 'Grok Chat',
-    waitMs: 3500,
-  },
-  {
-    file: 'automations.png',
-    path: '/automations',
-    alt: 'Automations',
-    waitMs: 3000,
-  },
+  { file: 'dashboard.png', path: '/', alt: 'Dashboard', waitMs: 2500 },
+  { file: 'chat.png', path: '/chat', alt: 'Grok Chat', waitMs: 3500 },
+  { file: 'agents.png', path: '/agents', alt: 'Agents', waitMs: 3000 },
+  { file: 'automations.png', path: '/automations', alt: 'Automations', waitMs: 3000 },
+  { file: 'capabilities.png', path: '/integrations', alt: 'Capabilities', waitMs: 3000 },
+  { file: 'projects.png', path: '/projects', alt: 'Projects', waitMs: 2500 },
+  { file: 'workspace.png', path: '/workspace', alt: 'Workspace', waitMs: 2500 },
+  { file: 'usage.png', path: '/usage', alt: 'Usage', waitMs: 3000 },
+  { file: 'logs.png', path: '/logs', alt: 'Logs', waitMs: 3000 },
+  { file: 'settings.png', path: '/settings', alt: 'Settings', waitMs: 3000 },
+  { file: 'api-docs.png', path: '/api-docs', alt: 'API Explorer', waitMs: 2500 },
 ];
 
 async function waitReady(page) {
   await page.waitForFunction(() => {
     const t = document.body?.innerText || '';
-    return t.includes('Shiba Studio') || t.includes('Grok Chat') || t.includes('Dashboard');
+    return t.includes('Shiba Studio') || t.includes('Grok Chat') || t.includes('Dashboard') || t.includes('API Explorer');
   }, { timeout: 60000 }).catch(() => {});
 }
 

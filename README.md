@@ -46,6 +46,16 @@ All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAut
 | <img src="docs/images/dashboard.png" alt="Dashboard: hero, readiness badges, quick stats, and recent agent runs with statuses and view-answer links" /> | <img src="docs/images/automations.png" alt="Automations: scheduled agents with Active/Paused states, per-schedule Run/Edit/Delete, and compact run-log icon" /> |
 | Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Cron-scheduled agents with compact run-log access — they keep firing headless as long as the server is up. |
 
+| Agents | Capabilities |
+| :---: | :---: |
+| <img src="docs/images/agents.png" alt="Agents page: local and cloud Grok agents with models, workspaces, integration scopes, skills, and schedule state" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations (GitHub, Slack, Drive, Discord, X, Obsidian, Vercel, Netlify), skills, MCP servers, and the built-in tool catalog" /> |
+| Local and cloud agents with their own model, workspace, worktree, integration scopes, skills, and schedules. | Every integration, skill, MCP server, and built-in tool your agents can reach — sourced live from the runtime. |
+
+| Interactive API explorer | Settings |
+| :---: | :---: |
+| <img src="docs/images/api-docs.png" alt="API Explorer at /api-docs: grouped endpoints with GET/POST badges and a live request/response panel" /> | <img src="docs/images/settings.png" alt="Settings: model sources, agent behavior, cost and safety guardrails, backup and restore" /> |
+| Send real same-origin requests against your instance from `/api-docs` — GET is safe, POST warns first. | Model sources, ask-before-act default, cost & safety guardrails, and one-file backup/restore. |
+
 ## Quick start
 
 ```bash

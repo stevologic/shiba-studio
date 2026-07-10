@@ -2,6 +2,8 @@
 
 The Automations page is where everything that *runs* lives: schedules, live execution traces, and per-schedule run logs.
 
+<img src="images/automations.png" alt="Automations: scheduled agents with Active/Paused states, per-schedule Run/Edit/Delete, and run-log access" width="880" />
+
 ## Schedules
 
 Each agent can have multiple schedule entries, each with:

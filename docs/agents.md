@@ -2,6 +2,8 @@
 
 Agents are autonomous Grok workers with their own model, workspace, capabilities, and schedules. The **Agents page** is where you view, create, and edit them; running and traces live on **[Automations](automations.md)**.
 
+<img src="images/agents.png" alt="Agents page: local and cloud Grok agents with models, workspaces, integration scopes, skills, and schedule state" width="880" />
+
 ## Local vs cloud agents
 
 | | Local agent | Cloud agent |
