@@ -117,8 +117,8 @@ export async function syncUploadToCloud(): Promise<{
       if (idx >= 0) state.files[idx] = entry;
       else state.files.push(entry);
       uploaded.push(file.name);
-    } catch (e: any) {
-      errors.push(`${file.name}: ${e.message}`);
+    } catch (e) {
+      errors.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -190,8 +190,8 @@ export async function syncDownloadFromCloud(): Promise<{
       if (idx >= 0) state.files[idx] = entry;
       else state.files.push(entry);
       downloaded.push(name);
-    } catch (e: any) {
-      errors.push(`${name}: ${e.message}`);
+    } catch (e) {
+      errors.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

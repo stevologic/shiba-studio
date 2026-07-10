@@ -12,7 +12,11 @@ export async function GET() {
   const safe = {
     ...cfg,
     xaiApiKey: cfg.xaiApiKey ? (cfg.xaiApiKey.slice(0, 6) + '…' + cfg.xaiApiKey.slice(-4)) : '',
+    xaiManagementKey: cfg.xaiManagementKey
+      ? (cfg.xaiManagementKey.slice(0, 6) + '…' + cfg.xaiManagementKey.slice(-4))
+      : '',
     hasKey: !!cfg.xaiApiKey,
+    hasManagementKey: !!cfg.xaiManagementKey?.trim(),
     hasOAuth: oauth.connected,
     hasCloudAuth: auth.hasCloudAuth,
     cloudAuthMode: (cfg.cloudAuthMode || 'api_key') as CloudAuthMode,
@@ -29,10 +33,17 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const changedKeys = [
-    'xaiApiKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel', 'localGrokEnabled',
-    'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode', 'globalInstructions', 'useAgentsMd',
-    'usageBudgetUsd',
+  // Action requests (testLocalGrok, testManagementKey) are read-only probes —
+  // they carry config keys (e.g. localGrokBaseUrl) but never write, so they
+  // must not audit as "settings updated" (they used to spam the log on every
+  // page load via the silent local-models probe).
+  const changedKeys = body.action ? [] : [
+    'xaiApiKey', 'xaiManagementKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel',
+    'defaultTtsVoice', 'defaultTtsSpeed',
+    'localGrokEnabled', 'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode',
+    'disabledTools', 'globalInstructions', 'useAgentsMd', 'usageBudgetUsd',
+    'dailyBudgetUsd', 'budgetHardStop', 'maxConcurrentRuns', 'perRunTokenCap',
+    'runRetentionDays', 'auditRetentionDays',
   ].filter((k) => body[k] !== undefined);
   if (changedKeys.length) {
     const { audit } = await import('@/lib/audit-log');
@@ -42,6 +53,21 @@ export async function POST(req: NextRequest) {
     const cfg = await saveConfig({ xaiApiKey: body.xaiApiKey });
     const auth = await resolveCloudBearer(cfg);
     return NextResponse.json({ ok: true, hasKey: !!cfg.xaiApiKey, hasCloudAuth: auth.hasCloudAuth });
+  }
+  if (body.xaiManagementKey !== undefined) {
+    const cfg = await saveConfig({ xaiManagementKey: String(body.xaiManagementKey || '') });
+    try {
+      const { clearXaiUsageCache } = await import('@/lib/xai-billing-usage');
+      clearXaiUsageCache();
+    } catch { /* */ }
+    try {
+      const { clearNavUsageCostCache } = await import('@/lib/nav-stats');
+      clearNavUsageCostCache();
+    } catch { /* */ }
+    return NextResponse.json({
+      ok: true,
+      hasManagementKey: !!cfg.xaiManagementKey?.trim(),
+    });
   }
   if (body.cloudAuthMode === 'api_key' || body.cloudAuthMode === 'oauth') {
     const cfg = await saveConfig({ cloudAuthMode: body.cloudAuthMode });
@@ -60,10 +86,58 @@ export async function POST(req: NextRequest) {
     const cfg = await saveConfig({ defaultGrokModel: String(body.defaultGrokModel || '') });
     return NextResponse.json({ ok: true, defaultGrokModel: cfg.defaultGrokModel });
   }
-  if (body.usageBudgetUsd !== undefined) {
-    const budget = Math.max(0, Number(body.usageBudgetUsd) || 0);
-    const cfg = await saveConfig({ usageBudgetUsd: budget });
-    return NextResponse.json({ ok: true, usageBudgetUsd: cfg.usageBudgetUsd });
+  if (body.defaultTtsVoice !== undefined || body.defaultTtsSpeed !== undefined) {
+    const partial: { defaultTtsVoice?: string; defaultTtsSpeed?: number } = {};
+    if (body.defaultTtsVoice !== undefined) {
+      partial.defaultTtsVoice = String(body.defaultTtsVoice || '').trim().toLowerCase() || '';
+    }
+    if (body.defaultTtsSpeed !== undefined) {
+      const n = Number(body.defaultTtsSpeed);
+      // Clamp to xAI TTS range without importing client-only helpers here.
+      partial.defaultTtsSpeed = Number.isFinite(n)
+        ? Math.min(1.5, Math.max(0.7, Math.round(n * 100) / 100))
+        : 1;
+    }
+    const cfg = await saveConfig(partial);
+    return NextResponse.json({
+      ok: true,
+      defaultTtsVoice: cfg.defaultTtsVoice || '',
+      defaultTtsSpeed: cfg.defaultTtsSpeed ?? 1,
+    });
+  }
+  // Cost & safety guardrails + retention — saved as one group so the Settings
+  // card can submit them together (each field remains individually optional).
+  if (
+    body.usageBudgetUsd !== undefined
+    || body.dailyBudgetUsd !== undefined
+    || body.budgetHardStop !== undefined
+    || body.maxConcurrentRuns !== undefined
+    || body.perRunTokenCap !== undefined
+    || body.runRetentionDays !== undefined
+    || body.auditRetentionDays !== undefined
+  ) {
+    const nonNeg = (v: unknown) => Math.max(0, Number(v) || 0);
+    const cfg = await saveConfig({
+      ...(body.usageBudgetUsd !== undefined ? { usageBudgetUsd: nonNeg(body.usageBudgetUsd) } : {}),
+      ...(body.dailyBudgetUsd !== undefined ? { dailyBudgetUsd: nonNeg(body.dailyBudgetUsd) } : {}),
+      ...(body.budgetHardStop !== undefined ? { budgetHardStop: !!body.budgetHardStop } : {}),
+      ...(body.maxConcurrentRuns !== undefined
+        ? { maxConcurrentRuns: Math.min(20, Math.max(1, Math.floor(Number(body.maxConcurrentRuns) || 3))) }
+        : {}),
+      ...(body.perRunTokenCap !== undefined ? { perRunTokenCap: Math.floor(nonNeg(body.perRunTokenCap)) } : {}),
+      ...(body.runRetentionDays !== undefined ? { runRetentionDays: Math.floor(nonNeg(body.runRetentionDays)) } : {}),
+      ...(body.auditRetentionDays !== undefined ? { auditRetentionDays: Math.floor(nonNeg(body.auditRetentionDays)) } : {}),
+    });
+    return NextResponse.json({
+      ok: true,
+      usageBudgetUsd: cfg.usageBudgetUsd,
+      dailyBudgetUsd: cfg.dailyBudgetUsd,
+      budgetHardStop: cfg.budgetHardStop,
+      maxConcurrentRuns: cfg.maxConcurrentRuns,
+      perRunTokenCap: cfg.perRunTokenCap,
+      runRetentionDays: cfg.runRetentionDays,
+      auditRetentionDays: cfg.auditRetentionDays,
+    });
   }
   if (body.localModelAllowlist !== undefined) {
     const allowlist = Array.isArray(body.localModelAllowlist)
@@ -80,6 +154,13 @@ export async function POST(req: NextRequest) {
     const base = body.localGrokBaseUrl as string | undefined;
     const r = await listLocalGrokModels(base);
     return NextResponse.json({ ok: r.ok, models: r.models, error: r.error });
+  }
+  // Probe management-api.x.ai with a pasted key or the saved management key.
+  if (body.action === 'testManagementKey') {
+    const { validateManagementKey } = await import('@/lib/xai-billing-usage');
+    const key = typeof body.key === 'string' ? body.key : undefined;
+    const result = await validateManagementKey({ key });
+    return NextResponse.json(result);
   }
   if (body.localGrokEnabled !== undefined || body.localGrokBaseUrl !== undefined) {
     const cfg = await saveConfig({
@@ -111,6 +192,5 @@ export async function POST(req: NextRequest) {
       useAgentsMd: cfg.useAgentsMd,
     });
   }
-  const cfg = await loadConfig();
   return NextResponse.json({ ok: true });
 }

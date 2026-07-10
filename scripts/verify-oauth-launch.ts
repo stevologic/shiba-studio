@@ -24,9 +24,11 @@ async function waitForServer(url: string, timeoutMs = 120_000): Promise<void> {
 function killProcess(child: ChildProcess) {
   if (!child.killed && child.pid) {
     try {
-      process.platform === 'win32'
-        ? spawn('taskkill', ['/pid', String(child.pid), '/f', '/t'], { shell: true })
-        : child.kill('SIGTERM');
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', String(child.pid), '/f', '/t'], { shell: true });
+      } else {
+        child.kill('SIGTERM');
+      }
     } catch {
       /* ignore */
     }

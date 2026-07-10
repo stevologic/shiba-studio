@@ -82,11 +82,11 @@ export function parseGrokUsage(usage: unknown): {
   const completionTokens = Number(u.completion_tokens ?? u.output_tokens ?? 0) || 0;
   const reasoningTokens = Number(
     u.reasoning_tokens
-    ?? (u.completion_tokens_details as any)?.reasoning_tokens
+    ?? (u.completion_tokens_details as { reasoning_tokens?: number } | undefined)?.reasoning_tokens
     ?? 0,
   ) || 0;
   const cachedTokens = Number(
-    (u.prompt_tokens_details as any)?.cached_tokens
+    (u.prompt_tokens_details as { cached_tokens?: number } | undefined)?.cached_tokens
     ?? u.cached_prompt_tokens
     ?? 0,
   ) || 0;

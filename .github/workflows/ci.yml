@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} · Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        node: ['22.5', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # `npm ci` enforces lockfile integrity — it fails if package.json and
+      # package-lock.json disagree. Puppeteer's Chromium is needed by
+      # verify-theme (headless launch check).
+      - name: Install (lockfile-exact)
+        run: npm ci
+
+      # Non-blocking until the remaining no-explicit-any debt is zeroed
+      # (TODO.md §4) — then drop continue-on-error so CI enforces it.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Functional verification suite
+        run: npm test
+
+  audit:
+    name: npm audit (high+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # Moderate advisories currently exist inside Next.js's own bundled deps
+      # (see SECURITY.md); gate CI on high/critical only.
+      - run: npm audit --audit-level=high

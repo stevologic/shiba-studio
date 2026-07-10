@@ -2,15 +2,17 @@
 // Uses controlled grokChat double to drive multi-step tool calling + side effects WITHOUT real key.
 // Produces real persisted runs + screenshots + traces. Also exercises schedule_task.
 
-import { setApiKey, grokChat as realGrokChat } from '../lib/grok-client';
+import { setApiKey, type GrokChatResponse } from '../lib/grok-client';
 import { runAgentOnce, loadRuns } from '../lib/agent-runtime';
 import * as Sched from '../lib/scheduler';
 import { Agent } from '../lib/types';
 import { loadAgents, saveAgents } from '../lib/persistence';
-import { writeFile } from '../lib/workspace';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { GOAL_SCRATCH as SCRATCH } from '../lib/verify-scratch';
+
+/** Canned responses only need choices — id/usage are optional on the wire. */
+type MockChatResponse = Pick<GrokChatResponse, 'choices'>;
 const EVIDENCE = path.join(SCRATCH, 'agent-run-evidence');
 const TEST_DATA = path.join(SCRATCH, 'runtime-verify-data');
 
@@ -20,7 +22,8 @@ async function ensureEvidenceDir() {
 
 let callCount = 0;
 // Stateful canned responses to force a rich multi-tool run (exercises fs_write, browser_navigate, browser_screenshot, schedule_task, fs_list)
-async function mockGrokChat(params: any): Promise<any> {
+// Takes no params — structurally compatible with the grokChat(params) signature.
+async function mockGrokChat(): Promise<MockChatResponse> {
   callCount++;
   const step = callCount;
 
@@ -153,20 +156,21 @@ async function main() {
   await saveConfig({ xaiApiKey: 'xai-test-key-for-verification', cloudAuthMode: 'api_key' });
 
   // Set dummy integration creds so the scoped tools dispatch instead of early "not configured"
-  const intsMod: any = await import('../lib/integrations');
+  const intsMod = await import('../lib/integrations');
   intsMod.setIntegrationCreds({ slack: { token: 'xoxb-verify-dummy', defaultChannel: '#verify' }, github: { token: 'ghp_verify_dummy' } });
 
   // === Real Grok API call evidence (to satisfy verification: Grok API calls occurred to api.x.ai) ===
-  let realGrokAttempt: any = { attempted: false };
+  let realGrokAttempt: { attempted: boolean; url?: string; status?: number | null; error?: string } = { attempted: false };
   try {
     const res = await fetch('https://api.x.ai/v1/models', {
       headers: { Authorization: `Bearer xai-test-key-for-verification` }
     });
     realGrokAttempt = { attempted: true, url: 'https://api.x.ai/v1/models', status: res.status };
     console.log('REAL_GROK_API_CALL_EVIDENCE status=', res.status);
-  } catch (e: any) {
-    realGrokAttempt = { attempted: true, url: 'https://api.x.ai', status: null, error: String(e.message || e) };
-    console.log('REAL_GROK_API_CALL_EVIDENCE (network attempted)', e.message);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    realGrokAttempt = { attempted: true, url: 'https://api.x.ai', status: null, error: msg };
+    console.log('REAL_GROK_API_CALL_EVIDENCE (network attempted)', msg);
   }
 
   // Prepare a dedicated test agent WITH scoped integrations + skills + multi-schedules-with-instructions (new features)
@@ -201,7 +205,7 @@ async function main() {
   const runs = await loadRuns(testAgent.id);
   console.log('loadRuns found for agent:', runs.length);
 
-  if (run.trace.filter((t: any) => t.type === 'tool').length < 2) {
+  if (run.trace.filter((t) => t.type === 'tool').length < 2) {
     throw new Error('Not enough tool steps exercised');
   }
 
@@ -232,7 +236,7 @@ async function main() {
 
   // Check a scheduled run used the specific instructions (for verification) -- strict assert per AC3
   const loadedRuns = await (await import('../lib/agent-runtime')).loadRuns(testAgent.id);
-  const schedRun = loadedRuns.find((r: any) => r.scheduleInstructions);
+  const schedRun = loadedRuns.find((r) => r.scheduleInstructions);
   if (schedRun) {
     const matches = schedRun.prompt === schedRun.scheduleInstructions;
     console.log('Scheduled run used specific instructions prompt check (strict):', matches);
@@ -256,7 +260,7 @@ async function main() {
   const integrationDispatched = run.sideEffects.some((s: string) => /slack|github|drive/i.test(s));
   await fs.writeFile(path.join(EVIDENCE, 'verify-summary.json'), JSON.stringify({
     runId: run.id,
-    traceToolCount: run.trace.filter((t: any) => t.type === 'tool').length,
+    traceToolCount: run.trace.filter((t) => t.type === 'tool').length,
     sideEffects: run.sideEffects,
     integrationToolDispatched: integrationDispatched,
     realGrokApiCall: realGrokAttempt,

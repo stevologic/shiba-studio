@@ -82,6 +82,85 @@ function dbPath(): string {
   return file;
 }
 
+/**
+ * Schema version stamped into the database (PRAGMA user_version).
+ *
+ * The baseline CREATE TABLE IF NOT EXISTS block below IS version 1 — it is
+ * idempotent, so fresh databases and pre-versioning databases both end up at
+ * v1. Any future change to the schema must NOT edit the baseline; instead:
+ *   1. bump SCHEMA_VERSION,
+ *   2. append a migration to MIGRATIONS keyed by the version it upgrades FROM.
+ * Migrations run in order inside a transaction on next open, so an existing
+ * ~/.shiba-studio/data/shiba-studio.db always upgrades safely.
+ */
+const SCHEMA_VERSION = 2;
+
+/** MIGRATIONS[n] upgrades a database at user_version n to n+1. */
+const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
+  // v1 → v2: FTS5 search over runs and the audit log (external-content
+  // tables kept in sync by triggers; seeded from existing rows).
+  1: (d) => d.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS runs_fts USING fts5(
+      prompt, finalOutput, agentName,
+      content='runs', content_rowid='rowid'
+    );
+    CREATE TRIGGER IF NOT EXISTS runs_fts_ai AFTER INSERT ON runs BEGIN
+      INSERT INTO runs_fts(rowid, prompt, finalOutput, agentName)
+      VALUES (new.rowid, new.prompt, new.finalOutput, new.agentName);
+    END;
+    CREATE TRIGGER IF NOT EXISTS runs_fts_ad AFTER DELETE ON runs BEGIN
+      INSERT INTO runs_fts(runs_fts, rowid, prompt, finalOutput, agentName)
+      VALUES ('delete', old.rowid, old.prompt, old.finalOutput, old.agentName);
+    END;
+    CREATE TRIGGER IF NOT EXISTS runs_fts_au AFTER UPDATE ON runs BEGIN
+      INSERT INTO runs_fts(runs_fts, rowid, prompt, finalOutput, agentName)
+      VALUES ('delete', old.rowid, old.prompt, old.finalOutput, old.agentName);
+      INSERT INTO runs_fts(rowid, prompt, finalOutput, agentName)
+      VALUES (new.rowid, new.prompt, new.finalOutput, new.agentName);
+    END;
+    INSERT INTO runs_fts(rowid, prompt, finalOutput, agentName)
+      SELECT rowid, prompt, finalOutput, agentName FROM runs;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS audit_fts USING fts5(
+      action, detail, category,
+      content='audit_log', content_rowid='id'
+    );
+    CREATE TRIGGER IF NOT EXISTS audit_fts_ai AFTER INSERT ON audit_log BEGIN
+      INSERT INTO audit_fts(rowid, action, detail, category)
+      VALUES (new.id, new.action, new.detail, new.category);
+    END;
+    CREATE TRIGGER IF NOT EXISTS audit_fts_ad AFTER DELETE ON audit_log BEGIN
+      INSERT INTO audit_fts(audit_fts, rowid, action, detail, category)
+      VALUES ('delete', old.id, old.action, old.detail, old.category);
+    END;
+    INSERT INTO audit_fts(rowid, action, detail, category)
+      SELECT id, action, detail, category FROM audit_log;
+  `),
+};
+
+function schemaVersion(database: DatabaseSync): number {
+  const row = database.prepare('PRAGMA user_version').get() as { user_version?: number };
+  return Number(row?.user_version ?? 0);
+}
+
+function runMigrations(database: DatabaseSync): void {
+  let v = schemaVersion(database);
+  if (v >= SCHEMA_VERSION) return;
+  while (v < SCHEMA_VERSION) {
+    const migrate = MIGRATIONS[v];
+    database.exec('BEGIN');
+    try {
+      if (migrate) migrate(database); // v0 → v1 is the baseline itself
+      database.exec(`PRAGMA user_version = ${v + 1}`);
+      database.exec('COMMIT');
+    } catch (e) {
+      try { database.exec('ROLLBACK'); } catch { /* no txn open */ }
+      throw new Error(`Database migration v${v} → v${v + 1} failed: ${e instanceof Error ? e.message : e}`);
+    }
+    v += 1;
+  }
+}
+
 export function getDb(): DatabaseSync {
   if (db) return db;
   const { DatabaseSync } = loadSqlite();
@@ -125,8 +204,25 @@ export function getDb(): DatabaseSync {
       PRIMARY KEY (scheduleKey, tick)
     );
   `);
+  runMigrations(db);
   migrateRunsFromJson(db);
   return db;
+}
+
+/** Absolute path of the SQLite file (for backup/restore). */
+export function databasePath(): string {
+  return dbPath();
+}
+
+/**
+ * Close the shared handle so the file can be replaced (backup restore).
+ * The next getDb() reopens and re-runs migrations.
+ */
+export function closeDb(): void {
+  if (!db) return;
+  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* best-effort */ }
+  try { db.close(); } catch { /* already closed */ }
+  db = null;
 }
 
 /**

@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowUp, Check, Folder, FolderGit2, Loader2, Unlink, X } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 
 interface DirEntry {
   name: string;
@@ -24,12 +24,14 @@ interface WorkspacePickerProps {
   open: boolean;
   /** Currently bound folder, if any. */
   value: string | null;
+  /** Settings default workspace — used when the chat has no bound folder yet. */
+  defaultPath?: string | null;
   onClose: () => void;
   /** null = detach the workspace from this chat. */
   onSelect: (dir: string | null) => void;
 }
 
-export default function WorkspacePicker({ open, value, onClose, onSelect }: WorkspacePickerProps) {
+export default function WorkspacePicker({ open, value, defaultPath, onClose, onSelect }: WorkspacePickerProps) {
   const [listing, setListing] = useState<Listing | null>(null);
   const [pathInput, setPathInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -53,10 +55,11 @@ export default function WorkspacePicker({ open, value, onClose, onSelect }: Work
 
   useEffect(() => {
     if (!open) return;
-    void (async () => {
-      await browse(value || undefined);
-    })();
-  }, [open, value, browse]);
+    // Prefer the chat binding; otherwise land on Settings default workspace
+    // (not the user home directory).
+    const start = (value || defaultPath || '').trim() || undefined;
+    void browse(start);
+  }, [open, value, defaultPath, browse]);
 
   if (!open) return null;
 

@@ -1,0 +1,16 @@
+# docker compose up -d  →  http://127.0.0.1:3000
+services:
+  shiba-studio:
+    build: .
+    ports:
+      # Loopback-only publish — the studio's APIs are unauthenticated by
+      # design (single user). Change to "3000:3000" only behind your own auth.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # Everything lives here: config, ENCRYPTED credentials + machine key,
+      # runs/audit SQLite, chats. Back this volume up.
+      - shiba-data:/data
+    restart: unless-stopped
+
+volumes:
+  shiba-data:

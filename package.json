@@ -1,11 +1,16 @@
 {
   "name": "shiba-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
+  "bin": {
+    "shiba-studio": "bin/shiba-studio.mjs"
+  },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 127.0.0.1",
+    "dev:lan": "next dev -H 0.0.0.0",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H 127.0.0.1",
+    "start:lan": "next start -H 0.0.0.0",
     "lint": "eslint",
     "test": "tsx scripts/verify-all.ts",
     "test:xai-oauth": "tsx scripts/verify-xai-oauth.ts",
@@ -16,6 +21,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@slack/web-api": "^7.17.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
     "date-fns": "^4.4.0",
     "framer-motion": "^12.42.0",
     "googleapis": "^173.0.0",
@@ -23,6 +31,7 @@
     "lucide-react": "^1.22.0",
     "next": "16.2.9",
     "node-cron": "^4.5.0",
+    "node-pty": "^1.1.0",
     "octokit": "^5.0.5",
     "puppeteer": "^25.2.1",
     "react": "19.2.4",
@@ -32,6 +41,7 @@
     "remark-gfm": "^4.0.1",
     "sonner": "^2.0.7",
     "uuid": "^14.0.1",
+    "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -39,6 +49,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.18.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
@@ -47,5 +58,8 @@
   },
   "engines": {
     "node": ">=22.5.0"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }

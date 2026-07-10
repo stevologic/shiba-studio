@@ -27,11 +27,13 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 wi
 ## Scripts
 
 ```bash
-npm run dev      # dev server (Turbopack)
+npm run dev      # dev server (Turbopack, binds 127.0.0.1)
 npm run build    # production build
-npm run start    # serve the build
-npm test         # scripts/verify-all.ts — the full gate
+npm run start    # serve the build (binds 127.0.0.1)
+npm test         # scripts/verify-all.ts — the full gate (isolated data dir)
 ```
+
+`dev:lan` / `start:lan` bind all interfaces for deliberate LAN exposure — see [SECURITY.md](../SECURITY.md) first.
 
 `npm test` chains theme checks, a full runtime drive of the shipped code (real agent run with tools), 40 OAuth/API unit+HTTP tests, and feature structural checks. Results go to `functional-npm-test.log` in the suite's scratch dir — stdout stays quiet; exit code 0 means pass.
 
@@ -42,7 +44,9 @@ npm test         # scripts/verify-all.ts — the full gate
 - **Route remounts:** navigating between tabs remounts the shell (one catch-all route). Ephemeral state that must survive navigation rides the URL (e.g. `/automations?run=<id>`).
 - **React compiler lint:** `set-state-in-effect` errors on synchronous setState inside effects — set state after an `await`, or flip flags in event handlers.
 - **Structural tests grep source:** some verify scripts assert literal UI strings (e.g. "xAI Grok API Key"); renaming copy can fail the suite intentionally.
-- **Test isolation caveat:** the verify suite currently mutates the live data dir (creates/deletes fixture agents/projects) — entity counts change after `npm test`.
+- **Test isolation:** `npm test` points every child script at a fresh `SHIBA_DATA_DIR` under the suite's scratch dir — it never touches `~/.shiba-studio`. Set `SHIBA_TEST_DATA_DIR` to reuse a persistent test store instead.
+- **DB migrations:** `lib/db.ts` stamps `PRAGMA user_version`; schema changes bump `SCHEMA_VERSION` and add an entry to `MIGRATIONS` — never edit the baseline DDL.
+- **Same-origin guard:** `proxy.ts` rejects cross-origin `/api/*` requests; if you add an endpoint the browser must call from another origin (don't), it needs an explicit exemption there.
 - The pre-existing `no-explicit-any` lint debt is being paid down; don't add new `any`s.
 
 ## Release roadmap

@@ -32,6 +32,25 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: 'No messages provided' }), { status: 400 });
   }
 
+  // Prefer chat/project workspace so CLI coding runs where the user is working.
+  let cwd = projectRoot();
+  if (body.workspaceDir) {
+    const requested = String(body.workspaceDir).trim();
+    try {
+      const fs = await import('fs');
+      if (requested && fs.statSync(requested).isDirectory()) cwd = requested;
+    } catch { /* stale path — fall back to project root */ }
+  }
+  if (cwd !== projectRoot()) {
+    systemParts.push([
+      '## Workspace',
+      `You are working in \`${cwd}\` on the user's machine.`,
+      'Use your tools to explore, edit, and verify code there.',
+      'Do not give a final answer until coding changes are complete (or blocked).',
+      'Stream progress via your normal reasoning; implement first, then summarize.',
+    ].join('\n'));
+  }
+
   const prompt = buildCliPromptFromMessages(chatMessages, systemParts);
   const ac = new AbortController();
   req.signal.addEventListener('abort', () => ac.abort());
@@ -40,12 +59,19 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       const encoder = new TextEncoder();
       try {
+        if (cwd !== projectRoot()) {
+          controller.enqueue(encoder.encode(encodeSseEvent({
+            type: 'thinking',
+            delta: `Working in workspace \`${cwd}\` via Grok CLI…\n`,
+          })));
+        }
         for await (const event of streamGrokCli({
           prompt,
           model: body.model,
           reasoningEffort: body.reasoningEffort,
-          cwd: projectRoot(),
-          maxTurns: body.maxTurns,
+          cwd,
+          // More turns when coding in a bound workspace so work finishes before the reply.
+          maxTurns: body.maxTurns ?? (cwd !== projectRoot() ? 20 : undefined),
           signal: ac.signal,
         })) {
           controller.enqueue(encoder.encode(encodeSseEvent(event)));

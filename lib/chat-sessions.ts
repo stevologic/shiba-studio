@@ -48,8 +48,8 @@ export async function searchChatSessions(query: string, opts?: { includeArchived
   if (!q) return listChatSessions(opts);
   const sessions = await listChatSessions({ includeArchived: opts?.includeArchived });
   return sessions.filter((s) => {
-    if (s.title.toLowerCase().includes(q)) return true;
-    return s.messages.some((m) => m.content?.toLowerCase().includes(q));
+    if ((s.title || '').toLowerCase().includes(q)) return true;
+    return (s.messages || []).some((m) => m?.content?.toLowerCase().includes(q));
   });
 }
 

@@ -213,37 +213,182 @@ function DailyChart({ byDay }: { byDay: UsageSummary['byDay'] }) {
   );
 }
 
-interface LiveXaiStatus {
-  connected: boolean;
+interface XaiAccountUsage {
+  available: boolean;
   checkedAt: string;
-  keyName?: string;
   teamId?: string;
-  modelCount?: number;
+  authSource?: string | null;
+  prepaidBalanceUsd?: number;
+  monthToDateCostUsd?: number;
+  spendingLimitUsd?: number;
+  billingCycle?: { year: number; month: number };
+  byModel: Array<{
+    model: string;
+    label: string;
+    costUsd: number;
+    promptTokens: number;
+    completionTokens: number;
+    otherTokens: number;
+    totalTokens: number;
+  }>;
+  byDay: Array<{ date: string; costUsd: number; totalTokens: number }>;
+  rangeStart?: string;
+  rangeEnd?: string;
   error?: string;
+  note: string;
+}
+
+function XaiAccountSection({ xai }: { xai: XaiAccountUsage }) {
+  const maxCost = Math.max(...xai.byModel.map((m) => m.costUsd), 0.0001);
+  const maxDay = Math.max(...xai.byDay.map((d) => d.costUsd), 0.0001);
+
+  if (!xai.available) {
+    return (
+      <div className="grok-card p-5 mb-5 usage-xai-account">
+        <div className="font-semibold mb-1">xAI account usage</div>
+        <div className="text-xs text-dim mb-2">
+          Authoritative costs from the xAI Billing API (same data as Console → Usage).
+        </div>
+        <div className="text-sm text-muted">
+          {xai.error || 'Not available'} — {xai.note}
+        </div>
+        <div className="text-[10px] text-dim mt-2">
+          Tip: add a Management Key in Settings (Console → Settings → Management Keys) if your inference key cannot read billing.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grok-card p-5 mb-5 usage-xai-account">
+      <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
+        <div>
+          <div className="font-semibold">xAI account usage</div>
+          <div className="text-xs text-dim mt-0.5">
+            Backported from xAI Billing API
+            {xai.billingCycle ? ` · cycle ${xai.billingCycle.year}-${String(xai.billingCycle.month).padStart(2, '0')}` : ''}
+            {xai.rangeStart && xai.rangeEnd ? ` · ${xai.rangeStart} → ${xai.rangeEnd}` : ''}
+            {xai.authSource ? ` · via ${xai.authSource}` : ''}
+          </div>
+        </div>
+        <span className="usage-live-pill usage-live-connected" title={xai.note}>
+          <span className="usage-live-dot" />
+          Billing · live
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        {[
+          {
+            label: 'Month-to-date spend',
+            value: xai.monthToDateCostUsd != null ? fmtUsd(xai.monthToDateCostUsd) : '—',
+          },
+          {
+            label: 'Prepaid balance',
+            value: xai.prepaidBalanceUsd != null ? fmtUsd(xai.prepaidBalanceUsd) : '—',
+          },
+          {
+            label: 'Spending limit',
+            value: xai.spendingLimitUsd != null ? fmtUsd(xai.spendingLimitUsd) : '—',
+          },
+          {
+            label: 'Models with usage',
+            value: String(xai.byModel.length),
+          },
+        ].map((c) => (
+          <div key={c.label} className="usage-stat-card grok-card p-3">
+            <div className="text-[10px] uppercase tracking-wider text-dim mb-1">{c.label}</div>
+            <div className="text-xl font-semibold font-mono">{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {xai.byDay.some((d) => d.costUsd > 0) && (
+        <div className="mb-4">
+          <div className="text-xs text-dim mb-2">Daily spend (14 days) — from xAI</div>
+          <div className="usage-daily-bars">
+            {xai.byDay.map((d) => (
+              <div key={d.date} className="usage-daily-col" title={`${d.date}: ${fmtUsd(d.costUsd)}`}>
+                <div
+                  className="usage-daily-bar"
+                  style={{ height: `${Math.max(4, (d.costUsd / maxDay) * 100)}%` }}
+                />
+                <div className="usage-daily-label">{fmtDate(d.date)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {xai.byModel.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="usage-table w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-dim border-b border-default">
+                <th className="pb-2 pr-4">Model (xAI)</th>
+                <th className="pb-2 pr-4">Input tok</th>
+                <th className="pb-2 pr-4">Output tok</th>
+                <th className="pb-2 pr-4">Total tok</th>
+                <th className="pb-2">Billed cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {xai.byModel.map((m) => (
+                <tr key={m.model + m.label} className="border-b border-default/50">
+                  <td className="py-3 pr-4">
+                    <div className="font-mono text-xs">{m.model}</div>
+                    {m.label !== m.model && (
+                      <div className="text-[10px] text-dim truncate" title={m.label}>{m.label}</div>
+                    )}
+                    <div className="usage-bar-track mt-1.5 h-1.5">
+                      <div
+                        className="usage-bar-fill"
+                        style={{ width: `${(m.costUsd / maxCost) * 100}%` }}
+                      />
+                    </div>
+                  </td>
+                  <td className="py-3 pr-4 font-mono text-dim">{m.promptTokens ? fmtNum(m.promptTokens) : '—'}</td>
+                  <td className="py-3 pr-4 font-mono text-dim">{m.completionTokens ? fmtNum(m.completionTokens) : '—'}</td>
+                  <td className="py-3 pr-4 font-mono">{m.totalTokens ? fmtNum(m.totalTokens) : '—'}</td>
+                  <td className="py-3 font-mono">{fmtUsd(m.costUsd)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="text-[10px] text-dim mt-3">{xai.note}</div>
+    </div>
+  );
 }
 
 export default function UsageDashboard() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
-  const [live, setLive] = useState<LiveXaiStatus | null>(null);
+  const [xaiAccount, setXaiAccount] = useState<XaiAccountUsage | null>(null);
+  const [authoritativeCostUsd, setAuthoritativeCostUsd] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  async function load(force = false) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/usage');
+      const res = await fetch(`/api/usage${force ? '?refresh=1' : ''}`);
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Failed to load usage');
       setSummary(data as UsageSummary);
-      setLive((data.live as LiveXaiStatus) || null);
+      setXaiAccount((data.xaiAccount as XaiAccountUsage) || null);
+      setAuthoritativeCostUsd(
+        typeof data.authoritativeCostUsd === 'number' ? data.authoritativeCostUsd : null,
+      );
     } catch (e: any) {
       setError(e.message);
     }
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, []);
 
   if (loading && !summary) {
     return (
@@ -260,47 +405,54 @@ export default function UsageDashboard() {
   if (!summary) return null;
 
   const maxModelTokens = Math.max(...summary.byModel.map((m) => m.totalTokens), 1);
+  const hasLocal = summary.totalRequests > 0;
+  const hasXai = !!xaiAccount?.available;
 
   return (
-    <div className="usage-dashboard max-w-5xl">
-      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
-        <div>
-          <div className="text-xl font-semibold">Usage &amp; Cost</div>
-          <div className="text-sm text-muted">
-            Live token usage metered from every xAI API response, with estimated spend
+    <div className="usage-dashboard page-content">
+      <div className="page-head-row">
+        <div className="min-w-0">
+          <div className="page-title">Usage &amp; Cost</div>
+          <div className="page-subtitle">
+            {hasXai
+              ? 'Account spend from the xAI Billing API, plus this app’s local metering'
+              : 'Local metering from API responses — connect billing to backport official model usage'}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {live && (
-            <span
-              className={`usage-live-pill ${live.connected ? 'usage-live-connected' : 'usage-live-offline'}`}
-              title={live.connected
-                ? `Connected to api.x.ai${live.keyName ? ` · key: ${live.keyName}` : ''}${live.modelCount ? ` · ${live.modelCount} models` : ''} · checked ${new Date(live.checkedAt).toLocaleTimeString()}`
-                : `xAI API check failed: ${live.error || 'unreachable'} · usage below is from recorded API responses`}
-            >
-              <span className="usage-live-dot" />
-              {live.connected ? 'xAI API · live' : 'xAI API · offline'}
-            </span>
-          )}
-          <button onClick={load} disabled={loading} className="grok-btn grok-btn-secondary text-xs">
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={() => void load(true)} disabled={loading} className="grok-btn grok-btn-secondary text-xs">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
         </div>
       </div>
 
-      {summary.totalRequests === 0 ? (
+      {xaiAccount && <XaiAccountSection xai={xaiAccount} />}
+
+      {!hasLocal && !hasXai && (
         <div className="grok-card p-8 text-center">
-          <div className="text-muted mb-2">No API usage recorded yet</div>
-          <div className="text-xs text-dim">Send a Grok Chat message or run an agent — token usage is tracked automatically from API responses.</div>
+          <div className="text-muted mb-2">No usage data yet</div>
+          <div className="text-xs text-dim">
+            Send a Grok Chat message or run an agent — or add cloud credentials / a Management Key to pull account usage from xAI.
+          </div>
         </div>
-      ) : (
+      )}
+
+      {hasLocal && (
         <>
+          <div className="text-sm font-medium mb-2 text-muted">This app (studio metering)</div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
             {[
               { label: 'API calls', value: String(summary.totalRequests) },
               { label: 'Total tokens', value: fmtNum(summary.totalTokens) },
               { label: 'Input tokens', value: fmtNum(summary.totalPromptTokens) },
-              { label: 'Est. cost', value: fmtUsd(summary.estimatedCostUsd) },
+              {
+                label: hasXai ? 'Est. cost (studio)' : 'Est. cost',
+                value: fmtUsd(
+                  authoritativeCostUsd != null && !hasXai
+                    ? authoritativeCostUsd
+                    : summary.estimatedCostUsd,
+                ),
+              },
             ].map((c) => (
               <div key={c.label} className="grok-card p-4 usage-stat-card">
                 <div className="text-[10px] uppercase tracking-wider text-dim mb-1">{c.label}</div>

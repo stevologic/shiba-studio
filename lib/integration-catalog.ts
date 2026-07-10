@@ -8,6 +8,14 @@ export interface IntegrationMeta {
   shortLabel: string;
   icon: string;
   description: string;
+  /**
+   * Official API / product docs for credential setup and endpoints.
+   * Shown on the Capabilities page as an external “API docs” link.
+   */
+  docsUrl?: string;
+  /** Optional secondary setup guide (e.g. OAuth app creation). */
+  setupUrl?: string;
+  docsLabel?: string;
 }
 
 export const INTEGRATION_CATALOG: IntegrationMeta[] = [
@@ -17,6 +25,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     shortLabel: 'GitHub',
     icon: '/integrations/github.svg',
     description: 'Repos, commits, and pull requests',
+    docsUrl: 'https://docs.github.com/en/rest',
+    setupUrl: 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
+    docsLabel: 'GitHub REST API',
   },
   {
     id: 'slack',
@@ -24,6 +35,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     shortLabel: 'Slack',
     icon: '/integrations/slack.svg',
     description: 'Post messages to channels',
+    docsUrl: 'https://api.slack.com/docs',
+    setupUrl: 'https://api.slack.com/authentication/token-types#bot',
+    docsLabel: 'Slack API',
   },
   {
     id: 'googledrive',
@@ -31,6 +45,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     shortLabel: 'Drive',
     icon: '/integrations/googledrive.svg',
     description: 'Read and write Drive files',
+    docsUrl: 'https://developers.google.com/drive/api/guides/about-sdk',
+    setupUrl: 'https://developers.google.com/drive/api/guides/enable-drive-api',
+    docsLabel: 'Drive API',
   },
   {
     id: 'discord',
@@ -38,6 +55,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     shortLabel: 'Discord',
     icon: '/integrations/discord.svg',
     description: 'Post messages to channels via bot',
+    docsUrl: 'https://discord.com/developers/docs/intro',
+    setupUrl: 'https://discord.com/developers/docs/topics/oauth2#bot-vs-user-accounts',
+    docsLabel: 'Discord API',
   },
   {
     id: 'x',
@@ -45,6 +65,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     shortLabel: 'X',
     icon: '/integrations/x.svg',
     description: 'Post tweets to your X account',
+    docsUrl: 'https://docs.x.com/x-api/introduction',
+    setupUrl: 'https://docs.x.com/resources/fundamentals/authentication/overview',
+    docsLabel: 'X API',
   },
   {
     id: 'obsidian',
@@ -52,6 +75,10 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     shortLabel: 'Obsidian',
     icon: '/integrations/obsidian.svg',
     description: 'Read, write, and search notes in your vault',
+    // Local vault has no public API; cloud mode uses the community REST plugin.
+    docsUrl: 'https://coddingtonbear.github.io/obsidian-local-rest-api/',
+    setupUrl: 'https://help.obsidian.md/',
+    docsLabel: 'Local REST API',
   },
 ];
 

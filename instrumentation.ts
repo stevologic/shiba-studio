@@ -1,7 +1,8 @@
 // Next.js instrumentation — runs once when the SERVER starts, before any
 // request. Arms every agent cron schedule immediately, so automations run
 // even if no browser ever opens the app (previously scheduling was triggered
-// by the client hitting /api/boot on page load).
+// by the client hitting /api/boot on page load). Also starts the real host
+// PTY WebSocket bridge (node-pty) on localhost for the in-app terminal.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   try {
@@ -12,5 +13,17 @@ export async function register() {
     console.log('[shiba-studio] agent schedules armed at server start');
   } catch (e) {
     console.error('[shiba-studio] failed to arm schedules at server start', e);
+  }
+  try {
+    const { startTerminalServer } = await import('./lib/terminal-server');
+    startTerminalServer();
+  } catch (e) {
+    console.error('[shiba-studio] failed to start terminal PTY bridge', e);
+  }
+  try {
+    const { startRetentionSchedule } = await import('./lib/retention');
+    startRetentionSchedule();
+  } catch (e) {
+    console.error('[shiba-studio] failed to start retention pruning', e);
   }
 }

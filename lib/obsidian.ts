@@ -124,7 +124,6 @@ async function restSearch(base: string, apiKey: string, query: string): Promise<
 
 async function walkVaultMd(vaultPath: string, subdir = '', max = 80): Promise<{ path: string; name: string }[]> {
   const results: { path: string; name: string }[] = [];
-  const dir = subdir ? path.join(vaultPath, subdir) : vaultPath;
 
   async function walk(rel: string) {
     if (results.length >= max) return;
@@ -150,7 +149,7 @@ async function walkVaultMd(vaultPath: string, subdir = '', max = 80): Promise<{ 
   return results;
 }
 
-function useRest(cfg: ObsidianConfig): { base: string; apiKey: string } | null {
+function restCreds(cfg: ObsidianConfig): { base: string; apiKey: string } | null {
   const apiKey = cfg.restApiKey?.trim();
   if (!apiKey) return null;
   const base = normalizeBase(cfg.restApiUrl || (cfg.mode === 'local' ? DEFAULT_LOCAL_REST : ''));
@@ -194,7 +193,7 @@ export async function testObsidian(creds: IntegrationCreds): Promise<{
     }
   }
 
-  const rest = useRest(cfg);
+  const rest = restCreds(cfg);
   if (rest) {
     try {
       const ping = await obsidianFetch(`${rest.base}/`, { skipTlsVerify: true });
@@ -235,7 +234,7 @@ export async function obsidianListNotes(
   const cfg = getObsidianConfig(creds);
   if (!cfg) throw new Error('Obsidian not configured');
 
-  const rest = useRest(cfg);
+  const rest = restCreds(cfg);
   if (rest) {
     const files = await restListDir(rest.base, rest.apiKey, dir);
     return files
@@ -245,6 +244,9 @@ export async function obsidianListNotes(
   }
 
   if (cfg.mode === 'local' && cfg.vaultPath) {
+    // Boundary-check the subdir the same way note paths are checked —
+    // a "../" listing dir must not walk markdown outside the vault.
+    if (dir) resolveVaultPath(cfg.vaultPath, dir);
     return walkVaultMd(path.resolve(cfg.vaultPath), dir, max);
   }
 
@@ -255,7 +257,7 @@ export async function obsidianReadNote(creds: IntegrationCreds, notePath: string
   const cfg = getObsidianConfig(creds);
   if (!cfg) throw new Error('Obsidian not configured');
 
-  const rest = useRest(cfg);
+  const rest = restCreds(cfg);
   if (rest) return restReadNote(rest.base, rest.apiKey, notePath);
 
   if (cfg.mode === 'local' && cfg.vaultPath) {
@@ -270,7 +272,7 @@ export async function obsidianWriteNote(creds: IntegrationCreds, notePath: strin
   const cfg = getObsidianConfig(creds);
   if (!cfg) throw new Error('Obsidian not configured');
 
-  const rest = useRest(cfg);
+  const rest = restCreds(cfg);
   if (rest) {
     await restWriteNote(rest.base, rest.apiKey, notePath, content);
     return;
@@ -293,7 +295,7 @@ export async function obsidianSearch(
   const cfg = getObsidianConfig(creds);
   if (!cfg) throw new Error('Obsidian not configured');
 
-  const rest = useRest(cfg);
+  const rest = restCreds(cfg);
   if (rest) return restSearch(rest.base, rest.apiKey, query);
 
   if (cfg.mode === 'local' && cfg.vaultPath) {

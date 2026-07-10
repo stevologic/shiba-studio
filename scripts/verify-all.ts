@@ -23,6 +23,15 @@ async function main() {
   process.env.GROK_GOAL_SCRATCH = GOAL_SCRATCH;
   await fs.mkdir(GOAL_SCRATCH, { recursive: true });
 
+  // Isolate ALL persistence from the live install: every child script gets a
+  // fresh SHIBA_DATA_DIR under scratch, so `npm test` never mutates
+  // ~/.shiba-studio/data (agents, runs, chats) again. Override with
+  // SHIBA_TEST_DATA_DIR if you deliberately want a persistent test store.
+  const testDataDir = process.env.SHIBA_TEST_DATA_DIR
+    || path.join(GOAL_SCRATCH, `test-data-${Date.now()}`);
+  process.env.SHIBA_DATA_DIR = testDataDir;
+  await fs.mkdir(testDataDir, { recursive: true });
+
   const lines: string[] = [
     `FUNCTIONAL_VERIFY_START ${new Date().toISOString()}`,
     `SCRATCH=${GOAL_SCRATCH}`,

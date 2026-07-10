@@ -12,6 +12,16 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Runtime state and agent workspaces — not part of the app source
+    // (mirrors .gitignore; agents write arbitrary code into these).
+    ".worktrees/**",
+    "data/**",
+    "uploads/**",
+    "terminals/**",
+    "mcps/**",
+    "project-builder-ws-folder/**",
+    "research/**",
+    "daily-summary.js",
   ]),
 ]);
 

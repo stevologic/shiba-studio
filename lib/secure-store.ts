@@ -104,3 +104,43 @@ export function secretKeyLocation(): string {
   if (process.env.GROKDESK_SECRET_KEY) return 'GROKDESK_SECRET_KEY environment variable (legacy name — prefer SHIBA_SECRET_KEY)';
   return keyFilePath();
 }
+
+/** The active key as 64 hex chars — embedded in backups so encrypted
+ *  credentials restore on a new machine. Treat exports like a password. */
+export function exportSecretKeyHex(): string {
+  return loadOrCreateKeySync().toString('hex');
+}
+
+/**
+ * Install a key from a backup. Safe rules: a matching key (or env-provided
+ * key) is a no-op; a brand-new machine (no key yet) gets the backup's key
+ * written; a machine whose existing key DIFFERS is refused — overwriting
+ * would brick every secret already sealed on this machine.
+ */
+export function importSecretKeyHex(hex: string): { ok: boolean; reason?: string } {
+  const clean = hex.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(clean)) return { ok: false, reason: 'Backup key is malformed (expected 64 hex chars)' };
+
+  const envKey = (process.env.SHIBA_SECRET_KEY || process.env.GROKDESK_SECRET_KEY)?.trim().toLowerCase();
+  if (envKey) {
+    if (envKey === clean) return { ok: true };
+    return { ok: false, reason: 'This machine uses SHIBA_SECRET_KEY; set it to the backup’s key to read restored credentials' };
+  }
+
+  const file = keyFilePath();
+  if (fsSync.existsSync(file)) {
+    const raw = fsSync.readFileSync(file, 'utf8').trim().toLowerCase();
+    if (raw === clean) return { ok: true };
+    return {
+      ok: false,
+      reason: 'This machine already has a different encryption key. Restored credentials stay sealed under the backup’s key — '
+        + 'to adopt them, stop the server, replace ~/.shiba-studio/shiba-studio.key with the key from the backup, and restart.',
+    };
+  }
+
+  // Fresh machine — install the backup's key so restored secrets open.
+  fsSync.mkdirSync(path.dirname(file), { recursive: true });
+  fsSync.writeFileSync(file, clean, { mode: 0o600 });
+  cachedKey = Buffer.from(clean, 'hex');
+  return { ok: true };
+}

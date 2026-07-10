@@ -51,7 +51,7 @@ All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAut
 git clone https://github.com/stevologic/shiba-studio.git
 cd shiba-studio
 npm install
-npm run dev          # → http://localhost:3000
+npm run dev          # → http://127.0.0.1:3000 (localhost only, by design)
 ```
 
 **Requirements:** Node.js ≥ 22.5 (the runs/audit database uses Node's built-in `node:sqlite` — nothing to compile on any platform). Runs on **Windows, macOS, and Linux**.
@@ -91,23 +91,30 @@ The top bar shows a readiness badge for each source.
 - **Cross-session agent memory** — agents (and chat, via `/remember`) persist facts in SQLite and recall them in later runs.
 - **Grok CLI deep integration** — route chats through the local CLI, and give agents `grok_cli` with effort levels, self-verification, best-of-N, and structured JSON output.
 
-## Security — credentials at rest
+## Security
 
-All credentials (xAI API key, OAuth tokens, integration secrets) are **encrypted with AES-256-GCM** before touching disk. The machine key lives outside the project at `~/.shiba-studio/shiba-studio.key` (or supply `SHIBA_SECRET_KEY` as 64 hex chars for headless deployments). Secrets never appear in source code; plaintext stores migrate to encrypted form automatically on first load. See [Configuration](docs/configuration.md) for the full model and current limitations before exposing the server beyond localhost.
+- **Localhost only, by default** — the server binds `127.0.0.1`; a same-origin guard (`proxy.ts`) blocks any other website in your browser from reaching the API, and the terminal bridge rejects foreign WebSocket origins. `npm run dev:lan` / `start:lan` opt into LAN exposure.
+- **Ask-before-act** — sensitive tools (shell, file writes, posting) require per-call approval by default; YOLO mode is an explicit opt-in.
+- **Credentials at rest** — all secrets (xAI API key, OAuth tokens, integration secrets) are **encrypted with AES-256-GCM** before touching disk; the machine key lives outside the project at `~/.shiba-studio/shiba-studio.key` (or supply `SHIBA_SECRET_KEY` as 64 hex chars for headless deployments). Plaintext stores migrate to encrypted form automatically on first load.
+
+Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Privacy: [PRIVACY.md](PRIVACY.md) · Settings reference: [Configuration](docs/configuration.md).
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Development server with hot reload |
+| `npm run dev` | Development server with hot reload (binds `127.0.0.1`) |
 | `npm run build` | Production build |
-| `npm run start` | Serve the production build |
-| `npm test` | Full functional verification suite (theme, runtime, OAuth, features) |
+| `npm run start` | Serve the production build (binds `127.0.0.1`) |
+| `npm run dev:lan` / `start:lan` | Explicitly expose on all interfaces — read [SECURITY.md](SECURITY.md) first |
+| `npm test` | Full functional verification suite — isolated, never touches your live data |
 
 ## Contributing & support
 
 - 🌐 **Website & docs** → [shiba-studio.io](http://shiba-studio.io)
-- 🐛 **Bugs / feature requests** → [open an issue](https://github.com/stevologic/shiba-studio/issues/new)
+- 🛠️ **Contributing guide** → [CONTRIBUTING.md](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
+- 🐛 **Bugs / feature requests** → [open an issue](https://github.com/stevologic/shiba-studio/issues/new/choose)
+- 🔒 **Security reports** → [SECURITY.md](SECURITY.md) (privately, please)
 - 🗺️ **Roadmap to public release** → [TODO.md](TODO.md)
 - Ð **Donate Dogecoin** → `DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK` (much thanks, very wow)
 

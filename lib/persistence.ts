@@ -12,6 +12,7 @@ import { decryptSecret, encryptSecret, isEncryptedSecret } from './secure-store'
  */
 const SENSITIVE_CONFIG_PATHS = [
   'xaiApiKey',
+  'xaiManagementKey',
   'integrations.github.token',
   'integrations.slack.token',
   'integrations.googledrive.accessToken',
@@ -102,7 +103,7 @@ const AGENT_OVERRIDE_SECRET_FIELDS: Record<string, string[]> = {
 };
 
 function transformAgentOverrideSecrets(agent: Agent, fn: (v: string) => string): Agent {
-  const ov = (agent as any).integrationOverrides as Record<string, Record<string, unknown>> | undefined;
+  const ov = (agent as Agent & { integrationOverrides?: Record<string, Record<string, unknown>> }).integrationOverrides;
   if (!ov) return agent;
   const nextOv: Record<string, Record<string, unknown>> = {};
   for (const [svc, svcObj] of Object.entries(ov)) {
@@ -121,7 +122,7 @@ export async function loadAgents(): Promise<Agent[]> {
   await ensureData();
   try {
     const raw = await fs.readFile(agentsFile(), 'utf8');
-    const list = JSON.parse(raw) as any[];
+    const list = JSON.parse(raw) as unknown[];
     return list.map(normalizeAgent).map((a) => transformAgentOverrideSecrets(a, decryptSecret));
   } catch {
     return [];
@@ -143,7 +144,12 @@ const DEFAULT_CONFIG: AppConfig = {
   localGrokBaseUrl: 'http://127.0.0.1:1234/v1',
   localModelAllowlist: [],
   cloudAuthMode: 'api_key',
-  toolApprovalMode: 'yolo',
+  // Approval-required is the safe default for a public release; YOLO is an
+  // explicit opt-in from Settings (existing configs keep their saved choice).
+  toolApprovalMode: 'ask',
+  budgetHardStop: true,
+  maxConcurrentRuns: 3,
+  disabledTools: [],
   globalInstructions: '',
   useAgentsMd: true,
 };

@@ -43,10 +43,10 @@ function buildResponsesInput(messages: ChatMessagePayload[]) {
           parts.push({ type: 'input_file', file_id: att.fileId });
         }
       }
-      if (m.content.trim()) parts.push({ type: 'input_text', text: m.content });
+      if ((m.content || '').trim()) parts.push({ type: 'input_text', text: m.content });
       return { role: m.role, content: parts };
     }
-    return { role: m.role, content: m.content };
+    return { role: m.role, content: m.content ?? '' };
   });
 }
 
@@ -65,10 +65,10 @@ function buildCompletionsMessages(messages: ChatMessagePayload[]) {
           }
         }
       }
-      if (m.content.trim()) parts.push({ type: 'text', text: m.content });
+      if ((m.content || '').trim()) parts.push({ type: 'text', text: m.content });
       return { role: m.role, content: parts };
     }
-    return { role: m.role, content: m.content };
+    return { role: m.role, content: m.content ?? '' };
   });
 }
 

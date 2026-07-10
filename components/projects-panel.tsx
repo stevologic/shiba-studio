@@ -1,55 +1,44 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { FolderKanban, Pencil, Plus, Trash2, Upload, RefreshCw, FolderOpen, Play, Save, Terminal } from 'lucide-react';
-import { toast } from 'sonner';
+import {
+  FolderKanban, Pencil, Plus, Trash2, Upload, RefreshCw, FolderOpen, Save,
+  MessageSquare, Bot, Globe, FileText, Layers, Sparkles,
+} from 'lucide-react';
+import { toast } from '@/lib/toast';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import type { Project } from '@/lib/project-types';
 import { resolveProjectWorkspace } from '@/lib/project-types';
-import GrokChatPanel from '@/components/grok-chat-panel';
 import FolderBrowseModal from '@/components/folder-browse-modal';
-import PreviewRail from '@/components/preview-rail';
-import WorkspaceDiffPanel from '@/components/workspace-diff-panel';
-import type { GrokModel, Agent, AgentRun } from '@/lib/types';
-import type { TraceStep } from '@/lib/types';
+import type { Agent } from '@/lib/types';
+import InfoHint from '@/components/info-hint';
 
-type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' };
+interface GlobalUploadSummary {
+  name: string;
+  size: number;
+  uploadedAt?: string;
+}
 
 interface ProjectsPanelProps {
-  chatModel: string;
-  onChatModelChange: (model: string) => void;
-  availableModels: ModelOption[];
-  modelsLoading: boolean;
-  modelsError: string | null;
-  onRefreshModels: () => void;
   agents: Agent[];
   defaultWorkspace: string;
-  activeRun: AgentRun | null;
-  liveTrace: TraceStep[];
-  previewSelectedIdx: number | null;
-  onPreviewSelect: (idx: number) => void;
-  onBuildWithAgent: (project: Project, agentId: string, prompt: string) => Promise<void>;
+  defaultChatModel: string;
   onProjectSelect?: (projectId: string | null) => void;
-  /** Notifies the shell that the project count changed (nav badges are load-once). */
   onStatsChange?: () => void;
+  /** Create a chat session linked to the project and open it. */
+  onOpenProjectChat: (sessionId: string) => void;
+  /** Open the agent editor pre-filled from this project. */
+  onCreateAgentFromProject: (project: Project) => void;
 }
 
 export default function ProjectsPanel({
-  chatModel,
-  onChatModelChange,
-  availableModels,
-  modelsLoading,
-  modelsError,
-  onRefreshModels,
   agents,
   defaultWorkspace,
-  activeRun,
-  liveTrace,
-  previewSelectedIdx,
-  onPreviewSelect,
-  onBuildWithAgent,
+  defaultChatModel,
   onProjectSelect,
   onStatsChange,
+  onOpenProjectChat,
+  onCreateAgentFromProject,
 }: ProjectsPanelProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -58,9 +47,7 @@ export default function ProjectsPanel({
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [savingSetup, setSavingSetup] = useState(false);
-  const [buildPrompt, setBuildPrompt] = useState('Implement the project goals in the workspace. Start by exploring the repo, then make focused changes.');
-  const [buildAgentId, setBuildAgentId] = useState('');
-  const [building, setBuilding] = useState(false);
+  const [openingChat, setOpeningChat] = useState(false);
   const [browseOpen, setBrowseOpen] = useState(false);
 
   const [setupInstructions, setSetupInstructions] = useState('');
@@ -68,6 +55,13 @@ export default function ProjectsPanel({
   const [setupDefaultAgent, setSetupDefaultAgent] = useState('');
 
   const [projectsLoaded, setProjectsLoaded] = useState(false);
+
+  // Studio-wide context that is always injected into project chats / agent runs.
+  const [globalInstructions, setGlobalInstructions] = useState('');
+  const [useAgentsMd, setUseAgentsMd] = useState(true);
+  const [globalUploads, setGlobalUploads] = useState<GlobalUploadSummary[]>([]);
+  const [globalUploadsPath, setGlobalUploadsPath] = useState('');
+  const [globalCtxLoading, setGlobalCtxLoading] = useState(true);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -95,9 +89,37 @@ export default function ProjectsPanel({
     return null;
   }, []);
 
+  const loadGlobalContext = useCallback(async () => {
+    setGlobalCtxLoading(true);
+    try {
+      const [cfgRes, syncRes] = await Promise.all([
+        fetch('/api/config').then((r) => r.json()).catch(() => null),
+        fetch('/api/workspace/sync').then((r) => r.json()).catch(() => null),
+      ]);
+      // GET /api/config returns the config object directly (not { ok, config }).
+      if (cfgRes && typeof cfgRes === 'object') {
+        setGlobalInstructions(String(cfgRes.globalInstructions || ''));
+        setUseAgentsMd(cfgRes.useAgentsMd !== false);
+      }
+      if (syncRes?.ok) {
+        setGlobalUploads(
+          (syncRes.uploads || []).map((u: { name: string; size: number; uploadedAt?: string }) => ({
+            name: u.name,
+            size: u.size,
+            uploadedAt: u.uploadedAt,
+          })),
+        );
+        setGlobalUploadsPath(String(syncRes.uploadsPath || ''));
+      }
+    } finally {
+      setGlobalCtxLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    loadProjects();
-  }, [loadProjects]);
+    void loadProjects();
+    void loadGlobalContext();
+  }, [loadProjects, loadGlobalContext]);
 
   useEffect(() => {
     onProjectSelect?.(selectedId);
@@ -110,8 +132,7 @@ export default function ProjectsPanel({
     setSetupInstructions(selectedProject.instructions || '');
     setSetupWorkspace(selectedProject.workspacePath || '');
     setSetupDefaultAgent(selectedProject.defaultAgentId || '');
-    setBuildAgentId(selectedProject.defaultAgentId || agents[0]?.id || '');
-  }, [selectedProject?.id, selectedProject?.instructions, selectedProject?.workspacePath, selectedProject?.defaultAgentId, agents]);
+  }, [selectedProject?.id, selectedProject?.instructions, selectedProject?.workspacePath, selectedProject?.defaultAgentId]);
 
   const effectiveWorkspace = selectedProject
     ? resolveProjectWorkspace(selectedProject, defaultWorkspace)
@@ -173,30 +194,41 @@ export default function ProjectsPanel({
     }
   }
 
-  async function runProjectBuild() {
-    if (!selectedProject || !selectedId) return;
-    const agentId = buildAgentId || setupDefaultAgent || agents[0]?.id;
-    if (!agentId) {
-      toast.error('Create an agent first, or pick a default agent in project setup.');
-      return;
-    }
-    const prompt = buildPrompt.trim();
-    if (!prompt) {
-      toast.error('Enter build instructions.');
-      return;
-    }
-    setBuilding(true);
+  async function openProjectChat() {
+    if (!selectedProject) return;
+    setOpeningChat(true);
     try {
-      const saved = await saveProjectSetup(true);
-      if (!saved) return;
-      await onBuildWithAgent(saved, agentId, prompt);
+      // Persist setup first so the chat sees current instructions/workspace.
+      await saveProjectSetup(true);
+      const res = await fetch('/api/chat-sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          defaults: {
+            title: selectedProject.name,
+            chatModel: defaultChatModel,
+            projectId: selectedProject.id,
+            chatTarget: selectedProject.defaultAgentId || setupDefaultAgent || 'grok',
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.session) throw new Error(data.error || 'Could not open chat');
+      toast.success('Project chat ready');
+      onOpenProjectChat(data.session.id);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not open project chat');
     } finally {
-      setBuilding(false);
+      setOpeningChat(false);
     }
   }
 
-  const projectActiveRun = activeRun?.projectId === selectedId ? activeRun : null;
-  const projectLiveTrace = activeRun?.projectId === selectedId ? liveTrace : [];
+  async function createAgentFromProject() {
+    if (!selectedProject) return;
+    const saved = await saveProjectSetup(true);
+    onCreateAgentFromProject(saved || selectedProject);
+  }
 
   async function renameProject(id: string, e?: React.MouseEvent) {
     e?.stopPropagation();
@@ -229,7 +261,7 @@ export default function ProjectsPanel({
     const current = projects.find((p) => p.id === id);
     const ok = await confirmDialog({
       title: `Delete ${current?.name || 'this project'}?`,
-      message: 'All project files and chat history are permanently deleted.',
+      message: 'All project files are permanently deleted. Linked chats keep their history but lose the project link.',
       confirmLabel: 'Delete',
       danger: true,
     });
@@ -299,6 +331,8 @@ export default function ProjectsPanel({
     setUploading(false);
   }
 
+  const defaultAgentName = agents.find((a) => a.id === (setupDefaultAgent || selectedProject?.defaultAgentId))?.name;
+
   return (
     <div className="projects-page flex flex-col lg:flex-row gap-4 min-h-[calc(100vh-120px)]">
       <div className="grok-card p-4 w-full lg:w-64 shrink-0 flex flex-col">
@@ -311,7 +345,9 @@ export default function ProjectsPanel({
             <Plus size={16} />
           </button>
         </div>
-        <div className="text-[10px] text-dim mb-3">Configure workspace + agent, then chat or build.</div>
+        <div className="text-[10px] text-dim mb-3 leading-relaxed">
+          Bundle a workspace, instructions, and reference files — then open a chat or spin up an agent from them.
+        </div>
         <div className="flex-1 overflow-auto space-y-1 min-h-[120px]">
           {!projectsLoaded && (
             <div className="data-loading-row py-1"><span className="data-spinner" /> Loading projects…</div>
@@ -334,7 +370,8 @@ export default function ProjectsPanel({
               <div className="min-w-0 flex-1">
                 <div className="font-medium text-sm truncate">{p.name}</div>
                 <div className="text-[10px] text-dim mt-0.5">
-                  {p.files.length} file{p.files.length === 1 ? '' : 's'} · {p.messages.length} msg{p.messages.length === 1 ? '' : 's'}
+                  {p.files.length} file{p.files.length === 1 ? '' : 's'}
+                  {p.workspacePath ? ' · workspace set' : ''}
                 </div>
               </div>
               <span className="projects-list-item-actions">
@@ -365,11 +402,143 @@ export default function ProjectsPanel({
           <div className="grok-card p-8 text-center text-dim flex-1 flex items-center justify-center">
             <div>
               <FolderKanban size={40} className="mx-auto mb-3 opacity-30" />
-              <div className="text-sm">Select a project or create one to configure workspace, instructions, and autonomous builds.</div>
+              <div className="text-sm max-w-md mx-auto leading-relaxed">
+                Select a project or create one. Each project packages a workspace folder, instructions, and reference files you can open in chat or hand to a new agent.
+              </div>
             </div>
           </div>
         ) : (
           <>
+            {/* Header + primary actions */}
+            <div className="grok-card p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-lg tracking-tight">{selectedProject.name}</div>
+                  {selectedProject.description && (
+                    <div className="text-xs text-dim mt-1">{selectedProject.description}</div>
+                  )}
+                  <div className="text-[11px] text-dim mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                    <span>{selectedProject.files.length} reference file{selectedProject.files.length === 1 ? '' : 's'}</span>
+                    {defaultAgentName && <span>Default agent: {defaultAgentName}</span>}
+                    <span className="font-mono truncate max-w-[280px]" title={effectiveWorkspace}>
+                      {effectiveWorkspace}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button type="button" onClick={() => loadProject(selectedProject.id)} className="grok-btn grok-btn-ghost text-xs" title="Refresh">
+                    <RefreshCw size={14} />
+                  </button>
+                  <button type="button" onClick={() => deleteProject(selectedProject.id)} className="grok-btn grok-btn-ghost text-xs text-error" title="Delete project">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="project-action-row mt-4">
+                <button
+                  type="button"
+                  onClick={() => void openProjectChat()}
+                  disabled={openingChat}
+                  className="project-action-card project-action-card-primary"
+                >
+                  <span className="project-action-icon">
+                    <MessageSquare size={18} />
+                  </span>
+                  <span className="project-action-copy">
+                    <span className="project-action-title">
+                      {openingChat ? 'Opening chat…' : 'Open project chat'}
+                    </span>
+                    <span className="project-action-sub">
+                      Start a Grok conversation with this project&apos;s instructions, files, and workspace already loaded as context.
+                    </span>
+                  </span>
+                  <Sparkles size={14} className="project-action-spark" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void createAgentFromProject()}
+                  className="project-action-card project-action-card-secondary"
+                >
+                  <span className="project-action-icon">
+                    <Bot size={18} />
+                  </span>
+                  <span className="project-action-copy">
+                    <span className="project-action-title">Build an agent from this project</span>
+                    <span className="project-action-sub">
+                      Create a new agent pre-filled with this workspace and project instructions — ready to schedule or run.
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Global context */}
+            <div className="grok-card p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Globe size={16} className="text-accent" />
+                <div className="font-semibold text-sm">Global context always included</div>
+                <InfoHint text="Studio-wide materials are injected into every project chat and agent run, alongside this project's own setup. Manage them under Workspace (uploads) and Settings (instructions)." />
+              </div>
+              <div className="text-[11px] text-dim mb-3 leading-relaxed">
+                These ride along automatically with any chat or agent you launch from this project — you do not need to re-attach them.
+              </div>
+
+              {globalCtxLoading ? (
+                <div className="data-loading-row py-2"><span className="data-spinner" /> Loading global context…</div>
+              ) : (
+                <div className="project-global-grid">
+                  <div className="project-global-tile">
+                    <div className="project-global-tile-head">
+                      <FileText size={14} />
+                      <span>Studio instructions</span>
+                    </div>
+                    {globalInstructions.trim() ? (
+                      <pre className="project-global-snippet">{globalInstructions.trim().slice(0, 480)}{globalInstructions.trim().length > 480 ? '…' : ''}</pre>
+                    ) : (
+                      <div className="text-xs text-dim leading-relaxed">
+                        No global instructions set. Add them in Settings so every chat and agent shares the same house rules.
+                      </div>
+                    )}
+                    <div className="text-[10px] text-dim mt-2">
+                      {useAgentsMd ? 'AGENTS.md from the repo is also applied when present.' : 'AGENTS.md injection is disabled in Settings.'}
+                    </div>
+                  </div>
+
+                  <div className="project-global-tile">
+                    <div className="project-global-tile-head">
+                      <Layers size={14} />
+                      <span>Global uploads</span>
+                      <span className="project-global-count">{globalUploads.length}</span>
+                    </div>
+                    {globalUploads.length === 0 ? (
+                      <div className="text-xs text-dim leading-relaxed">
+                        No shared files yet. Drop docs into Workspace → Global uploads and they become available to all projects, chats, and agents.
+                      </div>
+                    ) : (
+                      <ul className="project-global-file-list">
+                        {globalUploads.slice(0, 8).map((f) => (
+                          <li key={f.name}>
+                            <span className="font-mono truncate">{f.name}</span>
+                            <span className="text-dim shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
+                          </li>
+                        ))}
+                        {globalUploads.length > 8 && (
+                          <li className="text-dim">+{globalUploads.length - 8} more in Workspace</li>
+                        )}
+                      </ul>
+                    )}
+                    {globalUploadsPath && (
+                      <div className="text-[10px] text-dim mt-2 font-mono truncate" title={globalUploadsPath}>
+                        {globalUploadsPath}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Project setup */}
             <div className="grok-card p-4">
               <div className="font-semibold text-sm mb-3">Project setup</div>
               <div className="space-y-3">
@@ -396,17 +565,17 @@ export default function ProjectsPanel({
                     </button>
                   </div>
                   <div className="text-[10px] text-dim mt-1">
-                    Build runs use: <span className="font-mono">{effectiveWorkspace}</span>
+                    Effective path: <span className="font-mono">{effectiveWorkspace}</span>
                   </div>
                 </div>
                 <div>
-                  <div className="grok-label text-xs">Default agent</div>
+                  <div className="grok-label text-xs">Default agent (optional)</div>
                   <select
                     className="grok-select w-full text-xs mt-1"
                     value={setupDefaultAgent}
                     onChange={(e) => setSetupDefaultAgent(e.target.value)}
                   >
-                    <option value="">— Select agent —</option>
+                    <option value="">Grok (default) — or pick an agent for project chats</option>
                     {agents.map((a) => (
                       <option key={a.id} value={a.id}>{a.name}</option>
                     ))}
@@ -418,84 +587,24 @@ export default function ProjectsPanel({
               </div>
             </div>
 
+            {/* Project files */}
             <div className="grok-card p-4">
-              <div className="font-semibold text-sm mb-3 flex items-center gap-2">
-                <Play size={16} /> Build with agent
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div className="font-semibold text-sm flex items-center gap-2">
+                  <Upload size={15} />
+                  Project reference files
+                </div>
+                <label className="grok-btn grok-btn-secondary text-xs cursor-pointer">
+                  <Upload size={14} /> Add files
+                  <input type="file" multiple className="hidden" onChange={(e) => e.target.files && uploadToProject(e.target.files)} />
+                </label>
               </div>
-              <div className="flex flex-wrap gap-2 mb-2">
-                <select
-                  className="grok-select text-xs min-w-[160px]"
-                  value={buildAgentId}
-                  onChange={(e) => setBuildAgentId(e.target.value)}
-                >
-                  {agents.length === 0 && <option value="">No agents — create one in Agents tab</option>}
-                  {agents.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </select>
-              </div>
-              <textarea
-                className="grok-input text-xs min-h-[72px] mb-2"
-                value={buildPrompt}
-                onChange={(e) => setBuildPrompt(e.target.value)}
-                placeholder="What should the agent build or change?"
-              />
-              <button
-                type="button"
-                onClick={() => void runProjectBuild()}
-                disabled={building || agents.length === 0}
-                className="grok-btn grok-btn-primary text-xs"
-              >
-                <Play size={14} /> {building ? 'Building…' : 'Run autonomous build'}
-              </button>
-            </div>
-
-            {projectLiveTrace.length > 0 && selectedId && (
-              <div className="grok-card p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Terminal size={16} />
-                  <div className="font-medium text-sm">Build trace</div>
-                  {projectActiveRun && <span className="badge">{projectActiveRun.status}</span>}
-                </div>
-                <div className="font-mono text-xs overflow-auto max-h-[280px] bg-black/40 p-3 rounded">
-                  {projectLiveTrace.map((step, idx) => (
-                    <div key={step.id || idx} className={`trace-step mb-3 ${step.type}`}>
-                      <div className="text-[10px] text-dim">{step.ts ? new Date(step.ts).toLocaleTimeString() : ''} — {step.type.toUpperCase()}</div>
-                      <div className="mt-0.5">{step.content}</div>
-                    </div>
-                  ))}
-                </div>
-                <PreviewRail trace={projectLiveTrace} selectedIdx={previewSelectedIdx} onSelect={onPreviewSelect} />
-                {projectActiveRun?.status !== 'running' && (
-                  <WorkspaceDiffPanel workspaceDir={projectActiveRun?.workspaceSnapshot} runId={projectActiveRun?.id} />
-                )}
-              </div>
-            )}
-
-            <div className="grok-card p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="font-semibold text-lg">{selectedProject.name}</div>
-                  {selectedProject.description && (
-                    <div className="text-xs text-dim mt-1">{selectedProject.description}</div>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => loadProject(selectedProject.id)} className="grok-btn grok-btn-ghost text-xs">
-                    <RefreshCw size={14} />
-                  </button>
-                  <button type="button" onClick={() => deleteProject(selectedProject.id)} className="grok-btn grok-btn-ghost text-xs text-error">
-                    <Trash2 size={14} />
-                  </button>
-                  <label className="grok-btn grok-btn-secondary text-xs cursor-pointer">
-                    <Upload size={14} /> Add files
-                    <input type="file" multiple className="hidden" onChange={(e) => e.target.files && uploadToProject(e.target.files)} />
-                  </label>
-                </div>
+              <div className="text-[11px] text-dim mb-3 leading-relaxed">
+                Files here are project-scoped context (specs, designs, samples). Global uploads above apply to the whole studio.
               </div>
 
               <div
-                className={`workspace-dropzone mt-3 py-6 ${dragOver ? 'workspace-dropzone-active' : ''}`}
+                className={`workspace-dropzone py-6 ${dragOver ? 'workspace-dropzone-active' : ''}`}
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={(e) => {
@@ -523,20 +632,6 @@ export default function ProjectsPanel({
                   ))}
                 </div>
               )}
-            </div>
-
-            <div className="flex-1 min-h-0">
-              <GrokChatPanel
-                chatModel={chatModel}
-                onChatModelChange={(m) => onChatModelChange(m as GrokModel)}
-                availableModels={availableModels}
-                modelsLoading={modelsLoading}
-                modelsError={modelsError}
-                onRefreshModels={onRefreshModels}
-                agents={agents}
-                project={selectedProject}
-                onProjectUpdated={() => loadProject(selectedProject.id)}
-              />
             </div>
           </>
         )}

@@ -144,13 +144,24 @@ export async function detectGrokCli(force = false): Promise<GrokCliStatus> {
 export function grokCliModelId(modelRef?: string): string | undefined {
   if (!modelRef?.trim()) return undefined;
   const ref = parseModelRef(modelRef);
-  if (ref.provider === 'cloud') return ref.id;
+  // Accept cloud:/cli:/grok-cli: or bare ids — CLI always wants the bare model name.
+  if (ref.provider === 'cloud' || ref.provider === 'cli' || ref.provider === 'local') {
+    return ref.id || undefined;
+  }
   return ref.id || undefined;
 }
 
-function buildCliArgs(opts: GrokCliRunOptions): string[] {
+/**
+ * Windows CreateProcess caps the full command line at ~32,767 chars; cmd.exe
+ * is ~8,191. Multi-turn chat histories (especially ones with embedded
+ * browser-screenshot data URIs) blow past that and surface as
+ * `Error: spawn ENAMETOOLONG`. Above this threshold we hand the prompt to the
+ * CLI via `--prompt-file` instead of `-p`.
+ */
+const PROMPT_INLINE_MAX_BYTES = 4_000;
+
+function buildCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): string[] {
   const args = [
-    '-p', opts.prompt,
     '--output-format', opts.outputFormat || 'plain',
     '--permission-mode', 'bypassPermissions',
   ];
@@ -159,7 +170,15 @@ function buildCliArgs(opts: GrokCliRunOptions): string[] {
   if (model) args.push('-m', model);
   if (opts.reasoningEffort) args.push('--reasoning-effort', opts.reasoningEffort);
   if (opts.maxTurns != null) args.push('--max-turns', String(opts.maxTurns));
-  if (opts.systemPrompt?.trim()) args.push('--system-prompt-override', opts.systemPrompt.trim());
+  // Keep system overrides short when inlined — oversized ones also hit the
+  // spawn limit. Long system context is already folded into `prompt` by the
+  // stream route via buildCliPromptFromMessages.
+  if (opts.systemPrompt?.trim()) {
+    const sys = opts.systemPrompt.trim();
+    if (Buffer.byteLength(sys, 'utf8') <= PROMPT_INLINE_MAX_BYTES) {
+      args.push('--system-prompt-override', sys);
+    }
+  }
   if (opts.effort && ['low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) {
     args.push('--effort', opts.effort);
   }
@@ -167,6 +186,46 @@ function buildCliArgs(opts: GrokCliRunOptions): string[] {
   if (opts.bestOfN && opts.bestOfN >= 2) args.push('--best-of-n', String(Math.min(4, Math.floor(opts.bestOfN))));
   if (opts.jsonSchema?.trim()) args.push('--json-schema', opts.jsonSchema.trim());
   return args;
+}
+
+/** Materialize CLI args, spilling long prompts to a temp file. Caller must run cleanup(). */
+async function materializeCliArgs(opts: GrokCliRunOptions): Promise<{
+  args: string[];
+  cleanup: () => Promise<void>;
+}> {
+  const base = buildCliArgsBase(opts);
+  const prompt = opts.prompt || '';
+  const promptBytes = Buffer.byteLength(prompt, 'utf8');
+
+  if (promptBytes <= PROMPT_INLINE_MAX_BYTES) {
+    return { args: ['-p', prompt, ...base], cleanup: async () => {} };
+  }
+
+  const fs = await import('fs/promises');
+  const os = await import('os');
+  const path = await import('path');
+  const file = path.join(
+    os.tmpdir(),
+    `shiba-grok-cli-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.txt`,
+  );
+  await fs.writeFile(file, prompt, 'utf8');
+  return {
+    args: ['--prompt-file', file, ...base],
+    cleanup: async () => {
+      try { await fs.unlink(file); } catch { /* best-effort */ }
+    },
+  };
+}
+
+function friendlySpawnError(err: Error): string {
+  const msg = err.message || String(err);
+  if (/ENAMETOOLONG/i.test(msg)) {
+    return (
+      'Grok CLI prompt is too long for this OS to spawn (ENAMETOOLONG). ' +
+      'Try clearing older messages with screenshots, or switch off Grok CLI mode and use the cloud API.'
+    );
+  }
+  return msg;
 }
 
 export interface GrokCliUpdateInfo {
@@ -206,17 +265,31 @@ export async function checkGrokCliUpdate(): Promise<GrokCliUpdateInfo> {
   }
 }
 
+/**
+ * CLI is text-only. Inline `data:image/...;base64,...` blobs (browser screenshots
+ * appended by the agent tool loop) are useless there and routinely push the
+ * prompt past Windows spawn limits. Replace them with short placeholders.
+ */
+export function sanitizeCliPromptContent(content: string): string {
+  if (!content) return '';
+  return content
+    .replace(/!\[[^\]]*\]\(\s*data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+\)/gi, '![image omitted]')
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]{80,}/gi, '[image data omitted]');
+}
+
 export function buildCliPromptFromMessages(
   messages: Array<{ role: string; content: string }>,
   systemParts: string[] = [],
 ): string {
   const lines: string[] = [];
   if (systemParts.length) {
-    lines.push(systemParts.join('\n\n'), '');
+    const system = sanitizeCliPromptContent(systemParts.join('\n\n'));
+    if (system.trim()) lines.push(system, '');
   }
   for (const m of messages) {
     const role = m.role === 'assistant' ? 'Assistant' : m.role === 'system' ? 'System' : 'User';
-    if (m.content?.trim()) lines.push(`${role}: ${m.content.trim()}`);
+    const text = sanitizeCliPromptContent(m.content || '').trim();
+    if (text) lines.push(`${role}: ${text}`);
   }
   lines.push('', 'Reply as Assistant:');
   return lines.join('\n');
@@ -238,7 +311,10 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
     };
   }
 
-  const args = buildCliArgs(opts);
+  const { args, cleanup } = await materializeCliArgs({
+    ...opts,
+    prompt: sanitizeCliPromptContent(opts.prompt),
+  });
   const executable = status.path || 'grok';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const child = await spawnCli(executable, args, { cwd: opts.cwd, signal: opts.signal });
@@ -252,6 +328,7 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      void cleanup();
       resolve(result);
     };
 
@@ -268,7 +345,7 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
     child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
     child.on('error', (err) => {
-      finish({ ok: false, stdout, stderr: err.message, code: 1 });
+      finish({ ok: false, stdout, stderr: friendlySpawnError(err), code: 1 });
     });
     child.on('close', (code) => {
       finish({
@@ -303,13 +380,15 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
 
   const executable = status.path || 'grok';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // Sanitize once — stream retries only change the model, not the body.
+  const safePrompt = sanitizeCliPromptContent(opts.prompt);
   // Installed CLIs ship with a fixed model list — if the selected model is newer
   // than the binary, retry once with the CLI's own default model.
   const modelAttempts: Array<string | undefined> = opts.model ? [opts.model, undefined] : [undefined];
 
   for (let attempt = 0; attempt < modelAttempts.length; attempt++) {
     const model = modelAttempts[attempt];
-    const args = buildCliArgs({ ...opts, model });
+    const { args, cleanup } = await materializeCliArgs({ ...opts, model, prompt: safePrompt });
     const child = await spawnCli(executable, args, { cwd: opts.cwd, signal: opts.signal });
 
     let stderr = '';
@@ -338,7 +417,7 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
       wake?.();
     });
     child.on('error', (err) => {
-      stderr += err.message;
+      stderr += friendlySpawnError(err);
       closed = true;
       wake?.();
     });
@@ -355,19 +434,25 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
       wake?.();
     }, { once: true });
 
-    while (!closed || buffer.length) {
-      if (buffer.length) {
-        yield { type: 'content', delta: buffer.shift()! };
-      } else if (!closed) {
-        await wait();
-        wake = null;
-      } else {
-        break;
+    try {
+      while (!closed || buffer.length) {
+        if (buffer.length) {
+          yield { type: 'content', delta: buffer.shift()! };
+        } else if (!closed) {
+          await wait();
+          wake = null;
+        } else {
+          break;
+        }
       }
+    } finally {
+      await cleanup();
     }
 
     if (exitCode === 0 || gotStdout) {
-      yield { type: 'done', model: `grok-cli:${model ? grokCliModelId(model) : 'default'}` };
+      // Prefer cli: so the model badge shows "CLI" (legacy grok-cli: still parses).
+      const bare = model ? grokCliModelId(model) : 'default';
+      yield { type: 'done', model: `cli:${bare || 'default'}` };
       return;
     }
 

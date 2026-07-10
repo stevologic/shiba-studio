@@ -53,8 +53,26 @@ export function getToolDefinitions(
       type: 'function',
       function: {
         name: 'shell_exec',
-        description: 'Run a shell command in the agent workspace (node, npm, git, python etc). Keep commands safe and short.',
+        description: 'Run a one-shot shell command in the agent workspace (node, npm, git, python etc). Keep commands safe and short. Does not use the Studio Terminal UI.',
         parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'terminal_exec',
+        description:
+          'Run a command in the shared Studio Terminal (the interactive PTY panel the user can open with Ctrl+`). ' +
+          'The user sees the command and output live. Prefer this when the user asked to use the terminal, for multi-step shell work they should watch, or to leave cwd/env state for follow-up commands. ' +
+          'Use shell_exec for silent one-shot workspace commands. Avoid interactive full-screen apps (vim, less, top).',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: 'Shell command to run in the Studio Terminal' },
+            timeoutMs: { type: 'number', description: 'Optional timeout in ms (default 45000, max 180000)' },
+          },
+          required: ['command'],
+        },
       },
     },
     {
@@ -489,11 +507,30 @@ async function* agentRunGenerator(
     setIntegrationCreds(mergeAgentIntegrationCreds(cfg.integrations || {}, agent.integrationOverrides));
   }
   const cloudAuth = await resolveCloudBearer(cfg, modelRef.authSource);
-  const modelError = modelRef.provider === 'local'
+  let modelError = modelRef.provider === 'local'
     ? (!cfg.localGrokEnabled ? 'Local Grok is disabled. Enable it in Settings or switch this agent to a Cloud model.' : null)
     : (!cloudAuth.hasCloudAuth
       ? 'No cloud credentials configured. Add an xAI API key, sign in with X (OAuth) in Settings, or switch to a Local model.'
       : null);
+  // Run guards — refuse before any model spend: monthly/daily budget hard
+  // stop, (cloud models) reachability, then the atomic concurrency slot claim
+  // LAST so a refusal for other reasons never leaks a claimed slot.
+  const guards = await import('./run-guards');
+  const scheduleKey = opts.scheduleId ? `${agent.id}:${opts.scheduleId}` : undefined;
+  let runSlotClaimed = false;
+  if (!modelError) modelError = await guards.checkSpendGuard(cfg, modelRef.provider === 'local');
+  if (!modelError && modelRef.provider !== 'local' && !opts.grokChatFn) {
+    const reach = await guards.cloudReachable();
+    if (!reach.ok) {
+      modelError = 'api.x.ai is unreachable from this machine (offline?). '
+        + 'The run was not started — check your connection, or switch to a local model.';
+    }
+  }
+  if (!modelError) {
+    modelError = guards.tryAcquireRunSlot(cfg, runId, agent.id, agent.name, scheduleKey);
+    runSlotClaimed = !modelError;
+  }
+  void runSlotClaimed; // released in the run loop's finally (sweeper reclaims pathological leaks)
   if (!modelError && modelRef.provider !== 'local') {
     // Pin the same credential the model selection chose, if any.
     const { setApiKey } = await import('./grok-client');
@@ -557,6 +594,11 @@ async function* agentRunGenerator(
   if (cliStatus.installed && origin === 'local') tools.push(grokCliToolDefinition());
   const mcpServers = origin === 'local' ? await listEnabledMcpServers() : [];
   if (mcpServers.length) tools.push(...mcpToolDefinitions());
+  // Honor Capabilities → Tools toggles (global disabled list).
+  const { filterToolsByDisabled } = await import('./disabled-tools');
+  const enabledTools = filterToolsByDisabled(tools, cfg.disabledTools);
+  tools.length = 0;
+  tools.push(...enabledTools);
   const globalUploadsPath = await getGlobalUploadsDir();
   const { buildGlobalInstructionsContext } = await import('./global-instructions');
   const globalInstructionsText = await buildGlobalInstructionsContext(cfg);
@@ -587,6 +629,8 @@ async function* agentRunGenerator(
   let finalOutput = '';
   let steps = 0;
   const sideEffects: string[] = [];
+  const tokenCap = guards.perRunTokenCap(cfg);
+  let runTokens = 0;
 
   try {
     while (steps < MAX_STEPS) {
@@ -599,6 +643,18 @@ async function* agentRunGenerator(
         tool_choice: 'auto',
         usageContext: { source: 'agent', sourceId: runId },
       });
+      if (tokenCap > 0) {
+        const { parseGrokUsage } = await import('./usage');
+        runTokens += parseGrokUsage(resp?.usage)?.totalTokens ?? 0;
+        if (runTokens >= tokenCap) {
+          yield emit({
+            id: uuidv4(), ts: new Date().toISOString(), type: 'error',
+            content: `Per-run token cap reached (${runTokens.toLocaleString()} of ${tokenCap.toLocaleString()} tokens) — run stopped. Raise the cap in Settings → Cost & safety.`,
+          });
+          audit('run', 'token cap reached', `${agent.name}: ${runTokens} tokens (cap ${tokenCap})`, { runId, agentId: agent.id });
+          break;
+        }
+      }
       const choice = resp.choices?.[0];
       const msg = choice?.message;
       if (!msg) break;
@@ -689,6 +745,7 @@ async function* agentRunGenerator(
   } catch (e: any) {
     yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: e.message || String(e) });
   } finally {
+    guards.releaseActiveRun(runId);
     await Browser.closeRunPage(runId).catch(() => {});
   }
 

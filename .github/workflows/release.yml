@@ -1,0 +1,55 @@
+name: Release
+
+# Tag a commit `v*` (matching package.json's version) to cut a GitHub Release:
+#   git tag v0.2.0 && git push origin v0.2.0
+# The in-app footer notice compares against the latest release of this repo.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_V=$(node -p "require('./package.json').version")
+          TAG_V="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_V" != "$TAG_V" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_V"
+            exit 1
+          fi
+
+      - name: Install & verify
+        run: |
+          npm ci
+          npm run lint || true   # non-blocking until lint debt is zero (TODO.md §4)
+          npx tsc --noEmit
+          npm run build
+          npm test
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          awk -v ver="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" ver "\\]" { grab = 1; next }
+            grab && /^## \[/ { exit }
+            grab { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          [ -s RELEASE_NOTES.md ] || echo "See CHANGELOG.md" > RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: false

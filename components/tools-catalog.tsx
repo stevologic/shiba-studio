@@ -2,10 +2,12 @@
 
 // Built-in agent tool catalog — surfaced on the Capabilities page so users can
 // see exactly what agents can call during runs (sourced live from the runtime
-// definitions via /api/tools, never a hardcoded copy).
+// definitions via /api/tools, never a hardcoded copy). Each tool has a toggle
+// to disable it globally for agent runs and workspace chat.
 
 import React, { useEffect, useState } from 'react';
 import { Wrench, TerminalSquare, Globe, Plug2, Workflow, Boxes, Search, Compass, Brain, Image as ImageIcon } from 'lucide-react';
+import { toast } from '@/lib/toast';
 import InfoHint from '@/components/info-hint';
 
 interface ToolEntry {
@@ -14,6 +16,7 @@ interface ToolEntry {
   group: string;
   requires?: string;
   localOnly: boolean;
+  enabled: boolean;
 }
 
 const GROUP_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
@@ -42,6 +45,7 @@ const GROUP_BLURBS: Record<string, string> = {
 const GROUP_ORDER = ['Workspace & Files', 'Web & Research', 'Browser Automation', 'Memory', 'AI Generation', 'Integrations', 'Orchestration', 'MCP'];
 
 function requirementChip(tool: ToolEntry): { label: string; cls: string } {
+  if (!tool.enabled) return { label: 'disabled', cls: 'tool-chip-disabled' };
   if (tool.localOnly) return { label: 'local agents', cls: 'tool-chip-local' };
   if (tool.requires === 'peers') return { label: 'needs peers', cls: 'tool-chip-req' };
   if (tool.requires === 'mcp') return { label: 'needs MCP server', cls: 'tool-chip-req' };
@@ -53,6 +57,7 @@ function requirementChip(tool: ToolEntry): { label: string; cls: string } {
 export default function ToolsCatalog() {
   const [tools, setTools] = useState<ToolEntry[] | null>(null);
   const [filter, setFilter] = useState('');
+  const [pending, setPending] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let stale = false;
@@ -60,13 +65,104 @@ export default function ToolsCatalog() {
       try {
         const res = await fetch('/api/tools');
         const data = await res.json();
-        if (!stale && data.ok) setTools(data.tools || []);
+        if (!stale && data.ok) {
+          setTools((data.tools || []).map((t: ToolEntry) => ({
+            ...t,
+            enabled: t.enabled !== false,
+          })));
+        }
       } catch {
         if (!stale) setTools([]);
       }
     })();
     return () => { stale = true; };
   }, []);
+
+  async function toggleTool(tool: ToolEntry, enabled: boolean) {
+    if (pending[tool.name]) return;
+    setPending((p) => ({ ...p, [tool.name]: true }));
+    // Optimistic update
+    setTools((list) =>
+      (list || []).map((t) => (t.name === tool.name ? { ...t, enabled } : t)),
+    );
+    try {
+      const res = await fetch('/api/tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: tool.name, enabled }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Update failed');
+      // Reconcile from server list if provided
+      if (Array.isArray(data.disabledTools)) {
+        const disabled = new Set(data.disabledTools as string[]);
+        setTools((list) =>
+          (list || []).map((t) => ({ ...t, enabled: !disabled.has(t.name) })),
+        );
+      }
+    } catch (e: unknown) {
+      // Revert
+      setTools((list) =>
+        (list || []).map((t) => (t.name === tool.name ? { ...t, enabled: tool.enabled } : t)),
+      );
+      toast.error(e instanceof Error ? e.message : 'Could not update tool');
+    }
+    setPending((p) => {
+      const next = { ...p };
+      delete next[tool.name];
+      return next;
+    });
+  }
+
+  async function setGroupEnabled(group: string, enabled: boolean) {
+    const groupTools = (tools || []).filter((t) => t.group === group);
+    if (!groupTools.length) return;
+    setPending((p) => {
+      const next = { ...p };
+      for (const t of groupTools) next[t.name] = true;
+      return next;
+    });
+    setTools((list) =>
+      (list || []).map((t) => (t.group === group ? { ...t, enabled } : t)),
+    );
+    try {
+      // Build next disabled list from current catalog + this group change
+      const disabled = new Set(
+        (tools || []).filter((t) => !t.enabled && t.group !== group).map((t) => t.name),
+      );
+      if (!enabled) {
+        for (const t of groupTools) disabled.add(t.name);
+      } else {
+        for (const t of groupTools) disabled.delete(t.name);
+      }
+      const res = await fetch('/api/tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disabledTools: [...disabled] }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Update failed');
+      if (Array.isArray(data.disabledTools)) {
+        const set = new Set(data.disabledTools as string[]);
+        setTools((list) =>
+          (list || []).map((t) => ({ ...t, enabled: !set.has(t.name) })),
+        );
+      }
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not update group');
+      // Reload
+      try {
+        const res = await fetch('/api/tools');
+        const data = await res.json();
+        if (data.ok) setTools(data.tools || []);
+      } catch { /* */ }
+    }
+    setPending((p) => {
+      const next = { ...p };
+      for (const t of groupTools) delete next[t.name];
+      return next;
+    });
+  }
 
   const q = filter.trim().toLowerCase();
   const visible = (tools || []).filter(
@@ -76,6 +172,7 @@ export default function ToolsCatalog() {
     ...GROUP_ORDER.filter((g) => visible.some((t) => t.group === g)),
     ...[...new Set(visible.map((t) => t.group))].filter((g) => !GROUP_ORDER.includes(g)),
   ];
+  const disabledCount = (tools || []).filter((t) => !t.enabled).length;
 
   return (
     <div className="tools-section mt-10 pt-8 border-t border-default">
@@ -84,10 +181,13 @@ export default function ToolsCatalog() {
           <div className="text-xl font-semibold flex items-center gap-2">
             <Wrench size={18} className="opacity-70" />
             Tools
-            <InfoHint text="This catalog is sourced live from the runtime — what you see is exactly what agents can call. Chips show what unlocks each tool." />
+            <InfoHint text="Toggle any tool off to hide it from agents and workspace chat. Disabled tools are never offered to the model and are blocked if still called. Changes apply to the next run." />
           </div>
           <div className="text-sm text-muted mt-1">
-            Built-in abilities every agent can call during runs — scoped by agent type (local/cloud) and enabled integrations.
+            Built-in abilities every agent can call during runs — use the switch on each tile to disable a function globally.
+            {disabledCount > 0 && (
+              <span className="ml-1 text-dim">· {disabledCount} disabled</span>
+            )}
           </div>
         </div>
         <div className="tool-filter">
@@ -111,26 +211,70 @@ export default function ToolsCatalog() {
           {groupNames.map((group) => {
             const Icon = GROUP_ICONS[group] || Wrench;
             const groupTools = visible.filter((t) => t.group === group);
+            const allOn = groupTools.every((t) => t.enabled);
+            const allOff = groupTools.every((t) => !t.enabled);
             return (
               <div key={group} className="grok-card p-4 tool-group">
                 <div className="tool-group-head">
                   <Icon size={16} className="opacity-70 shrink-0" />
                   <span className="font-medium text-sm">{group}</span>
                   <span className="text-[11px] text-dim tool-group-blurb">{GROUP_BLURBS[group] || ''}</span>
-                  <span className="text-[10px] text-dim font-mono ml-auto shrink-0">
-                    {groupTools.length} tool{groupTools.length === 1 ? '' : 's'}
-                  </span>
+                  <div className="ml-auto shrink-0 flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="text-[10px] text-dim hover:text-muted underline-offset-2 hover:underline"
+                      onClick={() => void setGroupEnabled(group, true)}
+                      disabled={allOn}
+                      title="Enable all tools in this group"
+                    >
+                      All on
+                    </button>
+                    <button
+                      type="button"
+                      className="text-[10px] text-dim hover:text-muted underline-offset-2 hover:underline"
+                      onClick={() => void setGroupEnabled(group, false)}
+                      disabled={allOff}
+                      title="Disable all tools in this group"
+                    >
+                      All off
+                    </button>
+                    <span className="text-[10px] text-dim font-mono">
+                      {groupTools.filter((t) => t.enabled).length}/{groupTools.length}
+                    </span>
+                  </div>
                 </div>
                 <div className="tool-grid">
                   {groupTools.map((tool) => {
                     const chip = requirementChip(tool);
+                    const busy = !!pending[tool.name];
                     return (
-                      <div key={tool.name} className="tool-tile">
+                      <div
+                        key={tool.name}
+                        className={`tool-tile ${tool.enabled ? '' : 'tool-tile-disabled'}`}
+                      >
                         <div className="tool-tile-head">
                           <span className="font-mono text-[11px] tool-row-name">{tool.name}</span>
-                          <span className={`tool-chip ${chip.cls}`}>{chip.label}</span>
+                          <label
+                            className={`tool-toggle ${busy ? 'tool-toggle-busy' : ''}`}
+                            title={tool.enabled ? `Disable ${tool.name}` : `Enable ${tool.name}`}
+                          >
+                            <input
+                              type="checkbox"
+                              role="switch"
+                              checked={tool.enabled}
+                              disabled={busy}
+                              onChange={(e) => void toggleTool(tool, e.target.checked)}
+                              aria-label={`${tool.enabled ? 'Disable' : 'Enable'} ${tool.name}`}
+                            />
+                            <span className="tool-toggle-track" aria-hidden>
+                              <span className="tool-toggle-thumb" />
+                            </span>
+                          </label>
                         </div>
                         <div className="tool-tile-desc">{tool.description}</div>
+                        <div className="mt-2">
+                          <span className={`tool-chip ${chip.cls}`}>{chip.label}</span>
+                        </div>
                       </div>
                     );
                   })}

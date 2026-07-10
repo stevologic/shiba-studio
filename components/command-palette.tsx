@@ -13,40 +13,88 @@ export interface CommandPaletteItem {
   run: () => void;
 }
 
+/** Mirror of lib/global-search's SearchHit — that module is server-only. */
+interface GlobalSearchHit {
+  kind: 'chat' | 'run' | 'log';
+  id: string;
+  title: string;
+  snippet: string;
+  ts: string;
+  href: string;
+}
+
+const HIT_GROUP: Record<GlobalSearchHit['kind'], string> = {
+  chat: 'Chats',
+  run: 'Agent runs',
+  log: 'Audit log',
+};
+
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   commands: CommandPaletteItem[];
+  /** SPA navigation for search hits (falls back to a full page load). */
+  onOpenHref?: (href: string) => void;
 }
 
-export default function CommandPalette({ open, onClose, commands }: CommandPaletteProps) {
+export default function CommandPalette({ open, onClose, commands, onOpenHref }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
+  const [hits, setHits] = useState<GlobalSearchHit[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Global content search (chats/runs/logs via /api/search) — debounced,
+  // kicks in from 3 chars so short command filters stay instant. Hits are
+  // hidden (not cleared) below the threshold, so the effect only fetches.
+  useEffect(() => {
+    const q = query.trim();
+    if (!open || q.length < 3) return;
+    const ctl = new AbortController();
+    const t = window.setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctl.signal });
+        const data = await res.json();
+        if (data.ok) setHits(data.hits || []);
+      } catch {
+        /* aborted or offline — keep previous */
+      }
+    }, 200);
+    return () => {
+      window.clearTimeout(t);
+      ctl.abort();
+    };
+  }, [query, open]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return commands;
-    return commands.filter((cmd) => {
+    const matching = !q ? commands : commands.filter((cmd) => {
       const hay = [cmd.label, cmd.hint, cmd.group, ...(cmd.keywords || [])]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [commands, query]);
+    const visibleHits = q.length >= 3 ? hits : [];
+    const hitItems: CommandPaletteItem[] = visibleHits.map((h) => ({
+      id: `search-${h.kind}-${h.id}`,
+      label: h.title,
+      hint: h.snippet,
+      group: HIT_GROUP[h.kind],
+      run: () => {
+        if (onOpenHref) onOpenHref(h.href);
+        else window.location.assign(h.href);
+      },
+    }));
+    return [...matching, ...hitItems];
+  }, [commands, query, hits, onOpenHref]);
 
+  // The parent mounts the palette fresh on every open, so initial state
+  // already covers query/activeIdx resets — this effect only moves focus.
   useEffect(() => {
     if (!open) return;
-    setQuery('');
-    setActiveIdx(0);
     const t = window.setTimeout(() => inputRef.current?.focus(), 30);
     return () => window.clearTimeout(t);
   }, [open]);
-
-  useEffect(() => {
-    setActiveIdx(0);
-  }, [query]);
 
   useEffect(() => {
     if (!open) return;
@@ -99,8 +147,8 @@ export default function CommandPalette({ open, onClose, commands }: CommandPalet
               <input
                 ref={inputRef}
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search commands…"
+                onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
+                placeholder="Search commands, chats, runs, logs…"
                 className="command-palette-input"
                 aria-label="Command palette search"
               />

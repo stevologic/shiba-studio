@@ -14,7 +14,7 @@ export interface MultiAgentChatParams {
 function latestUserMessage(messages: ChatMessagePayload[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === 'user' && messages[i].content?.trim()) {
-      return messages[i].content.trim();
+      return (messages[i].content || '').trim();
     }
   }
   return '';

@@ -51,6 +51,12 @@ next-env.d.ts
 # runtime logs and automation artifacts
 *.log
 periodic_log.txt
+daily-summary.js
+daily-summary.json
+daily_summary.py
+daily_summary.txt
+/project-builder-ws-folder/
+/research/
 
 # local-only Claude Code settings
 .claude/settings.local.json

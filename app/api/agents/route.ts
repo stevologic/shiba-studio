@@ -73,6 +73,9 @@ export async function POST(req: NextRequest) {
     peers: body.peers || [],
     skills: body.skills || [],
     chatSkill: body.chatSkill || '',
+    voiceId: typeof body.voiceId === 'string' && body.voiceId.trim()
+      ? body.voiceId.trim().toLowerCase()
+      : undefined,
     schedules: initSchedules,
     schedule: body.schedule, // legacy
     createdAt: now,

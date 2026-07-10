@@ -285,8 +285,9 @@ export async function shellExec(cmd: string, cwd?: string, timeoutMs = 30000): P
   try {
     const { stdout, stderr } = await execAsync(cmd, { cwd: work, timeout: timeoutMs, maxBuffer: 1024 * 1024 * 2 });
     return { stdout, stderr, code: 0 };
-  } catch (e: any) {
-    return { stdout: e.stdout || '', stderr: e.stderr || e.message, code: e.code || 1 };
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string; message?: string; code?: number };
+    return { stdout: err.stdout || '', stderr: err.stderr || err.message || String(e), code: err.code || 1 };
   }
 }
 

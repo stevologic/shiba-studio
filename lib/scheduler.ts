@@ -98,6 +98,32 @@ async function resyncAllSchedules() {
             console.log(`[scheduler] tick ${tick} for ${agent.name}/${entry.id} already claimed — skipping duplicate fire`);
             return;
           }
+          // Overlap suppression: if this schedule's previous run is still
+          // going, skip the tick instead of stacking a second run.
+          const guards = await import('./run-guards');
+          if (guards.isScheduleStillRunning(taskKey)) {
+            console.log(`[scheduler] ${agent.name}/${entry.id} previous run still going — skipping tick ${tick}`);
+            const { audit } = await import('./audit-log');
+            audit('run', 'schedule tick skipped', `${agent.name}: previous scheduled run still in progress`, {
+              agentId: agent.id, scheduleId: entry.id, tick,
+            });
+            return;
+          }
+          // Offline degradation: cloud-model agents skip the tick (with an
+          // audit entry) when api.x.ai is unreachable, instead of burning the
+          // run on a guaranteed network error.
+          const { parseModelRef } = await import('./model-providers');
+          if (parseModelRef(live.model).provider !== 'local') {
+            const reach = await guards.cloudReachable();
+            if (!reach.ok) {
+              console.log(`[scheduler] api.x.ai unreachable — skipping tick ${tick} for ${agent.name}/${entry.id}`);
+              const { audit } = await import('./audit-log');
+              audit('run', 'schedule tick skipped', `${agent.name}: api.x.ai unreachable (offline) — tick skipped`, {
+                agentId: agent.id, scheduleId: entry.id, tick,
+              });
+              return;
+            }
+          }
           console.log(`[scheduler] firing ${agent.name} schedule ${entry.id} with specific instructions`);
           try {
             // Use the schedule entry's dedicated instructions as the prompt (AC3)

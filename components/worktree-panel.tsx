@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { GitBranch, Plus, Trash2, RefreshCw } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { Agent } from '@/lib/types';
 

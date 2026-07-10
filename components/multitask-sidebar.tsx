@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { FolderKanban, MessageSquare, Clock, ChevronRight, Pencil, Trash2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import type { AppTab } from '@/lib/app-navigation';
 import type { Agent } from '@/lib/types';
@@ -43,28 +43,65 @@ function QuickItem({
   );
 }
 
-export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: MultitaskSidebarProps) {
-  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
-  const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
-  const [loaded, setLoaded] = useState(false);
+/** Module cache so catch-all remounts (`/chat` → `/chat/:id`) don't re-hit the APIs. */
+const multitaskCache: {
+  at: number;
+  projects: Array<{ id: string; name: string }>;
+  sessions: Array<{ id: string; title: string }>;
+  inflight: Promise<void> | null;
+} = { at: 0, projects: [], sessions: [], inflight: null };
+const MULTITASK_TTL_MS = 15_000;
 
-  const load = useCallback(async () => {
-    try {
-      const [pRes, sRes] = await Promise.all([
-        fetch('/api/projects').then((r) => r.json()),
-        fetch('/api/chat-sessions').then((r) => r.json()),
-      ]);
-      if (pRes.ok) setProjects((pRes.projects || []).slice(0, 5).map((p: { id: string; name: string }) => ({ id: p.id, name: p.name })));
-      if (sRes.ok) setSessions((sRes.sessions || []).slice(0, 5).map((s: { id: string; title: string }) => ({ id: s.id, title: s.title || 'Chat' })));
+export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: MultitaskSidebarProps) {
+  const [projects, setProjects] = useState(() => multitaskCache.projects);
+  const [sessions, setSessions] = useState(() => multitaskCache.sessions);
+  const [loaded, setLoaded] = useState(() => multitaskCache.at > 0);
+
+  const load = useCallback(async (force = false) => {
+    if (!force && multitaskCache.at && Date.now() - multitaskCache.at < MULTITASK_TTL_MS) {
+      setProjects(multitaskCache.projects);
+      setSessions(multitaskCache.sessions);
       setLoaded(true);
-    } catch {
-      /* ignore */
+      return;
+    }
+    if (!force && multitaskCache.inflight) {
+      await multitaskCache.inflight;
+      setProjects(multitaskCache.projects);
+      setSessions(multitaskCache.sessions);
+      setLoaded(true);
+      return;
+    }
+    const run = (async () => {
+      try {
+        const [pRes, sRes] = await Promise.all([
+          fetch('/api/projects').then((r) => r.json()),
+          fetch('/api/chat-sessions').then((r) => r.json()),
+        ]);
+        if (pRes.ok) {
+          multitaskCache.projects = (pRes.projects || []).slice(0, 5).map((p: { id: string; name: string }) => ({ id: p.id, name: p.name }));
+        }
+        if (sRes.ok) {
+          multitaskCache.sessions = (sRes.sessions || []).slice(0, 5).map((s: { id: string; title: string }) => ({ id: s.id, title: s.title || 'Chat' }));
+        }
+        multitaskCache.at = Date.now();
+      } catch {
+        /* ignore */
+      }
+    })();
+    multitaskCache.inflight = run;
+    try {
+      await run;
+      setProjects(multitaskCache.projects);
+      setSessions(multitaskCache.sessions);
+      setLoaded(true);
+    } finally {
+      if (multitaskCache.inflight === run) multitaskCache.inflight = null;
     }
   }, []);
 
   useEffect(() => {
-    const initial = window.setTimeout(() => void load(), 0);
-    const t = setInterval(() => void load(), 30000);
+    const initial = window.setTimeout(() => void load(false), 0);
+    const t = setInterval(() => void load(true), 30000);
     return () => {
       window.clearTimeout(initial);
       clearInterval(t);
@@ -79,7 +116,7 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'update', id, name }),
     });
-    await load();
+    await load(true);
     toast.success('Project renamed');
   }
 
@@ -96,7 +133,7 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'delete', id }),
     });
-    await load();
+    await load(true);
     onDataChanged?.();
     toast.success('Project deleted');
   }
@@ -109,7 +146,7 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'update', id, patch: { title } }),
     });
-    await load();
+    await load(true);
     toast.success('Chat renamed');
   }
 
@@ -126,7 +163,7 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'delete', id }),
     });
-    await load();
+    await load(true);
     onDataChanged?.();
     toast.success('Chat deleted');
   }

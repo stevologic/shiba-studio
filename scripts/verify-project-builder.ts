@@ -68,8 +68,10 @@ async function main() {
 
   const panel = await read('components/projects-panel.tsx');
   assert(panel.includes('saveProjectSetup(true)'), 'auto-save before build');
-  assert(panel.includes('projectActiveRun'), 'scoped project trace');
-  assert(panel.includes('projectLiveTrace'), 'scoped live trace');
+  // The panel no longer renders a scoped run trace — projects hand off to a
+  // linked chat session and agent creation; traces render on Automations.
+  assert(panel.includes('onOpenProjectChat'), 'project chat handoff');
+  assert(panel.includes('onCreateAgentFromProject'), 'create-agent handoff');
   assert(panel.includes('onProjectSelect'), 'project switch handler');
 
   const desk = await read('components/shiba-studio.tsx');
@@ -187,6 +189,9 @@ async function main() {
 }
 
 main().catch(async (e) => {
+  // Also print to the console — verify-all captures stdout/stderr, and a
+  // silent exit-1 (log-file only) made suite failures undiagnosable.
+  console.error(`FAIL: ${e.message || e}`);
   await writeRunLog(`FAIL: ${e.message || e}`);
   process.exit(1);
 });

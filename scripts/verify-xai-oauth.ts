@@ -14,16 +14,12 @@ import {
   clearOAuthSession,
   describeCloudAuthPrecedence,
   ensureCloudAuth,
-  exchangeOAuthCode,
   fetchCloudWithAuth,
   generatePkce,
-  getOAuthPublicStatus,
   getValidAccessToken,
   isSessionExpired,
   parseOAuthCallbackInput,
-  refreshOAuthSession,
   resolveCloudBearer,
-  saveOAuthPending,
   saveOAuthSession,
   sessionFromTokenResponse,
   setOAuthDataDir,
@@ -292,7 +288,10 @@ async function runApiRouteTests() {
     ));
     assert(cbRes.status === 200, 'GET /callback returns the hand-back page after exchange');
     const cbHtml = await cbRes.text();
-    assert(cbHtml.includes('shiba-oauth:connected'), 'callback page announces success to the opener');
+    // The hand-back script posts `channel + ':connected'` (channel-generic
+    // since Google Drive reuses it), so assert both halves.
+    assert(cbHtml.includes('"shiba-oauth"'), 'callback page posts on the shiba-oauth channel');
+    assert(cbHtml.includes(":connected"), 'callback page announces success to the opener');
     assert(cbHtml.includes('window.close'), 'callback popup closes itself');
     assert(cbHtml.includes('/settings?oauth=connected'), 'callback falls back to same-tab return');
 

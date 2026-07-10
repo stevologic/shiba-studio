@@ -76,6 +76,12 @@ export interface Agent {
   skills?: string[];
   /** Chat personality (Skill) — how this agent speaks in Grok Chat conversations. */
   chatSkill?: string;
+  /**
+   * Default Grok TTS voice for this agent (xAI voice_id, e.g. "eve", "ara").
+   * Used in Grok Chat / voice mode when this agent is the active target.
+   * Empty/undefined → fall back to the app-wide voice picker.
+   */
+  voiceId?: string;
   // New multi-schedule support: each entry can have its own instructions
   schedules: ScheduleEntry[];
   // Legacy single schedule for backward compatibility (will be normalized in loads)
@@ -87,7 +93,7 @@ export interface Agent {
 export interface ToolCall {
   id: string;
   name: string;
-  arguments: Record<string, any>;
+  arguments: Record<string, unknown>;
 }
 
 export interface TraceStep {
@@ -97,8 +103,8 @@ export interface TraceStep {
   content: string;
   tool?: {
     name: string;
-    args: any;
-    result?: any;
+    args: unknown;
+    result?: unknown;
     error?: string;
   };
   screenshot?: string; // path or data url
@@ -172,6 +178,12 @@ export type ToolApprovalMode = 'yolo' | 'ask';
 
 export interface AppConfig {
   xaiApiKey: string;
+  /**
+   * Optional xAI Management API key (Console → Settings → Management Keys).
+   * Used to backport authoritative team usage / billing into the Usage page.
+   * Separate from the inference API key.
+   */
+  xaiManagementKey?: string;
   integrations: IntegrationCreds;
   defaultWorkspace: string;
   /** Default model ref (cloud:id or local:id) for new agents and Grok Chat */
@@ -189,12 +201,33 @@ export interface AppConfig {
   cloudAuthMode?: CloudAuthMode;
   /** Tool execution policy for agent runs */
   toolApprovalMode?: ToolApprovalMode;
+  /**
+   * Tool function names the user has turned off globally (Capabilities → Tools).
+   * Disabled tools are omitted from model tool lists and blocked if still called.
+   */
+  disabledTools?: string[];
   /** User-defined instructions prepended to all agents and chat */
   globalInstructions?: string;
   /** Inject AGENTS.md / CLAUDE.md from workspace into prompts */
   useAgentsMd?: boolean;
   /** Monthly spend quota (USD) — usage is reported as a percentage of this */
   usageBudgetUsd?: number;
+  /** Daily spend quota (USD, 0/unset = none) */
+  dailyBudgetUsd?: number;
+  /** When a budget is set, block new cloud runs at the limit (default true) */
+  budgetHardStop?: boolean;
+  /** Max agent runs in flight at once (default 3) */
+  maxConcurrentRuns?: number;
+  /** Per-run cumulative token budget (0/unset = unlimited) */
+  perRunTokenCap?: number;
+  /** Auto-prune agent runs older than this many days (0/unset = keep forever) */
+  runRetentionDays?: number;
+  /** Auto-prune audit-log entries older than this many days (0/unset = keep forever) */
+  auditRetentionDays?: number;
+  /** Studio-wide default voice for TTS playback (xAI voice id, lowercase) */
+  defaultTtsVoice?: string;
+  /** Studio-wide default TTS speed (clamped to the xAI 0.7–1.5 range) */
+  defaultTtsSpeed?: number;
 }
 
 export interface InterAgentMessage {
@@ -221,15 +254,32 @@ export interface FileEntry {
   size?: number;
 }
 
+/** Loose shape of schedule entries as they appear in legacy on-disk JSON. */
+type LegacyScheduleEntry = {
+  id?: string;
+  enabled?: unknown;
+  cron?: string;
+  instructions?: string;
+  description?: string;
+};
+
 /**
  * Normalize legacy agent (single schedule) to new shape with schedules[] + skills.
  * Used for backward compat during load/seed.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- input is untyped legacy JSON from disk; every field is normalized below
 export function normalizeAgent(agent: any): Agent {
   const base = { ...agent };
   base.origin = base.origin === 'cloud' ? 'cloud' : 'local';
   if (!base.skills) base.skills = [];
   if (base.chatSkill === undefined || base.chatSkill === null) base.chatSkill = '';
+  // Optional Grok TTS voice — keep only non-empty string ids ('' clears on save).
+  if (typeof base.voiceId === 'string') {
+    base.voiceId = base.voiceId.trim().toLowerCase();
+    if (!base.voiceId) delete base.voiceId;
+  } else {
+    delete base.voiceId;
+  }
   if (!base.schedules || !Array.isArray(base.schedules)) {
     if (base.schedule) {
       base.schedules = [{
@@ -244,7 +294,7 @@ export function normalizeAgent(agent: any): Agent {
     }
   }
   // Ensure every schedule entry has id and instructions; filter 'manual' pollution
-  base.schedules = (base.schedules || []).filter((s: any) => s.cron && !String(s.cron).includes('manual')).map((s: any, i: number) => ({
+  base.schedules = (base.schedules || []).filter((s: LegacyScheduleEntry) => s.cron && !String(s.cron).includes('manual')).map((s: LegacyScheduleEntry, i: number) => ({
     id: s.id || `sch-${i}-${Date.now()}`,
     enabled: !!s.enabled,
     cron: s.cron || '*/30 * * * *',

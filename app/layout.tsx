@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
-import { Toaster } from "sonner";
+import { Toaster } from '@/lib/toast';
 import { THEME_IDENTITY } from "@/lib/theme";
+import StudioTerminalHost from "@/components/studio-terminal-host";
+import VoiceAgentHost from "@/components/voice-agent-host";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,6 +16,13 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
   weight: ["400", "500", "700"],
+});
+
+/** Readable traditional monospace for the Studio Terminal (not pixel/CRT). */
+const terminalFont = IBM_Plex_Mono({
+  variable: "--font-terminal",
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
 });
 
 export const metadata: Metadata = {
@@ -32,11 +41,28 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${terminalFont.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-shell text-primary">
         {children}
-        <Toaster position="top-center" richColors closeButton />
+        {/* Terminal + Grok Voice HUD live in the root layout so they survive navigation. */}
+        <StudioTerminalHost />
+        <VoiceAgentHost />
+                <Toaster
+          position="bottom-left"
+          theme="dark"
+          closeButton
+          expand={false}
+          visibleToasts={3}
+          gap={8}
+          offset={{ bottom: '4.75rem', left: '0.55rem' }}
+          className="studio-toaster"
+          toastOptions={{
+            className: 'studio-toast',
+            duration: 4200,
+            // Success suppressed in lib/toast.ts; only errors/warnings surface.
+          }}
+        />
       </body>
     </html>
   );
