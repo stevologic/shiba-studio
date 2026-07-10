@@ -17,7 +17,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
-        node: ['22.5', '24']
+        # 22 = latest 22 LTS (node:sqlite is unflagged there; it needs
+        # --experimental-sqlite on 22.5–22.11, which the app relies on).
+        node: ['22', '24']
+    # Next's production build can exceed the default heap on smaller runners.
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v4
 

@@ -68,6 +68,12 @@ async function main() {
     lines.push('');
     if (effectiveStatus !== 0) {
       exitCode = effectiveStatus;
+      // Echo the failing script's captured output so CI logs (which only see
+      // this process's stdout, not the per-script log file) show the real error.
+      console.error(`\n===== FAILED: ${script} (exit ${effectiveStatus}) =====`);
+      if (result.stdout) console.error(result.stdout.trimEnd());
+      if (result.stderr) console.error(result.stderr.trimEnd());
+      console.error(`===== end ${script} =====\n`);
       break;
     }
   }
