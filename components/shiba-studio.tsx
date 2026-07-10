@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
   CloudUpload, CloudDownload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -4908,14 +4908,30 @@ export default function ShibaStudio() {
             >
               Docs
             </a>
+            <Link
+              href="/api-docs"
+              className="hover:text-primary"
+              title="Interactive API explorer — send real requests against your instance"
+            >
+              API
+            </Link>
             <a
-              href="https://github.com/stevologic/shiba-studio/issues/new"
+              href="https://github.com/stevologic/shiba-studio/issues/new?template=feature_request.md"
               target="_blank"
               rel="noreferrer"
               className="hover:text-primary inline-flex items-center gap-1"
-              title="Contribute by submitting a feature request — opens a new GitHub issue"
+              title="Suggest a feature — opens a new GitHub issue from the feature template"
             >
               <Plus size={11} /> Request a feature
+            </a>
+            <a
+              href="https://github.com/stevologic/shiba-studio/issues/new?template=bug_report.md"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-primary inline-flex items-center gap-1"
+              title="Report a bug — opens a new GitHub issue from the bug template"
+            >
+              <Bug size={11} /> Report a bug
             </a>
             <button
               type="button"

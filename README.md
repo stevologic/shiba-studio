@@ -77,6 +77,8 @@ The top bar shows a readiness badge for each source.
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
 | [Automations](docs/automations.md) | Cron schedules, execution traces, run logs, headless operation |
 | [Capabilities](docs/capabilities.md) | Integrations, skills, MCP servers, and the full built-in tool catalog |
+| [Grok CLI](docs/cli.md) | Routing chat through the local `grok` CLI, the `grok_cli` agent tool, effort/check/best-of-N/structured output |
+| [API Reference](docs/api.md) | Every `/api/*` endpoint, curl examples, and the in-app interactive explorer at `/api-docs` |
 | [Cloud Sync](docs/sync.md) | What sync does, where snapshots live, push/pull semantics |
 | [Architecture](docs/architecture.md) | How every feature fits together — one diagram, one engine |
 | [Configuration](docs/configuration.md) | Settings reference, environment variables, data locations, security model |

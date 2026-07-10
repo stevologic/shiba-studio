@@ -48,6 +48,9 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 - [x] README, docs pages, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, PRIVACY, issue/PR templates — all present and refreshed for the dual-license + hardening changes.
 - [x] **Full docs-accuracy pass (post-merge)** — every doc cross-checked against the merged code: added Netlify wherever integrations were listed (agents, architecture, PRIVACY); corrected tool count (30+→40+; actual 48) and API-route count (~30→50+); fixed a factual error in PRIVACY (cloud sync goes to **xAI** file storage, not Google Drive); documented `PUPPETEER_SKIP_DOWNLOAD`, `SHIBA_TEST_DATA_DIR`, `terminal_exec`, the onboarding checklist, overlap/cost guardrails, `npm run test:e2e`, and the new `lib/` modules; verified no stale MIT/YOLO-default claims remain.
+- [x] **Interactive API docs** — [docs/api.md](api.md) documents every `/api/*` endpoint with curl examples, plus an **in-app explorer at `/api-docs`** that sends real same-origin test requests (GET safe; POST endpoints warn + require a confirm click). Linked from the footer ("API") and the README docs index.
+- [x] **Grok CLI docs** — [docs/cli.md](cli.md): install/detection, routing chat through the CLI, and the `grok_cli` agent tool (effort / self-verify / best-of-N / JSON-schema). CLI support itself was already complete.
+- [x] **Report-a-bug link** — footer now has both "Request a feature" and "Report a bug", each routed to its GitHub issue template.
 
 ## 7. Product polish
 

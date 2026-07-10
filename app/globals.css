@@ -1410,6 +1410,81 @@ body::before {
   color: var(--success);
 }
 
+/* Interactive API explorer (/api-docs) — standalone route */
+.apidocs-root {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+.apidocs-sidebar {
+  border-right: 1px solid var(--border);
+  padding: 1rem;
+  overflow-y: auto;
+  background: var(--bg-card);
+}
+.apidocs-brand { margin-bottom: 1rem; }
+.apidocs-back { font-size: 0.75rem; color: var(--text-dim); text-decoration: none; }
+.apidocs-back:hover { color: var(--text); }
+.apidocs-brand h1 { font-size: 1.1rem; font-weight: 600; margin: 0.35rem 0; letter-spacing: -0.01em; }
+.apidocs-note { font-size: 0.6875rem; line-height: 1.5; color: var(--text-dim); margin: 0; }
+.apidocs-note a { color: var(--text-muted); text-decoration: underline; }
+.apidocs-group { margin-top: 1rem; }
+.apidocs-group-title {
+  font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-dim); margin-bottom: 0.35rem;
+}
+.apidocs-endpoint {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  padding: 0.3rem 0.4rem; border-radius: 6px; border: 0; background: transparent;
+  cursor: pointer; text-align: left; color: var(--text-muted);
+}
+.apidocs-endpoint:hover { background: color-mix(in srgb, var(--bg-card) 70%, var(--border)); }
+.apidocs-endpoint.active { background: color-mix(in srgb, var(--bg-card) 55%, var(--border)); color: var(--text); }
+.apidocs-method {
+  font-size: 0.6rem; font-weight: 700; font-family: ui-monospace, monospace;
+  padding: 0.1rem 0.35rem; border-radius: 4px; flex-shrink: 0; min-width: 38px; text-align: center;
+}
+.apidocs-method-get { background: color-mix(in srgb, var(--success) 22%, transparent); color: var(--success); }
+.apidocs-method-post { background: color-mix(in srgb, var(--warning) 22%, transparent); color: var(--warning); }
+.apidocs-path { font-family: ui-monospace, monospace; font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apidocs-main { padding: 1.5rem 2rem; overflow-y: auto; max-width: 900px; }
+.apidocs-req-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+.apidocs-req-path { font-family: ui-monospace, monospace; font-size: 0.9rem; color: var(--text); word-break: break-all; }
+.apidocs-summary { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 1.25rem; line-height: 1.5; }
+.apidocs-section { margin-bottom: 1.25rem; }
+.apidocs-section-title {
+  font-size: 0.75rem; font-weight: 600; color: var(--text); margin-bottom: 0.5rem;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.apidocs-param { display: grid; grid-template-columns: 120px 1fr; gap: 0.5rem 0.75rem; align-items: center; margin-bottom: 0.4rem; }
+.apidocs-param-name { font-family: ui-monospace, monospace; font-size: 0.75rem; color: var(--text-muted); }
+.apidocs-param-desc { grid-column: 2; font-size: 0.6875rem; color: var(--text-dim); }
+.apidocs-input { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+.apidocs-body { width: 100%; min-height: 130px; font-family: ui-monospace, monospace; font-size: 0.8rem; line-height: 1.5; }
+.apidocs-warn {
+  font-size: 0.75rem; color: var(--warning); margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem; border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-card) 82%, rgba(234, 179, 8, 0.18));
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+}
+.apidocs-actions { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.25rem; }
+.apidocs-confirm-hint { font-size: 0.7rem; color: var(--warning); }
+.apidocs-status { font-family: ui-monospace, monospace; font-size: 0.7rem; }
+.apidocs-status.ok { color: var(--success); }
+.apidocs-status.bad { color: var(--error); }
+.apidocs-resp-body {
+  font-family: ui-monospace, monospace; font-size: 0.75rem; line-height: 1.5;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 0.75rem 1rem; max-height: 460px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  color: var(--text-muted);
+}
+@media (max-width: 720px) {
+  .apidocs-root { grid-template-columns: 1fr; }
+  .apidocs-sidebar { border-right: 0; border-bottom: 1px solid var(--border); max-height: 40vh; }
+}
+
 /* Offline degradation banner — cloud creds present but api.x.ai unreachable */
 .offline-banner {
   background: color-mix(in srgb, var(--bg-card) 82%, rgba(234, 179, 8, 0.18));
