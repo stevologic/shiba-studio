@@ -17,6 +17,15 @@ export function isAppTab(value: string | undefined): value is AppTab {
   return !!value && (APP_TABS as readonly string[]).includes(value);
 }
 
+/**
+ * URL aliases → canonical tab. The Integrations tab is labelled "Capabilities"
+ * throughout the UI, so the obvious `/capabilities` URL must land there instead
+ * of silently falling back to the dashboard.
+ */
+const PATH_ALIASES: Record<string, AppTab> = {
+  capabilities: 'integrations',
+};
+
 export function tabToPath(tab: AppTab): string {
   return tab === 'dashboard' ? '/' : `/${tab}`;
 }
@@ -52,7 +61,8 @@ export function pathToTab(pathname: string): AppTab {
   const segments = pathname.replace(/\/$/, '').split('/').filter(Boolean);
   const first = segments[0];
   if (!first) return 'dashboard';
-  return isAppTab(first) ? first : 'dashboard';
+  if (isAppTab(first)) return first;
+  return PATH_ALIASES[first] ?? 'dashboard';
 }
 
 export function pathToChatSessionId(pathname: string): string | null {
@@ -65,7 +75,7 @@ export function pathToChatSessionId(pathname: string): string | null {
 export function isKnownAppPath(pathname: string): boolean {
   const segments = pathname.replace(/\/$/, '').split('/').filter(Boolean);
   if (segments.length === 0) return true;
-  if (segments.length === 1) return isAppTab(segments[0]);
+  if (segments.length === 1) return isAppTab(segments[0]) || segments[0] in PATH_ALIASES;
   if (segments.length === 2 && segments[0] === 'chat') return true;
   return false;
 }
