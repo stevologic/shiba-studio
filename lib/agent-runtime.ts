@@ -837,23 +837,40 @@ async function* agentRunGenerator(
       const msg = choice?.message;
       if (!msg) break;
 
+      // Small local models often print the tool call as TEXT instead of using
+      // the structured tool_calls field — recover it so the tool actually runs
+      // (gated on the name matching a real tool, so prose isn't hijacked).
+      let effectiveToolCalls = msg.tool_calls;
+      if (msg.content && (!effectiveToolCalls || effectiveToolCalls.length === 0)) {
+        const { parseInlineToolCall } = await import('./inline-tool-calls');
+        const toolNames = new Set(tools.map((t) => t.function.name));
+        const recovered = parseInlineToolCall(msg.content, toolNames);
+        if (recovered) {
+          effectiveToolCalls = [recovered];
+          yield emit({
+            id: uuidv4(), ts: new Date().toISOString(), type: 'think',
+            content: `Recovered inline tool call from model text: ${recovered.function.name}`,
+          });
+        }
+      }
+
       if (msg.content) {
         yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'think', content: msg.content });
-        if (!msg.tool_calls || msg.tool_calls.length === 0) {
+        if (!effectiveToolCalls || effectiveToolCalls.length === 0) {
           finalOutput = msg.content;
           yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: msg.content });
           break;
         }
-        messages.push({ role: 'assistant', content: msg.content, tool_calls: msg.tool_calls });
+        messages.push({ role: 'assistant', content: msg.content, tool_calls: effectiveToolCalls });
       } else {
         // Empty string, NOT null — local OpenAI-compatible servers (LM Studio,
         // Ollama) reject a null content on a tool-call turn with
         // "invalid message content type: <nil>". "" is valid on cloud too.
-        messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: msg.tool_calls });
+        messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: effectiveToolCalls });
       }
 
       // Execute tool calls
-      for (const tc of (msg.tool_calls || [])) {
+      for (const tc of (effectiveToolCalls || [])) {
         const fn = tc.function;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced JSON, coerced per tool by the executor
         let args: any = {};

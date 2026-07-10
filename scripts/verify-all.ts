@@ -14,6 +14,7 @@ const CHAIN = [
   'verify-theme.ts',
   'verify-page-chrome.ts',
   'verify-runtime.ts',
+  'verify-tool-dispatch.ts',
   'verify-shell-state.ts',
   'verify-xai-oauth.ts',
   'verify-competitor-features.ts',

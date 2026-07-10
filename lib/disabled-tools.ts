@@ -14,16 +14,20 @@ export function isToolDisabled(
   return disabledTools.includes(name);
 }
 
-/** Remove disabled tools from a Grok tool definition list. */
+/**
+ * Remove disabled tools from a Grok tool definition list. ALWAYS returns a new
+ * array — callers that mutate the input in place (`tools.length = 0; push(...)`)
+ * would otherwise empty their own result when we returned the same reference.
+ */
 export function filterToolsByDisabled<T extends { function: { name: string } }>(
   tools: T[],
   disabledTools?: string[] | Set<string> | null,
 ): T[] {
   if (!disabledTools || (Array.isArray(disabledTools) ? disabledTools.length === 0 : disabledTools.size === 0)) {
-    return tools;
+    return [...tools];
   }
   const set = disabledTools instanceof Set ? disabledTools : getDisabledToolSet(disabledTools);
-  if (set.size === 0) return tools;
+  if (set.size === 0) return [...tools];
   return tools.filter((t) => !set.has(t.function.name));
 }
 
