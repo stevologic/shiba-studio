@@ -37,7 +37,7 @@ Filterable, grouped, and annotated with what unlocks each tool (local agents onl
 
 | Group | Tools |
 | --- | --- |
-| **Workspace & Files** | `fs_list`, `fs_read`, `fs_write`, `fs_search` (workspace-wide grep), `shell_exec` |
+| **Workspace & Files** | `fs_list`, `fs_read`, `fs_write`, `fs_search` (workspace-wide grep), `shell_exec` (one-shot), `terminal_exec` (runs in the shared Studio Terminal you can watch) |
 | **Web & Research** | `web_search` (keyless DuckDuckGo), `web_fetch` (page → clean text) |
 | **Browser Automation** | `browser_navigate`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_extract` |
 | **Memory** | `memory_save`, `memory_recall` — facts persist across runs per agent |

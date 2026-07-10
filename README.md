@@ -34,8 +34,8 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, peers, and schedules. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Automations** — cron-scheduled agent runs with live execution traces, per-schedule run logs, and headless operation (schedules fire as long as the server is up — no browser required).
 - **Annotation sub-browser** — load the web app *you're* building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot straight into chat for code refinement.
-- **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, and Netlify integrations; custom skills; MCP servers; and a live catalog of 30+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, deploys, …).
-- **Everything local** — credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, zero telemetry.
+- **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, and Netlify integrations; custom skills; MCP servers; and a live catalog of 40+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, deploys, …).
+- **Everything local** — credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, one-file backup & restore, and zero telemetry.
 
 All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAuth 2.0 with X, the local Grok CLI, or any OpenAI-compatible local model server (LM Studio, Ollama, llama.cpp).
 
@@ -88,7 +88,9 @@ The top bar shows a readiness badge for each source.
 - **Chat workspaces** — point a chat at any folder with `/workspace` (or the topbar folder button); file reads/writes/searches and `/git` commands run inside it, so "fix the failing test in this repo" just works.
 - **Auto-titled chats** — a low-end model summarizes each new conversation into a title after the first exchange.
 - **Run provenance everywhere** — dashboard runs, agent history, and the audit log all deep-link to full execution traces; deleted agents show a 🛸 and their automations retire themselves.
-- **Usage quota** — spend is metered live from xAI responses and reported against a configurable monthly budget.
+- **Cost & safety guardrails** — monthly *and* daily spend limits with an optional hard stop, a global concurrent-run cap, per-run token caps, and overlap-suppressed schedules (Settings → Cost & safety).
+- **Global search** — Ctrl+K searches your chats, agent runs, and audit log (SQLite FTS5) alongside commands, deep-linking straight to the result.
+- **Backup & restore** — export your entire studio (settings, agents, chats, projects, runs, audit log) to one file and restore it on another machine.
 - **Cross-session agent memory** — agents (and chat, via `/remember`) persist facts in SQLite and recall them in later runs.
 - **Grok CLI deep integration** — route chats through the local CLI, and give agents `grok_cli` with effort levels, self-verification, best-of-N, and structured JSON output.
 
@@ -96,6 +98,7 @@ The top bar shows a readiness badge for each source.
 
 - **Localhost only, by default** — the server binds `127.0.0.1`; a same-origin guard (`proxy.ts`) blocks any other website in your browser from reaching the API, and the terminal bridge rejects foreign WebSocket origins. `npm run dev:lan` / `start:lan` opt into LAN exposure.
 - **Ask-before-act** — sensitive tools (shell, file writes, posting) require per-call approval by default; YOLO mode is an explicit opt-in.
+- **Spend limits** — optional monthly/daily budgets with a hard stop pause cloud runs and chats before you overspend; local models are always free.
 - **Credentials at rest** — all secrets (xAI API key, OAuth tokens, integration secrets) are **encrypted with AES-256-GCM** before touching disk; the machine key lives outside the project at `~/.shiba-studio/shiba-studio.key` (or supply `SHIBA_SECRET_KEY` as 64 hex chars for headless deployments). Plaintext stores migrate to encrypted form automatically on first load.
 
 Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Privacy: [PRIVACY.md](PRIVACY.md) · Settings reference: [Configuration](docs/configuration.md).
@@ -109,6 +112,7 @@ Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Pri
 | `npm run start` | Serve the production build (binds `127.0.0.1`) |
 | `npm run dev:lan` / `start:lan` | Explicitly expose on all interfaces — read [SECURITY.md](SECURITY.md) first |
 | `npm test` | Full functional verification suite — isolated, never touches your live data |
+| `npm run test:e2e` | Playwright browser E2E (run `npx playwright install chromium` + `npm run build` first) |
 
 ## Contributing & support
 

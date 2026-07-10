@@ -18,6 +18,8 @@ Schedules fire **as long as the server is running — no browser needed**. Cron 
 
 If an agent is deleted, its schedule **retires itself** at the next fire attempt instead of running an orphan — you'll find a `schedule retired` entry in Logs.
 
+**Overlap & cost safety.** If a scheduled run is still going when its next tick fires, the tick is **skipped** (recorded in Logs) rather than stacking a second run. Cloud-model schedules also skip while `api.x.ai` is unreachable. A schedule that would fire more than ~24×/day shows a ⚠ warning on its row, and the global concurrent-run limit and monthly/daily spend caps (Settings → Cost & safety) apply to scheduled runs too.
+
 ## Run log
 
 Each automation card shows its last scheduled executions — status, time, and instructions — and every entry opens the full trace. Each schedule row has its own **Run now** (▶) that fires that automation's instructions immediately.

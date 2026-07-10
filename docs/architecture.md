@@ -18,13 +18,13 @@ flowchart TB
 
     subgraph Engine["Engine — what does the work"]
         Gateway["Model gateway (grok-client)<br/>xAI key / OAuth / Grok CLI / local server"]
-        ToolExec["Tool executor<br/>30+ tools: fs, shell, browser, web,<br/>memory, images, PRs, MCP"]
+        ToolExec["Tool executor<br/>40+ tools: fs, shell, browser, web,<br/>memory, images, PRs, deploys, MCP"]
         Runtime["Agent runtime<br/>tool-calling loop + trace"]
         Scheduler["Scheduler (node-cron)<br/>armed at server start, headless"]
     end
 
     subgraph Capabilities["Capabilities — what it can reach"]
-        Integrations["Integrations<br/>GitHub, Slack, Drive, Discord, X, Obsidian, Vercel"]
+        Integrations["Integrations<br/>GitHub, Slack, Drive, Discord, X,<br/>Obsidian, Vercel, Netlify"]
         Skills["Custom skills"]
         MCP["MCP servers"]
         Git["Git actions<br/>status / checkout / commit / PR"]

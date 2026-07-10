@@ -24,13 +24,14 @@ than the one running on your own machine.
   run are sent to `api.x.ai` (or your OAuth-authenticated Grok endpoint) to
   generate responses. If you use a **local model server** instead, that
   traffic stays on your machine.
-- **Integrations you connect** — GitHub, Slack, Google Drive, Discord, X, and
-  Obsidian calls go directly from your machine to those services using the
-  credentials you provided. No proxy in between.
+- **Integrations you connect** — GitHub, Slack, Google Drive, Discord, X,
+  Obsidian, Vercel, and Netlify calls go directly from your machine to those
+  services using the credentials you provided. No proxy in between.
 - **Web tools you invoke** — web search, `/fetch`, and the sub-browser load
   the sites you point them at, from your machine.
-- **Cloud sync (optional, off by default)** — snapshots go to the Google
-  Drive folder you chose, under your own Google account. Credential secrets
+- **Cloud sync (optional, off by default)** — snapshots are uploaded to your
+  own **xAI account's private file storage** (via the xAI Files API), under
+  the credentials you already use for Grok. Credential secrets
   are excluded from snapshots.
 
 ## Your responsibility to third parties

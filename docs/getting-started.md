@@ -48,6 +48,8 @@ Open **http://localhost:3000**. For a production build: `npm run build && npm ru
 
 ## First run
 
+On a fresh install the **dashboard shows a 3-step checklist** — connect a model source → create your first agent → run it — that ticks itself off as you go and disappears when you're set up. The steps below are the same flow in detail.
+
 1. **Connect a model source** in **Settings** — any one of:
    - **xAI API key** — from [console.x.ai](https://console.x.ai); paste and *Save & Validate*.
    - **OAuth 2.0 with X** — *Sign in with X* (SuperGrok / X Premium+): a popup opens the official `accounts.x.ai` login and closes itself when done — tokens are cached encrypted and refresh automatically, nothing to copy or paste. (A manual fallback field exists under the button if the popup can't come back.)

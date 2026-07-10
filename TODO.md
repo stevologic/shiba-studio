@@ -47,6 +47,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 ## 6. Documentation & community
 
 - [x] README, docs pages, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, PRIVACY, issue/PR templates — all present and refreshed for the dual-license + hardening changes.
+- [x] **Full docs-accuracy pass (post-merge)** — every doc cross-checked against the merged code: added Netlify wherever integrations were listed (agents, architecture, PRIVACY); corrected tool count (30+→40+; actual 48) and API-route count (~30→50+); fixed a factual error in PRIVACY (cloud sync goes to **xAI** file storage, not Google Drive); documented `PUPPETEER_SKIP_DOWNLOAD`, `SHIBA_TEST_DATA_DIR`, `terminal_exec`, the onboarding checklist, overlap/cost guardrails, `npm run test:e2e`, and the new `lib/` modules; verified no stale MIT/YOLO-default claims remain.
 
 ## 7. Product polish
 
@@ -60,7 +61,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 ## State of the tree (2026-07-10)
 
-`origin/main` (Netlify/Vercel integrations, dual license, page-chrome refresh) is **merged** — the worktree carries both that line and this session's work (guardrails, backup, search, onboarding, security hardening). Verified after the merge: `tsc` clean · `next build` clean · app booted with both feature sets live and zero console errors · guard/backup/search behaviors re-tested. `npm test` chain: 10 scripts, isolated data dir.
+`origin/main` (Netlify/Vercel integrations, dual license, page-chrome refresh) is **merged and pushed** — `origin/main` and local `main` are in sync. The tree carries both that line and this session's work (guardrails, backup, search, onboarding, security hardening, tool-dispatch fixes). Verified: `tsc` clean · `next build` clean · **full `npm test` suite green (10/10 scripts, exit 0)** on the merged tree · app booted with both feature sets live and zero console errors · agent tool-use proven end-to-end · all docs cross-checked against code. Playwright E2E scaffold present (`npm run test:e2e`), not yet in CI.
 
 ### Bugs fixed in the final product-quality pass
 
