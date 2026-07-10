@@ -288,10 +288,9 @@ async function runApiRouteTests() {
     ));
     assert(cbRes.status === 200, 'GET /callback returns the hand-back page after exchange');
     const cbHtml = await cbRes.text();
-    // The hand-back script posts `channel + ':connected'` (channel-generic
-    // since Google Drive reuses it), so assert both halves.
-    assert(cbHtml.includes('"shiba-oauth"'), 'callback page posts on the shiba-oauth channel');
-    assert(cbHtml.includes(":connected"), 'callback page announces success to the opener');
+    // The hand-back script embeds the full postMessage payload
+    // (JSON.stringify(`${channel}:connected`)) — assert the literal message.
+    assert(cbHtml.includes('shiba-oauth:connected'), 'callback page announces success on the shiba-oauth channel');
     assert(cbHtml.includes('window.close'), 'callback popup closes itself');
     assert(cbHtml.includes('/settings?oauth=connected'), 'callback falls back to same-tab return');
 
