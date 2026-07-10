@@ -2929,8 +2929,8 @@ export default function ShibaStudio() {
 
         {!navCollapsed && (
           <div className={`sidebar-foot p-4 border-t border-default text-xs text-dim ${process.env.NODE_ENV === 'development' ? 'sidebar-foot-dev' : ''}`}>
-            <div className="pl-3">localhost • Cloud + local models</div>
-            <div className="mt-1 pl-3 text-[10px]">Chat that acts • agents that run while you sleep</div>
+            <div className="whitespace-nowrap">localhost • Cloud + local models</div>
+            <div className="mt-1 text-[9px] whitespace-nowrap">Chat that acts • agents that run while you sleep</div>
           </div>
         )}
       </div>
