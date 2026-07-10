@@ -29,6 +29,7 @@ async function read(rel: string): Promise<string> {
 const SURFACE_SOURCES: Record<(typeof PRIMARY_PAGE_SURFACES)[number], string[]> = {
   chat: ['components/chat-sessions-panel.tsx'],
   projects: ['components/projects-panel.tsx'],
+  board: ['components/kanban-board.tsx'],
   agents: ['components/shiba-studio.tsx'],
   workspace: ['components/workspace-page.tsx'],
   automations: ['components/shiba-studio.tsx'],

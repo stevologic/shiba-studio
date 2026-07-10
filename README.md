@@ -86,6 +86,7 @@ The top bar shows a readiness badge for each source.
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install on Windows/macOS/Linux, first run, connecting model sources |
 | [Grok Chat](docs/chat.md) | Sessions, models & reasoning, attachments, slash commands, the annotation sub-browser, quotas |
+| [Board](docs/board.md) | The shared Kanban board — assign cards to agents, traced runs, agents filing their own follow-ups |
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
 | [Automations](docs/automations.md) | Cron schedules, execution traces, run logs, headless operation |
 | [Capabilities](docs/capabilities.md) | Integrations, skills, MCP servers, and the full built-in tool catalog |

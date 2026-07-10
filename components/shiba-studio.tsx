@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
-  Home, MessageSquare, Users, FolderOpen, FolderKanban, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
+  Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
   CloudUpload, CloudDownload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
   KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug
@@ -32,6 +32,7 @@ const McpPanel = dynamic(() => import('@/components/mcp-panel'), { loading: pane
 const SkillsBrowser = dynamic(() => import('@/components/skills-browser'), { loading: panelLoading });
 const WorkspaceDiffPanel = dynamic(() => import('@/components/workspace-diff-panel'), { loading: panelLoading });
 const WorkspacePage = dynamic(() => import('@/components/workspace-page'), { loading: panelLoading });
+const KanbanBoard = dynamic(() => import('@/components/kanban-board'), { loading: panelLoading });
 const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
 const ToolsCatalog = dynamic(() => import('@/components/tools-catalog'), { loading: panelLoading });
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
@@ -2620,6 +2621,7 @@ export default function ShibaStudio() {
       { id: 'dashboard', label: 'Dashboard' },
       { id: 'chat', label: 'Grok Chat' },
       { id: 'projects', label: 'Projects' },
+      { id: 'board', label: 'Board' },
       { id: 'agents', label: 'Agents' },
       { id: 'workspace', label: 'Workspace' },
       { id: 'automations', label: 'Automations' },
@@ -2805,6 +2807,7 @@ export default function ShibaStudio() {
             { id: 'dashboard', label: 'Dashboard', icon: Home, stat: null as string | null },
             { id: 'chat', label: 'Grok Chat', icon: MessageSquare, stat: navStats.chatSessions > 0 ? String(navStats.chatSessions) : null },
             { id: 'projects', label: 'Projects', icon: FolderKanban, stat: navStats.projects > 0 ? String(navStats.projects) : null },
+            { id: 'board', label: 'Board', icon: KanbanSquare, stat: null },
             { id: 'agents', label: 'Agents', icon: Users, stat: agents.length > 0 ? String(agents.length) : null },
             { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
@@ -3062,7 +3065,7 @@ export default function ShibaStudio() {
         {/* Content surfaces — workspace locks outer scroll; lists scroll inside */}
         <div
           className={
-            tab === 'workspace'
+            tab === 'workspace' || tab === 'board'
               ? 'flex-1 min-h-0 overflow-hidden p-3 sm:p-5 relative z-[1] flex flex-col'
               : 'flex-1 overflow-auto p-3 sm:p-5 space-y-5 relative z-[1]'
           }
@@ -4327,6 +4330,10 @@ export default function ShibaStudio() {
 
               <ToolsCatalog />
             </div>
+          )}
+
+          {tab === 'board' && (
+            <KanbanBoard agents={agents} onOpenRun={openRunTrace} />
           )}
 
           {tab === 'usage' && (

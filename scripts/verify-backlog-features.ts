@@ -63,6 +63,17 @@ async function main() {
   assert(chatStream.includes('asBackgroundContext'), 'chat context wrapped as background');
   assert((await read('lib/agent-runtime.ts')).includes('<background_context source="integrations">'), 'agent runs wrap injected context');
 
+  // Kanban board: shared store, agent tools, run dispatch, Linear-style UI.
+  assert((await read('lib/board.ts')).includes('moveBoardTask'), 'board store');
+  assert((await read('lib/board-runner.ts')).includes('startWorkOnTask'), 'board run dispatch');
+  const runtimeSrc = await read('lib/agent-runtime.ts');
+  for (const t of ['board_list_tasks', 'board_get_task', 'board_update_task', 'board_create_task']) {
+    assert(runtimeSrc.includes(`'${t}'`), `agent tool ${t}`);
+  }
+  assert((await read('lib/agent-tool-exec.ts')).includes("case 'board_update_task'"), 'board tool exec');
+  assert((await read('components/kanban-board.tsx')).includes('Start work'), 'kanban UI');
+  assert((await read('lib/app-navigation.ts')).includes("'board'"), 'board nav tab');
+
   await log('PASS: all backlog feature structural checks');
   process.exit(0);
 }

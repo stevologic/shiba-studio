@@ -123,6 +123,56 @@ export async function executeAgentTool(
         const entries = memoryRecall(agent.id, args.query ? String(args.query) : undefined);
         return { result: entries, sideEffect: `recalled ${entries.length} memories` };
       }
+      case 'board_list_tasks': {
+        const { listBoardTasks } = await import('./board');
+        let tasks = await listBoardTasks();
+        if (args.mine) tasks = tasks.filter((t) => t.assigneeAgentId === agent.id);
+        if (args.status) tasks = tasks.filter((t) => t.status === String(args.status));
+        // Compact listing — full card via board_get_task.
+        const listing = tasks.map((t) => ({
+          key: t.key, title: t.title, status: t.status, priority: t.priority,
+          assigneeAgentId: t.assigneeAgentId, labels: t.labels,
+        }));
+        return { result: listing, sideEffect: `listed ${listing.length} board cards` };
+      }
+      case 'board_get_task': {
+        const { getBoardTask } = await import('./board');
+        const task = await getBoardTask(String(args.id || ''));
+        return {
+          result: task || { error: `No board card ${args.id}` },
+          sideEffect: task ? `read board card ${task.key}` : `board card ${args.id} not found`,
+        };
+      }
+      case 'board_update_task': {
+        const { updateBoardTask } = await import('./board');
+        const { isBoardStatus } = await import('./board-types');
+        const status = args.status && isBoardStatus(String(args.status)) ? String(args.status) : undefined;
+        const task = await updateBoardTask(String(args.id || ''), {
+          status: status as import('./board-types').BoardStatus | undefined,
+          actor: agent.name,
+          note: args.note
+            ? { kind: 'agent', text: String(args.note), agentName: agent.name }
+            : undefined,
+        });
+        return {
+          result: { key: task.key, status: task.status, updated: true },
+          sideEffect: `updated board card ${task.key}${status ? ` → ${status}` : ''}${args.note ? ' (+note)' : ''}`,
+        };
+      }
+      case 'board_create_task': {
+        const { createBoardTask } = await import('./board');
+        const task = await createBoardTask({
+          title: String(args.title || ''),
+          description: args.description ? String(args.description) : '',
+          status: String(args.status) === 'todo' ? 'todo' : 'backlog',
+          labels: Array.isArray(args.labels) ? args.labels.map(String) : [],
+          createdBy: agent.name,
+        });
+        return {
+          result: { key: task.key, id: task.id, status: task.status },
+          sideEffect: `filed board card ${task.key}: ${task.title.slice(0, 80)}`,
+        };
+      }
       case 'generate_image': {
         const { generateImage } = await import('./agent-power-tools');
         const { loadConfig } = await import('./persistence');

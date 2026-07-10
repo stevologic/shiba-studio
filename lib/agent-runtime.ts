@@ -514,6 +514,63 @@ export function getToolDefinitions(
       parameters: { type: 'object', properties: { prompt: { type: 'string', description: 'Image description' } }, required: ['prompt'] },
     },
   });
+  // Shared Kanban board: every agent can read it, work assigned cards, post
+  // progress, and file new cards for the user or other agents.
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'board_list_tasks',
+      description: 'List cards on the shared Kanban board. Filter to your own assignments with mine=true, or by status. Check this to find work assigned to you.',
+      parameters: {
+        type: 'object',
+        properties: {
+          mine: { type: 'boolean', description: 'Only cards assigned to you' },
+          status: { type: 'string', description: 'backlog | todo | in_progress | in_review | done | cancelled' },
+        },
+      },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'board_get_task',
+      description: 'Read one Kanban card in full (description + activity feed) by key (e.g. SHIB-12) or id.',
+      parameters: { type: 'object', properties: { id: { type: 'string', description: 'Card key like SHIB-12, or id' } }, required: ['id'] },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'board_update_task',
+      description: 'Update a Kanban card: post a progress note, and/or move its status. Post notes at meaningful milestones so the user can follow along on the board.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Card key like SHIB-12, or id' },
+          note: { type: 'string', description: 'Progress note for the activity feed' },
+          status: { type: 'string', description: 'New status: backlog | todo | in_progress | in_review | done | cancelled' },
+        },
+        required: ['id'],
+      },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'board_create_task',
+      description: 'File a new card on the shared Kanban board (e.g. follow-up work you discovered). Lands in Backlog unless a status is given.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short imperative title' },
+          description: { type: 'string', description: 'Complete brief: goal, constraints, definition of done' },
+          status: { type: 'string', description: 'backlog (default) | todo' },
+          labels: { type: 'array', items: { type: 'string' }, description: 'Optional labels' },
+        },
+        required: ['title'],
+      },
+    },
+  });
   return tools;
 }
 

@@ -11,6 +11,7 @@ const PAGES: Array<{ path: string; marker: string | RegExp }> = [
   { path: '/settings', marker: /Settings/ },
   { path: '/projects', marker: /Projects/ },
   { path: '/workspace', marker: /Workspace/ },
+  { path: '/board', marker: /Board/ },
 ];
 
 for (const { path: pagePath, marker } of PAGES) {

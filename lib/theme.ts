@@ -75,6 +75,7 @@ export const PAGE_CHROME = {
 export const PRIMARY_PAGE_SURFACES = [
   'chat',
   'projects',
+  'board',
   'agents',
   'workspace',
   'automations',
