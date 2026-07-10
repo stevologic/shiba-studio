@@ -574,6 +574,9 @@ export default function ShibaStudio() {
   const [defaultModelInput, setDefaultModelInput] = useState('');
   const [defaultTtsVoiceInput, setDefaultTtsVoiceInput] = useState(DEFAULT_TTS_VOICE);
   const [defaultTtsSpeedInput, setDefaultTtsSpeedInput] = useState(DEFAULT_TTS_SPEED);
+  /** Voice-test playback: idle → loading (fetching TTS) → playing. */
+  const [voiceTestState, setVoiceTestState] = useState<'idle' | 'loading' | 'playing'>('idle');
+  const voiceTestRef = useRef<HTMLAudioElement | null>(null);
   const [defaultWorkspaceInput, setDefaultWorkspaceInput] = useState('');
   const [availableModels, setAvailableModels] = useState<ModelOption[]>(() =>
     (getProvidersUiSnapshot()?.availableModels as ModelOption[] | undefined) ?? [],
@@ -2446,6 +2449,59 @@ export default function ShibaStudio() {
       || voice;
     const speedLabel = GROK_TTS_SPEEDS.find((s) => Math.abs(s.value - speed) < 0.01)?.label || `${speed}×`;
     toast.success(`Default voice ${label} · ${speedLabel}`);
+  }
+
+  /** Speak a short sample with the CURRENTLY SELECTED (possibly unsaved)
+   *  voice + speed so the user can audition before saving. */
+  async function testDefaultVoice() {
+    // Second click while playing = stop.
+    if (voiceTestRef.current) {
+      voiceTestRef.current.pause();
+      URL.revokeObjectURL(voiceTestRef.current.src);
+      voiceTestRef.current = null;
+      setVoiceTestState('idle');
+      return;
+    }
+    const voice = (defaultTtsVoiceInput || DEFAULT_TTS_VOICE).trim().toLowerCase() || DEFAULT_TTS_VOICE;
+    const speed = clampTtsSpeed(defaultTtsSpeedInput);
+    const name = agentVoiceOptions.find((v) => v.id === voice)?.name
+      || GROK_TTS_VOICES.find((v) => v.id === voice)?.name
+      || voice;
+    setVoiceTestState('loading');
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: `Hi, I'm ${name} — this is how Grok will sound in Shiba Studio.`,
+          voice_id: voice,
+          speed,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `TTS failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const audio = new Audio(URL.createObjectURL(blob));
+      voiceTestRef.current = audio;
+      const cleanup = () => {
+        URL.revokeObjectURL(audio.src);
+        if (voiceTestRef.current === audio) voiceTestRef.current = null;
+        setVoiceTestState('idle');
+      };
+      audio.onended = cleanup;
+      audio.onerror = cleanup;
+      setVoiceTestState('playing');
+      await audio.play();
+    } catch (e) {
+      if (voiceTestRef.current) {
+        URL.revokeObjectURL(voiceTestRef.current.src);
+        voiceTestRef.current = null;
+      }
+      setVoiceTestState('idle');
+      toast.error(e instanceof Error ? e.message : 'Voice test failed');
+    }
   }
 
   // Load TTS voices when Settings is open (default voice picker).
@@ -4603,6 +4659,16 @@ export default function ShibaStudio() {
                   <div className="flex gap-2 mt-3">
                     <button type="button" onClick={() => void saveDefaultTtsVoice()} className="grok-btn grok-btn-primary text-sm">
                       Save Voice Defaults
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void testDefaultVoice()}
+                      disabled={voiceTestState === 'loading'}
+                      className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
+                      title="Hear a short sample with the selected voice and speed (uses cloud TTS)"
+                    >
+                      <Volume2 size={14} />
+                      {voiceTestState === 'loading' ? 'Generating…' : voiceTestState === 'playing' ? 'Stop' : 'Test voice'}
                     </button>
                   </div>
                   <div className="text-xs mt-1.5 text-dim">
