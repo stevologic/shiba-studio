@@ -5,71 +5,61 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 ## 1. Security (ship-blockers)
 
-- [x] **Bind the server to localhost only** — done: `npm run dev`/`start` pass `-H 127.0.0.1`; `dev:lan`/`start:lan` are the explicit opt-ins.
-- [x] **CSRF/origin protection** — done: `proxy.ts` (Next 16 middleware) rejects `/api/*` requests with a non-loopback `Origin` or `Sec-Fetch-Site: cross-site` navigation; OAuth callbacks exempt (state-protected). Verified with an allow/deny matrix against the running server.
-- [x] **Terminal bridge origin check** — done (found during this audit): the node-pty WebSocket on `127.0.0.1:3911` accepted connections from ANY website (WebSockets bypass CORS — drive-by shell). Now rejects non-loopback origins with close code 1008; verified with real WS clients.
-- [x] **Change the default tool-approval mode** — done: fresh installs default to `ask`; YOLO is an explicit opt-in in Settings. Saved configs keep their existing choice.
-- [x] **Path-traversal audit** — done: Obsidian vault note read/write already boundary-checked; the vault *listing* dir could escape via `..` — fixed. `/api/fs/browse` and `/api/workspace/*` are machine-wide **by design** (folder picker / workspace editor); their boundary is the origin guard + loopback binding, documented in SECURITY.md.
-- [x] **Dependency audit** — `npm audit`: only 2 moderate advisories, both in postcss *bundled inside Next.js* (the only auto-fix is a downgrade to Next 9 — nonsense); tracked in SECURITY.md, re-check on Next upgrades. `framer-motion` confirmed still used (4 modal components). CI runs `npm audit --audit-level=high` + lockfile-exact `npm ci`.
-- [x] **SECURITY.md** — done: threat model, boundaries table, non-goals, accepted risks, private reporting channel.
+- [x] **Bind the server to localhost only** — `npm run dev`/`start` pass `-H 127.0.0.1`; `dev:lan`/`start:lan` are the explicit opt-ins.
+- [x] **CSRF/origin protection** — `proxy.ts` rejects `/api/*` requests with a non-loopback `Origin` or `Sec-Fetch-Site: cross-site`; OAuth callbacks exempt (state-protected). Verified with an allow/deny matrix.
+- [x] **Terminal bridge origin check** — the node-pty WebSocket on `127.0.0.1:3911` rejected nothing (WebSockets bypass CORS — drive-by shell); now closes foreign origins with 1008. Verified with real WS clients.
+- [x] **Default tool-approval mode** — fresh installs default to `ask`; YOLO is an explicit opt-in. Saved configs keep their choice.
+- [x] **Path-traversal audit** — Obsidian vault listing `..` escape fixed; `/api/fs/*` and `/api/workspace/*` are machine-wide by design (boundary = origin guard + loopback binding, documented in SECURITY.md).
+- [x] **Dependency audit** — only 2 moderate advisories, both in postcss bundled *inside* Next.js (auto-fix would downgrade Next to 9 — nonsense); tracked in SECURITY.md. CI runs `npm audit --audit-level=high` + lockfile-exact `npm ci`.
+- [x] **SECURITY.md** — threat model, boundaries, non-goals, private reporting channel.
 
 ## 2. Legal & branding (ship-blockers)
 
-- [x] **Add a LICENSE file** — done: dual-licensed AGPL-3.0-or-later / commercial ([LICENSE](LICENSE), [LICENSE.md](LICENSE.md)).
-- [x] **Naming review** — done: rebranded to "Shiba Studio"; legacy GrokDesk data migrates automatically.
-- [ ] **Asset licensing.** Confirm the shiba logo, alien avatars, and integration icons are original/licensed for redistribution. *(Not automatable — needs the author's confirmation of provenance.)*
+- [x] **LICENSE** — dual-licensed AGPL-3.0-or-later / commercial ([LICENSE](LICENSE), [LICENSE.md](LICENSE.md)); `package.json` carries `SEE LICENSE IN LICENSE`.
+- [x] **Naming review** — rebranded to "Shiba Studio"; legacy GrokDesk data migrates automatically.
+- [ ] **Asset licensing.** Confirm the shiba logo, alien avatars, and integration icons are original/licensed for redistribution. *(Needs the author's confirmation of provenance — not automatable.)*
 - [ ] **xAI API ToS check** — automated agent traffic, scheduled runs, and multi-agent fan-out must comply with rate/usage terms. *(Needs a human read of current xAI terms.)*
 
-## 3. Reliability & data (before first users)
+## 3. Reliability & data
 
-- [x] **DB schema versioning** — done: `lib/db.ts` stamps `PRAGMA user_version` (v1 = current baseline) with an ordered, transactional `MIGRATIONS` ladder for future releases. Verified against a fresh DB.
-- [ ] **Backup/export & import.** One-click export of config + agents + runs + audit log (SQLite file + JSON stores), and restore on a new machine.
-- [ ] **Cost guardrails.** Monthly/daily spend limit with a hard stop, warning when a scheduled agent will run N times/day, and per-run token caps surfaced in the UI (usage metering already exists).
-- [ ] **Runaway-agent protection.** MAX_STEPS exists per run and duplicate cron ticks are deduped via `schedule_ticks`; still missing: global concurrent-run limit and skip-if-previous-run-still-going.
-- [ ] **Graceful degradation offline** — clear banners when api.x.ai is unreachable; queue or skip scheduled runs instead of erroring silently (audit log now records failures).
+- [x] **DB schema versioning** — `PRAGMA user_version` ladder in `lib/db.ts` (v1 baseline, v2 adds FTS5 search tables); migrations run transactionally on open.
+- [x] **Backup/export & import** — Settings → Backup & restore: one-file export of config + agents + chats + projects + runs + audit log (+ the encryption key, so a new machine can decrypt); `.pre-restore` safety copies on import. Round-trip verified across isolated data dirs, including cross-machine key adoption.
+- [x] **Cost guardrails** — monthly *and* daily budgets with a hard stop (blocks new cloud runs/chats at the limit; local models never blocked; warn-only toggle), per-run token caps enforced in the run loop, and a ⚠ chip on automations firing >24×/day. All in Settings → Cost & safety. Guard behavior covered by functional tests.
+- [x] **Runaway-agent protection** — global concurrent-run limit (default 3, atomic slot claim) + schedule-overlap suppression (tick skipped with an audit entry while the previous run of that schedule is live), on top of MAX_STEPS and `schedule_ticks` dedupe.
+- [x] **Graceful degradation offline** — cached api.x.ai reachability probe; shell banner with retry when unreachable; scheduled cloud runs skip their tick with an audit entry; interactive runs refuse before spending.
 
 ## 4. CI, tests & platforms
 
-- [x] **GitHub Actions matrix** — done: `.github/workflows/ci.yml` — npm ci (lockfile-exact) + lint + typecheck + build + `npm test` on windows/macos/ubuntu × Node 22.5/24, plus an `npm audit --audit-level=high` job.
-- [ ] **Zero out lint debt.** Reduced this audit from 188 errors to 160 (and fixed the eslint config that was sweeping `.worktrees/` — 11,528 phantom problems). Remaining: ~121 in `components/shiba-studio.tsx`, 15 in `grok-chat-panel.tsx`, 13 in `lib/agent-runtime.ts`, 9 in `lib/grok-client.ts` — mostly `no-explicit-any` plus a handful of react-compiler `set-state-in-effect` warnings that need careful refactors in streaming code. The CI lint step is `continue-on-error` until this hits zero.
-- [ ] **Browser E2E suite** (Playwright): nav, chat send/stream (stubbed SSE), agent create/run/history, logs pagination + export, capabilities page. Current verify scripts cover runtime/API well but drive almost no real UI.
-- [x] **Test isolation** — done: `npm test` gives every child script a fresh `SHIBA_DATA_DIR` under scratch; `SHIBA_TEST_DATA_DIR` overrides. Live `~/.shiba-studio` is never touched. (Also fixed during this audit: two stale structural assertions — OAuth hand-back string, projects-panel redesign — and verify-project-builder failing silently with no stdout.)
-- [ ] **Split the god component.** `components/shiba-studio.tsx` (~4,600 lines) should become per-tab modules — required for maintainability once external contributors arrive, and where most of the remaining lint debt lives.
+- [x] **GitHub Actions matrix** — lint/typecheck/build/`npm test` on windows/macos/ubuntu × Node 22.5/24, plus an audit job (`.github/workflows/ci.yml`).
+- [ ] **Zero out lint debt.** `lib/`, `app/api/`, `scripts/`, and `types/` are now **clean**. Remaining ~190 problems live entirely in `components/*.tsx` (≈124 in `shiba-studio.tsx`, 12 `grok-chat-panel`, 11 `chat-sessions-panel`, rest singles) — mostly `no-explicit-any` plus react-compiler `set-state-in-effect`/`no-img-element` warnings needing careful UI refactors. CI lint stays `continue-on-error` until zero; pairs with the component split below.
+- [x] **Browser E2E suite (Playwright)** — scaffolded: `playwright.config.ts` (isolated `SHIBA_DATA_DIR`, production server on its own port), `e2e/nav.spec.ts` (every surface renders with zero console errors + sidebar nav), `e2e/settings-and-search.spec.ts` (Cost & safety save round-trip, palette search, logs `?q=` deep link). Run: `npx playwright install chromium` once, `npm run build`, then `npm run test:e2e`. *(Not yet wired into CI — add once flake-checked on all three OSes.)*
+- [x] **Test isolation** — `npm test` runs every script against a fresh temp `SHIBA_DATA_DIR`; also fixed this session: `verify-theme` leaked its spawned server on Windows (tree-kill + dynamic free port now), which had been silently breaking later runs via port squatting.
+- [ ] **Split the god component.** `components/shiba-studio.tsx` (~5,700 lines post-merge). Concrete plan: the shell (nav/topbar/footer/palette/modals) stays; extract per-tab modules in this order — ① Settings tab (self-contained save handlers; pass `config` + a `reload` callback), ② Dashboard (needs `agents/runs/navStats/config` + run handlers), ③ Agents tab + agent-editor modal (the largest; editor state is already local), ④ Automations. Chat/Projects/Workspace/Logs/Usage/Capabilities panels are already separate components. Do each extraction in its own PR with `npm test` + E2E green between steps; most remaining lint debt falls out with it.
 
 ## 5. Distribution & onboarding
 
-- [ ] **Decide the shipping vehicle**: `npx shiba-studio` launcher (fastest), Docker image, and/or Electron/Tauri desktop wrapper. Tauri keeps the footprint small and gives real localhost binding + native menus.
-- [ ] **First-run onboarding wizard** — guided key/OAuth setup, create first agent, run it. Today a new user lands on an empty dashboard and must find Settings on their own.
-- [ ] **Make Puppeteer optional.** It downloads a full Chromium (~150 MB) on `npm install` even for users who never use browser automation; switch to lazy install-on-first-use or an env opt-out. (Note: `verify-theme` needs it, so CI keeps the download.)
+- [x] **Shipping vehicles: Docker + npx** — `Dockerfile` (multi-stage, node-pty compiled, Chromium skipped, `SHIBA_DATA_DIR=/data` volume) + `docker-compose.yml` with loopback-only publish; `bin/shiba-studio.mjs` (`npx shiba-studio`: builds once, serves on 127.0.0.1) wired via `package.json` `bin`. *(npm publish itself — removing `"private": true`, choosing the package scope — is the author's call.)*
+- [x] **First-run onboarding** — the dashboard shows a live 3-step checklist (connect a model source → create your first agent → run it) that derives from real state and retires itself when all steps are done.
+- [x] **Make Puppeteer optional** — documented `PUPPETEER_SKIP_DOWNLOAD=1 npm install` slim path; browser tools fail with the exact one-liner to fetch Chromium on demand. CI/verify-theme keep the download.
 - [ ] **OAuth client registration.** The X OAuth flow needs a registered public client id and verified redirect handling on all platforms for users who won't paste API keys.
-- [ ] **Versioning & releases**: semver, CHANGELOG.md, GitHub Releases with a tested upgrade path (DB migrations now exist to support this), in-app "update available" notice.
+- [x] **Versioning & releases** — semver (`0.2.0`), [CHANGELOG.md](CHANGELOG.md), tag-triggered release workflow (`.github/workflows/release.yml`, notes extracted from the changelog, tag↔version guard), and an in-app "⬆ vX.Y.Z available" footer notice fed by the GitHub releases API (cached 6 h).
 
 ## 6. Documentation & community
 
-- [x] **README refresh for strangers** — done; updated this audit with the security model, localhost binding, and community links.
-- [x] **Docs pages** — done: getting-started, chat, agents, automations, capabilities, sync, configuration, development — refreshed this audit (test isolation, binding, migrations, origin guard).
-- [x] **CONTRIBUTING.md + issue/PR templates + CODE_OF_CONDUCT.md** — done (`.github/ISSUE_TEMPLATE/`, `PULL_REQUEST_TEMPLATE.md`).
-- [x] **Privacy statement** — done: [PRIVACY.md](PRIVACY.md) — everything local, zero telemetry, complete list of what leaves the machine and when.
+- [x] README, docs pages, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, PRIVACY, issue/PR templates — all present and refreshed for the dual-license + hardening changes.
 
-## 7. Product polish (fast follows)
+## 7. Product polish
 
-- [ ] Accessibility pass: full keyboard navigation of modals/tables, ARIA labels on icon buttons (partially done), contrast check on dim text.
-- [ ] Search across chats/runs/logs (SQLite FTS5 is available in `node:sqlite`).
-- [ ] Notifications for scheduled-run failures (in-app inbox and/or OS notification).
-- [ ] Retention settings for runs/audit log (auto-prune with size caps).
-- [ ] i18n scaffolding once copy stabilizes.
+- [x] **Accessibility pass (targeted)** — live-DOM scan across all surfaces: icon-only buttons were already labeled; fixed the last unlabeled controls (default-model select, file inputs) and raised `--text-dim` to clear WCAG AA 4.5:1. *(Full keyboard-trap audit of every modal remains open.)*
+- [x] **Search across chats/runs/logs** — SQLite FTS5 (external-content tables + triggers, schema v2) behind `/api/search`; surfaced in the Ctrl+K palette with grouped results that deep-link (`/chat/:id`, `/automations?run=`, `/logs?q=`).
+- [ ] **Notifications for scheduled-run failures** (in-app inbox and/or OS notification). Failures and skips are audit-logged today; a surfaced notification is still missing.
+- [x] **Retention settings** — optional day-based auto-prune for runs and audit log (Settings → Cost & safety); runs at boot + daily.
+- [ ] **i18n scaffolding** once copy stabilizes.
 
 ---
 
-## Fixed during the 2026-07-09 full-codebase audit
+## State of the tree (2026-07-10)
 
-Beyond the checkboxes above, this pass also repaired:
+`origin/main` (Netlify/Vercel integrations, dual license, page-chrome refresh) is **merged** — the worktree carries both that line and this session's work (guardrails, backup, search, onboarding, security hardening). Verified after the merge: `tsc` clean · `next build` clean · app booted with both feature sets live and zero console errors · guard/backup/search behaviors re-tested. `npm test` chain: 9 scripts, isolated data dir.
 
-- **Typecheck was broken** (5 errors): `defaultTtsVoice`/`defaultTtsSpeed` missing from `AppConfig`; dead Vercel-integration UI (no catalog entry, no backend) removed from Settings.
-- **Audit-log spam**: the silent local-models probe (`action: testLocalGrok`) falsely recorded "settings updated · localGrokBaseUrl" on every page load.
-- **Dashboard/nav disagreement**: "Active schedules" counted agents on the Dashboard but schedules in the sidebar badge — now both count schedules.
-- **ESLint scope**: config now ignores runtime dirs (`.worktrees/`, `data/`, uploads, terminals, mcps) like `.gitignore` does.
-- **Repo hygiene**: committed agent-test artifacts (`daily-summary.*`) untracked and gitignored.
-- `useRest()` in `lib/obsidian.ts` renamed (`restCreds`) — a server helper the React-hooks linter mistook for a hook (5 false errors).
-
-**Verified end-to-end after the changes**: `tsc` clean · `next build` clean · full `npm test` suite green (isolated) · app booted and every page walked with zero console errors · real chat round-trip against a local model (send → stream → auto-title → delete) · origin-guard allow/deny matrix and WS origin gating exercised against the live server.
+Still open, in priority order: components lint-zero + god-component split (paired), E2E in CI, failure notifications, OAuth public client, asset/ToS confirmations (human), i18n.
