@@ -57,7 +57,7 @@ async function resyncAllSchedules() {
   // Clean any accumulated 'manual' entries to prevent bad cron spam and clutter (fix accumulation bug)
   agents = agents.map(a => {
     if (a.schedules && Array.isArray(a.schedules)) {
-      a.schedules = a.schedules.filter((s: any) => s.cron && !String(s.cron).includes('manual'));
+      a.schedules = a.schedules.filter((s: ScheduleEntry) => s.cron && !String(s.cron).includes('manual'));
     }
     return a;
   });
@@ -140,7 +140,7 @@ async function resyncAllSchedules() {
         const existing = tasks.get(taskKey);
         if (existing) { try { existing.stop(); } catch { /* already stopped */ } }
         tasks.set(taskKey, task);
-      } catch (e) {
+      } catch {
         console.error('bad cron for', agent.name, entry.cron, entry.id);
       }
     }
@@ -151,8 +151,8 @@ export function scheduleAgentNow(agent: Agent, scheduleId?: string) {
   // Run immediately using schedule-specific instructions if scheduleId provided or first enabled.
   // This makes schedule instructions for 'manual scheduler trigger' reachable (fix dead code gap).
   const ag = normalizeAgent(agent);
-  let entry = scheduleId ? (ag.schedules || []).find((s: any) => s.id === scheduleId) : null;
-  if (!entry) entry = (ag.schedules || []).find((s: any) => s.enabled);
+  let entry = scheduleId ? (ag.schedules || []).find((s: ScheduleEntry) => s.id === scheduleId) : null;
+  if (!entry) entry = (ag.schedules || []).find((s: ScheduleEntry) => s.enabled);
   const prompt = entry ? entry.instructions : `Manual trigger from scheduler UI at ${new Date().toISOString()}`;
   const sid = entry ? entry.id : undefined;
   return runScheduledAgent(ag, prompt, { scheduled: true, scheduleId: sid, scheduleInstructions: entry ? entry.instructions : undefined });
@@ -226,7 +226,7 @@ export async function scheduleFromAgentTool(agentId: string, when: string, promp
 
   // Treat as cron string: add as enabled schedule entry
   if (when && (when.includes('*') || when.includes('/'))) {
-    const entry: any = { id: 'sch-tool-' + Date.now(), enabled: true, cron: when, instructions, description: (prompt || '').slice(0, 80) };
+    const entry: ScheduleEntry = { id: 'sch-tool-' + Date.now(), enabled: true, cron: when, instructions, description: (prompt || '').slice(0, 80) };
     ag.schedules.push(entry);
     await saveAgents(agents);
     await loadAndScheduleAll();

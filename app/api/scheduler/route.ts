@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadAgents, saveAgents } from '@/lib/persistence';
+import { loadAgents } from '@/lib/persistence';
 import { updateAgentSchedule } from '@/lib/scheduler';
 
 export async function POST(req: NextRequest) {

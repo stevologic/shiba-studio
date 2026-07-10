@@ -31,11 +31,13 @@ const LOCAL_ONLY_TOOLS = new Set([
 
 export async function executeAgentTool(
   name: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tool args arrive as model-produced JSON; each case coerces its own fields
   args: any,
   agent: Agent,
   run: Partial<AgentRun>,
   workDir: string,
   runIdForBrowser?: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- results are tool-shaped JSON, serialized straight back to the model
 ): Promise<{ result: any; sideEffect?: string; screenshot?: string }> {
   if (agent.origin === 'cloud' && LOCAL_ONLY_TOOLS.has(name)) {
     return {
@@ -368,7 +370,10 @@ export async function executeAgentTool(
       default:
         return { result: `unknown tool ${name}`, sideEffect: '' };
     }
-  } catch (err: any) {
-    return { result: { error: err.message }, sideEffect: `tool ${name} failed` };
+  } catch (err) {
+    return {
+      result: { error: err instanceof Error ? err.message : String(err) },
+      sideEffect: `tool ${name} failed`,
+    };
   }
 }

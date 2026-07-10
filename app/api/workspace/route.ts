@@ -25,8 +25,8 @@ export async function POST(req: NextRequest) {
     try {
       const result = await readFileSmart(body.path);
       return NextResponse.json(result);
-    } catch (e: any) {
-      return NextResponse.json({ error: e.message }, { status: 400 });
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
     }
   }
   const { path, content } = body;

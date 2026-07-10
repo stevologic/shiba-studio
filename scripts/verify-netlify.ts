@@ -253,8 +253,8 @@ async function main() {
     setPersistenceDataDir(testData);
     await saveConfig({
       xaiApiKey: 'xai-test-netlify-verify',
-      integrations: creds,
-    } as any);
+      integrations: creds as import('../lib/types').IntegrationCreds,
+    });
 
     const { executeAgentTool } = await import('../lib/agent-tool-exec');
     const agent = {
@@ -273,9 +273,9 @@ async function main() {
     const run = { id: 'netlify-verify-run', status: 'running' as const };
     const workDir = process.cwd();
 
-    const listRes = await executeAgentTool('netlify_list_sites', { limit: 5 }, agent as any, run, workDir);
+    const listRes = await executeAgentTool('netlify_list_sites', { limit: 5 }, agent as unknown as import('../lib/types').Agent, run, workDir);
     assert(
-      Array.isArray(listRes.result) && (listRes.result as any[]).length >= 1,
+      Array.isArray(listRes.result) && (listRes.result as unknown[]).length >= 1,
       `tool list sites: ${JSON.stringify(listRes)}`,
     );
     assert(String(listRes.sideEffect || '').toLowerCase().includes('netlify'), 'list side effect');
@@ -283,21 +283,21 @@ async function main() {
     const deployRes = await executeAgentTool(
       'netlify_deploy',
       { site: 'vibe-app', clear_cache: false },
-      agent as any,
+      agent as unknown as import('../lib/types').Agent,
       run,
       workDir,
     );
-    assert(deployRes.result && !(deployRes.result as any).error, `tool deploy: ${JSON.stringify(deployRes.result)}`);
+    assert(deployRes.result && !(deployRes.result as { error?: unknown }).error, `tool deploy: ${JSON.stringify(deployRes.result)}`);
     assert(String(deployRes.sideEffect || '').includes('Netlify deploy'), 'deploy side effect');
 
     const envRes = await executeAgentTool(
       'netlify_set_env',
       { site: 'vibe-app', key: 'DEMO_KEY', value: 'yes' },
-      agent as any,
+      agent as unknown as import('../lib/types').Agent,
       run,
       workDir,
     );
-    assert((envRes.result as any)?.ok, 'tool set env');
+    assert((envRes.result as { ok?: boolean })?.ok, 'tool set env');
     log('OK agent-tool-exec netlify tools');
 
     // Integration context (creds already on disk + in-memory via saveConfig)

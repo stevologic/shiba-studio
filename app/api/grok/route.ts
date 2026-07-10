@@ -47,8 +47,8 @@ export async function POST(req: NextRequest) {
       });
       const content = resp.choices?.[0]?.message?.content || '';
       return NextResponse.json({ content, model, provider: parseModelRef(model).provider, usage: resp.usage });
-    } catch (e: any) {
-      return NextResponse.json({ error: e.message }, { status: 400 });
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
     }
   }
 
@@ -64,8 +64,8 @@ export async function POST(req: NextRequest) {
         usageContext: body.usageContext || { source: 'other' },
       });
       return NextResponse.json(resp);
-    } catch (e: any) {
-      return NextResponse.json({ error: e.message }, { status: 400 });
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
     }
   }
 

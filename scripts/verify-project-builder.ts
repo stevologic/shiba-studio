@@ -120,8 +120,8 @@ async function main() {
   assert(scope!.workspacePathOverride.includes(WS_MARKER), 'scope workspace path');
   assert(scope!.effectivePrompt.includes(INJECT_MARKER), 'effective prompt has project instructions');
 
-  let capturedMessages: Array<{ role: string; content: string }> = [];
-  async function mockGrokChat(params: { messages: Array<{ role: string; content: string }> }) {
+  let capturedMessages: Array<{ role: string; content: string | null }> = [];
+  async function mockGrokChat(params: { messages: Array<{ role: string; content: string | null }> }) {
     capturedMessages = params.messages;
     return {
       choices: [{

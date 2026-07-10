@@ -2,14 +2,14 @@
 // Every intelligence step uses Grok exclusively. Tools execute locally + integrations + browser + worktree.
 
 import { v4 as uuidv4 } from 'uuid';
-import { Agent, AgentRun, GrokModel, TraceStep, IntegrationScope } from './types';
+import { Agent, AgentRun, TraceStep, IntegrationScope } from './types';
 import type { AgentStreamEvent } from './agent-stream-types';
 import { grokChat, GrokMessage, GrokTool } from './grok-client';
 import { resolveWorkspace, ensureWorktree, getGlobalUploadsDir, GLOBAL_UPLOADS_SUBDIR } from './workspace';
 import * as Browser from './browser';
 import { persistAgentRun } from './agent-runs-store';
 import { buildSkillsPrompt } from './skills-catalog';
-import { drainInbox, postToAgentInbox } from './agent-inbox';
+import { drainInbox } from './agent-inbox';
 import { detectGrokCli } from './grok-cli';
 import { listEnabledMcpServers } from './mcp';
 
@@ -575,11 +575,13 @@ export function grokCliToolDefinition(): GrokTool {
 
 async function executeTool(
   name: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced tool JSON; agent-tool-exec coerces per tool
   args: any,
   agent: Agent,
   run: Partial<AgentRun>,
   workDir: string,
   runIdForBrowser?: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tool-shaped JSON serialized back to the model
 ): Promise<{ result: any; sideEffect?: string; screenshot?: string }> {
   const { executeAgentTool } = await import('./agent-tool-exec');
   return executeAgentTool(name, args, agent, run, workDir, runIdForBrowser);
@@ -630,7 +632,14 @@ Finish by giving a short summary when task is complete.`;
 
 type AgentRunOpts = {
   scheduled?: boolean;
-  grokChatFn?: any;
+  /** Injectable chat double for tests — canned responses only need choices. */
+  grokChatFn?: (params: {
+    model: string;
+    messages: GrokMessage[];
+    tools?: GrokTool[];
+    tool_choice?: 'auto';
+    usageContext?: { source: string; sourceId: string };
+  }) => Promise<{ choices: Array<{ message?: { role?: string; content?: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }; finish_reason?: string }>; usage?: unknown }>;
   scheduleId?: string;
   scheduleInstructions?: string;
   /** Pre-built project context (instructions, workspace, uploads) */
@@ -735,8 +744,9 @@ async function* agentRunGenerator(
       const wt = await ensureWorktree(agent.workspace.path, agent.id);
       workDir = wt.worktreePath;
       yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'think', content: `Using worktree at ${workDir}` });
-    } catch (e: any) {
-      yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: `Worktree setup issue: ${e.message}. Using base workspace.` });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: `Worktree setup issue: ${msg}. Using base workspace.` });
     }
   }
 
@@ -834,17 +844,18 @@ async function* agentRunGenerator(
           yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: msg.content });
           break;
         }
-        messages.push({ role: 'assistant', content: msg.content, tool_calls: msg.tool_calls as any });
+        messages.push({ role: 'assistant', content: msg.content, tool_calls: msg.tool_calls });
       } else {
         // Empty string, NOT null — local OpenAI-compatible servers (LM Studio,
         // Ollama) reject a null content on a tool-call turn with
         // "invalid message content type: <nil>". "" is valid on cloud too.
-        messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: msg.tool_calls as any });
+        messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: msg.tool_calls });
       }
 
       // Execute tool calls
       for (const tc of (msg.tool_calls || [])) {
         const fn = tc.function;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced JSON, coerced per tool by the executor
         let args: any = {};
         try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
 
@@ -875,7 +886,7 @@ async function* agentRunGenerator(
               tool_call_id: tc.id,
               name: fn.name,
               content: JSON.stringify(denied),
-            } as any);
+            });
             yield emit({
               id: uuidv4(),
               ts: new Date().toISOString(),
@@ -896,7 +907,7 @@ async function* agentRunGenerator(
           name: fn.name,
           content: JSON.stringify(execRes.result).slice(0, 8000),
         };
-        messages.push(toolResultMsg as any);
+        messages.push(toolResultMsg);
 
         yield emit({
           id: uuidv4(),
@@ -910,8 +921,8 @@ async function* agentRunGenerator(
     }
 
     if (!finalOutput) finalOutput = 'Agent completed (see trace for details).';
-  } catch (e: any) {
-    yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: e.message || String(e) });
+  } catch (e) {
+    yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: e instanceof Error ? e.message : String(e) });
   } finally {
     guards.releaseActiveRun(runId);
     await Browser.closeRunPage(runId).catch(() => {});
@@ -933,7 +944,7 @@ async function* agentRunGenerator(
     ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
     ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
-  } as any;
+  };
 
   await persistAgentRun(run);
   audit('run', `run ${run.status}`, `${agent.name}: ${(run.finalOutput || prompt).slice(0, 120)}`, {

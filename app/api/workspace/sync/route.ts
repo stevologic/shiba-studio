@@ -45,8 +45,8 @@ export async function GET() {
       cloudFiles: cloud,
       lastSyncAt,
     });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e.message }, { status: 400 });
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
   }
 }
 
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, ...result });
     }
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e.message }, { status: 400 });
+  } catch (e) {
+    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
   }
 }

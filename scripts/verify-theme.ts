@@ -16,7 +16,38 @@ import puppeteer from 'puppeteer';
 import { spawn, ChildProcess } from 'child_process';
 
 import { GOAL_SCRATCH as SCRATCH } from '../lib/verify-scratch';
-const PORT = 3522;
+import net from 'net';
+
+/** Resolved to a genuinely free port before each launch — a fixed port
+ *  collided with servers leaked by earlier runs (see killServerTree). */
+let PORT = 0;
+
+function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const p = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(p));
+    });
+  });
+}
+
+/** child.kill() only kills the cmd.exe wrapper on Windows (shell: true) —
+ *  the real node server survived and squatted the port for the NEXT run.
+ *  taskkill /t takes down the whole tree. */
+function killServerTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(child.pid), '/f', '/t'], { shell: true });
+    } else {
+      child.kill('SIGTERM');
+    }
+  } catch {
+    /* already gone */
+  }
+}
 
 function assert(cond: boolean, msg: string) {
   if (!cond) throw new Error(`ASSERT FAILED: ${msg}`);
@@ -125,6 +156,7 @@ async function runHeadlessLaunch(runIndex: 1 | 2): Promise<{
 }
 
 async function runLaunchVerificationOnce(): Promise<void> {
+  PORT = await getFreePort();
   const server = startProdServer();
   try {
     await waitForServer(`http://localhost:${PORT}`);
@@ -153,11 +185,7 @@ async function runLaunchVerificationOnce(): Promise<void> {
     await fs.writeFile(path.join(SCRATCH, 'theme-dom-snippet.txt'), domSnippet);
     console.log('  DOM snippet saved to theme-dom-snippet.txt');
   } finally {
-    try {
-      server.kill();
-    } catch {
-      /* ignore */
-    }
+    killServerTree(server);
   }
 }
 

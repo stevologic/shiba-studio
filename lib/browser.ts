@@ -30,7 +30,7 @@ let screencastStarting: Promise<void> | null = null;
 export const SUBBROWSER_RUN_ID = '__subbrowser__';
 
 async function getBrowser(): Promise<Browser> {
-  if (browser && (browser as any).connected) return browser;
+  if (browser && browser.connected) return browser;
   const args = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -115,8 +115,8 @@ export async function browserClick(selector: string, runId?: string): Promise<{ 
     await page.waitForSelector(selector, { timeout: 8000 });
     await page.click(selector);
     return { ok: true, selector };
-  } catch (e: any) {
-    return { ok: false, selector, error: e.message };
+  } catch (e) {
+    return { ok: false, selector, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -129,7 +129,7 @@ export async function browserType(selector: string, text: string, submit = false
       await page.keyboard.press('Enter');
     }
     return { ok: true, selector, text };
-  } catch (e: any) {
+  } catch {
     // fallback direct
     await page.evaluate((sel, val) => {
       const el = document.querySelector(sel) as HTMLInputElement | null;
@@ -144,7 +144,6 @@ export async function browserScreenshot(name = 'capture', runId?: string): Promi
   const page = runId ? await getPageForRun(runId) : await getPage();
   const { ensureDir } = await import('./workspace');
   const pathMod = await import('path');
-  const { writeFile } = await import('fs/promises');
   const shotsDir = dataDir('screenshots');
   await ensureDir(shotsDir);
   const file = pathMod.join(shotsDir, `${name}-${Date.now()}.png`);

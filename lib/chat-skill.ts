@@ -27,7 +27,7 @@ export function buildMultiAgentSynthesisSystem(
   perspectives: Array<{ name: string; content: string }>,
 ): string {
   const block = perspectives
-    .map((p, i) => `### ${p.name}\n${p.content}`)
+    .map((p) => `### ${p.name}\n${p.content}`)
     .join('\n\n');
 
   return `You are Grok coordinating multiple specialized agents in Shiba Studio.

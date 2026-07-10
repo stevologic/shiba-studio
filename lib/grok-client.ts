@@ -12,10 +12,16 @@ import {
 
 export const XAI_BASE = 'https://api.x.ai/v1';
 
+export interface GrokToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
 export interface GrokMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
-  tool_calls?: any[];
+  tool_calls?: GrokToolCall[];
   tool_call_id?: string;
   name?: string;
 }
@@ -25,7 +31,7 @@ export interface GrokTool {
   function: {
     name: string;
     description: string;
-    parameters: Record<string, any>;
+    parameters: Record<string, unknown>;
   };
 }
 
@@ -60,7 +66,8 @@ export interface GrokChoice {
 export interface GrokChatResponse {
   id: string;
   choices: GrokChoice[];
-  usage?: any;
+  /** Raw provider usage block — parsed by lib/usage.parseGrokUsage. */
+  usage?: unknown;
 }
 
 let cachedKey: string | null = null;
@@ -90,7 +97,8 @@ export interface XaiModelInfo {
 
 /** Parse xAI language-models or models list into selectable chat model entries. */
 export function parseXaiModelList(data: unknown): XaiModelInfo[] {
-  const raw = (data as any)?.models ?? (data as any)?.data ?? [];
+  const d = data as { models?: unknown; data?: unknown } | null;
+  const raw = d?.models ?? d?.data ?? [];
   if (!Array.isArray(raw)) return [];
 
   const result: XaiModelInfo[] = [];
@@ -187,13 +195,13 @@ export async function listLocalGrokModels(baseUrl?: string): Promise<{ ok: boole
       const txt = await res.text();
       return { ok: false, models: [], error: `${res.status} ${txt}` };
     }
-    const data = await res.json();
-    const raw = (data as any)?.data ?? (data as any)?.models ?? [];
+    const data = await res.json() as { data?: unknown; models?: unknown };
+    const raw = data?.data ?? data?.models ?? [];
     if (!Array.isArray(raw) || raw.length === 0) {
       return { ok: true, models: [], error: 'Local server reported no models' };
     }
     const models: SelectableModel[] = raw
-      .map((m: any) => {
+      .map((m: { id?: unknown }) => {
         const id = m?.id;
         if (!id || typeof id !== 'string') return null;
         return {
@@ -204,8 +212,8 @@ export async function listLocalGrokModels(baseUrl?: string): Promise<{ ok: boole
       })
       .filter(Boolean) as SelectableModel[];
     return { ok: true, models };
-  } catch (e: any) {
-    return { ok: false, models: [], error: e.message };
+  } catch (e) {
+    return { ok: false, models: [], error: e instanceof Error ? e.message : String(e) };
   }
 }
 

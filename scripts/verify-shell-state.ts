@@ -62,7 +62,7 @@ async function main() {
         schedules: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      } as any,
+      } as unknown as import('../lib/types').Agent,
     ]);
     const after = await loadAgents();
     assert(after.some((a) => a.id === probeId), 'saveAgents+loadAgents round-trip sees probe agent');
@@ -148,7 +148,7 @@ async function main() {
 
   // --- 5) agents UI store remount simulation ---
   const agentsUi = await import('../lib/agents-ui-store');
-  agentsUi.setCachedAgents(agents.length ? agents : [{ id: 'x', name: 'Cached' } as any]);
+  agentsUi.setCachedAgents(agents.length ? agents : [{ id: 'x', name: 'Cached' } as unknown as import('../lib/types').Agent]);
   assert(agentsUi.hasCachedAgents() === true, 'agents cache set');
   assert((agentsUi.getCachedAgents() || []).length > 0, 'agents cache non-empty after set (remount restore source)');
 

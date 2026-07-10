@@ -19,14 +19,14 @@ export async function POST(req: NextRequest) {
         const buf = Buffer.from(await item.arrayBuffer());
         const file = await saveUploadFromBuffer(item.name, buf);
         saved.push(file);
-      } catch (e: any) {
-        errors.push(`${item.name}: ${e.message}`);
+      } catch (e) {
+        errors.push(`${item.name}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 
     return NextResponse.json({ ok: true, saved, errors });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 400 });
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
   }
 }
 

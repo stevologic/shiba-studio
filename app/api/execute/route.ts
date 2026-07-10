@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
       scheduleInstructions: scheduleInstructions || undefined,
     });
     return NextResponse.json({ run });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
 }

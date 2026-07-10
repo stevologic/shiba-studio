@@ -1,4 +1,4 @@
-import { getApiKey, XAI_BASE } from './grok-client';
+import { XAI_BASE } from './grok-client';
 import type { ChatMessagePayload, ChatStreamEvent, ReasoningEffort } from './chat-types';
 import { parseModelRef, supportsReasoning } from './model-providers';
 

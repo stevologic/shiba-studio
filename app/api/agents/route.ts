@@ -39,8 +39,8 @@ export async function POST(req: NextRequest) {
 
   // create (support skills[] and schedules[] or legacy schedule)
   const now = new Date().toISOString();
-  const initSchedules = body.schedules && Array.isArray(body.schedules) && body.schedules.length > 0 
-    ? body.schedules.map((s: any, i: number) => ({
+  const initSchedules = body.schedules && Array.isArray(body.schedules) && body.schedules.length > 0
+    ? body.schedules.map((s: { id?: string; enabled?: boolean; cron?: string; instructions?: string; description?: string }, i: number) => ({
         id: s.id || `sch-${i}-${Date.now()}`,
         enabled: s.enabled !== false,
         cron: s.cron || '*/30 * * * *',

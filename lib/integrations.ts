@@ -3,6 +3,7 @@
 // Lazy imports to avoid heavy top-level cjs/esm issues in tests.
 
 import crypto from 'crypto';
+import type { Block, KnownBlock } from '@slack/web-api';
 import { IntegrationCreds } from './types';
 
 let creds: IntegrationCreds = {};
@@ -48,8 +49,8 @@ export async function testGitHub(): Promise<{ ok: boolean; login?: string; error
     const octo = new Octokit({ auth: creds.github.token });
     const { data } = await octo.rest.users.getAuthenticated();
     return { ok: true, login: data.login };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -90,11 +91,11 @@ export async function testSlack(): Promise<{ ok: boolean; team?: string; error?:
     const { WebClient } = await import('@slack/web-api');
     const slack = new WebClient(creds.slack.token);
     const info = await slack.auth.test();
-    return { ok: true, team: (info as any).team };
-  } catch (e: any) { return { ok: false, error: e.message }; }
+    return { ok: true, team: (info as { team?: string }).team };
+  } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
 }
 
-export async function slackPostMessage(channel: string, text: string, blocks?: any) {
+export async function slackPostMessage(channel: string, text: string, blocks?: (Block | KnownBlock)[]) {
   if (!creds.slack?.token) throw new Error('Slack not configured');
   const { WebClient } = await import('@slack/web-api');
   const slack = new WebClient(creds.slack.token);
@@ -199,8 +200,8 @@ export async function testDiscord(): Promise<{ ok: boolean; username?: string; i
     }
     const data = await res.json();
     return { ok: true, username: data.username, id: data.id };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -278,8 +279,8 @@ export async function testX(): Promise<{ ok: boolean; username?: string; id?: st
     }
     const data = await res.json();
     return { ok: true, username: data.data?.username, id: data.data?.id };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
