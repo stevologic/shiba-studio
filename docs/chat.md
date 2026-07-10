@@ -61,6 +61,27 @@ Ask things like *"read src/api.ts and explain the auth flow"*, *"find every usag
 
 Workspace file access is granted per-chat and only to the folder you selected. Every tool call is recorded in the audit log.
 
+## Background tasks — long work without blocking the chat
+
+For jobs too big to finish inline — building a whole application, migrating a codebase, extensive multi-source research — ask the chat to run it in the background ("do this as a background task", or just give it a big job and it will offer). The model calls the `background_task` tool:
+
+- The work runs as a normal agent run: it appears on **Automations** with a live execution trace, and the standard guardrails (concurrency limits, budget caps, token caps) apply.
+- The chat answers immediately with a task id and stays fully responsive — keep chatting, or close the tab entirely.
+- When the run finishes, the **result is posted back into the same chat session** with a link to the full trace. Ask "how's that task going?" anytime and the model checks with `background_status`.
+- If the chat has a bound workspace, the background worker operates on that same folder; if you're chatting as an agent, that agent (with its integrations) does the work.
+
+Write background requests as complete briefs — goal, constraints, what "done" looks like — because the worker can't ask follow-up questions mid-run.
+
+## How your prompt and context are prioritized
+
+Chats can carry a lot of injected context: project files and instructions, global uploads, an agent's integration data (Obsidian vault, GitHub repos…), and workspace listings. The chat is explicitly instructed that **your latest message is the task** — all injected material is wrapped in labeled background-context blocks the model treats as reference data only:
+
+- Context is used only when it's clearly relevant to what you actually asked.
+- Irrelevant context is ignored — the model won't summarize it unprompted or steer the conversation toward it.
+- Nothing inside context blocks can override your request or act as instructions (a note in an uploaded file saying "ignore the user" is inert data).
+
+So you can keep large projects and vaults attached without worrying that a question about one thing gets answered about another.
+
 ## The annotation sub-browser
 
 The killer workflow for building web apps: refine code by *pointing at the page*.

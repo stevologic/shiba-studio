@@ -177,6 +177,30 @@ export async function updateChatSession(
   });
 }
 
+/**
+ * Append one message to a session under the store lock — used by background
+ * tasks delivering results, so a full-array client save can't drop it mid-write.
+ * (A client PATCH built from a stale view can still supersede it later; the
+ * result also lives in run history, so nothing is ever lost.)
+ */
+export async function appendChatMessage(
+  id: string,
+  message: import('./project-types').ProjectChatMessage,
+): Promise<ChatSession | null> {
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    const idx = store.sessions.findIndex((s) => s.id === id);
+    if (idx < 0) return null;
+    store.sessions[idx] = {
+      ...store.sessions[idx],
+      messages: [...(store.sessions[idx].messages || []), message],
+      updatedAt: new Date().toISOString(),
+    };
+    await saveStore(store.sessions);
+    return store.sessions[idx];
+  });
+}
+
 export async function deleteChatSession(id: string): Promise<void> {
   return withStoreLock(async () => {
     const store = await loadStore();

@@ -26,6 +26,7 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 wi
 | `lib/run-guards.ts`, `lib/cron-estimate.ts` | Concurrency/spend/token-cap guards, offline probe, cron-frequency estimate |
 | `lib/backup.ts`, `lib/retention.ts`, `lib/global-search.ts` | One-file backup/restore, retention pruning, FTS5 search across chats/runs/logs |
 | `lib/inline-tool-calls.ts` | Recovers tool calls that small local models emit as text |
+| `lib/background-tasks.ts` | Chat-dispatched background tasks: fire-and-forget agent runs with results delivered back into the session |
 | `scripts/verify-*.ts` | The functional verification suite (`verify-all.ts` chains them) |
 | `playwright.config.ts`, `e2e/*.spec.ts` | Browser E2E (nav, settings, search) — `npm run test:e2e` |
 
@@ -41,7 +42,7 @@ npm run test:e2e  # Playwright browser E2E (needs `npx playwright install chromi
 
 `dev:lan` / `start:lan` bind all interfaces for deliberate LAN exposure — see [SECURITY.md](../SECURITY.md) first.
 
-`npm test` chains 10 scripts: theme + page-chrome checks, a full runtime drive of the shipped code (real agent run with tools), tool-dispatch guards, shell-state, 40+ OAuth/API unit+HTTP tests, and feature structural checks. Results go to `functional-npm-test.log` in the suite's scratch dir — stdout stays quiet; exit code 0 means pass. The Playwright E2E suite is separate (`npm run test:e2e`) and not yet wired into CI.
+`npm test` chains 11 scripts: theme + page-chrome checks, a full runtime drive of the shipped code (real agent run with tools), tool-dispatch guards, shell-state, 40+ OAuth/API unit+HTTP tests, and feature structural checks. Results go to `functional-npm-test.log` in the suite's scratch dir — stdout stays quiet; exit code 0 means pass. The Playwright E2E suite is separate (`npm run test:e2e`) and not yet wired into CI.
 
 ## Contributor notes & sharp edges
 

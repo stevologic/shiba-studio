@@ -48,6 +48,21 @@ async function main() {
   assert(types.includes('toolApprovalMode'), 'ToolApprovalMode in types');
   assert(types.includes('globalInstructions'), 'globalInstructions in types');
 
+  // Chat background tasks: dispatch tool + result delivery back into the session.
+  const bgLib = await read('lib/background-tasks.ts');
+  assert(bgLib.includes('startBackgroundTask'), 'background task dispatch');
+  assert(bgLib.includes('deliverToChat'), 'background result delivery');
+  assert((await read('lib/chat-sessions.ts')).includes('appendChatMessage'), 'lock-protected chat append');
+  const chatStream = await read('app/api/grok/stream/route.ts');
+  assert(chatStream.includes("'background_task'") && chatStream.includes("'background_status'"), 'background tools wired into chat');
+  assert((await read('components/grok-chat-panel.tsx')).includes('sessionId: session?.id'), 'chat sends sessionId for delivery');
+
+  // Prompt primacy: the user's message is the task; injected context is
+  // subordinate reference material wrapped in <background_context>.
+  assert(chatStream.includes('Task focus — read this first'), 'chat prompt-primacy preamble');
+  assert(chatStream.includes('asBackgroundContext'), 'chat context wrapped as background');
+  assert((await read('lib/agent-runtime.ts')).includes('<background_context source="integrations">'), 'agent runs wrap injected context');
+
   await log('PASS: all backlog feature structural checks');
   process.exit(0);
 }

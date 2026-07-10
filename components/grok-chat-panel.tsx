@@ -2484,6 +2484,8 @@ export default function GrokChatPanel({
       const body: Record<string, unknown> = {
         model: useModel,
         messages: payloadMessages,
+        // Lets the server post background-task results back into this session.
+        sessionId: session?.id,
         // Only send reasoning effort to models that accept it (CLI keeps its
         // own flag handling; non-reasoning API models get no arg at all).
         reasoningEffort: useCli
