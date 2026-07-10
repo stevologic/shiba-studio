@@ -89,6 +89,10 @@ import {
   setCachedAgents,
 } from '@/lib/agents-ui-store';
 import {
+  getCachedIntegrationCreds,
+  setCachedIntegrationCreds,
+} from '@/lib/integrations-ui-store';
+import {
   getProvidersUiSnapshot,
   hasProvidersUiSnapshot,
   patchProvidersUiSnapshot,
@@ -516,7 +520,9 @@ export default function ShibaStudio() {
   const [wsSyncing, setWsSyncing] = useState<'upload' | 'download' | null>(null);
 
   // Integrations form state
-  const [intCreds, setIntCreds] = useState<any>({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, vercel: {}, netlify: {} });
+  // Seed from the module cache so a shell remount (tab nav) never flashes
+  // configured integrations as "Not set up" while /api/integrations re-fetches.
+  const [intCreds, setIntCreds] = useState<any>(() => getCachedIntegrationCreds());
   const [intTest, setIntTest] = useState<any>({});
   const [intSaving, setIntSaving] = useState<Record<string, boolean>>({});
   const [expandedIntegration, setExpandedIntegration] = useState<string | null>(null);
@@ -853,7 +859,9 @@ export default function ShibaStudio() {
       const cfg = cRes;
       setConfig(cfg as any);
       if (intRes.integrations) {
-        setIntCreds({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...intRes.integrations });
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...intRes.integrations };
+        setCachedIntegrationCreds(merged);
+        setIntCreds(merged);
       }
       if ((cfg as any).hasKey) setApiKeyInput('••••••••'); // masked
       if ((cfg as any).hasManagementKey) setManagementKeyInput('••••••••');
@@ -1833,7 +1841,9 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (data.integrations) {
-        setIntCreds({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...data.integrations });
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...data.integrations };
+        setCachedIntegrationCreds(merged);
+        setIntCreds(merged);
       }
       const label = getIntegrationMeta(which)?.label || which;
       toast.success(`${label} credentials saved`);
@@ -1861,7 +1871,9 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (data.integrations) {
-        setIntCreds({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...data.integrations });
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...data.integrations };
+        setCachedIntegrationCreds(merged);
+        setIntCreds(merged);
       }
       setIntTest((t: any) => ({ ...t, [which]: undefined }));
       await loadNavStats();
@@ -3797,7 +3809,7 @@ export default function ShibaStudio() {
                 Core Integrations
                 <InfoHint text="Credentials are AES-256-GCM encrypted at rest on this machine and never leave it except toward the service itself." />
               </div>
-              <div className="page-section-sub">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, Obsidian, and Vercel during runs.</div>
+              <div className="page-section-sub">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, Obsidian, Vercel, and Netlify during runs.</div>
 
               <div className="integrations-grid">
                 {INTEGRATION_CATALOG.map((integration) => {
@@ -4220,7 +4232,7 @@ export default function ShibaStudio() {
                 })}
               </div>
 
-              <div className="mt-5 cap-card-meta">Credentials are stored locally on your machine only. Never sent anywhere except to the services you authorize.</div>
+              <div className="cap-card-meta">Credentials are stored locally on your machine only. Never sent anywhere except to the services you authorize.</div>
 
               <SkillsBrowser
                 installed={[...new Set(agents.flatMap((a) => a.skills || []))]}
