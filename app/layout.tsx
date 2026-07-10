@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
-import { Toaster } from '@/lib/toast';
+import { Toaster } from "sonner";
 import { THEME_IDENTITY } from "@/lib/theme";
 import StudioTerminalHost from "@/components/studio-terminal-host";
 import VoiceAgentHost from "@/components/voice-agent-host";
@@ -48,19 +48,18 @@ export default function RootLayout({
         {/* Terminal + Grok Voice HUD live in the root layout so they survive navigation. */}
         <StudioTerminalHost />
         <VoiceAgentHost />
-                <Toaster
+        <Toaster
           position="bottom-left"
           theme="dark"
           closeButton
           expand={false}
-          visibleToasts={3}
+          visibleToasts={4}
           gap={8}
-          offset={{ bottom: '4.75rem', left: '0.55rem' }}
+          offset={{ bottom: '11.5rem', left: '0.55rem' }}
           className="studio-toaster"
           toastOptions={{
             className: 'studio-toast',
-            duration: 4200,
-            // Success suppressed in lib/toast.ts; only errors/warnings surface.
+            duration: 3800,
           }}
         />
       </body>

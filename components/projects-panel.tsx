@@ -29,6 +29,10 @@ interface ProjectsPanelProps {
   onOpenProjectChat: (sessionId: string) => void;
   /** Open the agent editor pre-filled from this project. */
   onCreateAgentFromProject: (project: Project) => void;
+  /** Active agent run scoped to the selected project (stays on Projects tab). */
+  projectActiveRun?: { id?: string; status?: string; agentName?: string; model?: string; finalOutput?: string; projectId?: string } | null;
+  /** Live execution steps for the scoped project run. */
+  projectLiveTrace?: Array<{ ts?: string; type?: string; content?: string }>;
 }
 
 export default function ProjectsPanel({
@@ -39,6 +43,8 @@ export default function ProjectsPanel({
   onStatsChange,
   onOpenProjectChat,
   onCreateAgentFromProject,
+  projectActiveRun = null,
+  projectLiveTrace = [],
 }: ProjectsPanelProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -334,19 +340,22 @@ export default function ProjectsPanel({
   const defaultAgentName = agents.find((a) => a.id === (setupDefaultAgent || selectedProject?.defaultAgentId))?.name;
 
   return (
-    <div className="projects-page flex flex-col lg:flex-row gap-4 min-h-[calc(100vh-120px)]">
+    <div className="projects-page page-content">
+      <div className="page-title">
+        Projects
+        <InfoHint text="Each project packages a workspace folder, instructions, and reference files you can open in chat or hand to a new agent." />
+      </div>
+      <div className="page-subtitle">
+        Bundle a workspace, instructions, and reference files — then open a chat or spin up an agent from them.
+      </div>
+
+      <div className="projects-page-body flex flex-col lg:flex-row gap-4 min-h-[calc(100vh-220px)]">
       <div className="grok-card p-4 w-full lg:w-64 shrink-0 flex flex-col">
         <div className="flex items-center justify-between mb-3">
-          <div className="font-semibold flex items-center gap-2">
-            <FolderKanban size={16} />
-            Projects
-          </div>
+          <div className="font-medium text-sm text-muted">All projects</div>
           <button type="button" onClick={createProject} disabled={loading} className="grok-btn grok-btn-ghost text-xs p-1" title="New project">
             <Plus size={16} />
           </button>
-        </div>
-        <div className="text-[10px] text-dim mb-3 leading-relaxed">
-          Bundle a workspace, instructions, and reference files — then open a chat or spin up an agent from them.
         </div>
         <div className="flex-1 overflow-auto space-y-1 min-h-[120px]">
           {!projectsLoaded && (
@@ -434,6 +443,38 @@ export default function ProjectsPanel({
                   </button>
                 </div>
               </div>
+
+              {/* Scoped project run trace — stays on this page when a project-bound agent runs. */}
+              {projectActiveRun && projectActiveRun.projectId === selectedProject.id && (
+                <div className="grok-card p-3 mt-4 border border-default">
+                  <div className="flex items-center gap-2 text-xs font-semibold mb-2">
+                    <span>Project run</span>
+                    <span className={`badge ${projectActiveRun.status === 'running' ? 'badge-accent' : ''}`}>
+                      {projectActiveRun.status || 'idle'}
+                    </span>
+                    {projectActiveRun.agentName && (
+                      <span className="text-dim font-normal">{projectActiveRun.agentName}</span>
+                    )}
+                  </div>
+                  <div className="projectLiveTrace max-h-40 overflow-y-auto space-y-1 text-[11px] font-mono text-dim">
+                    {(projectLiveTrace || []).slice(-40).map((step, idx) => (
+                      <div key={`${step.ts || 't'}-${idx}`}>
+                        <span className="opacity-60">{step.type || 'step'}</span>
+                        {' '}
+                        {(step.content || '').slice(0, 200)}
+                      </div>
+                    ))}
+                    {(!projectLiveTrace || projectLiveTrace.length === 0) && (
+                      <div className="text-dim">Waiting for execution steps…</div>
+                    )}
+                  </div>
+                  {projectActiveRun.finalOutput && (
+                    <div className="text-xs mt-2 pt-2 border-t border-default">
+                      Final: {projectActiveRun.finalOutput.slice(0, 280)}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="project-action-row mt-4">
                 <button
@@ -635,6 +676,7 @@ export default function ProjectsPanel({
             </div>
           </>
         )}
+      </div>
       </div>
 
       <FolderBrowseModal

@@ -14,6 +14,10 @@ export const APPROVAL_GATED_TOOLS = new Set([
   'x_post',
   'drive_upload',
   'obsidian_write',
+  'vercel_deploy',
+  'vercel_set_env',
+  'netlify_deploy',
+  'netlify_set_env',
   'grok_cli',
   'mcp_invoke',
 ]);

@@ -5,7 +5,19 @@
 // Everything is best-effort, time-boxed, and briefly cached.
 
 import type { IntegrationScope } from './types';
-import { getIntegrationCreds, testGitHub, githubListRepos, testSlack, driveListFiles, testDiscord, testX } from './integrations';
+import {
+  getIntegrationCreds,
+  testGitHub,
+  githubListRepos,
+  testSlack,
+  driveListFiles,
+  testDiscord,
+  testX,
+  testVercel,
+  vercelListProjects,
+  testNetlify,
+  netlifyListSites,
+} from './integrations';
 import { obsidianListNotes, obsidianReadNote, getObsidianConfig } from './obsidian';
 
 const CACHE_MS = 60_000;
@@ -111,6 +123,42 @@ async function xContext(): Promise<string> {
   return `### X\nPosting as @${t.username}.`;
 }
 
+async function vercelContext(): Promise<string> {
+  const t = await withTimeout(testVercel());
+  if (!t.ok) return '';
+  const creds = getIntegrationCreds().vercel;
+  let projectsLine = '';
+  try {
+    const projects = await withTimeout(vercelListProjects(12));
+    if (projects.length) {
+      projectsLine = `\nProjects: ${projects.map((p) => p.name).join(', ')}`;
+    }
+  } catch {
+    /* optional */
+  }
+  const team = t.team ? ` · team ${t.team}` : '';
+  const def = creds?.defaultProject ? `\nDefault project: ${creds.defaultProject}.` : '';
+  return `### Vercel\nAuthenticated as ${t.user || 'token user'}${team}.${def}${projectsLine}\nUse vercel_deploy to ship; vercel_list_deployments / vercel_get_deployment to check status.`;
+}
+
+async function netlifyContext(): Promise<string> {
+  const t = await withTimeout(testNetlify());
+  if (!t.ok) return '';
+  const creds = getIntegrationCreds().netlify;
+  let sitesLine = '';
+  try {
+    const sites = await withTimeout(netlifyListSites(12));
+    if (sites.length) {
+      sitesLine = `\nSites: ${sites.map((s) => s.name).join(', ')}`;
+    }
+  } catch {
+    /* optional */
+  }
+  const account = t.account ? ` · account ${t.account}` : '';
+  const def = creds?.defaultSite ? `\nDefault site: ${creds.defaultSite}.` : '';
+  return `### Netlify\nAuthenticated as ${t.user || 'token user'}${account}.${def}${sitesLine}\nUse netlify_deploy to ship git-linked sites; netlify_list_deploys / netlify_get_deploy to check status.`;
+}
+
 /**
  * Live context for every enabled integration in the scope. Returns '' when
  * nothing is enabled or nothing is reachable — callers can append verbatim.
@@ -136,6 +184,8 @@ export async function buildIntegrationContext(
     googledrive: () => driveContext(driveFolders),
     discord: discordContext,
     x: xContext,
+    vercel: vercelContext,
+    netlify: netlifyContext,
   };
 
   const sections = await Promise.all(

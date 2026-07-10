@@ -26,4 +26,18 @@ export async function register() {
   } catch (e) {
     console.error('[shiba-studio] failed to start retention pruning', e);
   }
+  // Slack Socket Mode + Discord Gateway: @mention → agent reply
+  try {
+    const { syncChannelListeners } = await import('./lib/channel-listeners');
+    const statuses = await syncChannelListeners();
+    const active = Object.values(statuses).filter((s) => s.enabled);
+    if (active.length) {
+      console.log(
+        '[shiba-studio] channel listeners:',
+        active.map((s) => `${s.platform}=${s.detail || (s.running ? 'on' : 'starting')}`).join(', '),
+      );
+    }
+  } catch (e) {
+    console.error('[shiba-studio] failed to start channel listeners', e);
+  }
 }

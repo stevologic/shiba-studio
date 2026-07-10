@@ -389,13 +389,13 @@ export default function SkillsBrowser({
   // Full-page variant — Capabilities: wide, readable skill cards (not MCP’s narrow grid).
   return (
     <div className="skills-section mt-10 pt-8 border-t border-default">
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+      <div className="page-head-row mb-4">
         <div className="min-w-0">
-          <div className="text-xl font-semibold flex items-center gap-2">
+          <div className="page-section-title">
             <Sparkles size={18} className="opacity-70 shrink-0" />
             Skills
           </div>
-          <div className="text-sm text-muted mt-1 max-w-2xl">
+          <div className="page-section-sub">
             Capability presets agents can equip. Each skill injects focused prompt guidance when active — expand a card to read the full guidance.
           </div>
         </div>
@@ -458,8 +458,8 @@ export default function SkillsBrowser({
                   </span>
                   <div className="skills-card-head min-w-0 flex-1">
                     <div className="skills-card-title-row">
-                      <h3 className="skills-card-title">{skill.name}</h3>
-                      {skill.custom && <span className="badge badge-muted text-[10px]">custom</span>}
+                      <h3 className="skills-card-title cap-card-title">{skill.name}</h3>
+                      {skill.custom && <span className="cap-chip cap-chip-muted">custom</span>}
                       {has && (
                         <span className="skills-card-installed">
                           {count > 0 ? `${count} agent${count === 1 ? '' : 's'}` : 'In use'}
@@ -475,7 +475,7 @@ export default function SkillsBrowser({
                   </div>
                 </div>
 
-                <p className="skills-card-desc">{skill.description || 'No description yet.'}</p>
+                <p className="skills-card-desc cap-card-desc">{skill.description || 'No description yet.'}</p>
 
                 {open && skill.promptHint && (
                   <div className="skills-card-guidance">

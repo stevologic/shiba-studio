@@ -170,16 +170,36 @@ export default function WorkspacePage({
     setWtLoading(false);
   }, [wsPath, defaultWorkspace]);
 
+  /** Resolve the global uploads folder path (creates it server-side if needed). */
+  const resolveUploadsPath = useCallback(async (): Promise<string> => {
+    if (wsUploadsPath.trim()) return wsUploadsPath.trim();
+    try {
+      const res = await fetch('/api/workspace/sync');
+      const data = await res.json();
+      if (data.ok && data.uploadsPath) {
+        const p = String(data.uploadsPath).trim();
+        setWsUploadsPath(p);
+        if (Array.isArray(data.uploads)) setWsUploads(data.uploads);
+        return p;
+      }
+    } catch { /* ignore */ }
+    return '';
+  }, [wsUploadsPath]);
+
   const loadExplorer = useCallback(async (
     dir?: string,
     opts?: { userInitiated?: boolean },
   ) => {
     if (opts?.userInitiated) userPickedPathRef.current = true;
-    // Non-user opens always prefer the studio default workspace directory.
+    // Non-user opens prefer the workspace uploads folder.
+    let fallback = '';
+    if (!opts?.userInitiated && !dir) {
+      fallback = await resolveUploadsPath();
+    }
     const p = (
       opts?.userInitiated
         ? (dir ?? wsPath ?? defaultWorkspace ?? '')
-        : (dir ?? defaultWorkspace ?? wsPath ?? '')
+        : (dir || fallback || wsUploadsPath || defaultWorkspace || wsPath || '')
     ).trim();
     if (!p) return;
     setExplorerLoading(true);
@@ -199,19 +219,23 @@ export default function WorkspacePage({
       toast.error(e instanceof Error ? e.message : 'Could not open folder');
     }
     setExplorerLoading(false);
-  }, [wsPath, defaultWorkspace]);
+  }, [wsPath, defaultWorkspace, wsUploadsPath, resolveUploadsPath]);
 
-  /** Open Explorer and land on the global workspace unless the user already navigated elsewhere. */
+  /** Open Explorer on the workspace uploads folder unless the user already navigated elsewhere. */
   const openExplorer = useCallback((opts?: { forceDefault?: boolean }) => {
     if (opts?.forceDefault) userPickedPathRef.current = false;
     setView('explorer');
-    const target = (
-      userPickedPathRef.current && !opts?.forceDefault
-        ? (wsPath || defaultWorkspace || '')
-        : (defaultWorkspace || wsPath || '')
-    ).trim();
-    if (target) void loadExplorer(target, { userInitiated: userPickedPathRef.current && !opts?.forceDefault });
-  }, [wsPath, defaultWorkspace, loadExplorer]);
+    void (async () => {
+      if (userPickedPathRef.current && !opts?.forceDefault) {
+        const target = (wsPath || defaultWorkspace || '').trim();
+        if (target) void loadExplorer(target, { userInitiated: true });
+        return;
+      }
+      const uploads = await resolveUploadsPath();
+      const target = (uploads || defaultWorkspace || wsPath || '').trim();
+      if (target) void loadExplorer(target);
+    })();
+  }, [wsPath, defaultWorkspace, loadExplorer, resolveUploadsPath]);
 
   useEffect(() => {
     void loadUploads();
@@ -222,7 +246,7 @@ export default function WorkspacePage({
     if (view === 'worktrees') void loadWorktrees();
   }, [view, loadWorktrees]);
 
-  // Explorer defaults to the global workspace; reload when that default arrives after mount.
+  // Explorer defaults to the uploads folder; reload when that path arrives after mount.
   useEffect(() => {
     if (view !== 'explorer') return;
     if (userPickedPathRef.current) {
@@ -230,30 +254,14 @@ export default function WorkspacePage({
       if (cur) void loadExplorer(cur, { userInitiated: true });
       return;
     }
-    const target = (defaultWorkspace || wsPath || '').trim();
-    if (!target) return;
-    void loadExplorer(target);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- enter-view / default seed only
-  }, [view, defaultWorkspace]);
-
-  // If Settings default was empty at first paint, fetch config so Explorer can open it.
-  useEffect(() => {
-    if (defaultWorkspace?.trim()) return;
-    let cancelled = false;
     void (async () => {
-      try {
-        const res = await fetch('/api/config');
-        const cfg = await res.json();
-        const path = String(cfg?.defaultWorkspace || '').trim();
-        if (cancelled || !path || userPickedPathRef.current) return;
-        setWsPath(path);
-        setPathInput(path);
-        if (view === 'explorer') void loadExplorer(path);
-      } catch { /* ignore */ }
+      const uploads = await resolveUploadsPath();
+      const target = (uploads || defaultWorkspace || wsPath || '').trim();
+      if (!target) return;
+      void loadExplorer(target);
     })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultWorkspace]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- enter-view / uploads seed only
+  }, [view, wsUploadsPath, defaultWorkspace]);
 
   async function deleteUpload(name: string) {
     const ok = await confirmDialog({
@@ -493,7 +501,7 @@ export default function WorkspacePage({
   ];
 
   return (
-    <div className="ws-shell">
+    <div className="ws-shell page-content">
       <header className="ws-header">
         <div className="min-w-0 flex-1">
           <div className="page-title">Workspace</div>
@@ -1001,13 +1009,27 @@ export default function WorkspacePage({
                       <FolderOpen size={14} /> Browse for folder
                     </button>
                     <div className="flex flex-wrap gap-2 mt-4 justify-center">
+                      <button
+                        type="button"
+                        className="grok-btn grok-btn-secondary text-xs"
+                        onClick={() => {
+                          userPickedPathRef.current = false;
+                          void (async () => {
+                            const uploads = await resolveUploadsPath();
+                            const target = (uploads || defaultWorkspace || wsPath || '').trim();
+                            if (target) void loadExplorer(target);
+                          })();
+                        }}
+                      >
+                        Open uploads folder
+                      </button>
                       {(defaultWorkspace || wsPath) && (
                         <button
                           type="button"
-                          className="grok-btn grok-btn-secondary text-xs"
+                          className="grok-btn grok-btn-ghost text-xs"
                           onClick={() => {
-                            userPickedPathRef.current = false;
-                            void loadExplorer(defaultWorkspace || wsPath);
+                            userPickedPathRef.current = true;
+                            void loadExplorer(defaultWorkspace || wsPath, { userInitiated: true });
                           }}
                         >
                           Open default workspace

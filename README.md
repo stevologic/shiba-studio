@@ -8,16 +8,17 @@
 
 Build, orchestrate, and schedule AI agents with full computer use — chat, code, browse, annotate, and automate, all from a beautiful space-themed cockpit that never leaves your machine.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-white.svg?style=flat-square&labelColor=000)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-white.svg?style=flat-square&labelColor=000)](LICENSE-AGPL-3.0)
+[![Commercial available](https://img.shields.io/badge/Commercial-available-white.svg?style=flat-square&labelColor=000)](LICENSE-COMMERCIAL.md)
 [![Node ≥ 22.5](https://img.shields.io/badge/Node-%E2%89%A5%2022.5-white.svg?style=flat-square&labelColor=000)](docs/getting-started.md)
 [![Platforms](https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-supported-white.svg?style=flat-square&labelColor=000)](docs/getting-started.md)
 [![Website](https://img.shields.io/badge/site-shiba--studio.io-white.svg?style=flat-square&labelColor=000)](http://shiba-studio.io)
 
 <br/>
 
-<img src="docs/images/chat.png" alt="Grok Chat: an element annotated in the sub-browser answered with a syntax-highlighted CSS refactor, reasoning trace, and token count" width="880" />
+<img src="docs/images/chat.png" alt="Grok Chat: annotated sub-browser element request with selector, HTML snippet, and mic-enabled composer" width="880" />
 
-*Grok Chat in action — an element annotated in the sub-browser, refactored with reasoning, code, and a one-command PR.*
+*Grok Chat in action — annotate the app you're building, refine with Grok, dictate messages, and ship from the same session.*
 
 *Upgrading from an older install? Legacy `~/.grokdesk` data (key, credentials, runs, chats) migrates to `~/.shiba-studio` automatically on first start.*
 
@@ -33,7 +34,7 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, peers, and schedules. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Automations** — cron-scheduled agent runs with live execution traces, per-schedule run logs, and headless operation (schedules fire as long as the server is up — no browser required).
 - **Annotation sub-browser** — load the web app *you're* building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot straight into chat for code refinement.
-- **Capabilities** — GitHub, Slack, Google Drive, Discord, X, and Obsidian integrations; custom skills; MCP servers; and a live catalog of 30+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, …).
+- **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, and Netlify integrations; custom skills; MCP servers; and a live catalog of 30+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, deploys, …).
 - **Everything local** — credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, zero telemetry.
 
 All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAuth 2.0 with X, the local Grok CLI, or any OpenAI-compatible local model server (LM Studio, Ollama, llama.cpp).
@@ -42,8 +43,8 @@ All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAut
 
 | Mission-control dashboard | Automations with run logs |
 | :---: | :---: |
-| <img src="docs/images/dashboard.png" alt="Dashboard: per-source readiness badges, quick stats, and the recent agent runs table with statuses and view-answer links" /> | <img src="docs/images/automations.png" alt="Automations: scheduled agents with per-schedule run logs, Active and Paused states, and Run now" /> |
-| Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Cron-scheduled agents with per-schedule run logs — they keep firing headless as long as the server is up. |
+| <img src="docs/images/dashboard.png" alt="Dashboard: hero, readiness badges, quick stats, and recent agent runs with statuses and view-answer links" /> | <img src="docs/images/automations.png" alt="Automations: scheduled agents with Active/Paused states, per-schedule Run/Edit/Delete, and compact run-log icon" /> |
+| Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Cron-scheduled agents with compact run-log access — they keep firing headless as long as the server is up. |
 
 ## Quick start
 
@@ -120,4 +121,9 @@ Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Pri
 
 ## License
 
-[MIT](LICENSE) — free to use, fork, and ship. Much freedom. Very open source.
+**Dual licensed:**
+
+- **[AGPL-3.0-or-later](LICENSE-AGPL-3.0)** — open source; if you run a modified version as a network service, you must offer source to users.
+- **[Commercial](LICENSE-COMMERCIAL.md)** — for closed-source / SaaS use without AGPL obligations (contact the copyright holder).
+
+See [LICENSE](LICENSE) for the dual-license notice.

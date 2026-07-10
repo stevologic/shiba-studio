@@ -58,6 +58,32 @@ export function usesRetiredAccent(hex: string): boolean {
   return RETIRED_ACCENT_HEX.includes(hex.toLowerCase() as (typeof RETIRED_ACCENT_HEX)[number]);
 }
 
+/**
+ * Shared page chrome class names (mirrored in app/globals.css).
+ * Primary tabs should use these for title/subtitle so the product reads as one theme.
+ */
+export const PAGE_CHROME = {
+  title: 'page-title',
+  subtitle: 'page-subtitle',
+  sectionTitle: 'page-section-title',
+  headRow: 'page-head-row',
+  content: 'page-content',
+  contentWide: 'page-content-wide',
+} as const;
+
+/** Primary app surfaces that show a page title (Dashboard uses a hero exception). */
+export const PRIMARY_PAGE_SURFACES = [
+  'chat',
+  'projects',
+  'agents',
+  'workspace',
+  'automations',
+  'integrations',
+  'usage',
+  'logs',
+  'settings',
+] as const;
+
 /** CSS custom-property map for injection into :root */
 export function themeToCssVars(): Record<string, string> {
   return {

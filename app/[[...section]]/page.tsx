@@ -1,13 +1,7 @@
-import { Suspense } from 'react';
-import ShibaStudio from '@/components/shiba-studio';
-import ErrorBoundary from '@/components/error-boundary';
-
+/**
+ * Catch-all route page. UI lives in the sibling layout (ShibaStudio) so client
+ * state survives /chat/:id navigations. This page is intentionally empty.
+ */
 export default function AppPage() {
-  return (
-    <ErrorBoundary>
-      <Suspense fallback={null}>
-        <ShibaStudio />
-      </Suspense>
-    </ErrorBoundary>
-  );
+  return null;
 }

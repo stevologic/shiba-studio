@@ -15,6 +15,7 @@ const SENSITIVE_CONFIG_PATHS = [
   'xaiManagementKey',
   'integrations.github.token',
   'integrations.slack.token',
+  'integrations.slack.appToken',
   'integrations.googledrive.accessToken',
   'integrations.googledrive.serviceAccountJson',
   'integrations.googledrive.clientSecret',
@@ -25,6 +26,8 @@ const SENSITIVE_CONFIG_PATHS = [
   'integrations.x.accessToken',
   'integrations.x.accessTokenSecret',
   'integrations.obsidian.restApiKey',
+  'integrations.vercel.token',
+  'integrations.netlify.token',
 ] as const;
 
 function getAtPath(obj: Record<string, unknown>, dotPath: string): unknown {
@@ -100,6 +103,8 @@ const AGENT_OVERRIDE_SECRET_FIELDS: Record<string, string[]> = {
   x: ['apiKey', 'apiSecret', 'accessToken', 'accessTokenSecret'],
   obsidian: ['restApiKey'],
   googledrive: ['accessToken', 'serviceAccountJson', 'clientSecret', 'refreshToken'],
+  vercel: ['token'],
+  netlify: ['token'],
 };
 
 function transformAgentOverrideSecrets(agent: Agent, fn: (v: string) => string): Agent {
@@ -140,6 +145,8 @@ const DEFAULT_CONFIG: AppConfig = {
   integrations: {},
   defaultWorkspace: projectRoot(),
   defaultGrokModel: '',
+  defaultTtsVoice: '',
+  defaultTtsSpeed: 1,
   localGrokEnabled: false,
   localGrokBaseUrl: 'http://127.0.0.1:1234/v1',
   localModelAllowlist: [],

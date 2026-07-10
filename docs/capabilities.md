@@ -9,11 +9,13 @@ Provide credentials once; agents with the matching scope can call the service du
 | Integration | Setup | Unlocks |
 | --- | --- | --- |
 | **GitHub** | Personal access token | `github_create_issue`, `github_list_repos`, `github_create_pr` (+ `/git pr` in chat) |
-| **Slack** | Bot token + default channel | `slack_post` |
+| **Slack** | Bot token + default channel; optional App-Level Token (xapp-…) + Socket Mode to **listen for @mentions** | `slack_post`; when listen is on, @mentions run a studio agent and reply in-thread |
 | **Google Drive** | Sign in with Google (popup OAuth). One-time setup: create an OAuth client (Desktop app, or Web application with the redirect URI the card shows — `http://localhost:3000/api/google-oauth/callback`), enable the Drive API, paste the client ID+secret. Tokens are captured and refreshed automatically. Service-account JSON is an advanced fallback | `drive_list`, `drive_upload` |
-| **Discord** | Bot token + channel id | `discord_post` |
+| **Discord** | Bot token + channel id; optional **listen for @mentions** (Gateway + Message Content intent) | `discord_post`; when listen is on, @mentions run a studio agent and reply |
 | **X** | API key/secret + access token/secret | `x_post` |
 | **Obsidian** | Local vault path, or Local REST API URL + key | `obsidian_list/read/write/search` (+ `/note` in chat) — scoped agents get the vault's contents as live context |
+| **Vercel** | Access token from [vercel.com/account/tokens](https://vercel.com/account/tokens); optional team id/slug and default project | `vercel_list_projects`, `vercel_list_deployments`, `vercel_get_deployment`, `vercel_deploy`, `vercel_set_env` — deploy/redeploy git-linked projects, check status, manage env vars |
+| **Netlify** | Personal access token from [app.netlify.com/user/applications](https://app.netlify.com/user/applications#personal-access-tokens); optional account slug and default site | `netlify_list_sites`, `netlify_list_deploys`, `netlify_get_deploy`, `netlify_deploy`, `netlify_set_env` — trigger builds for git-linked sites, check deploy status, manage env vars |
 
 Every credential is AES-256-GCM encrypted at rest. *Test Connection* verifies each one; *Remove* deletes stored credentials.
 

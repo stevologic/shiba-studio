@@ -46,6 +46,11 @@ import {
   getVoiceAgentUiState,
   subscribeVoiceAgentUi,
 } from '@/lib/voice-agent-ui-store';
+import {
+  hasLiveChatRuns,
+  primaryLiveChatSessionId,
+  subscribeLiveChatRuns,
+} from '@/lib/chat-live-runs';
 import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { THEME_IDENTITY } from '@/lib/theme';
 import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
@@ -74,6 +79,23 @@ import {
 } from '@/lib/app-navigation';
 import { formatUsageCostUsd, type NavStats } from '@/lib/nav-stats-types';
 import {
+  getCachedNavStats,
+  isNavStatsLoaded,
+  writeCachedNavStats,
+} from '@/lib/nav-stats-store';
+import {
+  getCachedAgents,
+  hasCachedAgents,
+  setCachedAgents,
+} from '@/lib/agents-ui-store';
+import {
+  getProvidersUiSnapshot,
+  hasProvidersUiSnapshot,
+  patchProvidersUiSnapshot,
+  setProvidersUiSnapshot,
+  type CachedOauthStatus,
+} from '@/lib/providers-ui-store';
+import {
   DEFAULT_TTS_SPEED,
   DEFAULT_TTS_VOICE,
   GROK_TTS_SPEEDS,
@@ -97,6 +119,9 @@ const TAB_LABELS: Record<string, string> = {
   workspace: 'Workspace', automations: 'Automations', integrations: 'Capabilities',
   usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
+
+/** Survives React remounts so chat session URL changes never re-bootstrap the shell. */
+let studioBootstrapped = false;
 
 function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
   const ref = parseModelRef(modelId || '');
@@ -134,18 +159,89 @@ const APP_VERSION = pkg.version;
 const GIT_COMMIT_FALLBACK = process.env.NEXT_PUBLIC_GIT_COMMIT || 'unreleased';
 const DOGE_DONATION_ADDRESS = 'DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK';
 
+/** Providers rail probes (local reachability, CLI) — cache 10 min across reloads. */
+const PROVIDER_STATUS_LS = 'shiba-provider-status-v1';
+const PROVIDER_STATUS_TTL_MS = 10 * 60_000;
+
+type ProviderStatusCache = {
+  at: number;
+  localGrokReachable?: boolean;
+  grokCli?: { installed: boolean; version?: string; path?: string };
+};
+
+function readProviderStatusCache(): ProviderStatusCache | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(PROVIDER_STATUS_LS);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ProviderStatusCache;
+    if (!parsed || typeof parsed.at !== 'number') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function providerStatusCacheFresh(cache: ProviderStatusCache | null): boolean {
+  return !!cache && Date.now() - cache.at < PROVIDER_STATUS_TTL_MS;
+}
+
+function writeProviderStatusCache(patch: Partial<Omit<ProviderStatusCache, 'at'>>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const prev = readProviderStatusCache() || { at: 0 };
+    const next: ProviderStatusCache = {
+      ...prev,
+      ...patch,
+      at: Date.now(),
+    };
+    window.localStorage.setItem(PROVIDER_STATUS_LS, JSON.stringify(next));
+  } catch {
+    /* private mode */
+  }
+}
+
+function invalidateProviderStatusCache(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(PROVIDER_STATUS_LS);
+  } catch {
+    /* private mode */
+  }
+}
+
 /** Per-agent credential override fields, by integration. Only shown for the
  *  integrations an agent has enabled — lets an agent use its own account. */
 const AGENT_OVERRIDE_FIELDS: Record<string, Array<{ key: string; label: string; secret?: boolean }>> = {
   github: [{ key: 'token', label: 'GitHub token (ghp_…)', secret: true }],
-  slack: [{ key: 'token', label: 'Slack bot token (xoxb-…)', secret: true }, { key: 'defaultChannel', label: 'Default channel (#…)' }],
-  discord: [{ key: 'token', label: 'Discord bot token', secret: true }, { key: 'defaultChannelId', label: 'Default channel id' }],
+  slack: [
+    { key: 'token', label: 'Slack bot token (xoxb-…)', secret: true },
+    { key: 'appToken', label: 'App-level token (xapp-… Socket Mode)', secret: true },
+    { key: 'defaultChannel', label: 'Default channel (#…)' },
+    { key: 'mentionAgentId', label: 'Mention agent id (optional)' },
+  ],
+  discord: [
+    { key: 'token', label: 'Discord bot token', secret: true },
+    { key: 'defaultChannelId', label: 'Default channel id' },
+    { key: 'mentionAgentId', label: 'Mention agent id (optional)' },
+  ],
   x: [
     { key: 'apiKey', label: 'API Key' }, { key: 'apiSecret', label: 'API Secret', secret: true },
     { key: 'accessToken', label: 'Access Token' }, { key: 'accessTokenSecret', label: 'Access Token Secret', secret: true },
   ],
   obsidian: [{ key: 'restApiUrl', label: 'REST API URL' }, { key: 'restApiKey', label: 'REST API key', secret: true }, { key: 'vaultPath', label: 'Vault path (local mode)' }],
   googledrive: [{ key: 'accessToken', label: 'OAuth access token', secret: true }, { key: 'serviceAccountJson', label: 'Service account JSON', secret: true }],
+  vercel: [
+    { key: 'token', label: 'Vercel access token', secret: true },
+    { key: 'teamId', label: 'Team id (team_…, optional)' },
+    { key: 'teamSlug', label: 'Team slug (optional)' },
+    { key: 'defaultProject', label: 'Default project name or id' },
+  ],
+  netlify: [
+    { key: 'token', label: 'Netlify personal access token', secret: true },
+    { key: 'accountSlug', label: 'Account slug (optional)' },
+    { key: 'defaultSite', label: 'Default site id or name' },
+  ],
 };
 
 export default function ShibaStudio() {
@@ -193,9 +289,17 @@ export default function ShibaStudio() {
     endVoiceIfSessionChanges(id);
     if (pathname === path) return;
     writeLastChatSessionId(id);
-    // `/chat` → `/chat/:id` is a bootstrap rewrite, not a user navigation.
-    if (pathname === '/chat' || pathname === '/chat/') router.replace(path);
-    else router.push(path);
+    // Prefer replace for session switches so the App Router doesn't treat each
+    // click as a heavy navigation. Layout holds ShibaStudio so badges stay put.
+    if (
+      pathname === '/chat'
+      || pathname === '/chat/'
+      || pathname.startsWith('/chat/')
+    ) {
+      router.replace(path);
+    } else {
+      router.push(path);
+    }
   }, [pathname, router]);
 
   /** Top-bar New Chat — create a fresh session and jump straight into it. */
@@ -297,16 +401,14 @@ export default function ShibaStudio() {
     router.replace('/settings');
   }, [tab, searchParams, router, handleOAuthConnected, handleDriveConnected]);
 
-  // Fetched once on mount — the top bar shows a Grok CLI badge on every tab.
-  useEffect(() => {
-    fetch('/api/grok-cli/status')
-      .then((r) => r.json())
-      .then((data) => setGrokCliStatus({ installed: !!data.installed, version: data.version, path: data.path }))
-      .catch(() => setGrokCliStatus({ installed: false }));
-  }, []);
-  const [agents, setAgents] = useState<Agent[]>([]);
+  // Seed from module cache so remounts/tab hops never show a false empty list.
+  const [agents, setAgents] = useState<Agent[]>(() => getCachedAgents() ?? []);
+  const [agentsReady, setAgentsReady] = useState(() => hasCachedAgents());
   const [runs, setRuns] = useState<AgentRun[]>([]);
-  const [config, setConfig] = useState<AppConfig | null>(null);
+  // Providers / auth — same remount cache so the rail doesn't flash "off".
+  const [config, setConfig] = useState<AppConfig | null>(
+    () => (getProvidersUiSnapshot()?.config as AppConfig | null) ?? null,
+  );
   const [loading, setLoading] = useState(false);
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [liveTrace, setLiveTrace] = useState<any[]>([]);
@@ -322,6 +424,12 @@ export default function ShibaStudio() {
   useEffect(() => {
     setVoiceAgentActiveLocal(getVoiceAgentUiState().active);
     return subscribeVoiceAgentUi(() => setVoiceAgentActiveLocal(getVoiceAgentUiState().active));
+  }, []);
+  // Same keep-alive for background chat turns: leave Chat and the session keeps working.
+  const [chatRunActive, setChatRunActive] = useState(false);
+  useEffect(() => {
+    setChatRunActive(hasLiveChatRuns());
+    return subscribeLiveChatRuns(() => setChatRunActive(hasLiveChatRuns()));
   }, []);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -350,7 +458,7 @@ export default function ShibaStudio() {
   }
   const [previewSelectedIdx, setPreviewSelectedIdx] = useState<number | null>(null);
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null);
-  const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>('ask');
+  const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>('yolo');
   const [globalInstructionsInput, setGlobalInstructionsInput] = useState('');
   const [useAgentsMd, setUseAgentsMd] = useState(true);
 
@@ -408,7 +516,7 @@ export default function ShibaStudio() {
   const [wsSyncing, setWsSyncing] = useState<'upload' | 'download' | null>(null);
 
   // Integrations form state
-  const [intCreds, setIntCreds] = useState<any>({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' } });
+  const [intCreds, setIntCreds] = useState<any>({ github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, vercel: {}, netlify: {} });
   const [intTest, setIntTest] = useState<any>({});
   const [intSaving, setIntSaving] = useState<Record<string, boolean>>({});
   const [expandedIntegration, setExpandedIntegration] = useState<string | null>(null);
@@ -420,10 +528,16 @@ export default function ShibaStudio() {
   }
   const [folderBrowseFor, setFolderBrowseFor] = useState<'obsidian' | 'workspace' | 'mcp' | null>(null);
   const [mcpBrowsePath, setMcpBrowsePath] = useState<string | null>(null);
-  const [grokCliStatus, setGrokCliStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(null);
+  const [grokCliStatus, setGrokCliStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(
+    () => getProvidersUiSnapshot()?.grokCli ?? null,
+  );
 
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [managementKeyInput, setManagementKeyInput] = useState('');
+  const [apiKeyInput, setApiKeyInput] = useState(() =>
+    getProvidersUiSnapshot()?.hasApiKeyMasked ? '••••••••' : '',
+  );
+  const [managementKeyInput, setManagementKeyInput] = useState(() =>
+    getProvidersUiSnapshot()?.hasManagementKeyMasked ? '••••••••' : '',
+  );
   /** Persistent "Tested" badges for Settings probe buttons (localStorage). */
   type SettingsTestId = 'apiKey' | 'managementKey' | 'localGrok';
   const SETTINGS_TESTED_LS = 'shiba-settings-tested';
@@ -443,53 +557,82 @@ export default function ShibaStudio() {
       return next;
     });
   }
-  const [oauthStatus, setOauthStatus] = useState<{
-    connected: boolean;
-    expired: boolean;
-    email?: string;
-    displayName?: string;
-    error?: string;
-  }>({ connected: false, expired: false });
-  const [cloudAuthMode, setCloudAuthMode] = useState<'api_key' | 'oauth'>('api_key');
+  const [oauthStatus, setOauthStatus] = useState<CachedOauthStatus>(() =>
+    getProvidersUiSnapshot()?.oauthStatus ?? { connected: false, expired: false },
+  );
+  const [cloudAuthMode, setCloudAuthMode] = useState<'api_key' | 'oauth'>(() =>
+    getProvidersUiSnapshot()?.cloudAuthMode ?? 'api_key',
+  );
   const [oauthCallbackInput, setOauthCallbackInput] = useState('');
   const [oauthStarting, setOauthStarting] = useState(false);
   const [defaultModelInput, setDefaultModelInput] = useState('');
   const [defaultTtsVoiceInput, setDefaultTtsVoiceInput] = useState(DEFAULT_TTS_VOICE);
   const [defaultTtsSpeedInput, setDefaultTtsSpeedInput] = useState(DEFAULT_TTS_SPEED);
   const [defaultWorkspaceInput, setDefaultWorkspaceInput] = useState('');
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>(() =>
+    (getProvidersUiSnapshot()?.availableModels as ModelOption[] | undefined) ?? [],
+  );
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
-  const [localGrokEnabled, setLocalGrokEnabled] = useState(false);
-  const [localGrokBaseUrl, setLocalGrokBaseUrl] = useState('http://127.0.0.1:1234/v1');
-  const [localGrokReachable, setLocalGrokReachable] = useState(false);
-  const [localModelOptions, setLocalModelOptions] = useState<string[]>([]);
-  const [localModelAllowlist, setLocalModelAllowlist] = useState<string[]>([]);
+  const [modelsError, setModelsError] = useState<string | null>(() =>
+    getProvidersUiSnapshot()?.modelsError ?? null,
+  );
+  const [localGrokEnabled, setLocalGrokEnabled] = useState(() =>
+    getProvidersUiSnapshot()?.localGrokEnabled ?? false,
+  );
+  const [localGrokBaseUrl, setLocalGrokBaseUrl] = useState(() =>
+    getProvidersUiSnapshot()?.localGrokBaseUrl ?? 'http://127.0.0.1:1234/v1',
+  );
+  const [localGrokReachable, setLocalGrokReachable] = useState(() => {
+    const snap = getProvidersUiSnapshot();
+    if (snap) return snap.localGrokReachable;
+    const cache = typeof window !== 'undefined' ? readProviderStatusCache() : null;
+    return cache?.localGrokReachable ?? false;
+  });
+  const [localModelOptions, setLocalModelOptions] = useState<string[]>(() =>
+    getProvidersUiSnapshot()?.localModelOptions ?? [],
+  );
+  const [localModelAllowlist, setLocalModelAllowlist] = useState<string[]>(() =>
+    getProvidersUiSnapshot()?.localModelAllowlist ?? [],
+  );
   const [localModelsFetching, setLocalModelsFetching] = useState(false);
-  const [navStats, setNavStats] = useState<NavStats>({
-    chatSessions: 0,
-    projects: 0,
-    workspaceFiles: 0,
-    automationsScheduled: 0,
-    integrationsConfigured: 0,
-    usageCostUsd: 0,
-    usageCostSource: 'local',
-    usageBudgetUsd: 0,
-    cloudReachable: true,
-  });
-  const [navStatsLoaded, setNavStatsLoaded] = useState(false);
-  // Cost & safety + retention (Settings card) — text state so fields can be cleared.
-  const [costSettings, setCostSettings] = useState({
-    usageBudgetUsd: '',
-    dailyBudgetUsd: '',
-    budgetHardStop: true,
-    maxConcurrentRuns: '3',
-    perRunTokenCap: '',
-    runRetentionDays: '',
-    auditRetentionDays: '',
-  });
-  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null);
-  const backupFileRef = useRef<HTMLInputElement | null>(null);
+
+  // Providers probes (CLI + local) — hydrate from module + 10‑min LS cache; only re-probe when stale.
+  useEffect(() => {
+    const snap = getProvidersUiSnapshot();
+    if (snap?.grokCli) setGrokCliStatus(snap.grokCli);
+    if (snap?.localGrokReachable != null) setLocalGrokReachable(!!snap.localGrokReachable);
+
+    const cache = readProviderStatusCache();
+    if (cache?.localGrokReachable != null && !snap) setLocalGrokReachable(!!cache.localGrokReachable);
+    if (cache?.grokCli && !snap?.grokCli) setGrokCliStatus(cache.grokCli);
+
+    // Fresh probe cache + we already have CLI status → skip network.
+    if (providerStatusCacheFresh(cache) && (cache?.grokCli || snap?.grokCli)) return;
+    // Module snapshot already has CLI from this tab session → skip re-probe on remount.
+    if (snap?.grokCli) return;
+
+    fetch('/api/grok-cli/status')
+      .then((r) => r.json())
+      .then((data) => {
+        const next = {
+          installed: !!data.installed,
+          version: data.version as string | undefined,
+          path: data.path as string | undefined,
+        };
+        setGrokCliStatus(next);
+        writeProviderStatusCache({ grokCli: next });
+        patchProvidersUiSnapshot({ grokCli: next });
+      })
+      .catch(() => {
+        const next = { installed: false as const };
+        setGrokCliStatus(next);
+        writeProviderStatusCache({ grokCli: next });
+        patchProvidersUiSnapshot({ grokCli: next });
+      });
+  }, []);
+  // Seed from module cache so tab switches / remounts never flash zeros or spinners.
+  const [navStats, setNavStats] = useState<NavStats>(() => getCachedNavStats());
+  const [navStatsLoaded, setNavStatsLoaded] = useState(() => isNavStatsLoaded());
   const [cliUpdate, setCliUpdate] = useState<{ checking: boolean; text?: string; available?: boolean }>({ checking: false });
   /** Live commit of the tree this server process is serving (refreshed via /api/version). */
   const [runtimeVersion, setRuntimeVersion] = useState<{
@@ -511,6 +654,18 @@ export default function ShibaStudio() {
       })
       .catch(() => { /* offline — no notice */ });
   }, []);
+  // Cost & safety + retention (Settings card) — text state so fields can be cleared.
+  const [costSettings, setCostSettings] = useState({
+    usageBudgetUsd: '',
+    dailyBudgetUsd: '',
+    budgetHardStop: true,
+    maxConcurrentRuns: '3',
+    perRunTokenCap: '',
+    runRetentionDays: '',
+    auditRetentionDays: '',
+  });
+  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null);
+  const backupFileRef = useRef<HTMLInputElement | null>(null);
 
   async function refreshRuntimeVersion() {
     try {
@@ -551,12 +706,17 @@ export default function ShibaStudio() {
     }
   }
 
+  /**
+   * Full badge refresh — only call after a mutation that can change counts
+   * (create/delete chat, project, automation, integration, sync, etc.).
+   * Never call on plain tab / session navigation.
+   */
   async function loadNavStats() {
     try {
       const res = await fetch('/api/nav-stats');
       const data = await res.json();
       if (data.ok) {
-        setNavStats({
+        const next: NavStats = {
           chatSessions: data.chatSessions ?? 0,
           projects: data.projects ?? 0,
           workspaceFiles: data.workspaceFiles ?? 0,
@@ -566,7 +726,10 @@ export default function ShibaStudio() {
           usageCostSource: data.usageCostSource === 'xai' ? 'xai' : 'local',
           usageBudgetUsd: data.usageBudgetUsd ?? 0,
           cloudReachable: data.cloudReachable !== false,
-        });
+        };
+        // Skip setState when nothing changed — avoids badge flicker / re-paint.
+        if (!writeCachedNavStats(next) && isNavStatsLoaded()) return;
+        setNavStats(next);
         setNavStatsLoaded(true);
       }
     } catch {
@@ -586,20 +749,31 @@ export default function ShibaStudio() {
     return preferred?.id || current || configured || 'cloud:grok-4';
   }
 
-  async function loadModels() {
+  async function loadModels(opts?: { forceProviderProbe?: boolean }) {
     setModelsLoading(true);
     setModelsError(null);
     try {
       const res = await fetch('/api/models');
       const data = await res.json();
       if (data.ok && Array.isArray(data.models) && data.models.length > 0) {
-        setAvailableModels(data.models.map((m: ModelOption) => ({
+        const mapped: ModelOption[] = data.models.map((m: ModelOption) => ({
           id: m.id,
           label: m.label || modelDisplayName(m.id),
           provider: m.provider || (m.id.startsWith('local:') ? 'local' : 'cloud'),
           reasoning: m.reasoning,
-        })));
-        setLocalGrokReachable(!!data.localReachable);
+        }));
+        setAvailableModels(mapped);
+        patchProvidersUiSnapshot({ availableModels: mapped, modelsError: null });
+        // Only refresh Local badge from this probe when cache is stale or forced —
+        // still always apply when the server reports a definitive localReachable.
+        if (typeof data.localReachable === 'boolean') {
+          const cache = readProviderStatusCache();
+          if (opts?.forceProviderProbe || !providerStatusCacheFresh(cache) || data.localReachable === false) {
+            setLocalGrokReachable(!!data.localReachable);
+            writeProviderStatusCache({ localGrokReachable: !!data.localReachable });
+            patchProvidersUiSnapshot({ localGrokReachable: !!data.localReachable });
+          }
+        }
         setChatModel((current) => pickDefaultModel(current));
         const resolvedDefault = pickDefaultModel(config?.defaultGrokModel || defaultModelInput || undefined);
         if (config?.defaultGrokModel) setDefaultModelInput(config.defaultGrokModel);
@@ -607,11 +781,28 @@ export default function ShibaStudio() {
         setAgentForm((f: any) => ({ ...f, model: pickDefaultModel(f.model) }));
       } else {
         setAvailableModels([]);
-        setModelsError(data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings'));
+        const errMsg = data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings');
+        setModelsError(errMsg);
+        patchProvidersUiSnapshot({ availableModels: [], modelsError: errMsg });
+        // Failed / empty model list with local enabled → mark Local offline
+        if (data.localEnabled || localGrokEnabled || (config as any)?.localGrokEnabled) {
+          if (data.localReachable === false || data.error) {
+            setLocalGrokReachable(false);
+            writeProviderStatusCache({ localGrokReachable: false });
+            patchProvidersUiSnapshot({ localGrokReachable: false });
+          }
+        }
       }
     } catch (e: any) {
       setAvailableModels([]);
       setModelsError(e.message);
+      patchProvidersUiSnapshot({ availableModels: [], modelsError: e.message });
+      // Network/API failure — don't claim Local is healthy
+      if (localGrokEnabled || (config as any)?.localGrokEnabled) {
+        setLocalGrokReachable(false);
+        writeProviderStatusCache({ localGrokReachable: false });
+        patchProvidersUiSnapshot({ localGrokReachable: false });
+      }
     }
     setModelsLoading(false);
   }
@@ -654,7 +845,10 @@ export default function ShibaStudio() {
         fetch('/api/config').then(r => r.json()),
         fetch('/api/integrations').then(r => r.json()),
       ]);
-      setAgents(aRes.agents || []);
+      const nextAgents = (aRes.agents || []) as Agent[];
+      setCachedAgents(nextAgents);
+      setAgents(nextAgents);
+      setAgentsReady(true);
       setRuns(rRes.runs || []);
       const cfg = cRes;
       setConfig(cfg as any);
@@ -663,11 +857,37 @@ export default function ShibaStudio() {
       }
       if ((cfg as any).hasKey) setApiKeyInput('••••••••'); // masked
       if ((cfg as any).hasManagementKey) setManagementKeyInput('••••••••');
-      if ((cfg as any).oauthStatus) setOauthStatus((cfg as any).oauthStatus);
-      if ((cfg as any).cloudAuthMode) setCloudAuthMode((cfg as any).cloudAuthMode);
-      if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(!!cfg.localGrokEnabled);
+      const nextOauth: CachedOauthStatus = (cfg as any).oauthStatus
+        ? (cfg as any).oauthStatus
+        : { connected: false, expired: false };
+      if ((cfg as any).oauthStatus) setOauthStatus(nextOauth);
+      const nextAuthMode = ((cfg as any).cloudAuthMode === 'oauth' ? 'oauth' : 'api_key') as 'api_key' | 'oauth';
+      if ((cfg as any).cloudAuthMode) setCloudAuthMode(nextAuthMode);
+      const nextLocalEnabled = cfg.localGrokEnabled !== undefined ? !!cfg.localGrokEnabled : localGrokEnabled;
+      if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(nextLocalEnabled);
+      const nextLocalBase = cfg.localGrokBaseUrl || localGrokBaseUrl;
       if (cfg.localGrokBaseUrl) setLocalGrokBaseUrl(cfg.localGrokBaseUrl);
-      if (Array.isArray(cfg.localModelAllowlist)) setLocalModelAllowlist(cfg.localModelAllowlist);
+      const nextAllowlist = Array.isArray(cfg.localModelAllowlist) ? cfg.localModelAllowlist : localModelAllowlist;
+      if (Array.isArray(cfg.localModelAllowlist)) setLocalModelAllowlist(nextAllowlist);
+      // Persist Providers rail picture for remounts / tab hops (skip full loadAll).
+      const probe = readProviderStatusCache();
+      setProvidersUiSnapshot({
+        config: cfg as Record<string, unknown>,
+        oauthStatus: nextOauth,
+        cloudAuthMode: nextAuthMode,
+        localGrokEnabled: nextLocalEnabled,
+        localGrokBaseUrl: nextLocalBase,
+        localGrokReachable: probe?.localGrokReachable
+          ?? getProvidersUiSnapshot()?.localGrokReachable
+          ?? false,
+        localModelOptions: getProvidersUiSnapshot()?.localModelOptions ?? [],
+        localModelAllowlist: nextAllowlist,
+        grokCli: getProvidersUiSnapshot()?.grokCli ?? probe?.grokCli ?? null,
+        availableModels: getProvidersUiSnapshot()?.availableModels ?? [],
+        modelsError: getProvidersUiSnapshot()?.modelsError ?? null,
+        hasApiKeyMasked: !!(cfg as any).hasKey,
+        hasManagementKeyMasked: !!(cfg as any).hasManagementKey,
+      });
       if (cfg.defaultGrokModel) {
         setDefaultModelInput(cfg.defaultGrokModel);
         setChatModel((current) => (
@@ -729,27 +949,63 @@ export default function ShibaStudio() {
     }
   }
 
-  // Nav counts load ONCE at startup; afterwards only mutation sites refresh
-  // them (delete/create/sync handlers call loadNavStats directly).
+  // Catalog + badges + providers load ONCE per browser tab. On remount, restore
+  // from module caches — never leave agents empty or Providers all-off.
   useEffect(() => {
+    if (studioBootstrapped) {
+      if (isNavStatsLoaded()) {
+        setNavStats(getCachedNavStats());
+        setNavStatsLoaded(true);
+      }
+      if (hasCachedAgents()) {
+        setAgents(getCachedAgents() ?? []);
+        setAgentsReady(true);
+      }
+      const snap = getProvidersUiSnapshot();
+      if (snap) {
+        if (snap.config) setConfig(snap.config as unknown as AppConfig);
+        setOauthStatus(snap.oauthStatus);
+        setCloudAuthMode(snap.cloudAuthMode);
+        setLocalGrokEnabled(snap.localGrokEnabled);
+        setLocalGrokBaseUrl(snap.localGrokBaseUrl);
+        setLocalGrokReachable(snap.localGrokReachable);
+        setLocalModelOptions(snap.localModelOptions);
+        setLocalModelAllowlist(snap.localModelAllowlist);
+        if (snap.grokCli) setGrokCliStatus(snap.grokCli);
+        if (snap.availableModels?.length) setAvailableModels(snap.availableModels as ModelOption[]);
+        if (snap.modelsError != null) setModelsError(snap.modelsError);
+        if (snap.hasApiKeyMasked) setApiKeyInput('••••••••');
+        if (snap.hasManagementKeyMasked) setManagementKeyInput('••••••••');
+      }
+      // Cold caches (HMR / partial remount) — full hydrate once.
+      if (!hasCachedAgents() && !hasProvidersUiSnapshot()) {
+        void loadAll();
+      }
+      return;
+    }
+    studioBootstrapped = true;
     loadAll();
     void loadNavStats();
   }, []);
 
-  // The usage badge alone refreshes on a 15-minute cadence (server caches the
-  // ledger aggregation for the same window).
+  // Usage badge alone: refresh the cost figure every 15 minutes (not entity counts).
   useEffect(() => {
     const t = setInterval(async () => {
       try {
         const res = await fetch('/api/nav-stats');
         const data = await res.json();
         if (data.ok) {
-          setNavStats((prev) => ({
-            ...prev,
-            usageCostUsd: data.usageCostUsd ?? prev.usageCostUsd,
-            usageCostSource: data.usageCostSource === 'xai' ? 'xai' : (data.usageCostSource === 'local' ? 'local' : prev.usageCostSource),
-            cloudReachable: data.cloudReachable !== false,
-          }));
+          setNavStats((prev) => {
+            const next: NavStats = {
+              ...prev,
+              usageCostUsd: data.usageCostUsd ?? prev.usageCostUsd,
+              usageCostSource: data.usageCostSource === 'xai'
+                ? 'xai'
+                : (data.usageCostSource === 'local' ? 'local' : prev.usageCostSource),
+            };
+            writeCachedNavStats(next);
+            return next;
+          });
         }
       } catch {
         /* keep previous figure */
@@ -762,22 +1018,39 @@ export default function ShibaStudio() {
     if (tab === 'workspace') loadUploads();
   }, [tab]);
 
+  // Model catalog: load once when cloud/local becomes available (not every poll tick).
+  // If remount restored models from providers cache, skip a redundant fetch.
+  const modelsBootstrappedRef = useRef(!!(getProvidersUiSnapshot()?.availableModels?.length));
   useEffect(() => {
-    if (tab === 'settings' && localGrokEnabled) void fetchLocalModelOptions({ silent: true });
-  }, [tab, localGrokEnabled]);
-
-  useEffect(() => {
-    if ((config as any)?.hasCloudAuth || (config as any)?.localGrokEnabled || localGrokEnabled) {
-      void loadModels();
-    }
+    const cloud = !!(config as any)?.hasCloudAuth;
+    const local = !!(localGrokEnabled || (config as any)?.localGrokEnabled);
+    if (!cloud && !local) return;
+    if (modelsBootstrappedRef.current && availableModels.length > 0) return;
+    modelsBootstrappedRef.current = true;
+    void loadModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled, localGrokEnabled]);
 
-  // Keep Local badge accurate: probe the local server when enabled, even if models list is empty.
+  // Local reachability for Providers rail — use 10‑min cache; only probe when stale.
   useEffect(() => {
     if (!localGrokEnabled && !(config as any)?.localGrokEnabled) return;
+    const cache = readProviderStatusCache();
+    if (providerStatusCacheFresh(cache) && cache?.localGrokReachable != null) {
+      setLocalGrokReachable(!!cache.localGrokReachable);
+      return;
+    }
     void fetchLocalModelOptions({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localGrokEnabled, (config as any)?.localGrokEnabled]);
+
+  // Settings → Local models list: only refresh options when cache is stale.
+  useEffect(() => {
+    if (tab !== 'settings' || !localGrokEnabled) return;
+    const cache = readProviderStatusCache();
+    if (providerStatusCacheFresh(cache) && cache?.localGrokReachable != null && localModelOptions.length > 0) return;
+    void fetchLocalModelOptions({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, localGrokEnabled]);
 
   /**
    * A run hyperlink targets its agent's configuration + log. Execution traces
@@ -910,10 +1183,98 @@ export default function ShibaStudio() {
     return () => { stale = true; };
   }, [tab]);
 
+  /** Create-automation form on the Automations page (no full agent editor). */
+  type NewAutomationForm = {
+    agentId: string;
+    instructions: string;
+    enabled: boolean;
+    _preset: SchedulePresetId;
+    _time: string;
+    _customCron: string;
+  };
+  const emptyNewAutomation = (): NewAutomationForm => ({
+    agentId: '',
+    instructions: '',
+    enabled: true,
+    _preset: 'every_30m',
+    _time: '09:00',
+    _customCron: '*/30 * * * *',
+  });
+  const [showNewAutomation, setShowNewAutomation] = useState(false);
+  const [newAutomation, setNewAutomation] = useState<NewAutomationForm>(emptyNewAutomation);
+  const [savingAutomation, setSavingAutomation] = useState(false);
+
+  function openNewAutomationModal(preselectAgentId?: string) {
+    const preferred = preselectAgentId || agents[0]?.id || '';
+    setNewAutomation({
+      ...emptyNewAutomation(),
+      agentId: preferred,
+      instructions: preferred
+        ? `Scheduled work for ${agents.find((a) => a.id === preferred)?.name || 'agent'}.`
+        : '',
+    });
+    setShowNewAutomation(true);
+  }
+
+  async function createAutomationFromPage() {
+    const agent = agents.find((a) => a.id === newAutomation.agentId);
+    if (!agent) {
+      toast.error(agents.length === 0 ? 'Create an agent first (Agents page)' : 'Pick an agent for this automation');
+      return;
+    }
+    const instructions = newAutomation.instructions.trim();
+    if (!instructions) {
+      toast.error('Add instructions — what should the agent do when it runs?');
+      return;
+    }
+    const cron = presetToCron(
+      newAutomation._preset,
+      newAutomation._time,
+      newAutomation._customCron,
+    ).trim();
+    if (!cron) {
+      toast.error('Choose a valid schedule');
+      return;
+    }
+    setSavingAutomation(true);
+    try {
+      const entry = {
+        id: 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        enabled: !!newAutomation.enabled,
+        cron,
+        instructions,
+        description: instructions.slice(0, 80),
+      };
+      const existing = agentSchedules(agent);
+      const schedules = [...existing, entry];
+      const res = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update',
+          agent: { ...agent, schedules, schedule: undefined },
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.error) throw new Error(data.error);
+      await refreshAgents();
+      await loadNavStats();
+      setShowNewAutomation(false);
+      setNewAutomation(emptyNewAutomation());
+      toast.success(`Automation added to ${agent.name}`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not create automation');
+    }
+    setSavingAutomation(false);
+  }
+
   // Agents CRUD
   async function refreshAgents() {
     const res = await fetch('/api/agents').then(r => r.json());
-    setAgents(res.agents || []);
+    const nextAgents = (res.agents || []) as Agent[];
+    setCachedAgents(nextAgents);
+    setAgents(nextAgents);
+    setAgentsReady(true);
   }
 
   const [cloudAgentSyncing, setCloudAgentSyncing] = useState(false);
@@ -1635,13 +1996,15 @@ export default function ShibaStudio() {
       const res = await fetch('/api/xai-oauth/status');
       const data = await res.json();
       if (data.ok) {
-        setOauthStatus({
+        const next: CachedOauthStatus = {
           connected: !!data.connected,
           expired: !!data.expired,
           email: data.email,
           displayName: data.displayName,
           error: data.error,
-        });
+        };
+        setOauthStatus(next);
+        patchProvidersUiSnapshot({ oauthStatus: next });
       }
     } catch {
       /* ignore */
@@ -1773,6 +2136,7 @@ export default function ShibaStudio() {
     stopOAuthPolling();
     await fetch('/api/xai-oauth/logout', { method: 'POST' });
     setOauthStatus({ connected: false, expired: false });
+    patchProvidersUiSnapshot({ oauthStatus: { connected: false, expired: false } });
     toast.success('OAuth disconnected');
     await loadAll();
     await loadModels();
@@ -1780,6 +2144,7 @@ export default function ShibaStudio() {
 
   async function saveCloudAuthMode(mode: 'api_key' | 'oauth') {
     setCloudAuthMode(mode);
+    patchProvidersUiSnapshot({ cloudAuthMode: mode });
     const res = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1787,7 +2152,11 @@ export default function ShibaStudio() {
     });
     const data = await res.json();
     if (data.ok) {
-      setConfig((c: any) => ({ ...c, cloudAuthMode: mode, activeCloudSource: data.activeCloudSource }));
+      setConfig((c: any) => {
+        const next = { ...c, cloudAuthMode: mode, activeCloudSource: data.activeCloudSource };
+        patchProvidersUiSnapshot({ config: next as Record<string, unknown> });
+        return next;
+      });
       toast.success(mode === 'oauth' ? 'Using OAuth for cloud Grok' : 'Using API key for cloud Grok');
       await loadModels();
     }
@@ -1804,9 +2173,26 @@ export default function ShibaStudio() {
       toast.error('Failed to save local model settings');
       return;
     }
-    setConfig((c: any) => ({ ...c, localGrokEnabled, localGrokBaseUrl }));
+    setConfig((c: any) => {
+      const next = { ...c, localGrokEnabled, localGrokBaseUrl };
+      patchProvidersUiSnapshot({
+        config: next as Record<string, unknown>,
+        localGrokEnabled,
+        localGrokBaseUrl,
+      });
+      return next;
+    });
     toast.success(localGrokEnabled ? 'Local models enabled' : 'Local models disabled');
-    await loadModels();
+    invalidateProviderStatusCache();
+    modelsBootstrappedRef.current = false;
+    if (localGrokEnabled) {
+      await fetchLocalModelOptions({ silent: true });
+    } else {
+      setLocalGrokReachable(false);
+      writeProviderStatusCache({ localGrokReachable: false });
+      patchProvidersUiSnapshot({ localGrokReachable: false });
+    }
+    await loadModels({ forceProviderProbe: true });
   }
 
   function localIdOf(model: { id?: string; label?: string }): string {
@@ -1825,14 +2211,19 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.ok) {
         setLocalGrokReachable(true);
-        setLocalModelOptions(((data.models || []) as Array<{ id?: string; label?: string }>).map(localIdOf).filter(Boolean));
+        writeProviderStatusCache({ localGrokReachable: true });
+        const optsList = ((data.models || []) as Array<{ id?: string; label?: string }>).map(localIdOf).filter(Boolean);
+        setLocalModelOptions(optsList);
+        patchProvidersUiSnapshot({ localGrokReachable: true, localModelOptions: optsList });
         if (!opts?.silent) {
           markSettingsTested('localGrok', true);
           toast.success(`Local server reachable — ${data.models?.length || 0} model(s) found`);
         }
       } else {
         setLocalGrokReachable(false);
+        writeProviderStatusCache({ localGrokReachable: false });
         setLocalModelOptions([]);
+        patchProvidersUiSnapshot({ localGrokReachable: false, localModelOptions: [] });
         if (!opts?.silent) {
           markSettingsTested('localGrok', false);
           toast.error(data.error || 'Local server not reachable');
@@ -1841,7 +2232,9 @@ export default function ShibaStudio() {
       return !!data.ok;
     } catch {
       setLocalGrokReachable(false);
+      writeProviderStatusCache({ localGrokReachable: false });
       setLocalModelOptions([]);
+      patchProvidersUiSnapshot({ localGrokReachable: false, localModelOptions: [] });
       if (!opts?.silent) markSettingsTested('localGrok', false);
       return false;
     } finally {
@@ -1850,8 +2243,9 @@ export default function ShibaStudio() {
   }
 
   async function testLocalGrok() {
+    invalidateProviderStatusCache();
     const ok = await fetchLocalModelOptions();
-    if (ok) await loadModels();
+    if (ok) await loadModels({ forceProviderProbe: true });
   }
 
   async function saveLocalModelAllowlist(next: string[]) {
@@ -2095,25 +2489,52 @@ export default function ShibaStudio() {
     toast('Automation deleted');
   }
 
-  // Seed a sample agent if none
+  // Seed a sample agent only after the first successful agents fetch returned [].
+  // Never seed while agents are still loading (that looked like "no agents" and
+  // could race a real list still on disk).
+  // Deps are always exactly 3 primitives so HMR / remount never trips
+  // "useEffect dependency array changed size".
+  const hasConfig = !!config;
+  const agentCount = agents.length;
+  const seededEmptyAgentsRef = useRef(false);
   useEffect(() => {
-    if (agents.length === 0 && config) {
-      // seed one demo
-      (async () => {
-        await fetch('/api/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-          name: 'Explorer Agent', model: config?.defaultGrokModel || pickDefaultModel(), description: 'Default exploration + automation agent',
-          workspace: { path: config.defaultWorkspace || '.', useWorktree: true },
+    if (!agentsReady || !hasConfig) return;
+    if (agentCount > 0) return;
+    if (seededEmptyAgentsRef.current) return;
+    seededEmptyAgentsRef.current = true;
+    let cancelled = false;
+    const cfg = config;
+    (async () => {
+      await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Explorer Agent',
+          model: cfg?.defaultGrokModel || pickDefaultModel(),
+          description: 'Default exploration + automation agent',
+          workspace: { path: cfg?.defaultWorkspace || '.', useWorktree: true },
           integrations: { ...EMPTY_INTEGRATION_SCOPE },
-          peers: [], schedule: { enabled: true, cron: '0 */2 * * *' }
-        }) });
-        await refreshAgents();
-      })();
-    }
-  }, [agents.length, config]);
+          peers: [],
+          schedule: { enabled: true, cron: '0 */2 * * *' },
+        }),
+      });
+      if (!cancelled) await refreshAgents();
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- config read once when hasConfig flips true
+  }, [agentsReady, agentCount, hasConfig]);
 
-  // Poll runs occasionally
+  // Light poll: runs list only (not full loadAll agents/config/integrations).
+  // Full loadAll was a major nav jank source every 22s; runs need fresher data.
   useEffect(() => {
-    const t = setInterval(() => { loadAll(); }, 22000);
+    const t = setInterval(async () => {
+      try {
+        const rRes = await fetch('/api/runs').then((r) => r.json());
+        if (Array.isArray(rRes.runs)) setRuns(rRes.runs);
+      } catch {
+        /* keep last runs */
+      }
+    }, 30_000);
     return () => clearInterval(t);
   }, []);
 
@@ -2340,6 +2761,12 @@ export default function ShibaStudio() {
               <Link
                 key={item.id}
                 href={linkHref}
+                prefetch={false}
+                onClick={(e) => {
+                  // Client navigate without re-bootstrapping badges/catalog.
+                  e.preventDefault();
+                  navigateToTab(item.id as AppTab);
+                }}
                 className={`nav-item ${active ? 'active' : ''} ${navCollapsed ? 'nav-item-collapsed' : ''}`}
                 title={item.label}
                 aria-label={item.label}
@@ -2439,37 +2866,51 @@ export default function ShibaStudio() {
             },
           ];
           return (
-            <div className={`nav-status-rail ${navCollapsed ? 'nav-status-rail-collapsed' : ''}`}>
-              <button
-                type="button"
-                className="nav-status-panel"
-                onClick={() => navigateToTab('settings')}
-                aria-label={ready ? 'Model providers ready — open Settings' : 'No model provider ready — open Settings'}
-              >
-                {!navCollapsed && (
-                  <div className="nav-status-head">
-                    <span className="nav-status-head-label">Providers</span>
-                    <span className={`nav-status-ready ${ready ? 'nav-status-ready-ok' : 'nav-status-ready-warn'}`}>
-                      {ready ? 'Ready' : 'Needs setup'}
-                    </span>
-                  </div>
-                )}
-                <div className={`nav-status-grid ${navCollapsed ? 'nav-status-grid-collapsed' : ''}`}>
-                  {sources.map((s) => (
-                    <div key={s.id} className={`nav-status-chip nav-status-${s.tone}`}>
-                      <span className="nav-status-dot" aria-hidden />
-                      {navCollapsed ? (
-                        <span className="nav-status-short">{s.short}</span>
-                      ) : (
-                        <>
-                          <span className="nav-status-name">{s.label}</span>
-                          <span className="nav-status-detail">{s.detail}</span>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </button>
+            <div className={`nav-providers ${navCollapsed ? 'nav-providers-collapsed' : ''}`}>
+              {!navCollapsed ? (
+                <button
+                  type="button"
+                  className="nav-providers-head"
+                  onClick={() => navigateToTab('settings')}
+                  aria-label={ready ? 'Model providers ready — open Settings' : 'No model provider ready — open Settings'}
+                >
+                  <span className="nav-providers-title">Providers</span>
+                  <span className={`nav-status-ready ${ready ? 'nav-status-ready-ok' : 'nav-status-ready-warn'}`}>
+                    {ready ? 'Ready' : 'Needs setup'}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="nav-providers-head nav-providers-head-collapsed"
+                  onClick={() => navigateToTab('settings')}
+                  title={ready ? 'Providers ready' : 'Providers need setup'}
+                  aria-label={ready ? 'Model providers ready — open Settings' : 'No model provider ready — open Settings'}
+                >
+                  <span className={`nav-status-dot ${ready ? 'nav-status-dot-on' : 'nav-status-dot-warn'}`} aria-hidden />
+                </button>
+              )}
+              <div className={`nav-providers-list ${navCollapsed ? 'nav-providers-list-collapsed' : ''}`}>
+                {sources.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`nav-provider-row nav-status-${s.tone}`}
+                    onClick={() => navigateToTab('settings')}
+                    title={`${s.label}: ${s.detail}`}
+                  >
+                    <span className="nav-status-dot" aria-hidden />
+                    {navCollapsed ? (
+                      <span className="nav-status-short">{s.short}</span>
+                    ) : (
+                      <>
+                        <span className="nav-status-name">{s.label}</span>
+                        <span className="nav-status-detail">{s.detail}</span>
+                      </>
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
           );
         })()}
@@ -2757,9 +3198,10 @@ export default function ShibaStudio() {
             </div>
           )}
 
-          {/* GROK CHAT — keep mounted while voice is active so mic/TTS keep running off-tab.
-              Freeze the bound session id off-chat so pathname changes don't remount the engine. */}
-          {(tab === 'chat' || voiceAgentActive) && (
+          {/* GROK CHAT — keep mounted while voice is active or a session turn is still
+              streaming so work continues after navigating to Agents / Settings / etc.
+              Freeze the bound session id off-chat so pathname changes don't remount. */}
+          {(tab === 'chat' || voiceAgentActive || chatRunActive) && (
             <div
               className={tab === 'chat' ? undefined : 'voice-agent-chat-keepalive'}
               aria-hidden={tab !== 'chat'}
@@ -2768,10 +3210,16 @@ export default function ShibaStudio() {
               <ChatSessionsPanel
                 sessionId={(() => {
                   const fromUrl = pathToChatSessionId(pathname);
+                  // On the Chat tab the URL (or last-opened id) always wins so the
+                  // rail can switch sessions freely — never pin to a live run here.
                   if (tab === 'chat') return fromUrl || readLastChatSessionId();
                   // Off chat with live voice: pin the bound session so the panel never remounts.
                   if (voiceAgentActive) {
                     return getVoiceAgentUiState().boundSessionId || readLastChatSessionId();
+                  }
+                  // Off chat with a background turn: pin that session's panel.
+                  if (chatRunActive) {
+                    return primaryLiveChatSessionId() || readLastChatSessionId();
                   }
                   return fromUrl;
                 })()}
@@ -2793,8 +3241,10 @@ export default function ShibaStudio() {
               agents={agents}
               defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''}
               defaultChatModel={chatModel}
+              projectActiveRun={activeRun?.projectId ? activeRun : null}
+              projectLiveTrace={activeRun?.projectId ? liveTrace : []}
               onOpenProjectChat={(sessionId) => {
-                void loadNavStats();
+                // Opening a chat does not change badge counts.
                 navigateToChatSession(sessionId);
               }}
               onCreateAgentFromProject={openCreateAgentFromProject}
@@ -2963,12 +3413,24 @@ export default function ShibaStudio() {
           {/* AUTOMATIONS — schedules & orchestration */}
           {tab === 'automations' && (
             <div className="page-content">
-              <div className="page-title">
-                Automations
-                <InfoHint text="Automations run agents on cron schedules with their own instructions. Open an agent’s run log to inspect past executions — each entry opens a full details modal." />
-              </div>
-              <div className="page-subtitle">
-                Scheduled &amp; orchestrated agents — cron jobs with their own instructions, run logs, and one-click replay.
+              <div className="page-head-row mb-0">
+                <div className="min-w-0">
+                  <div className="page-title">
+                    Automations
+                    <InfoHint text="Automations run agents on schedules with their own instructions. Create them here or from an agent’s editor. Open a run log to inspect past executions." />
+                  </div>
+                  <div className="page-subtitle">
+                    Scheduled &amp; orchestrated agents — cron jobs with their own instructions, run logs, and one-click replay.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="grok-btn grok-btn-primary text-xs shrink-0"
+                  onClick={() => openNewAutomationModal()}
+                  title="Create a new scheduled automation"
+                >
+                  <Plus size={14} /> New automation
+                </button>
               </div>
               <div className="space-y-3">
                 {/* Only agents with actual schedules — no placeholder cards */}
@@ -3011,9 +3473,9 @@ export default function ShibaStudio() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => openEditAgentSchedule(a, scheds.length)}
+                          onClick={() => openNewAutomationModal(a.id)}
                           className="grok-btn grok-btn-ghost text-xs py-1 px-2"
-                          title="Add a schedule in the agent editor"
+                          title="Add another automation for this agent"
                         >
                           <CalendarClock size={14}/> Add
                         </button>
@@ -3080,13 +3542,179 @@ export default function ShibaStudio() {
                 )})}
                 {agents.filter((a) => agentSchedules(a).length > 0).length === 0 && (
                   <div className="grok-card p-8 text-center text-dim text-sm">
-                    No scheduled automations yet — open an agent&apos;s editor (Agents → Edit) and add a schedule to see it here.
+                    <Clock size={28} className="mx-auto mb-3 opacity-40" />
+                    <div className="font-medium text-sm text-primary mb-1">No automations yet</div>
+                    <div className="max-w-sm mx-auto leading-relaxed mb-4">
+                      {agents.length === 0
+                        ? 'Create an agent first, then come back here to put it on a schedule.'
+                        : 'Schedule an agent to wake up on a timer with its own instructions — no agent-editor detour required.'}
+                    </div>
+                    {agents.length === 0 ? (
+                      <button type="button" className="grok-btn grok-btn-primary text-xs" onClick={() => { openCreateAgent(); navigateToTab('agents'); }}>
+                        <Plus size={13} /> Create an agent
+                      </button>
+                    ) : (
+                      <button type="button" className="grok-btn grok-btn-primary text-xs" onClick={() => openNewAutomationModal()}>
+                        <Plus size={13} /> New automation
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
               <div className="mt-6 text-xs text-dim">
-                Agents can schedule themselves via the <span className="font-mono">schedule_task</span> tool and message other agents using <span className="font-mono">send_to_peer</span>. Everything is scoped per agent.
+                Agents can also schedule themselves via the <span className="font-mono">schedule_task</span> tool and message peers with <span className="font-mono">send_to_peer</span>.
               </div>
+
+              {showNewAutomation && (
+                <div
+                  className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4"
+                  onClick={() => !savingAutomation && setShowNewAutomation(false)}
+                >
+                  <div
+                    className="modal modal-pop w-full max-w-md p-5 max-h-[90vh] overflow-y-auto"
+                    onClick={(e) => e.stopPropagation()}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="New automation"
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <div className="text-lg font-semibold flex items-center gap-2">
+                        <CalendarClock size={18} className="opacity-70" />
+                        New automation
+                      </div>
+                      <button
+                        type="button"
+                        className="grok-btn grok-btn-ghost p-1.5"
+                        onClick={() => setShowNewAutomation(false)}
+                        disabled={savingAutomation}
+                        aria-label="Close"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                    <div className="text-xs text-dim mb-4">
+                      Pick an agent, when it should run, and what it should do. Pause or edit anytime from this page.
+                    </div>
+
+                    {agents.length === 0 ? (
+                      <div className="text-sm text-dim mb-4">
+                        No agents yet.{' '}
+                        <button type="button" className="link-accent" onClick={() => { setShowNewAutomation(false); openCreateAgent(); navigateToTab('agents'); }}>
+                          Create one first
+                        </button>
+                        .
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div>
+                          <div className="grok-label">Agent</div>
+                          <select
+                            className="grok-select w-full text-sm"
+                            value={newAutomation.agentId}
+                            onChange={(e) => {
+                              const id = e.target.value;
+                              const name = agents.find((a) => a.id === id)?.name;
+                              setNewAutomation((f) => ({
+                                ...f,
+                                agentId: id,
+                                instructions: f.instructions.trim()
+                                  ? f.instructions
+                                  : (name ? `Scheduled work for ${name}.` : f.instructions),
+                              }));
+                            }}
+                          >
+                            {agents.map((a) => (
+                              <option key={a.id} value={a.id}>{a.name}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <div className="grok-label">When to run</div>
+                          <select
+                            className="grok-select w-full text-sm"
+                            value={newAutomation._preset}
+                            onChange={(e) => setNewAutomation((f) => ({
+                              ...f,
+                              _preset: e.target.value as SchedulePresetId,
+                            }))}
+                          >
+                            {SCHEDULE_PRESETS.map((p) => (
+                              <option key={p.id} value={p.id}>{p.label}</option>
+                            ))}
+                          </select>
+                          <div className="text-[11px] text-dim mt-1">
+                            {SCHEDULE_PRESETS.find((p) => p.id === newAutomation._preset)?.hint}
+                          </div>
+                          {(newAutomation._preset === 'daily' || newAutomation._preset === 'weekdays') && (
+                            <div className="mt-2">
+                              <div className="grok-label">Time</div>
+                              <input
+                                type="time"
+                                className="grok-input text-sm w-40"
+                                value={newAutomation._time}
+                                onChange={(e) => setNewAutomation((f) => ({ ...f, _time: e.target.value || '09:00' }))}
+                              />
+                            </div>
+                          )}
+                          {newAutomation._preset === 'custom' && (
+                            <div className="mt-2">
+                              <div className="grok-label">Cron expression</div>
+                              <input
+                                className="grok-input font-mono text-xs"
+                                value={newAutomation._customCron}
+                                onChange={(e) => setNewAutomation((f) => ({ ...f, _customCron: e.target.value }))}
+                                placeholder="*/30 * * * *"
+                              />
+                            </div>
+                          )}
+                          <div className="text-[11px] text-dim mt-1.5 font-mono">
+                            {describeCron(presetToCron(newAutomation._preset, newAutomation._time, newAutomation._customCron))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="grok-label">Instructions</div>
+                          <textarea
+                            className="grok-input min-h-[6.5rem] resize-y text-sm"
+                            value={newAutomation.instructions}
+                            onChange={(e) => setNewAutomation((f) => ({ ...f, instructions: e.target.value }))}
+                            placeholder="What should this agent do when the schedule fires?"
+                          />
+                        </div>
+
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={newAutomation.enabled}
+                            onChange={(e) => setNewAutomation((f) => ({ ...f, enabled: e.target.checked }))}
+                          />
+                          Activate immediately
+                        </label>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2 mt-5">
+                      <button
+                        type="button"
+                        className="grok-btn grok-btn-secondary flex-1"
+                        disabled={savingAutomation}
+                        onClick={() => setShowNewAutomation(false)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="grok-btn grok-btn-primary flex-1"
+                        disabled={savingAutomation || agents.length === 0}
+                        onClick={() => void createAutomationFromPage()}
+                      >
+                        {savingAutomation ? 'Saving…' : 'Create automation'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Execution Trace — top of the stack. Closing returns to run
                   details (if any) or the page; never leaves run log visible under it. */}
@@ -3169,7 +3797,7 @@ export default function ShibaStudio() {
                 Core Integrations
                 <InfoHint text="Credentials are AES-256-GCM encrypted at rest on this machine and never leave it except toward the service itself." />
               </div>
-              <div className="page-section-sub">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, and Obsidian during runs.</div>
+              <div className="page-section-sub">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, Obsidian, and Vercel during runs.</div>
 
               <div className="integrations-grid">
                 {INTEGRATION_CATALOG.map((integration) => {
@@ -3235,6 +3863,18 @@ export default function ShibaStudio() {
                             {intTest.obsidian.noteCount != null ? ` · ${intTest.obsidian.noteCount} notes` : ''}
                           </span>
                         )}
+                        {integration.id === 'vercel' && intTest.vercel?.ok && (
+                          <span className="integration-card-status text-success">
+                            connected as {intTest.vercel.user}
+                            {intTest.vercel.team ? ` · ${intTest.vercel.team}` : ''}
+                          </span>
+                        )}
+                        {integration.id === 'netlify' && intTest.netlify?.ok && (
+                          <span className="integration-card-status text-success">
+                            connected as {intTest.netlify.user}
+                            {intTest.netlify.account ? ` · ${intTest.netlify.account}` : ''}
+                          </span>
+                        )}
                       </div>
                       <span className="integration-card-chevron" aria-hidden>
                         {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -3247,8 +3887,40 @@ export default function ShibaStudio() {
                     )}
                     {integration.id === 'slack' && (
                       <>
-                        <input className="grok-input mb-2" placeholder="Slack Bot Token (xoxb-...)" value={intCreds.slack?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, slack: {...(c.slack||{}), token: e.target.value}}))} />
-                        <input className="grok-input" placeholder="Default channel (#general)" value={intCreds.slack?.defaultChannel || ''} onChange={e => setIntCreds((c:any)=>({...c, slack: {...(c.slack||{}), defaultChannel: e.target.value}}))} />
+                        <input className="grok-input mb-2 font-mono text-xs" type="password" placeholder="Slack Bot Token (xoxb-...)" value={intCreds.slack?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, slack: {...(c.slack||{}), token: e.target.value}}))} autoComplete="off" />
+                        <input className="grok-input mb-2" placeholder="Default channel (#general)" value={intCreds.slack?.defaultChannel || ''} onChange={e => setIntCreds((c:any)=>({...c, slack: {...(c.slack||{}), defaultChannel: e.target.value}}))} />
+                        <div className="text-xs text-dim mt-3 mb-1.5 font-medium">Listen for @mentions</div>
+                        <div className="text-[11px] text-dim mb-2">
+                          Enable Socket Mode on your Slack app, subscribe to the <span className="font-mono">app_mention</span> bot event,
+                          then create an App-Level Token with <span className="font-mono">connections:write</span>.
+                          When someone @mentions the bot, a studio agent answers in the thread.
+                        </div>
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          type="password"
+                          placeholder="App-Level Token (xapp-… for Socket Mode)"
+                          value={intCreds.slack?.appToken || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, slack: { ...(c.slack || {}), appToken: e.target.value } }))}
+                          autoComplete="off"
+                        />
+                        <label className="flex items-center gap-2 text-xs mb-2">
+                          <input
+                            type="checkbox"
+                            checked={!!intCreds.slack?.listenEnabled}
+                            onChange={(e) => setIntCreds((c: any) => ({ ...c, slack: { ...(c.slack || {}), listenEnabled: e.target.checked } }))}
+                          />
+                          Listen for @mentions and reply with an agent
+                        </label>
+                        <select
+                          className="grok-select text-xs w-full"
+                          value={intCreds.slack?.mentionAgentId || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, slack: { ...(c.slack || {}), mentionAgentId: e.target.value || undefined } }))}
+                        >
+                          <option value="">Responding agent — auto (first with Slack scope)</option>
+                          {agents.map((a) => (
+                            <option key={a.id} value={a.id}>{a.name}</option>
+                          ))}
+                        </select>
                       </>
                     )}
                     {integration.id === 'googledrive' && (() => {
@@ -3316,8 +3988,32 @@ export default function ShibaStudio() {
                     })()}
                     {integration.id === 'discord' && (
                       <>
-                        <input className="grok-input mb-2" placeholder="Discord Bot Token" value={intCreds.discord?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, discord: {...(c.discord||{}), token: e.target.value}}))} />
-                        <input className="grok-input" placeholder="Default channel ID (snowflake, optional)" value={intCreds.discord?.defaultChannelId || ''} onChange={e => setIntCreds((c:any)=>({...c, discord: {...(c.discord||{}), defaultChannelId: e.target.value}}))} />
+                        <input className="grok-input mb-2 font-mono text-xs" type="password" placeholder="Discord Bot Token" value={intCreds.discord?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, discord: {...(c.discord||{}), token: e.target.value}}))} autoComplete="off" />
+                        <input className="grok-input mb-2" placeholder="Default channel ID (snowflake, optional)" value={intCreds.discord?.defaultChannelId || ''} onChange={e => setIntCreds((c:any)=>({...c, discord: {...(c.discord||{}), defaultChannelId: e.target.value}}))} />
+                        <div className="text-xs text-dim mt-3 mb-1.5 font-medium">Listen for @mentions</div>
+                        <div className="text-[11px] text-dim mb-2">
+                          Enable the <span className="font-mono">Message Content</span> privileged intent and
+                          <span className="font-mono"> Server Members</span> as needed in the Discord Developer Portal.
+                          Invite the bot with permission to Read Messages / Send Messages. When @mentioned, a studio agent replies in-thread.
+                        </div>
+                        <label className="flex items-center gap-2 text-xs mb-2">
+                          <input
+                            type="checkbox"
+                            checked={!!intCreds.discord?.listenEnabled}
+                            onChange={(e) => setIntCreds((c: any) => ({ ...c, discord: { ...(c.discord || {}), listenEnabled: e.target.checked } }))}
+                          />
+                          Listen for @mentions and reply with an agent
+                        </label>
+                        <select
+                          className="grok-select text-xs w-full"
+                          value={intCreds.discord?.mentionAgentId || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, discord: { ...(c.discord || {}), mentionAgentId: e.target.value || undefined } }))}
+                        >
+                          <option value="">Responding agent — auto (first with Discord scope)</option>
+                          {agents.map((a) => (
+                            <option key={a.id} value={a.id}>{a.name}</option>
+                          ))}
+                        </select>
                       </>
                     )}
                     {integration.id === 'x' && (
@@ -3327,6 +4023,76 @@ export default function ShibaStudio() {
                         <input className="grok-input mb-2" placeholder="Access Token" value={intCreds.x?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessToken: e.target.value}}))} />
                         <input className="grok-input" placeholder="Access Token Secret" value={intCreds.x?.accessTokenSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessTokenSecret: e.target.value}}))} />
                         <div className="mt-2 text-xs text-dim">Create an app at developer.x.com with Read and Write permissions, then generate user access tokens.</div>
+                      </>
+                    )}
+                    {integration.id === 'vercel' && (
+                      <>
+                        <div className="text-xs text-dim mb-2">
+                          Create a token at{' '}
+                          <a href="https://vercel.com/account/tokens" className="link-accent" target="_blank" rel="noreferrer">vercel.com/account/tokens</a>
+                          {' '}with access to the team/account that owns your apps. Agents can list projects, deploy, and set env vars when Vercel scope is enabled.
+                        </div>
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          type="password"
+                          placeholder="Vercel access token"
+                          value={intCreds.vercel?.token || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, vercel: { ...(c.vercel || {}), token: e.target.value } }))}
+                          autoComplete="off"
+                        />
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          placeholder="Team id (team_…, optional — for team-scoped tokens)"
+                          value={intCreds.vercel?.teamId || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, vercel: { ...(c.vercel || {}), teamId: e.target.value } }))}
+                        />
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          placeholder="Team slug (optional alternative to team id)"
+                          value={intCreds.vercel?.teamSlug || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, vercel: { ...(c.vercel || {}), teamSlug: e.target.value } }))}
+                        />
+                        <input
+                          className="grok-input font-mono text-xs"
+                          placeholder="Default project name or id (optional)"
+                          value={intCreds.vercel?.defaultProject || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, vercel: { ...(c.vercel || {}), defaultProject: e.target.value } }))}
+                        />
+                        <div className="mt-2 text-xs text-dim">
+                          Default project is used when agents call deploy/list tools without a project argument. Git-linked projects redeploy the latest commit; production target promotes aliases.
+                        </div>
+                      </>
+                    )}
+                    {integration.id === 'netlify' && (
+                      <>
+                        <div className="text-xs text-dim mb-2">
+                          Create a personal access token at{' '}
+                          <a href="https://app.netlify.com/user/applications#personal-access-tokens" className="link-accent" target="_blank" rel="noreferrer">app.netlify.com/user/applications</a>
+                          . Agents can list sites, trigger deploys for git-linked sites, and set env vars when Netlify scope is enabled — a deploy path for vibe-coded projects alongside Vercel.
+                        </div>
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          type="password"
+                          placeholder="Netlify personal access token"
+                          value={intCreds.netlify?.token || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, netlify: { ...(c.netlify || {}), token: e.target.value } }))}
+                          autoComplete="off"
+                        />
+                        <input
+                          className="grok-input mb-2 font-mono text-xs"
+                          placeholder="Account slug (optional — for team env API)"
+                          value={intCreds.netlify?.accountSlug || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, netlify: { ...(c.netlify || {}), accountSlug: e.target.value } }))}
+                        />
+                        <input
+                          className="grok-input font-mono text-xs"
+                          placeholder="Default site id or name (optional)"
+                          value={intCreds.netlify?.defaultSite || ''}
+                          onChange={(e) => setIntCreds((c: any) => ({ ...c, netlify: { ...(c.netlify || {}), defaultSite: e.target.value } }))}
+                        />
+                        <div className="mt-2 text-xs text-dim">
+                          Default site is used when agents call deploy/list tools without a site argument. Prefer git-linked sites so netlify_deploy can trigger a build after code is pushed.
+                        </div>
                       </>
                     )}
                     {integration.id === 'obsidian' && (() => {
@@ -3748,7 +4514,7 @@ export default function ShibaStudio() {
                       <div className="font-medium text-sm">Default Model</div>
                       <div className="text-[11px] text-dim">Used by Grok Chat and every new agent.</div>
                     </div>
-                    <button type="button" onClick={loadModels} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5 ml-auto">
+                    <button type="button" onClick={() => void loadModels({ forceProviderProbe: true })} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5 ml-auto">
                       <RefreshCw size={12} className={modelsLoading ? 'animate-spin' : ''} /> Refresh
                     </button>
                   </div>
@@ -4563,7 +5329,7 @@ export default function ShibaStudio() {
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="grok-label mb-0">Grok Model</div>
                     {agentForm.model && <ModelProviderBadge modelId={agentForm.model} />}
-                    <button type="button" onClick={loadModels} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5">
+                    <button type="button" onClick={() => void loadModels({ forceProviderProbe: true })} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5">
                       <RefreshCw size={12} className={modelsLoading ? 'animate-spin' : ''} /> Refresh
                     </button>
                   </div>

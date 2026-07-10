@@ -1,0 +1,61 @@
+/**
+ * Sticky Grok Chat agent/target selection.
+ *
+ * Switching chat sessions must NOT re-load a different agent into the picker.
+ * The choice is global for the Chat tab: load once, keep until the user picks
+ * a new agent in the dropdown (and a send persists it onto that session).
+ */
+'use client';
+
+export type StickyChatTarget = 'grok' | 'all' | string;
+
+const LS_KEY = 'shiba-chat-target';
+
+type Listener = () => void;
+const listeners = new Set<Listener>();
+
+let sticky: StickyChatTarget = 'grok';
+let hydrated = false;
+
+function hydrateFromStorage() {
+  if (hydrated || typeof window === 'undefined') return;
+  hydrated = true;
+  try {
+    const v = window.localStorage.getItem(LS_KEY)?.trim();
+    if (v) sticky = v;
+  } catch {
+    /* private mode */
+  }
+}
+
+function emit() {
+  for (const l of listeners) {
+    try { l(); } catch { /* ignore */ }
+  }
+}
+
+export function getStickyChatTarget(): StickyChatTarget {
+  hydrateFromStorage();
+  return sticky;
+}
+
+export function setStickyChatTarget(next: StickyChatTarget) {
+  const value = next || 'grok';
+  hydrateFromStorage();
+  if (sticky === value) return;
+  sticky = value;
+  hydrated = true;
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(LS_KEY, sticky);
+    } catch {
+      /* private mode */
+    }
+  }
+  emit();
+}
+
+export function subscribeStickyChatTarget(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}

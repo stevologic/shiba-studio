@@ -1,4 +1,4 @@
-// Core integrations: GitHub, Slack, Google Drive, Discord, X, Obsidian
+// Core integrations: GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel
 // All scoped per-agent via config. Credentials stored server-side in config.
 // Lazy imports to avoid heavy top-level cjs/esm issues in tests.
 
@@ -378,6 +378,26 @@ export {
   obsidianWriteNote,
   obsidianSearch,
 } from './obsidian';
+
+export {
+  testVercel,
+  vercelListProjects,
+  vercelGetProject,
+  vercelListDeployments,
+  vercelGetDeployment,
+  vercelDeploy,
+  vercelSetEnv,
+} from './vercel';
+
+export {
+  testNetlify,
+  netlifyListSites,
+  netlifyGetSite,
+  netlifyListDeploys,
+  netlifyGetDeploy,
+  netlifyDeploy,
+  netlifySetEnv,
+} from './netlify';
 
 export async function driveUploadText(name: string, content: string, allowedFolders?: string[]) {
   const auth = await driveAuth();

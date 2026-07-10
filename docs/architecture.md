@@ -24,7 +24,7 @@ flowchart TB
     end
 
     subgraph Capabilities["Capabilities — what it can reach"]
-        Integrations["Integrations<br/>GitHub, Slack, Drive, Discord, X, Obsidian"]
+        Integrations["Integrations<br/>GitHub, Slack, Drive, Discord, X, Obsidian, Vercel"]
         Skills["Custom skills"]
         MCP["MCP servers"]
         Git["Git actions<br/>status / checkout / commit / PR"]

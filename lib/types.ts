@@ -10,6 +10,8 @@ export interface IntegrationScope {
   discord: boolean;
   x: boolean;
   obsidian: boolean;
+  vercel: boolean;
+  netlify: boolean;
 }
 
 export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
@@ -19,6 +21,8 @@ export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
   discord: false,
   x: false,
   obsidian: false,
+  vercel: false,
+  netlify: false,
 };
 
 export interface ScheduleConfig {
@@ -137,6 +141,16 @@ export interface IntegrationCreds {
   slack?: {
     token: string; // xoxb-...
     defaultChannel?: string;
+    /**
+     * App-level token (xapp-…) for Socket Mode — required to listen for
+     * @mentions without a public webhook URL. Create under Slack app →
+     * Basic Information → App-Level Tokens (connections:write).
+     */
+    appToken?: string;
+    /** When true (and appToken set), listen for app_mention events and reply. */
+    listenEnabled?: boolean;
+    /** Agent id that answers Slack @mentions (falls back to first slack-scoped agent). */
+    mentionAgentId?: string;
   };
   googledrive?: {
     // For simplicity support access token (oauth) or service account json string
@@ -152,6 +166,10 @@ export interface IntegrationCreds {
   discord?: {
     token: string; // Bot token
     defaultChannelId?: string;
+    /** When true, open a Discord Gateway connection and reply to @mentions. */
+    listenEnabled?: boolean;
+    /** Agent id that answers Discord @mentions (falls back to first discord-scoped agent). */
+    mentionAgentId?: string;
   };
   x?: {
     apiKey: string;
@@ -168,6 +186,26 @@ export interface IntegrationCreds {
     restApiUrl?: string;
     /** API key from Local REST API plugin settings. */
     restApiKey?: string;
+  };
+  /** Vercel access token — deploy and manage projects via REST API. */
+  vercel?: {
+    /** Personal or team access token from vercel.com/account/tokens */
+    token: string;
+    /** Optional team id (team_…) when the token is team-scoped */
+    teamId?: string;
+    /** Optional team slug (alternative to teamId) */
+    teamSlug?: string;
+    /** Default project name or id for deploy tools when not specified */
+    defaultProject?: string;
+  };
+  /** Netlify personal access token — deploy sites and manage env vars. */
+  netlify?: {
+    /** Personal access token from app.netlify.com/user/applications */
+    token: string;
+    /** Optional account slug (team) for account-scoped env API */
+    accountSlug?: string;
+    /** Default site id or name for deploy tools when not specified */
+    defaultSite?: string;
   };
 }
 
@@ -188,6 +226,17 @@ export interface AppConfig {
   defaultWorkspace: string;
   /** Default model ref (cloud:id or local:id) for new agents and Grok Chat */
   defaultGrokModel?: string;
+  /**
+   * App-wide default Grok TTS voice id (e.g. "eve", "ara").
+   * Used by Grok Chat voice mode when the user has not picked a session override,
+   * and as the "App default" option for agent default voices.
+   */
+  defaultTtsVoice?: string;
+  /**
+   * App-wide default speech rate for Grok TTS (xAI range 0.7–1.5, default 1.0).
+   * Seeds Grok Chat / voice HUD when the user has not set a session override.
+   */
+  defaultTtsSpeed?: number;
   /** Enable OpenAI-compatible local Grok runtime (LM Studio, Ollama, etc.) */
   localGrokEnabled?: boolean;
   /** Base URL for local Grok server, e.g. http://127.0.0.1:1234/v1 */
@@ -224,10 +273,6 @@ export interface AppConfig {
   runRetentionDays?: number;
   /** Auto-prune audit-log entries older than this many days (0/unset = keep forever) */
   auditRetentionDays?: number;
-  /** Studio-wide default voice for TTS playback (xAI voice id, lowercase) */
-  defaultTtsVoice?: string;
-  /** Studio-wide default TTS speed (clamped to the xAI 0.7–1.5 range) */
-  defaultTtsSpeed?: number;
 }
 
 export interface InterAgentMessage {

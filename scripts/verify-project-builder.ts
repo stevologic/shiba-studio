@@ -136,7 +136,7 @@ async function main() {
     name: 'Project Verify Agent',
     model: 'grok-3',
     workspace: { path: process.cwd(), useWorktree: false },
-    integrations: { github: false, slack: false, googledrive: false, discord: false, x: false, obsidian: false },
+    integrations: { github: false, slack: false, googledrive: false, discord: false, x: false, obsidian: false, vercel: false, netlify: false },
     peers: [],
     skills: [],
     schedules: [],

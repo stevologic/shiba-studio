@@ -2,6 +2,7 @@
   "name": "shiba-studio",
   "version": "0.2.0",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "bin": {
     "shiba-studio": "bin/shiba-studio.mjs"
   },
@@ -16,6 +17,7 @@
     "test:xai-oauth": "tsx scripts/verify-xai-oauth.ts",
     "test:oauth-launch": "tsx scripts/verify-oauth-launch.ts",
     "test:theme": "tsx scripts/verify-theme.ts",
+    "test:page-chrome": "tsx scripts/verify-page-chrome.ts",
     "generate:avatars": "tsx scripts/generate-alien-avatars.ts"
   },
   "dependencies": {

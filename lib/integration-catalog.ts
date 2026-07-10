@@ -1,6 +1,6 @@
 /** UI catalog for Shiba Studio integrations. */
 
-export type IntegrationId = 'github' | 'slack' | 'googledrive' | 'discord' | 'x' | 'obsidian';
+export type IntegrationId = 'github' | 'slack' | 'googledrive' | 'discord' | 'x' | 'obsidian' | 'vercel' | 'netlify';
 
 export interface IntegrationMeta {
   id: IntegrationId;
@@ -34,9 +34,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     label: 'Slack',
     shortLabel: 'Slack',
     icon: '/integrations/slack.svg',
-    description: 'Post messages to channels',
+    description: 'Post messages and reply to @mentions',
     docsUrl: 'https://api.slack.com/docs',
-    setupUrl: 'https://api.slack.com/authentication/token-types#bot',
+    setupUrl: 'https://api.slack.com/apis/connections/socket',
     docsLabel: 'Slack API',
   },
   {
@@ -54,9 +54,9 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     label: 'Discord',
     shortLabel: 'Discord',
     icon: '/integrations/discord.svg',
-    description: 'Post messages to channels via bot',
+    description: 'Post messages and reply to @mentions',
     docsUrl: 'https://discord.com/developers/docs/intro',
-    setupUrl: 'https://discord.com/developers/docs/topics/oauth2#bot-vs-user-accounts',
+    setupUrl: 'https://discord.com/developers/docs/topics/gateway',
     docsLabel: 'Discord API',
   },
   {
@@ -79,6 +79,26 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     docsUrl: 'https://coddingtonbear.github.io/obsidian-local-rest-api/',
     setupUrl: 'https://help.obsidian.md/',
     docsLabel: 'Local REST API',
+  },
+  {
+    id: 'vercel',
+    label: 'Vercel',
+    shortLabel: 'Vercel',
+    icon: '/integrations/vercel.svg',
+    description: 'Deploy apps, list projects, and manage env vars',
+    docsUrl: 'https://vercel.com/docs/rest-api',
+    setupUrl: 'https://vercel.com/account/tokens',
+    docsLabel: 'Vercel REST API',
+  },
+  {
+    id: 'netlify',
+    label: 'Netlify',
+    shortLabel: 'Netlify',
+    icon: '/integrations/netlify.svg',
+    description: 'Deploy sites, list deploys, and manage env vars',
+    docsUrl: 'https://docs.netlify.com/api/get-started/',
+    setupUrl: 'https://app.netlify.com/user/applications#personal-access-tokens',
+    docsLabel: 'Netlify API',
   },
 ];
 

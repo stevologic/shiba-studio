@@ -19,6 +19,11 @@ export interface ChatSession {
   updatedAt: string;
   archived?: boolean;
   archivedAt?: string;
+  /**
+   * True while a chat turn is running for this session (server-persisted so
+   * lists can show “working…” even after a full page reload mid-turn).
+   */
+  running?: boolean;
 }
 
 export function deriveSessionTitle(messages: ProjectChatMessage[], fallback = 'New chat'): string {

@@ -47,7 +47,7 @@ are carried over automatically.
 - Audit log no longer records a false "settings updated" for the silent
   local-model connectivity probe on every page load.
 - Dashboard "Active schedules" now counts schedules (matched the sidebar).
-- Duplicate/conflicting license files removed (MIT, single `LICENSE`).
+- Licensing consolidated: dual AGPL-3.0-or-later / commercial (see `LICENSE`).
 - Dead Vercel-integration UI removed from Settings; TTS settings typed.
 
 ## [0.1.0] — 2026-07-08

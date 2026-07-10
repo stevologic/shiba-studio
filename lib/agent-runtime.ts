@@ -280,6 +280,174 @@ export function getToolDefinitions(
       },
     });
   }
+  if (scope.vercel) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_list_projects',
+        description: 'List Vercel projects accessible with the configured token (name, framework, git link, latest deploy).',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Max projects (1-100, default 20)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_list_deployments',
+        description: 'List recent Vercel deployments for a project (or the default project on Capabilities).',
+        parameters: {
+          type: 'object',
+          properties: {
+            project: { type: 'string', description: 'Project name or id (optional if default project is set)' },
+            limit: { type: 'number', description: 'Max deployments (1-50, default 10)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_get_deployment',
+        description: 'Get status and URL for a Vercel deployment by id or hostname.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id_or_url: { type: 'string', description: 'Deployment id (dpl_…) or deployment hostname' },
+          },
+          required: ['id_or_url'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_deploy',
+        description:
+          'Deploy or redeploy a Vercel project to production or preview. Uses the git-linked repo (latest commit) by default. Prefer this to ship an app after code changes are pushed.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project: { type: 'string', description: 'Project name or id (optional if default project is set)' },
+            target: {
+              type: 'string',
+              enum: ['production', 'preview'],
+              description: "Deploy target — 'production' or 'preview' (default preview-style when omitted)",
+            },
+            git_ref: { type: 'string', description: 'Optional git branch or tag to deploy (e.g. main)' },
+            deployment_id: { type: 'string', description: 'Optional existing deployment id to redeploy with latest commit' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'vercel_set_env',
+        description: 'Create or update a Vercel project environment variable (upsert). Use for deploy secrets and config.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project: { type: 'string', description: 'Project name or id (optional if default project is set)' },
+            key: { type: 'string', description: 'Environment variable name' },
+            value: { type: 'string', description: 'Environment variable value' },
+            target: {
+              type: 'string',
+              description: "Comma-separated targets: production, preview, development (default all three)",
+            },
+            type: {
+              type: 'string',
+              enum: ['encrypted', 'plain', 'secret'],
+              description: 'Storage type (default encrypted)',
+            },
+          },
+          required: ['key', 'value'],
+        },
+      },
+    });
+  }
+  if (scope.netlify) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_list_sites',
+        description: 'List Netlify sites accessible with the configured token (name, URL, git link, published deploy).',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Max sites (1-100, default 20)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_list_deploys',
+        description: 'List recent Netlify deploys for a site (or the default site on Capabilities).',
+        parameters: {
+          type: 'object',
+          properties: {
+            site: { type: 'string', description: 'Site id or name (optional if default site is set)' },
+            limit: { type: 'number', description: 'Max deploys (1-50, default 10)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_get_deploy',
+        description: 'Get status and URL for a Netlify deploy by id.',
+        parameters: {
+          type: 'object',
+          properties: {
+            deploy_id: { type: 'string', description: 'Deploy id' },
+          },
+          required: ['deploy_id'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_deploy',
+        description:
+          'Trigger a Netlify site build/deploy (git-linked sites). Prefer this to ship after code is pushed to the linked repo — same as “Trigger deploy” in the Netlify UI.',
+        parameters: {
+          type: 'object',
+          properties: {
+            site: { type: 'string', description: 'Site id or name (optional if default site is set)' },
+            clear_cache: { type: 'boolean', description: 'Clear build cache before deploy (default false)' },
+            title: { type: 'string', description: 'Optional build title / note' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'netlify_set_env',
+        description: 'Create or update a Netlify site environment variable. Use for deploy secrets and config.',
+        parameters: {
+          type: 'object',
+          properties: {
+            site: { type: 'string', description: 'Site id or name (optional if default site is set)' },
+            key: { type: 'string', description: 'Environment variable name' },
+            value: { type: 'string', description: 'Environment variable value' },
+            context: {
+              type: 'string',
+              description: 'Env context: all (default), production, deploy-preview, branch-deploy, dev',
+            },
+          },
+          required: ['key', 'value'],
+        },
+      },
+    });
+  }
   if (hasPeers) {
     tools.push({
       type: 'function',

@@ -15,7 +15,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 ## 2. Legal & branding (ship-blockers)
 
-- [x] **Add a LICENSE file** — done: MIT ([LICENSE](LICENSE)). Duplicate conflicting `LICENSE.md` (older copyright line) removed during this audit.
+- [x] **Add a LICENSE file** — done: dual-licensed AGPL-3.0-or-later / commercial ([LICENSE](LICENSE), [LICENSE.md](LICENSE.md)).
 - [x] **Naming review** — done: rebranded to "Shiba Studio"; legacy GrokDesk data migrates automatically.
 - [ ] **Asset licensing.** Confirm the shiba logo, alien avatars, and integration icons are original/licensed for redistribution. *(Not automatable — needs the author's confirmation of provenance.)*
 - [ ] **xAI API ToS check** — automated agent traffic, scheduled runs, and multi-agent fan-out must comply with rate/usage terms. *(Needs a human read of current xAI terms.)*
