@@ -44,6 +44,12 @@ are carried over automatically.
   Chromium; browser tools explain how to fetch it on first use.
 
 ### Fixed
+- **Agents were sent an empty tool list on every run** (`filterToolsByDisabled`
+  aliased its input; the runtime then reset it in place) — the model never
+  learned its tools existed. Now fixed for both agent runs and chat.
+- Local models that print tool calls as text (llama.cpp/Ollama) now work —
+  the runtime recovers the inline call instead of treating it as the answer.
+- `/capabilities` resolves to the Capabilities tab instead of the dashboard.
 - Audit log no longer records a false "settings updated" for the silent
   local-model connectivity probe on every page load.
 - Dashboard "Active schedules" now counts schedules (matched the sidebar).

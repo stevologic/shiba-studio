@@ -60,6 +60,13 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 ## State of the tree (2026-07-10)
 
-`origin/main` (Netlify/Vercel integrations, dual license, page-chrome refresh) is **merged** — the worktree carries both that line and this session's work (guardrails, backup, search, onboarding, security hardening). Verified after the merge: `tsc` clean · `next build` clean · app booted with both feature sets live and zero console errors · guard/backup/search behaviors re-tested. `npm test` chain: 9 scripts, isolated data dir.
+`origin/main` (Netlify/Vercel integrations, dual license, page-chrome refresh) is **merged** — the worktree carries both that line and this session's work (guardrails, backup, search, onboarding, security hardening). Verified after the merge: `tsc` clean · `next build` clean · app booted with both feature sets live and zero console errors · guard/backup/search behaviors re-tested. `npm test` chain: 10 scripts, isolated data dir.
+
+### Bugs fixed in the final product-quality pass
+
+- **CRITICAL — agents were sent an empty tool list on every run.** `filterToolsByDisabled` returned the *same* array reference when nothing was disabled (the default); both the agent runtime and the chat/workspace-tools path then reset it in place (`tools.length = 0; push(...enabledTools)`), emptying their own result. The model never learned its tools existed. Filter now always returns a fresh array; guarded by `verify-tool-dispatch.ts`.
+- **Local models emitting tool calls as text now work.** Small llama.cpp/Ollama models print the call as JSON in the message content instead of the structured `tool_calls` field; the runtime treated that as the final answer. `lib/inline-tool-calls.ts` recovers it (gated on a real tool name), proven with a functional run (tool executes → clean prose answer).
+- **`/capabilities` URL** now resolves to the Integrations/"Capabilities" tab instead of silently falling back to the dashboard.
+- Integrations audited end-to-end (Vercel/Netlify/Slack/Discord/Drive/X/Obsidian): tool defs, executor, scope types, per-agent override UI, connection tests, nav counts, and `/api/tools` catalog all present — no stubs.
 
 Still open, in priority order: components lint-zero + god-component split (paired), E2E in CI, failure notifications, OAuth public client, asset/ToS confirmations (human), i18n.
