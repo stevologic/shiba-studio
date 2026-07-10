@@ -42,7 +42,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000**. For a production build: `npm run build && npm run start`. Both bind `127.0.0.1` only — your studio is never visible to the LAN unless you explicitly use `npm run dev:lan` / `start:lan` (read [SECURITY.md](../SECURITY.md) first).
+Open **http://localhost:3000** (or **http://shib.local:3000** — the app advertises that name over mDNS). For a production build: `npm run build && npm run start`. Both bind `127.0.0.1` only — your studio is never visible to the LAN unless you explicitly use `npm run dev:lan` / `start:lan`, which also makes `shib.local` resolve network-wide so other devices can reach it by name (read [SECURITY.md](../SECURITY.md) first).
 
 > **Slim install:** `npm install` downloads a headless Chromium (~150 MB) for the browser-automation tools and the annotation sub-browser. If you'll never use those, install with `PUPPETEER_SKIP_DOWNLOAD=1 npm install` — everything else works, and the browser tools tell you the one command to fetch Chromium later (`npx puppeteer browsers install chrome-headless-shell`).
 

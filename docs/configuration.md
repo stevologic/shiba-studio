@@ -29,11 +29,31 @@ Settings is a card grid; each card maps to a concern:
 | `SHIBA_GIT_COMMIT` | resolved via `git rev-parse` | Overrides the commit shown in the sidebar/footer for non-git installs |
 | `PUPPETEER_SKIP_DOWNLOAD` | unset | Set to `1` before `npm install` to skip the ~150 MB Chromium download (slim install). Browser tools then explain how to fetch it on first use |
 | `SHIBA_TEST_DATA_DIR` | unset | Persistent data dir for `npm test` (default: a fresh temp dir per run, so tests never touch your live data) |
+| `SHIBA_MDNS_HOST` | `shib.local` | The `.local` name the app advertises via mDNS. A bare label gets `.local` appended |
+| `SHIBA_MDNS` | on | Set to `off` to disable mDNS advertising entirely |
+| `SHIBA_LAN` | unset | Set by `npm run dev:lan`/`start:lan`; makes mDNS advertise the machine's LAN IP (network-wide) instead of `127.0.0.1` |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | unset | A bundled Google OAuth client for Drive. When both are set, Capabilities → Google Drive becomes zero-setup — users just click **Sign in with Google**. Unset = each user adds their own client under the card's Advanced section. See [Capabilities](capabilities.md) |
 
 Put these in a `.env.local` file in the project root (gitignored) or your shell environment; see `.env.example`.
 
 The pre-rebrand names `GROKDESK_DATA_DIR` / `GROKDESK_SECRET_KEY` are still honored as fallbacks so older deployments keep working.
+
+## Reach the app by name (mDNS / `shib.local`)
+
+On start the app advertises itself over multicast DNS so you can open it at
+**`http://shib.local:3000`** instead of an IP address — no hosts-file editing.
+
+- **`npm run dev` / `start` (localhost):** `shib.local` resolves to `127.0.0.1`
+  on this machine — a convenient local alias.
+- **`npm run dev:lan` / `start:lan` (LAN):** `shib.local` resolves to this
+  machine's **LAN IP**, so any device on the network (phone, laptop) can reach
+  the app by name. Because this exposes the app on the network, only use LAN
+  mode on a trusted network and read [SECURITY.md](../SECURITY.md) first.
+
+Resolution needs an mDNS resolver on the client: macOS has it built in, Linux
+via Avahi/nss-mdns, Windows via Apple **Bonjour** (bundled with iTunes and some
+Adobe/Apple tools, or installable standalone). Rename with `SHIBA_MDNS_HOST`
+(e.g. `mybox.local`) or turn it off with `SHIBA_MDNS=off`.
 
 ## Data locations
 

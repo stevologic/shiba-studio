@@ -8,10 +8,10 @@
   },
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
-    "dev:lan": "next dev -H 0.0.0.0",
+    "dev:lan": "node scripts/lan.mjs dev",
     "build": "next build",
     "start": "next start -H 127.0.0.1",
-    "start:lan": "next start -H 0.0.0.0",
+    "start:lan": "node scripts/lan.mjs start",
     "lint": "eslint",
     "test": "tsx scripts/verify-all.ts",
     "test:e2e": "playwright test",

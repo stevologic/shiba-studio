@@ -26,6 +26,13 @@ export async function register() {
   } catch (e) {
     console.error('[shiba-studio] failed to start retention pruning', e);
   }
+  // Advertise the app on the LAN by name (mDNS) — e.g. http://shib.local:3000.
+  try {
+    const { startMdns } = await import('./lib/mdns');
+    startMdns();
+  } catch (e) {
+    console.error('[shiba-studio] failed to start mDNS responder', e);
+  }
   // Slack Socket Mode + Discord Gateway: @mention → agent reply
   try {
     const { syncChannelListeners } = await import('./lib/channel-listeners');
