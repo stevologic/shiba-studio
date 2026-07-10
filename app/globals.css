@@ -1417,6 +1417,11 @@ body::before {
   min-height: 100vh;
   background: var(--bg);
   color: var(--text);
+  /* Sit ABOVE the fixed body::before starfield (z-index:0, opacity .55) —
+     without this the backdrop paints over the page and dims it like a modal
+     scrim (the shell does the same via .app-root). */
+  position: relative;
+  z-index: 1;
 }
 .apidocs-sidebar {
   border-right: 1px solid var(--border);
