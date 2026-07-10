@@ -75,14 +75,18 @@ async function main() {
   assert(lan === null || /^\d{1,3}(\.\d{1,3}){3}$/.test(lan), `primaryLanIPv4 is an IPv4 or null (${lan})`);
 
   // --- live UDP multicast round-trip (best-effort; multicast can be blocked) ---
-  process.env.SHIBA_MDNS_HOST = 'shib.local';
+  // Use a UNIQUE hostname so only THIS responder answers — the mDNS bus is
+  // shared, and a stale responder or a second Shiba instance on the network
+  // could otherwise answer `shib.local` and make the assertion flaky.
+  const uniqueHost = `shibtest-${process.pid}-${Date.now()}.local`;
+  process.env.SHIBA_MDNS_HOST = uniqueHost;
   delete process.env.SHIBA_LAN; // localhost mode → advertises 127.0.0.1
   const info = startMdns();
   if (info) {
     await new Promise((r) => setTimeout(r, 300));
-    const resolved = await roundTrip('shib.local');
+    const resolved = await roundTrip(uniqueHost);
     if (resolved) {
-      assert(resolved === '127.0.0.1', `round-trip resolves shib.local → ${resolved} (localhost mode)`);
+      assert(resolved === '127.0.0.1', `round-trip resolves ${uniqueHost} → ${resolved} (localhost mode)`);
     } else {
       console.log('note: multicast round-trip returned nothing (multicast may be blocked here) — packet logic verified above');
     }
