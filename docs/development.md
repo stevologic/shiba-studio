@@ -29,6 +29,7 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 wi
 | `lib/background-tasks.ts` | Chat-dispatched background tasks: fire-and-forget agent runs with results delivered back into the session |
 | `lib/board.ts`, `lib/board-runner.ts` | Shared Kanban board store + card→agent-run dispatch; `components/kanban-board.tsx` is the Linear-style UI |
 | `lib/voice-vad.ts` | Acoustic voice-activity detection for voice-mode barge-in (echo-cancelled mic energy; pure detector + WebAudio plumbing) |
+| `lib/app-events.ts`, `lib/live-events.ts` | Live change feed: stores emit on write → `/api/events` (SSE) → shell/board refresh without polling or page reloads |
 | `scripts/verify-*.ts` | The functional verification suite (`verify-all.ts` chains them) |
 | `playwright.config.ts`, `e2e/*.spec.ts` | Browser E2E (nav, settings, search) — `npm run test:e2e` |
 

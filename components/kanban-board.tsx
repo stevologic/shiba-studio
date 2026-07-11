@@ -12,6 +12,7 @@ import {
 import dynamic from 'next/dynamic';
 import BoardSyncModal from '@/components/board-sync-modal';
 import { toast } from '@/lib/toast';
+import { subscribeLiveEvents } from '@/lib/live-events';
 import type { BoardStatus, BoardTask } from '@/lib/board-types';
 import { BOARD_PRIORITY_LABELS, BOARD_STATUS_LABELS } from '@/lib/board-types';
 import type { CardWork, WorkFile } from '@/lib/board-work';
@@ -208,15 +209,26 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     setLoaded(true);
   }, [onOpenCountChanged]);
 
-  // Live board: agents post progress while runs execute, so poll briskly.
-  // First load also goes through the timer (0ms) — the compiler lint forbids
-  // synchronous state work directly in the effect body.
+  // Live board: SSE change events drive refreshes the moment anything writes
+  // to the board (agent notes, moves from other tabs); the slow poll is only
+  // a fallback for a dropped stream. First load goes through a 0ms timer —
+  // the compiler lint forbids synchronous state work directly in the effect.
   useEffect(() => {
     const first = setTimeout(() => void refresh(), 0);
+    let burst: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeLiveEvents(['board'], () => {
+      if (burst) clearTimeout(burst);
+      burst = setTimeout(() => { burst = null; void refresh(); }, 250);
+    });
     const t = setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
-    }, 4000);
-    return () => { clearTimeout(first); clearInterval(t); };
+    }, 15_000);
+    return () => {
+      clearTimeout(first);
+      if (burst) clearTimeout(burst);
+      unsubscribe();
+      clearInterval(t);
+    };
   }, [refresh]);
 
   useEffect(() => {

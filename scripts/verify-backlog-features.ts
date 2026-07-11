@@ -116,6 +116,21 @@ async function main() {
   assert(chatPanel.includes('startVoiceVad'), 'chat panel starts the VAD with voice mode');
   assert(chatPanel.includes('!vadActiveRef.current && hasWords'), 'transcript trigger is fallback-only');
 
+  // Live UI: stores emit on change, SSE fans out, shell + board subscribe.
+  assert((await read('lib/app-events.ts')).includes('emitAppEvent'), 'server change bus');
+  assert((await read('app/api/events/route.ts')).includes('text/event-stream'), 'SSE endpoint');
+  for (const [file, label] of [
+    ['lib/agent-runs-store.ts', 'runs emit'],
+    ['lib/board.ts', 'board emit'],
+    ['lib/chat-sessions.ts', 'chats emit'],
+    ['lib/persistence.ts', 'agents emit'],
+  ] as const) {
+    assert((await read(file)).includes('emitAppEvent'), label);
+  }
+  assert((await read('lib/live-events.ts')).includes('EventSource'), 'client event feed');
+  assert((await read('components/shiba-studio.tsx')).includes('subscribeLiveEvents'), 'shell subscribes live');
+  assert((await read('components/kanban-board.tsx')).includes('subscribeLiveEvents'), 'board subscribes live');
+
   await log('PASS: all backlog feature structural checks');
   process.exit(0);
 }

@@ -94,6 +94,9 @@ async function saveStoreUnlocked(sessions: ChatSession[]) {
   const payload = `${JSON.stringify({ sessions }, null, 2)}\n`;
   await fs.writeFile(SESSIONS_TMP, payload, 'utf8');
   await fs.rename(SESSIONS_TMP, SESSIONS_FILE);
+  // Live UI: session lists + nav badge refresh without a page reload.
+  const { emitAppEvent } = await import('./app-events');
+  emitAppEvent('chats');
 }
 
 async function saveStore(sessions: ChatSession[]) {

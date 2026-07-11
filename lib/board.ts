@@ -66,6 +66,9 @@ async function saveStore(store: BoardStore): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.writeFile(BOARD_TMP, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
   await fs.rename(BOARD_TMP, BOARD_FILE);
+  // Live UI: every open board (and the nav open-count badge) hears the change.
+  const { emitAppEvent } = await import('./app-events');
+  emitAppEvent('board');
 }
 
 function now(): string {

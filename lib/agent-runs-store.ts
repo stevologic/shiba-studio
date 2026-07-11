@@ -4,6 +4,7 @@
 
 import type { AgentRun } from './types';
 import { getDb } from './db';
+import { emitAppEvent } from './app-events';
 
 /** A run without its (potentially huge) trace — what lists and tables need. */
 export type AgentRunSummary = Omit<AgentRun, 'trace'> & { traceSteps: number };
@@ -70,6 +71,8 @@ export async function persistAgentRun(run: AgentRun): Promise<void> {
       JSON.stringify(run.sideEffects || []), run.workspaceSnapshot ?? null,
       JSON.stringify(run.trace || []),
     );
+  // Live UI: dashboards refresh the run list the moment a run starts/finishes.
+  emitAppEvent('runs');
 }
 
 /** Full runs including traces — kept for compatibility (agent-runtime, tests). */

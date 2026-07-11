@@ -91,6 +91,7 @@ import {
   setCachedAgents,
 } from '@/lib/agents-ui-store';
 import { getCachedRuns, setCachedRuns } from '@/lib/runs-ui-store';
+import { subscribeLiveEvents } from '@/lib/live-events';
 import {
   getCachedIntegrationCreds,
   setCachedIntegrationCreds,
@@ -2659,6 +2660,33 @@ export default function ShibaStudio() {
     const t = setInterval(() => { void refreshRuns(); }, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable helper, interval armed once
+  }, []);
+
+  // Live change feed (SSE): refresh the affected slice the moment the server
+  // says data changed — running tasks, board moves, chat sessions, agents all
+  // update without a page refresh. Polls above stay as a fallback. Debounced
+  // per slice so bursty writers (an agent posting notes) coalesce.
+  useEffect(() => {
+    const timers: Record<string, ReturnType<typeof setTimeout> | undefined> = {};
+    const debounced = (key: string, fn: () => void, ms = 400) => {
+      if (timers[key]) clearTimeout(timers[key]);
+      timers[key] = setTimeout(() => { timers[key] = undefined; fn(); }, ms);
+    };
+    const unsubscribe = subscribeLiveEvents(['runs', 'board', 'chats', 'agents'], (type) => {
+      if (type === 'runs') {
+        debounced('runs', () => { void refreshRuns(); });
+      } else if (type === 'agents') {
+        debounced('agents', () => { void refreshAgents(); void loadNavStats(); });
+      } else {
+        // board / chats → nav badges (open cards, session count).
+        debounced('nav', () => { void loadNavStats(); }, 600);
+      }
+    });
+    return () => {
+      unsubscribe();
+      for (const t of Object.values(timers)) if (t) clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable helpers, subscribe once per mount
   }, []);
 
   // Keep sidebar/footer commit SHA in sync with the tree Node is actually serving.

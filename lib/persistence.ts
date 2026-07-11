@@ -140,6 +140,9 @@ export async function saveAgents(agents: Agent[]) {
   await ensureData();
   const sealed = agents.map((a) => transformAgentOverrideSecrets(a, encryptSecret));
   await fs.writeFile(agentsFile(), JSON.stringify(sealed, null, 2));
+  // Live UI: agent lists/pickers refresh without a page reload.
+  const { emitAppEvent } = await import('./app-events');
+  emitAppEvent('agents');
 }
 
 const DEFAULT_CONFIG: AppConfig = {
