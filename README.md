@@ -33,8 +33,9 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 - **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Bind any chat to a **workspace folder** (a cloned repo, say) and Grok reads, writes, and searches its files directly.
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, peers, and schedules. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Automations** — cron-scheduled agent runs with live execution traces, per-schedule run logs, and headless operation (schedules fire as long as the server is up — no browser required).
+- **Board** — a shared Kanban where people and agents work the same cards, with optional pull, push, or two-way sync to Linear teams and Jira projects/Kanban boards.
 - **Annotation sub-browser** — load the web app *you're* building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot straight into chat for code refinement.
-- **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, and Netlify integrations; custom skills; MCP servers; and a live catalog of 40+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, deploys, …).
+- **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, and Netlify agent integrations; Linear/Jira Board sync; custom skills; MCP servers; and a live catalog of 40+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, deploys, …).
 - **Everything local** — credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, one-file backup & restore, and zero telemetry.
 
 All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAuth 2.0 with X, the local Grok CLI, or any OpenAI-compatible local model server (LM Studio, Ollama, llama.cpp).
@@ -48,8 +49,8 @@ All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAut
 
 | Agents | Capabilities |
 | :---: | :---: |
-| <img src="docs/images/agents.png" alt="Agents page: local and cloud Grok agents with models, workspaces, integration scopes, skills, and schedule state" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations (GitHub, Slack, Drive, Discord, X, Obsidian, Vercel, Netlify), skills, MCP servers, and the built-in tool catalog" /> |
-| Local and cloud agents with their own model, workspace, worktree, integration scopes, skills, and schedules. | Every integration, skill, MCP server, and built-in tool your agents can reach — sourced live from the runtime. |
+| <img src="docs/images/agents.png" alt="Agents page: local and cloud Grok agents with models, workspaces, integration scopes, skills, and schedule state" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the built-in tool catalog" /> |
+| Local and cloud agents with their own model, workspace, worktree, integration scopes, skills, and schedules. | Every integration the studio can reach, plus skills, MCP servers, and the built-in agent tool catalog. |
 
 | Interactive API explorer | Settings |
 | :---: | :---: |
@@ -86,7 +87,7 @@ The top bar shows a readiness badge for each source.
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install on Windows/macOS/Linux, first run, connecting model sources |
 | [Grok Chat](docs/chat.md) | Sessions, models & reasoning, attachments, slash commands, the annotation sub-browser, quotas |
-| [Board](docs/board.md) | The shared Kanban board — assign cards to agents, traced runs, agents filing their own follow-ups |
+| [Board](docs/board.md) | Shared Kanban, agent-run cards, and pull/push/two-way Linear or Jira sync |
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
 | [Automations](docs/automations.md) | Cron schedules, execution traces, run logs, headless operation |
 | [Capabilities](docs/capabilities.md) | Integrations, skills, MCP servers, and the full built-in tool catalog |
@@ -106,6 +107,7 @@ The top bar shows a readiness badge for each source.
 - **Cost & safety guardrails** — monthly *and* daily spend limits with an optional hard stop, a global concurrent-run cap, per-run token caps, and overlap-suppressed schedules (Settings → Cost & safety).
 - **Global search** — Ctrl+K searches your chats, agent runs, and audit log (SQLite FTS5) alongside commands, deep-linking straight to the result.
 - **Backup & restore** — export your entire studio (settings, agents, chats, projects, runs, audit log) to one file and restore it on another machine.
+- **Bounded Board sync** — mirror task fields and optional workflow status with Linear or Jira while keeping stable `SHIB-#` keys; ordering, assignees, activity, runs, sprints, and deletions stay out of sync.
 - **Cross-session agent memory** — agents (and chat, via `/remember`) persist facts in SQLite and recall them in later runs.
 - **Grok CLI deep integration** — route chats through the local CLI, and give agents `grok_cli` with effort levels, self-verification, best-of-N, and structured JSON output.
 

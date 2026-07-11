@@ -1,12 +1,12 @@
 # Capabilities
 
-The Capabilities page is everything your agents can reach: core integrations, skills, MCP servers, and the built-in tool catalog. The in-app catalog is sourced live from the runtime — what you see is exactly what agents can call.
+The Capabilities page is everything agents and the shared Board can reach: core integrations, skills, MCP servers, and the built-in tool catalog. Agent-scoped services become run/chat tools; Linear and Jira are Board-scoped sync targets that every agent reaches through the normal Board tools.
 
-<img src="images/capabilities.png" alt="Capabilities: core integrations (GitHub, Slack, Drive, Discord, X, Obsidian, Vercel, Netlify), skills, MCP servers, and the tool catalog" width="880" />
+<img src="images/capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the tool catalog" width="880" />
 
 ## Core integrations
 
-Provide credentials once; agents with the matching scope can call the service during runs, and scoped context is injected into their prompts.
+Provide credentials once. Most integrations become tools and context for agents with the matching scope; Linear and Jira instead connect directly to the shared Board.
 
 | Integration | Setup | Unlocks |
 | --- | --- | --- |
@@ -18,8 +18,16 @@ Provide credentials once; agents with the matching scope can call the service du
 | **Obsidian** | Local vault path, or Local REST API URL + key | `obsidian_list/read/write/search` (+ `/note` in chat) — scoped agents get the vault's contents as live context |
 | **Vercel** | Access token from [vercel.com/account/tokens](https://vercel.com/account/tokens); optional team id/slug and default project | `vercel_list_projects`, `vercel_list_deployments`, `vercel_get_deployment`, `vercel_deploy`, `vercel_set_env` — deploy/redeploy git-linked projects, check status, manage env vars |
 | **Netlify** | Personal access token from [app.netlify.com/user/applications](https://app.netlify.com/user/applications#personal-access-tokens); optional account slug and default site | `netlify_list_sites`, `netlify_list_deploys`, `netlify_get_deploy`, `netlify_deploy`, `netlify_set_env` — trigger builds for git-linked sites, check deploy status, manage env vars |
+| **Linear** | [Personal API key](https://linear.app/settings/api) from Linear's Security & access settings; *Test Connection* loads accessible teams | **Board → Sync**: pull a team's issues, push Shiba cards, or mirror both ways |
+| **Jira Cloud** | Site URL + Atlassian email + [API token](https://id.atlassian.com/manage-profile/security/api-tokens); scoped tokens also need the Cloud ID. *Test Connection* loads projects and Jira Software Kanban boards; issue type and extra JQL are optional | **Board → Sync**: pull/push/two-way sync against a project or Kanban board |
 
 Every credential is AES-256-GCM encrypted at rest. *Test Connection* verifies each one; *Remove* deletes stored credentials.
+
+### Linear and Jira Board sync
+
+Open **Board → Sync** after connecting. Choose a Linear team, Jira project, or Jira Kanban board; then choose **Pull**, **Push**, or **Two-way**. **Task fields only** mirrors title, description, priority, and labels. **Tasks + columns** also maps Shiba status to the closest Linear workflow state or an allowed Jira transition.
+
+When the same linked field changed on both copies, two-way sync can use the newest task-field change, always keep Shiba, or always keep the remote copy; changes to different fields merge automatically. Successfully linked issues are reused on later syncs, and cards retain their `SHIB-#` keys alongside clickable external issue keys. Sync never deletes either side and does not copy ordering, Shiba agent assignments, remote assignees, activity/run history, or Jira sprints. See [Board](board.md) for the complete behavior and safety boundaries.
 
 ### Google Drive folder isolation (per agent)
 
@@ -44,7 +52,7 @@ Filterable, grouped, and annotated with what unlocks each tool (local agents onl
 | **Browser Automation** | `browser_navigate`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_extract` |
 | **Memory** | `memory_save`, `memory_recall` — facts persist across runs per agent |
 | **AI Generation** | `generate_image` — xAI image generation; saves to the workspace and shows in the trace |
-| **Integrations** | the per-service tools above, gated by scope |
+| **Integrations** | the agent-scoped service tools above; Linear and Jira sync through Board rather than direct agent tools |
 | **Orchestration** | `schedule_task`, `send_to_peer`, `grok_cli` (headless Grok CLI delegation with effort levels, self-verification `check`, best-of-N, and JSON-schema structured output) |
 | **MCP** | `mcp_list_tools`, `mcp_invoke` |
 

@@ -25,8 +25,15 @@ than the one running on your own machine.
   generate responses. If you use a **local model server** instead, that
   traffic stays on your machine.
 - **Integrations you connect** — GitHub, Slack, Google Drive, Discord, X,
-  Obsidian, Vercel, and Netlify calls go directly from your machine to those
-  services using the credentials you provided. No proxy in between.
+  Obsidian, Vercel, Netlify, Linear, and Jira calls go directly from your
+  machine to those services using the credentials you provided. No proxy in
+  between.
+- **Linear/Jira Board sync (optional)** — a sync sends card title,
+  description, priority, and labels to the selected service; **Tasks +
+  columns** also sends mapped workflow status. Pulling brings those same
+  fields into the local Board. Ordering, Shiba agent assignments, remote
+  assignees, activity/run history, Jira sprints, and deletions are never
+  synchronized.
 - **Web tools you invoke** — web search, `/fetch`, and the sub-browser load
   the sites you point them at, from your machine.
 - **Cloud sync (optional, off by default)** — snapshots are uploaded to your
@@ -43,5 +50,8 @@ your agents' integrations accordingly.
 
 ## Deleting your data
 
-Delete `~/.shiba-studio/` and it is all gone. There is nothing to delete
-anywhere else, because nothing was ever sent anywhere else.
+Delete `~/.shiba-studio/` to remove the local configuration, credentials,
+Board links, and data. This does not delete content already sent to xAI or
+connected services, including Linear/Jira issues created by Board sync or
+optional cloud-sync snapshots. Delete those copies through the respective
+service.

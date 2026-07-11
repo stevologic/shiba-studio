@@ -1,6 +1,16 @@
 /** UI catalog for Shiba Studio integrations. */
 
-export type IntegrationId = 'github' | 'slack' | 'googledrive' | 'discord' | 'x' | 'obsidian' | 'vercel' | 'netlify';
+export type IntegrationId =
+  | 'github'
+  | 'slack'
+  | 'googledrive'
+  | 'discord'
+  | 'x'
+  | 'obsidian'
+  | 'vercel'
+  | 'netlify'
+  | 'linear'
+  | 'jira';
 
 export interface IntegrationMeta {
   id: IntegrationId;
@@ -16,6 +26,8 @@ export interface IntegrationMeta {
   /** Optional secondary setup guide (e.g. OAuth app creation). */
   setupUrl?: string;
   docsLabel?: string;
+  /** False for app-level integrations that should not appear as agent tool scopes. */
+  agentScoped?: boolean;
 }
 
 export const INTEGRATION_CATALOG: IntegrationMeta[] = [
@@ -100,6 +112,28 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     setupUrl: 'https://app.netlify.com/user/applications#personal-access-tokens',
     docsLabel: 'Netlify API',
   },
+  {
+    id: 'linear',
+    label: 'Linear',
+    shortLabel: 'Linear',
+    icon: '/integrations/linear.svg',
+    description: 'Sync teams, workflows, and issues with Board',
+    docsUrl: 'https://linear.app/developers/graphql',
+    setupUrl: 'https://linear.app/settings/api',
+    docsLabel: 'Linear GraphQL API',
+    agentScoped: false,
+  },
+  {
+    id: 'jira',
+    label: 'Jira',
+    shortLabel: 'Jira',
+    icon: '/integrations/jira.svg',
+    description: 'Sync Jira Cloud projects and issues with Board',
+    docsUrl: 'https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/',
+    setupUrl: 'https://id.atlassian.com/manage-profile/security/api-tokens',
+    docsLabel: 'Jira Cloud REST API',
+    agentScoped: false,
+  },
 ];
 
 const byId = new Map(INTEGRATION_CATALOG.map((i) => [i.id, i]));
@@ -109,3 +143,8 @@ export function getIntegrationMeta(id: string): IntegrationMeta | undefined {
 }
 
 export const INTEGRATION_IDS = INTEGRATION_CATALOG.map((i) => i.id);
+
+/** Integrations that expose direct tools/context inside an individual agent. */
+export const AGENT_INTEGRATION_IDS = INTEGRATION_CATALOG
+  .filter((i) => i.agentScoped !== false)
+  .map((i) => i.id) as Array<keyof import('./types').IntegrationScope>;

@@ -207,6 +207,41 @@ export interface IntegrationCreds {
     /** Default site id or name for deploy tools when not specified */
     defaultSite?: string;
   };
+  /** Linear Board sync. Board-scoped rather than an agent tool scope. */
+  linear?: {
+    /** Personal API key or OAuth access token. */
+    apiKey: string;
+    /** Linear team UUID selected as the Board sync target. */
+    teamId?: string;
+    /** Cached display name for the selected team. */
+    teamName?: string;
+    syncDirection?: 'pull' | 'push' | 'bidirectional';
+    /** `tasks` syncs card fields; `board` also maps workflow statuses/columns. */
+    syncMode?: 'tasks' | 'board';
+  };
+  /** Jira Cloud Board sync. Board-scoped rather than an agent tool scope. */
+  jira?: {
+    /** Jira Cloud site URL, e.g. https://example.atlassian.net. */
+    baseUrl: string;
+    /** Required only for Atlassian scoped API tokens (api.atlassian.com route). */
+    cloudId?: string;
+    email: string;
+    apiToken: string;
+    /** Jira project key selected as the Board sync target. */
+    projectKey?: string;
+    /** Cached display name for the selected project. */
+    projectName?: string;
+    /** Optional Jira Software Kanban board. When set, pulls follow its filter. */
+    boardId?: string;
+    boardName?: string;
+    /** Issue type used when Shiba creates a Jira issue. */
+    issueType?: string;
+    /** Optional extra JQL appended to the selected project filter. */
+    jql?: string;
+    syncDirection?: 'pull' | 'push' | 'bidirectional';
+    /** `tasks` syncs card fields; `board` also maps workflow statuses/columns. */
+    syncMode?: 'tasks' | 'board';
+  };
 }
 
 export type CloudAuthMode = 'api_key' | 'oauth';

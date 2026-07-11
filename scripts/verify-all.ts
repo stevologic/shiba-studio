@@ -22,6 +22,7 @@ const CHAIN = [
   'verify-backlog-features.ts',
   'verify-project-builder.ts',
   'verify-netlify.ts',
+  'verify-board-sync.ts',
 ] as const;
 
 async function main() {

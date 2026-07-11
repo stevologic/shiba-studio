@@ -120,6 +120,14 @@ export async function POST(req: NextRequest) {
       const r = await Ints.testNetlify(body.creds || cfg.integrations || {});
       return NextResponse.json(r);
     }
+    if (which === 'linear') {
+      const r = await Ints.testLinear(body.creds || cfg.integrations || {});
+      return NextResponse.json(r);
+    }
+    if (which === 'jira') {
+      const r = await Ints.testJira(body.creds || cfg.integrations || {});
+      return NextResponse.json(r);
+    }
   }
   return NextResponse.json({ error: 'bad action' }, { status: 400 });
 }

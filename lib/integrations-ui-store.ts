@@ -13,7 +13,7 @@ export type IntegrationCredsMap = Record<string, Record<string, unknown>>;
 
 const EMPTY: IntegrationCredsMap = {
   github: {}, slack: {}, googledrive: {}, discord: {}, x: {},
-  obsidian: { mode: 'local' }, vercel: {}, netlify: {},
+  obsidian: { mode: 'local' }, vercel: {}, netlify: {}, linear: {}, jira: {},
 };
 
 let cached: IntegrationCredsMap | null = null;

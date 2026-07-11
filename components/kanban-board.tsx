@@ -6,8 +6,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed,
+  Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw,
 } from 'lucide-react';
+import BoardSyncModal from '@/components/board-sync-modal';
 import { toast } from '@/lib/toast';
 import type { BoardStatus, BoardTask } from '@/lib/board-types';
 import { BOARD_PRIORITY_LABELS, BOARD_STATUS_LABELS } from '@/lib/board-types';
@@ -137,6 +138,7 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
   const [composerTitle, setComposerTitle] = useState('');
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<{ col: BoardStatus; beforeId: string | null } | null>(null);
+  const [syncOpen, setSyncOpen] = useState(false);
   const composerRef = useRef<HTMLInputElement | null>(null);
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
@@ -277,13 +279,22 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
             Shared Kanban every agent can work from — assign a card, hit <span className="kb-inline-key">▶ Start work</span>, and watch progress land in the activity feed.
           </div>
         </div>
-        <button
-          type="button"
-          className="grok-btn grok-btn-primary text-sm inline-flex items-center gap-1.5"
-          onClick={() => { setComposerCol('todo'); setComposerTitle(''); }}
-        >
-          <Plus size={14} /> New card
-        </button>
+        <div className="kb-head-actions">
+          <button
+            type="button"
+            className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
+            onClick={() => setSyncOpen(true)}
+          >
+            <RefreshCw size={14} /> Sync
+          </button>
+          <button
+            type="button"
+            className="grok-btn grok-btn-primary text-sm inline-flex items-center gap-1.5"
+            onClick={() => { setComposerCol('todo'); setComposerTitle(''); }}
+          >
+            <Plus size={14} /> New card
+          </button>
+        </div>
       </div>
 
       <div className="kb-columns" role="list" aria-label="Kanban board columns">
@@ -359,6 +370,15 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
                     >
                       <div className="kb-card-top">
                         <span className="kb-card-key">{task.key}</span>
+                        {task.externalRefs?.map((ref) => (
+                          <span
+                            key={`${ref.provider}-${ref.containerId}-${ref.remoteId}`}
+                            className={`kb-external-badge kb-external-${ref.provider}`}
+                            title={`Synced with ${ref.provider === 'linear' ? 'Linear' : 'Jira'} ${ref.remoteKey}`}
+                          >
+                            {ref.provider === 'linear' ? 'L' : 'J'} · {ref.remoteKey}
+                          </span>
+                        ))}
                         {task.working && (
                           <span className="kb-working" title={`${agent?.name || 'Agent'} is working this card`}>
                             <Loader2 size={11} className="kb-spin" /> working
@@ -420,6 +440,25 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
               onChange={(e) => setTasks((prev) => prev.map((t) => (t.id === selected.id ? { ...t, title: e.target.value } : t)))}
               onBlur={(e) => { void patchCard(selected.id, { title: e.target.value }); }}
             />
+
+            {!!selected.externalRefs?.length && (
+              <div className="kb-external-links" aria-label="External issue links">
+                {selected.externalRefs.map((ref) => (
+                  <a
+                    key={`${ref.provider}-${ref.containerId}-${ref.remoteId}`}
+                    href={ref.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`kb-external-link kb-external-${ref.provider}`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={`/integrations/${ref.provider}.svg`} width={14} height={14} alt="" />
+                    {ref.provider === 'linear' ? 'Linear' : 'Jira'} {ref.remoteKey}
+                    <ExternalLink size={11} />
+                  </a>
+                ))}
+              </div>
+            )}
 
             <div className="kb-panel-props">
               <label className="kb-prop">
@@ -528,6 +567,11 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
           </aside>
         </>
       )}
+      <BoardSyncModal
+        open={syncOpen}
+        onClose={() => setSyncOpen(false)}
+        onSynced={() => void refresh()}
+      />
     </div>
   );
 }

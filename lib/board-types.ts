@@ -51,6 +51,47 @@ export interface BoardActivity {
   agentName?: string;
 }
 
+export type BoardExternalProvider = 'linear' | 'jira';
+export type BoardSyncField = 'title' | 'description' | 'status' | 'priority' | 'labels';
+
+/** Stable link between one local card and one remote issue. */
+export interface BoardExternalRef {
+  provider: BoardExternalProvider;
+  /** Stable non-secret identity for the connected workspace/site. */
+  connectionId?: string;
+  /** Team, project, or Jira board identity used for this sync connection. */
+  containerId: string;
+  containerName?: string;
+  remoteId: string;
+  remoteKey: string;
+  url: string;
+  remoteUpdatedAt: string;
+  lastSyncedAt: string;
+  /** Fingerprints cover syncable card fields only, never activity/run state. */
+  lastLocalFingerprint: string;
+  lastRemoteFingerprint: string;
+  fingerprintMode?: 'tasks' | 'board';
+  /** Per-field baselines let pushes update only fields changed in Shiba. */
+  lastLocalFieldFingerprints?: Partial<Record<BoardSyncField, string>>;
+  lastRemoteFieldFingerprints?: Partial<Record<BoardSyncField, string>>;
+}
+
+export interface BoardSyncState {
+  provider: BoardExternalProvider;
+  containerId: string;
+  containerName?: string;
+  direction: 'pull' | 'push' | 'bidirectional';
+  mode: 'tasks' | 'board';
+  completedAt: string;
+  imported: number;
+  exported: number;
+  updatedLocal: number;
+  updatedRemote: number;
+  skipped: number;
+  conflicts: number;
+  errors: number;
+}
+
 export interface BoardTask {
   id: string;
   /** Human key like SHIB-12 — stable, never reused. */
@@ -69,6 +110,10 @@ export interface BoardTask {
   runIds: string[];
   /** True while a dispatched run is executing. */
   working?: boolean;
+  /** Changes only when a provider-syncable field changes. */
+  syncUpdatedAt?: string;
+  /** A card can be mirrored to Linear, Jira, or both. */
+  externalRefs?: BoardExternalRef[];
   createdAt: string;
   updatedAt: string;
 }
@@ -77,4 +122,5 @@ export interface BoardStore {
   /** Monotonic counter behind the SHIB-# keys. */
   nextNumber: number;
   tasks: BoardTask[];
+  syncState?: Partial<Record<BoardExternalProvider, BoardSyncState>>;
 }

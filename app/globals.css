@@ -6281,6 +6281,13 @@ body::before {
   margin-bottom: 1.1rem;
 }
 
+.kb-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-shrink: 0;
+}
+
 .kb-inline-key {
   color: var(--text);
   font-weight: 500;
@@ -6412,6 +6419,34 @@ body::before {
   font-size: 0.68rem;
   color: var(--text-dim);
   letter-spacing: 0.03em;
+}
+
+.kb-external-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.04rem 0.38rem;
+  font-family: var(--font-mono);
+  font-size: 0.59rem;
+  line-height: 1.35;
+}
+
+.kb-external-linear {
+  color: #b9a7ff;
+  border-color: color-mix(in srgb, #7c5cfc 45%, var(--border));
+  background: color-mix(in srgb, #7c5cfc 10%, transparent);
+}
+
+.kb-external-jira {
+  color: #85b8ff;
+  border-color: color-mix(in srgb, #0c66e4 48%, var(--border));
+  background: color-mix(in srgb, #0c66e4 10%, transparent);
 }
 
 .kb-working {
@@ -6559,6 +6594,27 @@ body::before {
   padding: 0.1rem 0;
 }
 
+.kb-external-links {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.kb-external-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  transition: filter 0.12s ease, border-color 0.12s ease;
+}
+
+.kb-external-link:hover { filter: brightness(1.18); }
+
 .kb-panel-props {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -6651,6 +6707,87 @@ body::before {
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ── Board provider sync ───────────────────────────────────────────── */
+
+.kb-sync-modal { max-height: min(760px, calc(100vh - 2rem)); overflow-y: auto; }
+
+.kb-sync-provider-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+}
+
+.kb-sync-provider {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.7rem;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-card) 75%, transparent);
+  color: var(--text);
+  font-size: 0.8rem;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.kb-sync-provider > span:last-child { font-size: 0.62rem; }
+.kb-sync-provider:hover { border-color: var(--border-light); }
+.kb-sync-provider-active {
+  border-color: color-mix(in srgb, var(--accent-2) 65%, var(--border));
+  background: color-mix(in srgb, var(--accent-2) 10%, var(--bg-card));
+}
+
+.kb-sync-directions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.kb-sync-directions .sync-direction-option { font-size: 0.7rem; padding-inline: 0.45rem; }
+
+.kb-sync-mode {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.65rem 0.7rem;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-card) 65%, transparent);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.kb-sync-mode span { color: var(--text); font-size: 0.75rem; font-weight: 500; }
+.kb-sync-mode small { color: var(--text-dim); font-size: 0.62rem; line-height: 1.35; }
+.kb-sync-mode:hover { border-color: var(--border-light); }
+.kb-sync-mode-active {
+  border-color: color-mix(in srgb, var(--accent-2) 65%, var(--border));
+  background: color-mix(in srgb, var(--accent-2) 8%, var(--bg-card));
+}
+
+.kb-sync-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border));
+  border-radius: 8px;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.kb-sync-result-warning {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+@media (max-width: 640px) {
+  .kb-head { flex-direction: column; }
+  .kb-head-actions { width: 100%; }
+  .kb-head-actions .grok-btn { flex: 1; }
+  .kb-sync-directions { grid-template-columns: 1fr; }
 }
 
 /* ── Responsive overrides — keep at end of file so they win the cascade ── */

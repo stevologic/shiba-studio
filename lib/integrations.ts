@@ -1,4 +1,5 @@
-// Core integrations: GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel
+// Core integrations: GitHub, Slack, Google Drive, Discord, X, Obsidian,
+// Vercel, Netlify, plus Board-scoped Linear and Jira sync.
 // All scoped per-agent via config. Credentials stored server-side in config.
 // Lazy imports to avoid heavy top-level cjs/esm issues in tests.
 
@@ -399,6 +400,9 @@ export {
   netlifyDeploy,
   netlifySetEnv,
 } from './netlify';
+
+export { testLinear } from './linear';
+export { testJira } from './jira';
 
 export async function driveUploadText(name: string, content: string, allowedFolders?: string[]) {
   const auth = await driveAuth();

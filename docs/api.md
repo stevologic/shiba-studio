@@ -70,6 +70,15 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | POST | `/api/execute/stream` | Run an agent with a live **SSE** trace (`{ agentId, prompt, … }`). |
 | POST | `/api/execute/approve` | Approve/deny a pending tool call (`{ approvalId, approved }`). |
 
+### Board
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/board` | List Board cards; `?id=<id-or-SHIB-key>` returns one card with activity and external issue links. |
+| POST | `/api/board` | Board actions: `create`, `update`, `move`, `delete`, or `startWork`. |
+| GET | `/api/board/sync` | Linear/Jira connection overview: selected target, direction/mode, linked-card count, and last-sync summary. |
+| POST | `/api/board/sync` | Discover targets with `{ action: 'discover', provider }`, or run sync with `{ action: 'sync', provider, targetId, direction, mode, conflictPolicy }`. Providers: `linear|jira`; directions: `pull|push|bidirectional`; modes: `tasks|board`; conflict policies: `newest|local|remote`. |
+
 ### Chat
 
 | Method | Path | Purpose |

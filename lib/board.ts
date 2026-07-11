@@ -8,6 +8,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { dataDir } from './data-paths';
 import {
   type BoardActivity,
+  type BoardExternalProvider,
+  type BoardExternalRef,
+  type BoardSyncState,
   type BoardStatus,
   type BoardStore,
   type BoardTask,
@@ -15,7 +18,15 @@ import {
   isBoardStatus,
 } from './board-types';
 
-export type { BoardTask, BoardStatus, BoardActivity } from './board-types';
+export type {
+  BoardTask,
+  BoardStatus,
+  BoardActivity,
+  BoardExternalProvider,
+  BoardExternalRef,
+  BoardSyncField,
+  BoardSyncState,
+} from './board-types';
 
 const DATA_DIR = dataDir();
 const BOARD_FILE = path.join(DATA_DIR, 'board.json');
@@ -36,12 +47,18 @@ async function loadStore(): Promise<BoardStore> {
   try {
     const raw = await fs.readFile(BOARD_FILE, 'utf8');
     const parsed = JSON.parse(raw);
+    const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
     return {
       nextNumber: Number.isInteger(parsed.nextNumber) && parsed.nextNumber > 0 ? parsed.nextNumber : 1,
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+      tasks: tasks.map((task: BoardTask) => ({
+        ...task,
+        syncUpdatedAt: task.syncUpdatedAt || task.updatedAt || task.createdAt,
+        externalRefs: Array.isArray(task.externalRefs) ? task.externalRefs : [],
+      })),
+      syncState: parsed.syncState && typeof parsed.syncState === 'object' ? parsed.syncState : {},
     };
   } catch {
-    return { nextNumber: 1, tasks: [] };
+    return { nextNumber: 1, tasks: [], syncState: {} };
   }
 }
 
@@ -91,6 +108,10 @@ export interface CreateBoardTaskInput {
   labels?: string[];
   /** Who created it — shows in the activity feed. */
   createdBy?: string;
+  /** Internal provider-sync metadata. */
+  externalRef?: BoardExternalRef;
+  createdAt?: string;
+  syncUpdatedAt?: string;
 }
 
 export async function createBoardTask(input: CreateBoardTaskInput): Promise<BoardTask> {
@@ -99,6 +120,7 @@ export async function createBoardTask(input: CreateBoardTaskInput): Promise<Boar
   return withStoreLock(async () => {
     const store = await loadStore();
     const status: BoardStatus = isBoardStatus(input.status) ? input.status : 'backlog';
+    const createdAt = input.createdAt || now();
     const task: BoardTask = {
       id: uuidv4(),
       key: `${KEY_PREFIX}-${store.nextNumber}`,
@@ -113,8 +135,10 @@ export async function createBoardTask(input: CreateBoardTaskInput): Promise<Boar
       order: endOrder(store.tasks, status),
       activity: [systemEvent(`Created by ${input.createdBy || 'user'}`)],
       runIds: [],
-      createdAt: now(),
-      updatedAt: now(),
+      syncUpdatedAt: input.syncUpdatedAt || createdAt,
+      externalRefs: input.externalRef ? [input.externalRef] : [],
+      createdAt,
+      updatedAt: createdAt,
     };
     store.nextNumber += 1;
     store.tasks.push(task);
@@ -137,6 +161,11 @@ export interface UpdateBoardTaskInput {
   addRunId?: string;
   /** Activity line describing the change (auto-generated when omitted). */
   actor?: string;
+  /** Internal provider-sync metadata. */
+  externalRef?: BoardExternalRef;
+  syncUpdatedAt?: string;
+  /** Internal optimistic guard used before a pull overwrites syncable fields. */
+  expectedSyncUpdatedAt?: string;
 }
 
 export async function updateBoardTask(idOrKey: string, patch: UpdateBoardTaskInput): Promise<BoardTask> {
@@ -145,13 +174,33 @@ export async function updateBoardTask(idOrKey: string, patch: UpdateBoardTaskInp
     const store = await loadStore();
     const task = store.tasks.find((t) => t.id === idOrKey || t.key.toUpperCase() === needle);
     if (!task) throw new Error(`Board task not found: ${idOrKey}`);
+    if (
+      patch.expectedSyncUpdatedAt !== undefined
+      && (task.syncUpdatedAt || task.updatedAt) !== patch.expectedSyncUpdatedAt
+    ) {
+      throw new Error('This Board card changed while sync was running. Run sync again to resolve it safely.');
+    }
     const actor = patch.actor || 'user';
+    let syncChanged = false;
 
-    if (patch.title !== undefined && patch.title.trim()) task.title = patch.title.trim().slice(0, 300);
-    if (patch.description !== undefined) task.description = String(patch.description).slice(0, 20_000);
-    if (patch.priority !== undefined) task.priority = clampPriority(patch.priority);
+    if (patch.title !== undefined && patch.title.trim()) {
+      const value = patch.title.trim().slice(0, 300);
+      if (value !== task.title) { task.title = value; syncChanged = true; }
+    }
+    if (patch.description !== undefined) {
+      const value = String(patch.description).slice(0, 20_000);
+      if (value !== task.description) { task.description = value; syncChanged = true; }
+    }
+    if (patch.priority !== undefined) {
+      const value = clampPriority(patch.priority);
+      if (value !== task.priority) { task.priority = value; syncChanged = true; }
+    }
     if (patch.labels !== undefined) {
-      task.labels = patch.labels.map((l) => String(l).trim()).filter(Boolean).slice(0, 10);
+      const value = patch.labels.map((l) => String(l).trim()).filter(Boolean).slice(0, 10);
+      if (JSON.stringify(value) !== JSON.stringify(task.labels)) {
+        task.labels = value;
+        syncChanged = true;
+      }
     }
     if (patch.assigneeAgentId !== undefined && patch.assigneeAgentId !== task.assigneeAgentId) {
       task.assigneeAgentId = patch.assigneeAgentId || null;
@@ -162,11 +211,22 @@ export async function updateBoardTask(idOrKey: string, patch: UpdateBoardTaskInp
     if (patch.status !== undefined && isBoardStatus(patch.status) && patch.status !== task.status) {
       const from = task.status;
       task.status = patch.status;
+      syncChanged = true;
       task.order = endOrder(store.tasks.filter((t) => t.id !== task.id), patch.status);
       task.activity.push(systemEvent(`${actor} moved ${from} → ${patch.status}`));
     }
     if (patch.working !== undefined) task.working = patch.working;
     if (patch.addRunId && !task.runIds.includes(patch.addRunId)) task.runIds.push(patch.addRunId);
+    if (patch.externalRef) {
+      const refs = Array.isArray(task.externalRefs) ? task.externalRefs : [];
+      // A card has at most one link per provider. Pulling an overlapping Jira
+      // board/project can therefore rebind the same remote issue without
+      // leaving an ambiguous second Jira link behind.
+      task.externalRefs = [
+        ...refs.filter((ref) => ref.provider !== patch.externalRef?.provider),
+        patch.externalRef,
+      ];
+    }
     if (patch.note?.text) {
       task.activity.push({
         ts: now(),
@@ -179,7 +239,9 @@ export async function updateBoardTask(idOrKey: string, patch: UpdateBoardTaskInp
     // Bound the feed so a chatty agent can't bloat the store.
     if (task.activity.length > 200) task.activity = task.activity.slice(-200);
 
-    task.updatedAt = now();
+    const updatedAt = now();
+    task.updatedAt = updatedAt;
+    if (syncChanged) task.syncUpdatedAt = patch.syncUpdatedAt || updatedAt;
     await saveStore(store);
     return task;
   });
@@ -215,6 +277,7 @@ export async function moveBoardTask(
 
     if (statusChanged) task.activity.push(systemEvent(`${actor} moved to ${status}`));
     task.updatedAt = now();
+    if (statusChanged) task.syncUpdatedAt = task.updatedAt;
 
     // Re-pack the column if fractional orders got too dense.
     const packed = [...col, task].sort((a, b) => a.order - b.order);
@@ -237,6 +300,35 @@ export async function deleteBoardTask(idOrKey: string): Promise<void> {
     const idx = store.tasks.findIndex((t) => t.id === idOrKey || t.key.toUpperCase() === needle);
     if (idx < 0) throw new Error(`Board task not found: ${idOrKey}`);
     store.tasks.splice(idx, 1);
+    await saveStore(store);
+  });
+}
+
+export async function findBoardTaskByExternalRef(
+  provider: BoardExternalProvider,
+  connectionId: string | undefined,
+  containerId: string,
+  remoteId: string,
+): Promise<BoardTask | null> {
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    return store.tasks.find((task) => task.externalRefs?.some((ref) =>
+      ref.provider === provider
+      && ref.connectionId === connectionId
+      && ref.containerId === containerId
+      && ref.remoteId === remoteId,
+    )) || null;
+  });
+}
+
+export async function getBoardSyncState(): Promise<BoardStore['syncState']> {
+  return withStoreLock(async () => (await loadStore()).syncState || {});
+}
+
+export async function recordBoardSyncState(state: BoardSyncState): Promise<void> {
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    store.syncState = { ...(store.syncState || {}), [state.provider]: state };
     await saveStore(store);
   });
 }

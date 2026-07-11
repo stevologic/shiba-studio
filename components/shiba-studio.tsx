@@ -65,7 +65,7 @@ import {
   schedulesForSave,
 } from '@/lib/schedule-presets';
 import { estimateCronRunsPerDay, SCHEDULE_RUNS_PER_DAY_WARN } from '@/lib/cron-estimate';
-import { INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/integration-catalog';
+import { AGENT_INTEGRATION_IDS, INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/integration-catalog';
 import { modelDisplayName, parseModelRef, providerLabel, providerTitle, type ModelProvider } from '@/lib/model-providers';
 import { resolveProjectWorkspace } from '@/lib/project-types';
 import {
@@ -531,6 +531,8 @@ export default function ShibaStudio() {
   function integrationConfigured(id: string): boolean {
     const creds = (intCreds as Record<string, Record<string, string>>)[id] || {};
     if (id === 'obsidian') return !!(creds.vaultPath?.trim() || creds.restApiUrl?.trim());
+    if (id === 'linear') return !!creds.apiKey?.trim();
+    if (id === 'jira') return !!(creds.baseUrl?.trim() && creds.email?.trim() && creds.apiToken?.trim());
     return Object.entries(creds).some(([k, v]) => k !== 'mode' && typeof v === 'string' && v.trim().length > 0);
   }
   const [folderBrowseFor, setFolderBrowseFor] = useState<'obsidian' | 'workspace' | 'mcp' | null>(null);
@@ -863,7 +865,7 @@ export default function ShibaStudio() {
       const cfg = cRes;
       setConfig(cfg as any);
       if (intRes.integrations) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...intRes.integrations };
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...intRes.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
@@ -1845,7 +1847,7 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (data.integrations) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...data.integrations };
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
@@ -1861,7 +1863,9 @@ export default function ShibaStudio() {
     const label = getIntegrationMeta(which)?.label || which;
     const ok = await confirmDialog({
       title: `Remove ${label} credentials?`,
-      message: 'Stored credentials for this integration are deleted from this machine. Agents lose access until you reconfigure it.',
+      message: which === 'linear' || which === 'jira'
+        ? 'Stored credentials are deleted from this machine. Existing issue links remain on Board, but sync is unavailable until you reconnect.'
+        : 'Stored credentials for this integration are deleted from this machine. Agents lose access until you reconfigure it.',
       confirmLabel: 'Remove',
       danger: true,
     });
@@ -1875,7 +1879,7 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (data.integrations) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, ...data.integrations };
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
@@ -3859,16 +3863,16 @@ export default function ShibaStudio() {
             <div className="integrations-page page-content">
               <div className="page-title">
                 Capabilities
-                <InfoHint text="Everything on this page becomes available to agents during runs and to Grok Chat when the matching scope is enabled on the agent." />
+                <InfoHint text="Agent-scoped integrations become run/chat tools. Linear and Jira connect directly to the shared Board so every agent can work synced cards through the Board tools." />
               </div>
-              <div className="page-subtitle">Everything your agents can reach — core integrations, skills, MCP servers, and built-in tools.</div>
+              <div className="page-subtitle">Everything your agents and shared Board can reach — core integrations, skills, MCP servers, and built-in tools.</div>
 
               <div className="page-section-title">
                 <Plug size={18} className="opacity-70" />
                 Core Integrations
                 <InfoHint text="Credentials are AES-256-GCM encrypted at rest on this machine and never leave it except toward the service itself." />
               </div>
-              <div className="page-section-sub">Provide credentials once. Agents that have the scope enabled will be able to call GitHub, Slack, Drive, Discord, X, Obsidian, Vercel, and Netlify during runs.</div>
+              <div className="page-section-sub">Provide credentials once. Agent-scoped services become run tools; Linear and Jira become sync targets directly inside Board.</div>
 
               <div className="integrations-grid">
                 {INTEGRATION_CATALOG.map((integration) => {
@@ -3944,6 +3948,18 @@ export default function ShibaStudio() {
                           <span className="integration-card-status text-success">
                             connected as {intTest.netlify.user}
                             {intTest.netlify.account ? ` · ${intTest.netlify.account}` : ''}
+                          </span>
+                        )}
+                        {integration.id === 'linear' && intTest.linear?.ok && (
+                          <span className="integration-card-status text-success">
+                            connected as {intTest.linear.user || 'Linear user'}
+                            {intTest.linear.organization ? ` · ${intTest.linear.organization}` : ''}
+                          </span>
+                        )}
+                        {integration.id === 'jira' && intTest.jira?.ok && (
+                          <span className="integration-card-status text-success">
+                            connected as {intTest.jira.user || 'Jira user'}
+                            {intTest.jira.site ? ` · ${intTest.jira.site}` : ''}
                           </span>
                         )}
                       </div>
@@ -4166,6 +4182,180 @@ export default function ShibaStudio() {
                         </div>
                       </>
                     )}
+                    {integration.id === 'linear' && (() => {
+                      const linear = intCreds.linear || {};
+                      const teams = (Array.isArray(intTest.linear?.teams) ? intTest.linear.teams : []) as Array<{ id: string; key: string; name: string }>;
+                      return (
+                        <>
+                          <div className="text-xs text-dim mb-2">
+                            Create a personal API key in Linear&apos;s Security &amp; access settings. Board can pull issues,
+                            push Shiba cards, or sync both ways; agents keep using the normal Board tools.
+                          </div>
+                          <input
+                            className="grok-input mb-2 font-mono text-xs"
+                            type="password"
+                            placeholder="Linear personal API key"
+                            value={linear.apiKey || ''}
+                            onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, linear: { ...(c.linear || {}), apiKey: e.target.value } }))}
+                            autoComplete="off"
+                          />
+                          {teams.length > 0 ? (
+                            <select
+                              className="grok-select text-xs w-full mb-2"
+                              value={linear.teamId || ''}
+                              onChange={(e) => {
+                                const team = teams.find((item) => item.id === e.target.value);
+                                setIntCreds((c: typeof intCreds) => ({
+                                  ...c,
+                                  linear: { ...(c.linear || {}), teamId: e.target.value, teamName: team?.name || '' },
+                                }));
+                              }}
+                            >
+                              <option value="">Select the Linear team to sync</option>
+                              {teams.map((team) => <option key={team.id} value={team.id}>{team.name} ({team.key})</option>)}
+                            </select>
+                          ) : (
+                            <input
+                              className="grok-input mb-2 font-mono text-xs"
+                              placeholder="Team UUID (or Test Connection to choose)"
+                              value={linear.teamId || ''}
+                              onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, linear: { ...(c.linear || {}), teamId: e.target.value } }))}
+                            />
+                          )}
+                          <div className="grid grid-cols-2 gap-2">
+                            <select
+                              className="grok-select text-xs w-full"
+                              value={linear.syncDirection || 'pull'}
+                              onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, linear: { ...(c.linear || {}), syncDirection: e.target.value } }))}
+                            >
+                              <option value="pull">Pull into Shiba</option>
+                              <option value="push">Push from Shiba</option>
+                              <option value="bidirectional">Two-way sync</option>
+                            </select>
+                            <select
+                              className="grok-select text-xs w-full"
+                              value={linear.syncMode || 'board'}
+                              onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, linear: { ...(c.linear || {}), syncMode: e.target.value } }))}
+                            >
+                              <option value="board">Tasks + columns</option>
+                              <option value="tasks">Task fields only</option>
+                            </select>
+                          </div>
+                          <div className="mt-2 text-[11px] text-dim">Test Connection loads your teams. You can also choose the target and run the sync from Board → Sync.</div>
+                        </>
+                      );
+                    })()}
+                    {integration.id === 'jira' && (() => {
+                      const jira = intCreds.jira || {};
+                      const projects = (Array.isArray(intTest.jira?.projects) ? intTest.jira.projects : []) as Array<{ id: string; key: string; name: string }>;
+                      const boards = (Array.isArray(intTest.jira?.boards) ? intTest.jira.boards : []) as Array<{
+                        id: number;
+                        name: string;
+                        location?: { projectKey?: string; projectName?: string };
+                      }>;
+                      const targetValue = jira.boardId ? `board:${jira.boardId}` : jira.projectKey ? `project:${jira.projectKey}` : '';
+                      return (
+                        <>
+                          <div className="text-xs text-dim mb-2">
+                            Jira Cloud uses your Atlassian email plus an API token. Kanban boards and projects can be
+                            mirrored to Board; status changes use the transitions your Jira workflow allows.
+                          </div>
+                          <input
+                            className="grok-input mb-2 font-mono text-xs"
+                            placeholder="Jira Cloud site (https://example.atlassian.net)"
+                            value={jira.baseUrl || ''}
+                            onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), baseUrl: e.target.value } }))}
+                          />
+                          <input
+                            className="grok-input mb-2 text-xs"
+                            type="email"
+                            placeholder="Atlassian account email"
+                            value={jira.email || ''}
+                            onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), email: e.target.value } }))}
+                          />
+                          <input
+                            className="grok-input mb-2 font-mono text-xs"
+                            type="password"
+                            placeholder="Atlassian API token"
+                            value={jira.apiToken || ''}
+                            onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), apiToken: e.target.value } }))}
+                            autoComplete="off"
+                          />
+                          <input
+                            className="grok-input mb-2 font-mono text-xs"
+                            placeholder="Cloud ID (optional; required for scoped API tokens)"
+                            value={jira.cloudId || ''}
+                            onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), cloudId: e.target.value } }))}
+                          />
+                          {(projects.length > 0 || boards.length > 0) ? (
+                            <select
+                              className="grok-select text-xs w-full mb-2"
+                              value={targetValue}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                const board = boards.find((item) => `board:${item.id}` === value);
+                                const project = projects.find((item) => `project:${item.key}` === value);
+                                setIntCreds((c: typeof intCreds) => ({
+                                  ...c,
+                                  jira: {
+                                    ...(c.jira || {}),
+                                    boardId: board ? String(board.id) : '',
+                                    boardName: board?.name || '',
+                                    projectKey: board?.location?.projectKey || project?.key || '',
+                                    projectName: board?.location?.projectName || project?.name || '',
+                                  },
+                                }));
+                              }}
+                            >
+                              <option value="">Select a Jira project or Kanban board</option>
+                              {boards.map((board) => <option key={`board-${board.id}`} value={`board:${board.id}`}>Kanban · {board.name}</option>)}
+                              {projects.map((project) => <option key={`project-${project.key}`} value={`project:${project.key}`}>Project · {project.name} ({project.key})</option>)}
+                            </select>
+                          ) : (
+                            <input
+                              className="grok-input mb-2 font-mono text-xs"
+                              placeholder="Project key (or Test Connection to choose)"
+                              value={jira.projectKey || ''}
+                              onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), projectKey: e.target.value.toUpperCase(), boardId: '', boardName: '' } }))}
+                            />
+                          )}
+                          <div className="grid grid-cols-2 gap-2 mb-2">
+                            <input
+                              className="grok-input text-xs"
+                              placeholder="Issue type (Task)"
+                              value={jira.issueType || ''}
+                              onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), issueType: e.target.value } }))}
+                            />
+                            <select
+                              className="grok-select text-xs w-full"
+                              value={jira.syncDirection || 'pull'}
+                              onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), syncDirection: e.target.value } }))}
+                            >
+                              <option value="pull">Pull into Shiba</option>
+                              <option value="push">Push from Shiba</option>
+                              <option value="bidirectional">Two-way sync</option>
+                            </select>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <select
+                              className="grok-select text-xs w-full"
+                              value={jira.syncMode || 'board'}
+                              onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), syncMode: e.target.value } }))}
+                            >
+                              <option value="board">Tasks + columns</option>
+                              <option value="tasks">Task fields only</option>
+                            </select>
+                            <input
+                              className="grok-input text-xs"
+                              placeholder="Extra JQL (optional)"
+                              value={jira.jql || ''}
+                              onChange={(e) => setIntCreds((c: typeof intCreds) => ({ ...c, jira: { ...(c.jira || {}), jql: e.target.value } }))}
+                            />
+                          </div>
+                          <div className="mt-2 text-[11px] text-dim">Test Connection loads visible projects and Jira Software Kanban boards. Scoped API tokens also need the site Cloud ID.</div>
+                        </>
+                      );
+                    })()}
                     {integration.id === 'obsidian' && (() => {
                       const obsidianMode = intCreds.obsidian?.mode || 'local';
                       const isCloud = obsidianMode === 'cloud';
@@ -5512,7 +5702,7 @@ export default function ShibaStudio() {
                     </div>
                   </div>
                   <div className="agent-capability-grid">
-                    {INTEGRATION_IDS.map(key => {
+                    {AGENT_INTEGRATION_IDS.map(key => {
                       const meta = getIntegrationMeta(key)!;
                       const on = !!agentForm.integrations?.[key];
                       return (

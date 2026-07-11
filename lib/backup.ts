@@ -26,6 +26,7 @@ const JSON_STORES = [
   'uploads-meta.json',
   'cloud-sync.json',
   'xai-oauth.json',
+  'board.json',
 ] as const;
 
 export interface BackupBundle {

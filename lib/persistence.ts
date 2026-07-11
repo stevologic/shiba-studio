@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { Agent, AppConfig, normalizeAgent } from './types';
+import { Agent, AppConfig, type IntegrationCreds, normalizeAgent } from './types';
 import { setIntegrationCreds } from './integrations';
 import { dataDir, projectRoot } from './data-paths';
 import { decryptSecret, encryptSecret, isEncryptedSecret } from './secure-store';
@@ -28,6 +28,8 @@ const SENSITIVE_CONFIG_PATHS = [
   'integrations.obsidian.restApiKey',
   'integrations.vercel.token',
   'integrations.netlify.token',
+  'integrations.linear.apiKey',
+  'integrations.jira.apiToken',
 ] as const;
 
 function getAtPath(obj: Record<string, unknown>, dotPath: string): unknown {
@@ -166,7 +168,15 @@ async function syncCloudAuthCache(cfg: AppConfig): Promise<void> {
   await ensureCloudAuth(cfg);
 }
 
-export async function loadConfig(): Promise<AppConfig> {
+let configChain: Promise<unknown> = Promise.resolve();
+
+function withConfigLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = configChain.then(fn, fn);
+  configChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function loadConfigUnlocked(): Promise<AppConfig> {
   await ensureData();
   try {
     const raw = await fs.readFile(configFile(), 'utf8');
@@ -188,15 +198,38 @@ export async function loadConfig(): Promise<AppConfig> {
   }
 }
 
-export async function saveConfig(partial: Partial<AppConfig>) {
-  await ensureData();
-  const cur = await loadConfig();
-  const next = { ...cur, ...partial, integrations: { ...cur.integrations, ...(partial.integrations || {}) } };
+async function writeConfigUnlocked(next: AppConfig): Promise<AppConfig> {
   const { sealed } = sealConfigSecrets(next);
   await fs.writeFile(configFile(), JSON.stringify(sealed, null, 2));
   setIntegrationCreds(next.integrations);
   await syncCloudAuthCache(next);
   return next;
+}
+
+export async function loadConfig(): Promise<AppConfig> {
+  return withConfigLock(loadConfigUnlocked);
+}
+
+export async function saveConfig(partial: Partial<AppConfig>) {
+  return withConfigLock(async () => {
+    await ensureData();
+    const cur = await loadConfigUnlocked();
+    const next = { ...cur, ...partial, integrations: { ...cur.integrations, ...(partial.integrations || {}) } };
+    return writeConfigUnlocked(next);
+  });
+}
+
+/** Atomic provider-only config mutation used after network-bound sync work. */
+export async function updateIntegrationConfig<K extends keyof IntegrationCreds>(
+  key: K,
+  update: (current: IntegrationCreds[K], config: AppConfig) => IntegrationCreds[K],
+): Promise<AppConfig> {
+  return withConfigLock(async () => {
+    await ensureData();
+    const cur = await loadConfigUnlocked();
+    const integrations = { ...cur.integrations, [key]: update(cur.integrations[key], cur) };
+    return writeConfigUnlocked({ ...cur, integrations });
+  });
 }
 
 export async function getConfig(): Promise<AppConfig> {

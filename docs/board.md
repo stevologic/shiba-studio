@@ -11,6 +11,31 @@ A shared Kanban board — Linear-style — that you and every agent work from. C
 - **New card** (top right) or the **+** on any column header opens an inline composer — type a title, press Enter. Press Enter repeatedly to file several cards fast.
 - Click a card for the **detail panel**: title, description, status, priority, assignee, labels, and the full activity feed.
 
+## Sync with Linear or Jira
+
+Connect either service on **Capabilities**, then open **Board → Sync**:
+
+- **Linear:** paste a personal API key, run *Test Connection*, and choose an accessible team.
+- **Jira Cloud:** enter the site URL, Atlassian account email, and API token. Scoped API tokens also need the site Cloud ID. *Test Connection* loads visible projects and Jira Software Kanban boards; an optional issue type controls new issues (default: `Task`), and optional JQL narrows what is pulled.
+
+The Sync dialog lets you change the target for that run and choose a direction:
+
+| Direction | Behavior |
+| --- | --- |
+| **Pull to Shiba** | Import unlinked remote issues and update already-linked Shiba cards. |
+| **Push out** | Create remote issues for unlinked Shiba cards and update already-linked issues. |
+| **Two-way** | Do both; stored fingerprints reveal which linked copy changed before either side is updated. |
+
+Choose **Task fields only** to sync title, description, priority, and labels while leaving each system's workflow status alone. Choose **Tasks + columns** to sync those fields plus a mapped status: Shiba's six columns map to the closest Linear workflow state or an available Jira transition. It does not recreate an arbitrary remote board layout.
+
+For two-way sync, conflicts happen only when the same linked field changed on both copies since their last successful sync; changes to different fields are merged. The default keeps the value from the copy with the newest task-field change for conflicting fields; you can instead keep Shiba's value or the remote value. After the provider returns an issue ID, stored external references and fingerprints make later syncs reuse that issue.
+
+Every synced card keeps its stable `SHIB-#` key. A Linear or Jira badge shows the remote issue key, and the card detail panel links directly to that issue. One card can carry links to both services.
+
+Sync is intentionally bounded: it never deletes local cards or remote issues, and it does not copy card ordering, Shiba agent assignments, remote assignees, activity/run history, or Jira sprint membership. Provider and workflow-transition failures are reported per item without deleting either copy. If a provider creates an issue but Shiba cannot receive or persist its ID, check that service before retrying because the local card cannot yet know which remote issue to reuse.
+
+Pagination is explicit rather than silent: one run processes up to 10,000 issues. Larger Jira targets return an error so you can narrow the optional JQL; larger Linear teams return an error instead of pretending the partial pull was complete.
+
 ## Agents work the board
 
 Two directions, both live:
@@ -34,4 +59,4 @@ The description is the agent's brief — it works from exactly that text. Includ
 
 ## Where things are stored
 
-The board lives in `board.json` under the studio data directory — local only, included in [backups](configuration.md), covered by the audit log (`board card created`, `board card dispatched`, …). Card keys are never reused.
+The local board, external issue links, and last-sync summaries live in `board.json` under the studio data directory and are included in [backups](configuration.md). Credentials (encrypted at rest) and selected target settings live in configuration. Board actions and syncs are covered by the audit log (`board card created`, `board card dispatched`, `linear board sync completed`, …). Card keys are never reused; deleting local data does not delete issues already created in Linear or Jira.
