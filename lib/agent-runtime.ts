@@ -1102,9 +1102,37 @@ async function* agentRunGenerator(
     }
 
     if (!finalOutput) {
-      // No clean final answer from the model — synthesize one from the
-      // confirmed side effects so "View answer" shows what actually happened
-      // instead of a shrug.
+      // The model ended without a written answer (common when its last turn
+      // was a tool call, e.g. posting its summary as a board note). Ask it
+      // once, tools off, to summarize what it did — "View answer" should
+      // never be a shrug.
+      try {
+        const chatFn = opts.grokChatFn || grokChat;
+        const resp = await chatFn({
+          model: agent.model,
+          messages: [
+            ...messages,
+            {
+              role: 'user',
+              content: 'The run is over. In 2-5 sentences, summarize for the user what you actually did and the outcome — concrete facts from this conversation only (files, cards, results). No preamble, no offers of further help.',
+            },
+          ],
+          usageContext: { source: 'agent', sourceId: runId },
+        });
+        finalOutput = (resp.choices?.[0]?.message?.content || '').trim();
+        if (finalOutput) {
+          yield emit({
+            id: uuidv4(), ts: new Date().toISOString(), type: 'final',
+            content: finalOutput.slice(0, 500),
+          });
+        }
+      } catch {
+        /* summary is best-effort — fall through to the deterministic one */
+      }
+    }
+    if (!finalOutput) {
+      // Still nothing (summary call failed) — synthesize from the confirmed
+      // side effects so "View answer" shows what actually happened.
       finalOutput = sideEffects.length
         ? [
           'The run finished without a written summary. Actions actually taken:',
