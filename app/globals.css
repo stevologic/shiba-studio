@@ -6293,6 +6293,13 @@ body::before {
   font-weight: 500;
 }
 
+.kb-subtitle-link {
+  color: #38bdf8;
+  text-decoration: none;
+}
+
+.kb-subtitle-link:hover { text-decoration: underline; }
+
 .kb-columns {
   display: flex;
   gap: 0.85rem;
@@ -6369,6 +6376,79 @@ body::before {
   flex: 1;
   min-height: 60px;
   scrollbar-width: thin;
+}
+
+.kb-col-more {
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #38bdf8;
+  border: 1px dashed color-mix(in srgb, #38bdf8 35%, var(--border));
+  border-radius: 8px;
+  padding: 0.45rem 0.5rem;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.kb-col-more:hover {
+  background: color-mix(in srgb, #38bdf8 8%, transparent);
+  border-color: color-mix(in srgb, #38bdf8 55%, var(--border));
+}
+
+/* Full-column table modal (crowded columns) */
+.kb-table-modal { width: min(900px, 96vw); }
+
+.kb-table-body { padding: 0; }
+
+.kb-cards-table {
+  min-width: 760px;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.kbt-col-key { width: 92px; }
+.kbt-col-prio { width: 120px; }
+.kbt-col-labels { width: 180px; }
+.kbt-col-assignee { width: 150px; }
+.kbt-col-updated { width: 100px; }
+
+.kbt-row { cursor: pointer; transition: background 0.12s ease; }
+.kbt-row:hover { background: color-mix(in srgb, var(--bg-hover) 55%, transparent); }
+
+.kbt-title {
+  display: block;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbt-prio-cell,
+.kbt-assignee {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.kbt-labels {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.kbt-dim {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbt-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .kb-col-empty {
@@ -6552,13 +6632,24 @@ body::before {
 .kb-review-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.3rem;
   font-size: 0.7rem;
   color: var(--text-muted);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.2rem 0.55rem;
+  white-space: nowrap;
   transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+/* Three-action review row: equal-width buttons that always fit on one line. */
+.kb-review-row-3 .kb-review-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.22rem 0.2rem;
+  gap: 0.25rem;
+  font-size: 0.66rem;
 }
 
 .kb-review-btn:hover {
@@ -7039,6 +7130,64 @@ body::before {
   .kb-head-actions { width: 100%; }
   .kb-head-actions .grok-btn { flex: 1; }
   .kb-sync-directions { grid-template-columns: 1fr; }
+}
+
+/* ── Logs: expandable rows + detail strip ────────────────────────────── */
+
+.logs-row-expandable { cursor: pointer; }
+.logs-row-expandable:hover td { background: color-mix(in srgb, var(--bg-hover) 45%, transparent); }
+
+.logs-when-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.logs-expand-caret { color: var(--text-dim); flex-shrink: 0; }
+.logs-expand-caret-none { width: 11px; display: inline-block; }
+
+.logs-detail-row td { border-bottom: 1px solid var(--border); }
+
+.logs-detail {
+  padding: 2px 4px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.logs-detail-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.logs-meta-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 14px;
+  font-size: 11px;
+  margin: 0;
+}
+
+.logs-meta-grid dt {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.logs-meta-grid dd {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  word-break: break-all;
 }
 
 /* ── Responsive overrides — keep at end of file so they win the cascade ── */

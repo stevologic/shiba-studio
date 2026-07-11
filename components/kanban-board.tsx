@@ -10,6 +10,7 @@ import {
   FileText, Image as ImageIcon, File, Copy, PackageOpen,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import BoardSyncModal from '@/components/board-sync-modal';
 import { toast } from '@/lib/toast';
 import { subscribeLiveEvents } from '@/lib/live-events';
@@ -34,6 +35,10 @@ function FileKindIcon({ kind }: { kind: WorkFile['kind'] }) {
 }
 
 const COLUMNS: BoardStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'];
+
+/** Columns render at most this many cards; beyond it, a "View all" link opens
+ *  the full column as a table (dragging 200 cards in a column helps nobody). */
+const COLUMN_RENDER_CAP = 25;
 
 /** Linear-style status glyphs (SVG, colored per status). */
 function StatusIcon({ status, size = 14 }: { status: BoardStatus; size?: number }) {
@@ -165,6 +170,8 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   const [work, setWork] = useState<CardWork | null>(null);
   const [workLoading, setWorkLoading] = useState(false);
   const [workOpen, setWorkOpen] = useState(false);
+  /** Column opened as a full tabular list (crowded columns past the render cap). */
+  const [tableView, setTableView] = useState<BoardStatus | null>(null);
   const composerRef = useRef<HTMLInputElement | null>(null);
   const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
   const lastOpenCountRef = useRef<number | null>(null);
@@ -402,6 +409,8 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   }, [tasks]);
 
   const doneish = (c: BoardStatus) => c === 'done' || c === 'cancelled';
+  /** Cards of the column currently opened as a table. */
+  const tableTasks = tableView ? (byColumn.get(tableView) ?? []) : [];
 
   return (
     <div className="kb-root">
@@ -417,7 +426,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
             </span>
           </div>
           <div className="page-subtitle">
-            Shared Kanban every agent can work from — assign a card, hit <span className="kb-inline-key">▶ Start work</span>, then <span className="kb-inline-key">✓ Validate</span> reviewed work into Done or send it back with feedback.
+            Shared Kanban every agent can work from — assign a card, hit <span className="kb-inline-key">▶ Start work</span>, then <span className="kb-inline-key">✓ Validate</span> reviewed work into Done or send it back with feedback — or <Link href="/automations" className="kb-subtitle-link">create an Automation</Link> to have an agent do it for you!
           </div>
         </div>
         <div className="kb-head-actions">
@@ -489,7 +498,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                     />
                   </div>
                 )}
-                {colTasks.map((task) => {
+                {colTasks.slice(0, COLUMN_RENDER_CAP).map((task) => {
                   const agent = task.assigneeAgentId ? agentById.get(task.assigneeAgentId) : undefined;
                   return (
                     <div
@@ -538,7 +547,17 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                         </div>
                       )}
                       {task.status === 'in_review' && !task.working && (
-                        <div className="kb-card-review-row">
+                        <div className="kb-card-review-row kb-review-row-3">
+                          {task.runIds.length > 0 && (
+                            <button
+                              type="button"
+                              className="kb-review-btn"
+                              title="See the answer, output, and files delivered so far"
+                              onClick={(e) => { e.stopPropagation(); void viewWork(task); }}
+                            >
+                              <PackageOpen size={12} /> View work
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="kb-review-btn kb-review-approve"
@@ -573,6 +592,16 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                     </div>
                   );
                 })}
+                {colTasks.length > COLUMN_RENDER_CAP && (
+                  <button
+                    type="button"
+                    className="kb-col-more"
+                    title={`This column has ${colTasks.length} cards — open the full list as a table`}
+                    onClick={() => setTableView(col)}
+                  >
+                    View all {colTasks.length} cards
+                  </button>
+                )}
                 {colTasks.length === 0 && composerCol !== col && (
                   <div className="kb-col-empty">{loaded ? 'No cards' : '…'}</div>
                 )}
@@ -810,6 +839,77 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
         onClose={() => setSyncOpen(false)}
         onSynced={() => void refresh()}
       />
+
+      {tableView && (
+        <div className="kb-work-overlay" onClick={() => setTableView(null)} role="presentation">
+          <div
+            className="kb-work-modal kb-table-modal"
+            role="dialog"
+            aria-label={`All ${BOARD_STATUS_LABELS[tableView]} cards`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="kb-work-head">
+              <StatusIcon status={tableView} />
+              <div className="kb-work-title min-w-0">
+                <span className="kb-work-title-text">{BOARD_STATUS_LABELS[tableView]} — all {tableTasks.length} cards</span>
+              </div>
+              <button type="button" className="kb-icon-btn" title="Close" aria-label="Close" onClick={() => setTableView(null)}>
+                <X size={15} />
+              </button>
+            </div>
+            <div className="kb-work-body kb-table-body">
+              <table className="kb-cards-table data-table w-full">
+                <thead>
+                  <tr>
+                    <th className="kbt-col-key">Key</th>
+                    <th>Title</th>
+                    <th className="kbt-col-prio">Priority</th>
+                    <th className="kbt-col-labels">Labels</th>
+                    <th className="kbt-col-assignee">Assignee</th>
+                    <th className="kbt-col-updated">Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableTasks.map((task) => {
+                    const agent = task.assigneeAgentId ? agentById.get(task.assigneeAgentId) : undefined;
+                    return (
+                      <tr
+                        key={task.id}
+                        className="kbt-row"
+                        title="Open this card"
+                        onClick={() => { setTableView(null); openCard(task.id); }}
+                      >
+                        <td className="kbt-col-key"><span className="kb-card-key">{task.key}</span></td>
+                        <td><span className="kbt-title">{task.title}</span></td>
+                        <td className="kbt-col-prio">
+                          <span className="kbt-prio-cell">
+                            <PriorityIcon priority={task.priority} />
+                            <span className="kbt-dim">{BOARD_PRIORITY_LABELS[task.priority]}</span>
+                          </span>
+                        </td>
+                        <td className="kbt-col-labels">
+                          <span className="kbt-labels">
+                            {task.labels.map((l) => (
+                              <span key={l} className="kb-label" style={{ ['--label-hue' as never]: agentHue(l) }}>{l}</span>
+                            ))}
+                          </span>
+                        </td>
+                        <td className="kbt-col-assignee">
+                          <span className="kbt-assignee">
+                            <AgentAvatar agent={agent} size={16} />
+                            <span className="kbt-dim">{agent?.name || '—'}</span>
+                          </span>
+                        </td>
+                        <td className="kbt-col-updated"><span className="kbt-dim kbt-mono" title={task.updatedAt}>{timeAgo(task.updatedAt)}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {workOpen && (
         <div className="kb-work-overlay" onClick={() => setWorkOpen(false)} role="presentation">

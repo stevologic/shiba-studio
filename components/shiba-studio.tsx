@@ -3870,70 +3870,6 @@ export default function ShibaStudio() {
                 </div>
               )}
 
-              {/* Execution Trace — top of the stack. Closing returns to run
-                  details (if any) or the page; never leaves run log visible under it. */}
-              {showTraceModal && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={closeTraceModal}>
-                  <div className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Execution trace">
-                    <div className="flex items-center gap-2 mb-3 shrink-0">
-                      <Terminal size={16}/>
-                      <div className="font-medium">Execution Trace</div>
-                      {activeRun && !activeRun.projectId && <span className={`badge ${activeRun.status === 'running' ? 'badge-accent' : ''}`}>{activeRun.status}</span>}
-                      {activeRun && !activeRun.projectId && (
-                        <span className="text-xs text-muted truncate min-w-0 flex items-center gap-1.5">
-                          {activeRun.agentName} <ModelLine modelId={activeRun.model} />
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0"
-                        onClick={closeTraceModal}
-                        title={runDetail ? 'Back to run details' : 'Close'}
-                      >
-                        <X size={16}/>
-                      </button>
-                    </div>
-                    <div className="flex-1 min-h-0 overflow-auto space-y-3 pr-1">
-                      <div className="grok-card p-4 font-mono text-xs bg-black/40">
-                        {liveTrace.length > 0 && !activeRun?.projectId ? liveTrace.map((step, idx) => (
-                          <div key={idx} className={`trace-step mb-3 ${step.type}`}>
-                            <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {step.type.toUpperCase()}</div>
-                            <div className="mt-0.5">{step.content}</div>
-                            {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
-                            {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="browser" /></div>}
-                          </div>
-                        )) : <div className="text-dim">Run any agent to see live detailed traces here (tools, thoughts, screenshots, side effects).</div>}
-                      </div>
-                      {activeRun && !activeRun.projectId && (
-                        <div className="text-xs text-muted flex flex-wrap items-center gap-2">
-                          <span>Final: {activeRun.finalOutput?.slice(0,200)}</span>
-                          <ModelLine modelId={activeRun.model} />
-                        </div>
-                      )}
-                      {!activeRun?.projectId && (
-                        <PreviewRail
-                          trace={liveTrace}
-                          selectedIdx={previewSelectedIdx}
-                          onSelect={setPreviewSelectedIdx}
-                        />
-                      )}
-                      {activeRun && !activeRun.projectId && activeRun.status !== 'running' && (
-                        <WorkspaceDiffPanel
-                          workspaceDir={activeRun?.workspaceSnapshot}
-                          runId={activeRun?.id}
-                        />
-                      )}
-                    </div>
-                    {(runDetail || historyAgent) && (
-                      <div className="flex justify-end mt-3 shrink-0">
-                        <button type="button" className="grok-btn grok-btn-secondary text-xs" onClick={closeTraceModal}>
-                          {runDetail ? 'Back to run details' : historyAgent ? 'Back to run log' : 'Close'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
@@ -5453,6 +5389,72 @@ export default function ShibaStudio() {
       )}
 
       {/* Final-answer quick look — the run's output without leaving the page */}
+      {/* Execution Trace — top-level so it opens from ANY tab (dashboard
+          answer modal, automations, board work modal). Closing returns to
+          run details (if any) or the page. */}
+      {showTraceModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={closeTraceModal}>
+          <div className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Execution trace">
+            <div className="flex items-center gap-2 mb-3 shrink-0">
+              <Terminal size={16}/>
+              <div className="font-medium">Execution Trace</div>
+              {activeRun && !activeRun.projectId && <span className={`badge ${activeRun.status === 'running' ? 'badge-accent' : ''}`}>{activeRun.status}</span>}
+              {activeRun && !activeRun.projectId && (
+                <span className="text-xs text-muted truncate min-w-0 flex items-center gap-1.5">
+                  {activeRun.agentName} <ModelLine modelId={activeRun.model} />
+                </span>
+              )}
+              <button
+                type="button"
+                className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0"
+                onClick={closeTraceModal}
+                title={runDetail ? 'Back to run details' : 'Close'}
+              >
+                <X size={16}/>
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-auto space-y-3 pr-1">
+              <div className="grok-card p-4 font-mono text-xs bg-black/40">
+                {liveTrace.length > 0 && !activeRun?.projectId ? liveTrace.map((step, idx) => (
+                  <div key={idx} className={`trace-step mb-3 ${step.type}`}>
+                    <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {step.type.toUpperCase()}</div>
+                    <div className="mt-0.5">{step.content}</div>
+                    {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
+                    {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="browser" /></div>}
+                  </div>
+                )) : <div className="text-dim">Run any agent to see live detailed traces here (tools, thoughts, screenshots, side effects).</div>}
+              </div>
+              {activeRun && !activeRun.projectId && (
+                <div className="text-xs text-muted flex flex-wrap items-center gap-2">
+                  <span>Final: {activeRun.finalOutput?.slice(0,200)}</span>
+                  <ModelLine modelId={activeRun.model} />
+                </div>
+              )}
+              {!activeRun?.projectId && (
+                <PreviewRail
+                  trace={liveTrace}
+                  selectedIdx={previewSelectedIdx}
+                  onSelect={setPreviewSelectedIdx}
+                />
+              )}
+              {activeRun && !activeRun.projectId && activeRun.status !== 'running' && (
+                <WorkspaceDiffPanel
+                  workspaceDir={activeRun?.workspaceSnapshot}
+                  runId={activeRun?.id}
+                />
+              )}
+            </div>
+            {(runDetail || historyAgent) && (
+              <div className="flex justify-end mt-3 shrink-0">
+                <button type="button" className="grok-btn grok-btn-secondary text-xs" onClick={closeTraceModal}>
+                  {runDetail ? 'Back to run details' : historyAgent ? 'Back to run log' : 'Close'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {answerRun && (
         <div
           className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4"

@@ -4,8 +4,8 @@
 // integrations, skills, sync, auth) recorded in SQLite and browsable here.
 
 import React, { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Download, RefreshCw, ScrollText, Search, SquareArrowOutUpRight, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Download, RefreshCw, ScrollText, Search, SquareArrowOutUpRight, Terminal, X } from 'lucide-react';
+import type { AgentRun } from '@/lib/types';
 import { modelDisplayName } from '@/lib/model-providers';
 import { MISSING_AGENT_AVATAR_PATH, resolveAgentAvatarPath } from '@/lib/agent-avatars';
 import InfoHint from '@/components/info-hint';
@@ -49,6 +49,16 @@ function metaStr(meta: Record<string, unknown> | null, key: string): string | nu
   return typeof v === 'string' && v.trim() ? v : null;
 }
 
+/** Meta keys already surfaced inline on the row — the expander shows the rest. */
+const INLINE_META_KEYS = new Set(['agent', 'agentName', 'model', 'agentId']);
+
+/** True when a row has more to show than the clamped inline cells. */
+function hasMoreDetail(e: LogEntry): boolean {
+  if (e.detail && e.detail.length > 90) return true;
+  const extra = e.meta ? Object.keys(e.meta).filter((k) => !INLINE_META_KEYS.has(k)) : [];
+  return extra.length > 0;
+}
+
 /** Recent events read relatively; older ones get a compact absolute stamp that fits the column. */
 function formatWhen(iso: string): string {
   const ms = Date.now() - Date.parse(iso);
@@ -77,6 +87,26 @@ export default function LogsPanel() {
   // Flipped on synchronously in the event handlers below (never in the
   // effect) so pager/refresh buttons disable while a fetch is in flight.
   const [loading, setLoading] = useState(false);
+  /** Row opened to its full detail + metadata. */
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  /** Execution trace opened in-place (no more bouncing to Automations). */
+  const [traceRun, setTraceRun] = useState<AgentRun | null>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
+
+  async function openTrace(runId: string) {
+    setTraceLoading(true);
+    try {
+      const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
+      const data = await res.json();
+      if (!data.ok || !data.run) throw new Error(data.error || 'Run not found (it may have been pruned by retention)');
+      setTraceRun(data.run as AgentRun);
+    } catch (err) {
+      const { toast } = await import('@/lib/toast');
+      toast.error(err instanceof Error ? err.message : 'Could not load the run');
+    } finally {
+      setTraceLoading(false);
+    }
+  }
   // Live agents, for avatars in the Agent column — deleted agents get the UFO.
   const [agentsById, setAgentsById] = useState<Map<string, { id: string; avatar?: string }>>(new Map());
 
@@ -344,10 +374,22 @@ export default function LogsPanel() {
                 const runId = metaStr(e.meta, 'runId');
                 const agentId = metaStr(e.meta, 'agentId');
                 const liveAgent = agentId ? agentsById.get(agentId) : undefined;
+                const expandable = hasMoreDetail(e);
+                const expanded = expandedId === e.id;
                 return (
-                  <tr key={e.id}>
+                  <React.Fragment key={e.id}>
+                  <tr
+                    className={expandable ? 'logs-row-expandable' : undefined}
+                    title={expandable ? (expanded ? 'Collapse details' : 'Show full details') : undefined}
+                    onClick={expandable ? () => setExpandedId(expanded ? null : e.id) : undefined}
+                  >
                     <td className="logs-when" title={new Date(e.ts).toLocaleString()}>
-                      {formatWhen(e.ts)}
+                      <span className="logs-when-cell">
+                        {expandable
+                          ? (expanded ? <ChevronDown size={11} className="logs-expand-caret" /> : <ChevronRight size={11} className="logs-expand-caret" />)
+                          : <span className="logs-expand-caret logs-expand-caret-none" />}
+                        {formatWhen(e.ts)}
+                      </span>
                     </td>
                     <td>
                       <span className={`log-cat-chip ${CATEGORY_COLORS[e.category] || ''}`}>{e.category}</span>
@@ -382,16 +424,39 @@ export default function LogsPanel() {
                     <td className="text-muted">
                       <span className="line-clamp-2" title={e.detail || undefined}>{e.detail || '—'}</span>
                       {runId && (
-                        <Link
-                          href={`/automations?run=${encodeURIComponent(runId)}`}
+                        <button
+                          type="button"
                           className="link-accent text-[10px] inline-flex items-center gap-1 mt-0.5"
-                          title="Open this run's full execution log"
+                          title="Open this run's full execution log right here"
+                          disabled={traceLoading}
+                          onClick={(event) => { event.stopPropagation(); void openTrace(runId); }}
                         >
                           <SquareArrowOutUpRight size={10} /> view execution log
-                        </Link>
+                        </button>
                       )}
                     </td>
                   </tr>
+                  {expanded && (
+                    <tr className="logs-detail-row">
+                      <td />
+                      <td colSpan={4}>
+                        <div className="logs-detail">
+                          {e.detail && <div className="logs-detail-text">{e.detail}</div>}
+                          {e.meta && Object.keys(e.meta).length > 0 && (
+                            <dl className="logs-meta-grid">
+                              {Object.entries(e.meta).map(([k, v]) => (
+                                <React.Fragment key={k}>
+                                  <dt>{k}</dt>
+                                  <dd>{typeof v === 'string' ? v : JSON.stringify(v)}</dd>
+                                </React.Fragment>
+                              ))}
+                            </dl>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -451,6 +516,39 @@ export default function LogsPanel() {
               Next <ChevronRight size={14} />
             </button>
           </span>
+        </div>
+      )}
+
+      {traceRun && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={() => setTraceRun(null)}>
+          <div className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Execution trace">
+            <div className="flex items-center gap-2 mb-3 shrink-0">
+              <Terminal size={16} />
+              <div className="font-medium">Execution Trace</div>
+              <span className={`badge ${traceRun.status === 'running' ? 'badge-accent' : ''}`}>{traceRun.status}</span>
+              <span className="text-xs text-muted truncate min-w-0">
+                {traceRun.agentName} · {modelDisplayName(traceRun.model)} · {new Date(traceRun.startedAt).toLocaleString()}
+              </span>
+              <button type="button" className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0" onClick={() => setTraceRun(null)} title="Close" aria-label="Close">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-auto space-y-3 pr-1">
+              <div className="grok-card p-4 font-mono text-xs bg-black/40">
+                {(traceRun.trace || []).length > 0 ? (traceRun.trace || []).map((step, idx) => (
+                  <div key={idx} className={`trace-step mb-3 ${step.type}`}>
+                    <div className="text-[10px] text-dim">{new Date(step.ts).toLocaleTimeString()} — {step.type.toUpperCase()}</div>
+                    <div className="mt-0.5">{step.content}</div>
+                    {step.tool && <div className="tool-call mt-1">{step.tool.name} {JSON.stringify(step.tool.args)}</div>}
+                    {step.screenshot && <div className="mt-2 screenshot"><img src={step.screenshot} alt="browser" /></div>}
+                  </div>
+                )) : <div className="text-dim">This run recorded no trace steps.</div>}
+              </div>
+              {traceRun.finalOutput && (
+                <div className="text-xs text-muted">Final: {traceRun.finalOutput.slice(0, 300)}</div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
