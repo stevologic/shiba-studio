@@ -976,35 +976,40 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                     <div className="kb-work-nofiles">No files were written by this card&apos;s runs.</div>
                   )}
                   {work.files.map((f) => (
-                    <div key={f.absPath} className={`kb-file-row ${f.exists ? '' : 'kb-file-missing'}`}>
-                      <FileKindIcon kind={f.kind} />
-                      {f.exists ? (
-                        <a
-                          className="kb-file-link"
-                          href={deliverableHref(f)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={`Open ${f.absPath}`}
-                        >
-                          {f.relPath}
-                        </a>
-                      ) : (
-                        <span className="kb-file-link kb-file-gone" title={`${f.absPath} (deleted or moved)`}>
-                          {f.relPath}
+                    <div key={f.absPath} className={`kb-file-row kb-file-row-stacked ${f.exists ? '' : 'kb-file-missing'}`}>
+                      <div className="kb-file-main">
+                        <FileKindIcon kind={f.kind} />
+                        {f.exists ? (
+                          <a
+                            className="kb-file-link"
+                            href={deliverableHref(f)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={`Open ${f.absPath}`}
+                          >
+                            {f.relPath}
+                          </a>
+                        ) : (
+                          <span className="kb-file-link kb-file-gone" title={`${f.absPath} (deleted or moved)`}>
+                            {f.relPath}
+                          </span>
+                        )}
+                        <span className="kb-file-meta">
+                          {f.exists ? formatBytes(f.size) : 'missing'}
                         </span>
+                        <button
+                          type="button"
+                          className="kb-icon-btn"
+                          title={`Copy full path\n${f.absPath}`}
+                          aria-label={`Copy path of ${f.name}`}
+                          onClick={() => void copyPath(f.absPath)}
+                        >
+                          <Copy size={12} />
+                        </button>
+                      </div>
+                      {f.preview && (
+                        <div className="kb-file-preview" title="Opening line of this document">{f.preview}</div>
                       )}
-                      <span className="kb-file-meta">
-                        {f.exists ? formatBytes(f.size) : 'missing'}
-                      </span>
-                      <button
-                        type="button"
-                        className="kb-icon-btn"
-                        title={`Copy full path\n${f.absPath}`}
-                        aria-label={`Copy path of ${f.name}`}
-                        onClick={() => void copyPath(f.absPath)}
-                      >
-                        <Copy size={12} />
-                      </button>
                     </div>
                   ))}
                 </section>

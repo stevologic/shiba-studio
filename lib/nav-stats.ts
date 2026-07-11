@@ -43,20 +43,24 @@ async function getCachedUsageCost(): Promise<{ costUsd: number; source: 'xai' | 
   if (usageCostCache && Date.now() - usageCostCache.at < USAGE_CACHE_MS) {
     return { costUsd: usageCostCache.costUsd, source: usageCostCache.source };
   }
+  // Settings → Usage source: auto prefers xAI billing, or the user pins one.
+  const pref = (await loadConfig()).usageCostSource || 'auto';
   // Prefer authoritative month-to-date from xAI billing; fall back to local estimate.
-  try {
-    const { fetchXaiAccountUsage } = await import('./xai-billing-usage');
-    const xai = await fetchXaiAccountUsage({ days: 30 });
-    if (xai.available && typeof xai.monthToDateCostUsd === 'number' && Number.isFinite(xai.monthToDateCostUsd)) {
-      usageCostCache = {
-        at: Date.now(),
-        costUsd: Math.max(0, xai.monthToDateCostUsd),
-        source: 'xai',
-      };
-      return { costUsd: usageCostCache.costUsd, source: 'xai' };
+  if (pref !== 'local') {
+    try {
+      const { fetchXaiAccountUsage } = await import('./xai-billing-usage');
+      const xai = await fetchXaiAccountUsage({ days: 30 });
+      if (xai.available && typeof xai.monthToDateCostUsd === 'number' && Number.isFinite(xai.monthToDateCostUsd)) {
+        usageCostCache = {
+          at: Date.now(),
+          costUsd: Math.max(0, xai.monthToDateCostUsd),
+          source: 'xai',
+        };
+        return { costUsd: usageCostCache.costUsd, source: 'xai' };
+      }
+    } catch {
+      /* fall through to local ledger */
     }
-  } catch {
-    /* fall through to local ledger */
   }
   const usage = await getUsageSummary();
   usageCostCache = {

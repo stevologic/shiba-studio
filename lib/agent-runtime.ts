@@ -18,6 +18,17 @@ export { postToAgentInbox, drainInbox } from './agent-inbox';
 
 const MAX_STEPS = 18;
 
+/**
+ * Tools that must never run concurrently with anything: they operate on a
+ * shared stateful surface (the single controlled browser page, the shared
+ * Studio Terminal PTY, git push/PR on the working tree) or spawn their own
+ * long-lived agent (grok_cli).
+ */
+const SEQUENTIAL_ONLY_TOOLS = new Set([
+  'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
+  'terminal_exec', 'grok_cli', 'github_create_pr', 'schedule_task',
+]);
+
 export function getToolDefinitions(
   scope: IntegrationScope,
   hasPeers: boolean,
@@ -543,7 +554,7 @@ export function getToolDefinitions(
     type: 'function',
     function: {
       name: 'board_update_task',
-      description: 'Update a Kanban card: post a progress note, and/or move its status. Post notes at meaningful milestones so the user can follow along on the board.',
+      description: 'Update a Kanban card: post a progress note, and/or move its status. Post notes at meaningful milestones so the user can follow along on the board. Finished work goes to in_review — only the user can validate a card into done.',
       parameters: {
         type: 'object',
         properties: {
@@ -747,17 +758,22 @@ async function* agentRunGenerator(
   const cloudAuth = await resolveCloudBearer(cfg, modelRef.authSource);
   let modelError = modelRef.provider === 'local'
     ? (!cfg.localGrokEnabled ? 'Local Grok is disabled. Enable it in Settings or switch this agent to a Cloud model.' : null)
-    : (!cloudAuth.hasCloudAuth
-      ? 'No cloud credentials configured. Add an xAI API key, sign in with X (OAuth) in Settings, or switch to a Local model.'
-      : null);
+    : modelRef.provider === 'cli'
+      // CLI runs use the Grok CLI's own auth — only its presence matters.
+      ? (!(await detectGrokCli()).installed
+        ? 'Grok CLI is not installed on this machine — install it or switch this agent to a Cloud/Local model.'
+        : null)
+      : (!cloudAuth.hasCloudAuth
+        ? 'No cloud credentials configured. Add an xAI API key, sign in with X (OAuth) in Settings, or switch to a Local model.'
+        : null);
   // Run guards — refuse before any model spend: monthly/daily budget hard
   // stop, (cloud models) reachability, then the atomic concurrency slot claim
   // LAST so a refusal for other reasons never leaks a claimed slot.
   const guards = await import('./run-guards');
   const scheduleKey = opts.scheduleId ? `${agent.id}:${opts.scheduleId}` : undefined;
   let runSlotClaimed = false;
-  if (!modelError) modelError = await guards.checkSpendGuard(cfg, modelRef.provider === 'local');
-  if (!modelError && modelRef.provider !== 'local' && !opts.grokChatFn) {
+  if (!modelError) modelError = await guards.checkSpendGuard(cfg, modelRef.provider !== 'cloud');
+  if (!modelError && modelRef.provider === 'cloud' && !opts.grokChatFn) {
     const reach = await guards.cloudReachable();
     if (!reach.ok) {
       modelError = 'api.x.ai is unreachable from this machine (offline?). '
@@ -768,8 +784,7 @@ async function* agentRunGenerator(
     modelError = guards.tryAcquireRunSlot(cfg, runId, agent.id, agent.name, scheduleKey);
     runSlotClaimed = !modelError;
   }
-  void runSlotClaimed; // released in the run loop's finally (sweeper reclaims pathological leaks)
-  if (!modelError && modelRef.provider !== 'local') {
+  if (!modelError && modelRef.provider === 'cloud') {
     // Pin the same credential the model selection chose, if any.
     const { setApiKey } = await import('./grok-client');
     if (cloudAuth.token) setApiKey(cloudAuth.token);
@@ -844,6 +859,65 @@ async function* agentRunGenerator(
 
   // Use schedule-specific instructions as the prompt when originating from a schedule entry (AC3)
   const effectivePrompt = (opts.scheduleInstructions && opts.scheduled) ? opts.scheduleInstructions : prompt;
+
+  // CLI-model agents delegate the whole task to the headless Grok CLI: it is
+  // its own agentic harness (reads/edits files, runs commands) working in the
+  // agent's workspace, with its own authentication.
+  if (modelRef.provider === 'cli') {
+    try {
+      yield emit({
+        id: uuidv4(), ts: new Date().toISOString(), type: 'think',
+        content: `Delegating this run to the local Grok CLI (${modelRef.id}) in ${workDir}`,
+      });
+      let finalOutput = '';
+      let cliStatusOut: AgentRun['status'] = 'completed';
+      const cliSideEffects: string[] = [`grok_cli headless run in ${workDir}`];
+      try {
+        const { runGrokCliPrompt } = await import('./grok-cli');
+        const out = await runGrokCliPrompt({
+          prompt: effectivePrompt,
+          cwd: workDir,
+          model: agent.model,
+          maxTurns: 18,
+        });
+        finalOutput = (out.stdout || '').trim().slice(-6000);
+        if (!out.ok) {
+          cliStatusOut = 'error';
+          finalOutput = finalOutput
+            || `Grok CLI exited with code ${out.code}: ${(out.stderr || '').slice(0, 800)}`;
+        } else if (!finalOutput) {
+          finalOutput = 'Grok CLI finished without output — see the workspace for changes.';
+        }
+        yield emit({
+          id: uuidv4(), ts: new Date().toISOString(), type: cliStatusOut === 'error' ? 'error' : 'result',
+          content: finalOutput.slice(0, 2000),
+          tool: { name: 'grok_cli', args: { prompt: effectivePrompt.slice(0, 200) } },
+        });
+      } catch (e) {
+        cliStatusOut = 'error';
+        finalOutput = e instanceof Error ? e.message : String(e);
+        yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: finalOutput });
+      }
+      trace.push({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: finalOutput.slice(0, 500) });
+      const run: AgentRun = {
+        id: runId, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
+        model: agent.model, startedAt, completedAt: new Date().toISOString(),
+        status: cliStatusOut, trace, finalOutput, workspaceSnapshot: workDir, sideEffects: cliSideEffects,
+        ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
+        ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
+        ...(opts.projectId ? { projectId: opts.projectId } : {}),
+      };
+      await persistAgentRun(run);
+      audit('run', `run ${run.status}`, `${agent.name}: ${(finalOutput || prompt).slice(0, 120)}`, {
+        runId, agent: agent.name, agentId: agent.id, model: agent.model,
+        steps: trace.length, sideEffects: cliSideEffects.length,
+      });
+      yield { kind: 'done', run };
+      return;
+    } finally {
+      if (runSlotClaimed) guards.releaseActiveRun(runId);
+    }
+  }
   const messages: GrokMessage[] = [
     {
       role: 'system',
@@ -931,6 +1005,34 @@ async function* agentRunGenerator(
       }
 
       // Execute tool calls
+      // When the model batches several INDEPENDENT tool calls (parallel file
+      // reads, multiple searches), execute them concurrently up front and let
+      // the loop below consume the precomputed results. Tools on shared
+      // stateful surfaces (the one browser page, the shared terminal, git
+      // push) and anything needing approval keep strict sequential execution.
+      const preExecuted = new Map<string, { result: unknown; sideEffect?: string; screenshot?: string }>();
+      {
+        const calls = effectiveToolCalls || [];
+        const { toolNeedsApproval: needsApproval } = await import('./tool-approval');
+        const canParallel = calls.length > 1 && calls.every((tc) => {
+          const name = tc.function?.name || '';
+          return name && !SEQUENTIAL_ONLY_TOOLS.has(name) && !needsApproval(name, cfg.toolApprovalMode);
+        });
+        if (canParallel) {
+          await Promise.all(calls.map(async (tc) => {
+            const fn = tc.function;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced JSON, coerced per tool by the executor
+            let args: any = {};
+            try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
+            const res = await executeTool(fn.name, args, agent, { id: runId }, workDir, runId)
+              .catch((e: unknown) => ({
+                result: { error: e instanceof Error ? e.message : String(e) },
+                sideEffect: '',
+              }));
+            preExecuted.set(tc.id, res as { result: unknown; sideEffect?: string; screenshot?: string });
+          }));
+        }
+      }
       for (const tc of (effectiveToolCalls || [])) {
         const fn = tc.function;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced JSON, coerced per tool by the executor
@@ -977,6 +1079,8 @@ async function* agentRunGenerator(
         }
 
         const execRes = await executeTool(fn.name, args, agent, { id: runId }, workDir, runId);
+        const execRes = preExecuted.get(tc.id)
+          ?? await executeTool(fn.name, args, agent, { id: runId }, workDir, runId);
 
         if (execRes.sideEffect) sideEffects.push(execRes.sideEffect);
         const toolResultMsg = {
@@ -998,7 +1102,18 @@ async function* agentRunGenerator(
       }
     }
 
-    if (!finalOutput) finalOutput = 'Agent completed (see trace for details).';
+    if (!finalOutput) {
+      // No clean final answer from the model — synthesize one from the
+      // confirmed side effects so "View answer" shows what actually happened
+      // instead of a shrug.
+      finalOutput = sideEffects.length
+        ? [
+          'The run finished without a written summary. Actions actually taken:',
+          ...sideEffects.slice(0, 15).map((s) => `- ${s}`),
+          sideEffects.length > 15 ? `…and ${sideEffects.length - 15} more (see the full trace).` : '',
+        ].filter(Boolean).join('\n')
+        : 'Agent completed without output or recorded actions (see trace for details).';
+    }
   } catch (e) {
     yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: e instanceof Error ? e.message : String(e) });
   } finally {

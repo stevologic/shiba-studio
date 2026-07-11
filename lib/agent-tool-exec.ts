@@ -146,16 +146,30 @@ export async function executeAgentTool(
       case 'board_update_task': {
         const { updateBoardTask } = await import('./board');
         const { isBoardStatus } = await import('./board-types');
-        const status = args.status && isBoardStatus(String(args.status)) ? String(args.status) : undefined;
+        let status = args.status && isBoardStatus(String(args.status)) ? String(args.status) : undefined;
+        // Done is the USER's validation gate — agent-completed work must land
+        // in review (with View work / Validate / Refine), never skip past it.
+        let coercedDone = false;
+        if (status === 'done') {
+          status = 'in_review';
+          coercedDone = true;
+        }
         const task = await updateBoardTask(String(args.id || ''), {
           status: status as import('./board-types').BoardStatus | undefined,
           actor: agent.name,
           note: args.note
             ? { kind: 'agent', text: String(args.note), agentName: agent.name }
-            : undefined,
+            : (coercedDone
+              ? { kind: 'system', text: `${agent.name} marked this complete — parked in review for validation` }
+              : undefined),
         });
         return {
-          result: { key: task.key, status: task.status, updated: true },
+          result: {
+            key: task.key,
+            status: task.status,
+            updated: true,
+            ...(coercedDone ? { note: 'Cards move to done only after the user validates them — this one is now In Review.' } : {}),
+          },
           sideEffect: `updated board card ${task.key}${status ? ` → ${status}` : ''}${args.note ? ' (+note)' : ''}`,
         };
       }

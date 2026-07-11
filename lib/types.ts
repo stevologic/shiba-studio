@@ -296,6 +296,9 @@ export interface AppConfig {
   useAgentsMd?: boolean;
   /** Monthly spend quota (USD) — usage is reported as a percentage of this */
   usageBudgetUsd?: number;
+  /** Where the usage/cost figure comes from: auto (xAI billing when available,
+   *  else studio metering), xai (billing only), or local (studio metering). */
+  usageCostSource?: 'auto' | 'xai' | 'local';
   /** Daily spend quota (USD, 0/unset = none) */
   dailyBudgetUsd?: number;
   /** When a budget is set, block new cloud runs at the limit (default true) */

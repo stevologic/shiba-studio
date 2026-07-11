@@ -554,6 +554,32 @@ export async function POST(req: NextRequest) {
 
               // "" not null — local servers reject null content on tool-call turns.
               msgs.push({ role: 'assistant', content: msg.content ?? '', tool_calls: toolCalls });
+              // Independent calls in one batch execute concurrently; stateful
+              // surfaces (browser page, terminal, git push, background dispatch)
+              // stay sequential. The loop below consumes precomputed results.
+              const CHAT_SEQUENTIAL_TOOLS = new Set([
+                'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
+                'terminal_exec', 'grok_cli', 'github_create_pr', 'schedule_task',
+                'background_task', 'background_status',
+              ]);
+              const preExecuted = new Map<string, { result: unknown; sideEffect?: string; screenshot?: string }>();
+              if (toolCalls.length > 1 && toolCalls.every((tc: { function?: { name?: string } }) => {
+                const n = tc.function?.name || '';
+                return n && !CHAT_SEQUENTIAL_TOOLS.has(n);
+              })) {
+                await Promise.all(toolCalls.map(async (tc: { id: string; function: { name: string; arguments?: string } }) => {
+                  const fn = tc.function;
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  let args: any = {};
+                  try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
+                  const execAgent = !agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
+                    ? workspaceAgent
+                    : agent;
+                  const res = await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID)
+                    .catch((e: unknown) => ({ result: { error: e instanceof Error ? e.message : String(e) }, sideEffect: '' }));
+                  preExecuted.set(tc.id, res as { result: unknown; sideEffect?: string; screenshot?: string });
+                }));
+              }
               for (const tc of toolCalls) {
                 const fn = tc.function;
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -603,7 +629,8 @@ export async function POST(req: NextRequest) {
                 const execAgent = !agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
                   ? workspaceAgent
                   : agent;
-                const out = await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID);
+                const out = await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID);                const out = preExecuted.get(tc.id)
+                  ?? await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID);
                 toolsUsed.push(fn.name);
                 if (BROWSER_TOOL_NAMES.has(fn.name)) browserUsed = true;
                 send({ type: 'thinking', delta: `${resultPreview(fn.name, out.result)}\n` });

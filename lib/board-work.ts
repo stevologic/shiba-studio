@@ -20,6 +20,8 @@ export interface WorkFile {
   size: number;
   mtime: string | null;
   kind: 'image' | 'text' | 'other';
+  /** One-line gist of a text deliverable (first heading / opening line). */
+  preview?: string;
   /** Run that produced it (for trace links). */
   runId: string;
 }
@@ -52,6 +54,24 @@ function fileKind(p: string): WorkFile['kind'] {
   if (IMAGE_EXT.has(ext)) return 'image';
   if (TEXT_EXT.has(ext)) return 'text';
   return 'other';
+}
+
+/**
+ * One-line gist of a text deliverable so the work modal can say what each
+ * document IS: prefers the first markdown heading, falls back to the first
+ * substantial line.
+ */
+async function textPreview(absPath: string): Promise<string | undefined> {
+  try {
+    const head = (await fs.readFile(absPath, 'utf8')).slice(0, 4000);
+    const lines = head.split('\n').map((l) => l.trim());
+    const heading = lines.find((l) => /^#{1,3}\s+\S/.test(l));
+    if (heading) return heading.replace(/^#{1,3}\s+/, '').slice(0, 140);
+    const first = lines.find((l) => l.length >= 8 && !/^[-*_=`~\[{(<]/.test(l));
+    return first ? first.slice(0, 140) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -118,15 +138,18 @@ export async function collectCardWork(idOrKey: string): Promise<CardWork | null>
     const workDir = await runWorkDir(run);
     for (const f of filePathsFromTrace(run, workDir)) {
       const stat = await fs.stat(f.absPath).catch(() => null);
+      const kind = fileKind(f.absPath);
+      const exists = !!stat?.isFile();
       // Later runs win the dedupe — their version of the file is current.
       fileMap.set(f.absPath.toLowerCase(), {
         name: path.basename(f.absPath),
         relPath: f.relPath,
         absPath: f.absPath,
-        exists: !!stat?.isFile(),
+        exists,
         size: stat?.isFile() ? stat.size : 0,
         mtime: stat?.isFile() ? stat.mtime.toISOString() : null,
-        kind: fileKind(f.absPath),
+        kind,
+        preview: exists && kind === 'text' ? await textPreview(f.absPath) : undefined,
         runId,
       });
     }

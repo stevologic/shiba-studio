@@ -972,6 +972,10 @@ body::before {
   border-left: 3px solid var(--border);
   padding-left: 12px;
   margin-left: 8px;
+  /* Long unbroken tokens (URLs, JSON args, file paths) wrap inside the modal
+     instead of forcing horizontal scroll. */
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 .trace-step.think { border-color: var(--accent-3); }
 .trace-step.tool { border-color: var(--accent-2); }
@@ -985,6 +989,9 @@ body::before {
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   font-size: 12px;
+  /* JSON args are one long token — break anywhere rather than overflow. */
+  word-break: break-all;
+  white-space: pre-wrap;
 }
 
 /* Modal */
@@ -4576,9 +4583,11 @@ body::before {
 }
 
 .integration-chip-configured {
-  color: var(--text-muted);
-  background: var(--bg-elev);
-  border-color: var(--border);
+  /* Configured = credentials in place: read as a positive (green) state,
+     one step below the brighter "Connected" (live-tested) chip. */
+  color: #6ee7a0;
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
 }
 
 .integration-chip-unset {
@@ -6853,6 +6862,28 @@ body::before {
 
 .kb-file-missing { opacity: 0.65; }
 
+.kb-file-row-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.kb-file-main {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.kb-file-preview {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  padding-left: 1.55rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .kb-composer { padding: 0.35rem; }
 
 .kb-composer-input {
@@ -7131,6 +7162,28 @@ body::before {
   .kb-head-actions .grok-btn { flex: 1; }
   .kb-sync-directions { grid-template-columns: 1fr; }
 }
+
+.automation-running-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+/* Inputs with a leading icon: Tailwind pl-* loses to .grok-input's own
+   padding by cascade order, leaving the icon on top of the placeholder.
+   These land later in the file and carry two-class specificity, so they win. */
+input.input-icon-pad { padding-left: 2.25rem; }
+input.input-icon-pad-sm { padding-left: 1.75rem; }
 
 /* ── Logs: expandable rows + detail strip ────────────────────────────── */
 

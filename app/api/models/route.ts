@@ -23,9 +23,26 @@ export async function GET() {
     });
   }
 
+  // Grok CLI models are selectable too (agents delegate their whole run to
+  // the headless CLI) — appended best-effort when the CLI is installed.
+  let models = result.models;
+  try {
+    const { detectGrokCli, listGrokCliModels } = await import('@/lib/grok-cli');
+    const cli = await detectGrokCli();
+    if (cli.installed) {
+      const cliModels = await listGrokCliModels();
+      const extras = (cliModels.models.length ? cliModels.models : ['grok']).map((id) => ({
+        id: `cli:${id}`,
+        label: `${id} (Grok CLI)`,
+        provider: 'cli' as const,
+      }));
+      models = [...models, ...extras];
+    }
+  } catch { /* CLI listing is optional */ }
+
   return NextResponse.json({
     ok: true,
-    models: result.models,
+    models,
     hasCloudAuth: result.hasCloudAuth,
     localEnabled: result.localEnabled,
     localReachable: result.localReachable,

@@ -676,6 +676,7 @@ export default function ShibaStudio() {
   // Cost & safety + retention (Settings card) — text state so fields can be cleared.
   const [costSettings, setCostSettings] = useState({
     usageBudgetUsd: '',
+    usageCostSource: 'auto' as 'auto' | 'xai' | 'local',
     dailyBudgetUsd: '',
     budgetHardStop: true,
     maxConcurrentRuns: '3',
@@ -929,6 +930,7 @@ export default function ShibaStudio() {
     if (cfg.useAgentsMd != null) setUseAgentsMd(!!cfg.useAgentsMd);
     setCostSettings({
       usageBudgetUsd: cfg.usageBudgetUsd ? String(cfg.usageBudgetUsd) : '',
+      usageCostSource: (cfg.usageCostSource === 'xai' || cfg.usageCostSource === 'local' ? cfg.usageCostSource : 'auto') as 'auto' | 'xai' | 'local',
       dailyBudgetUsd: cfg.dailyBudgetUsd ? String(cfg.dailyBudgetUsd) : '',
       budgetHardStop: cfg.budgetHardStop !== false,
       maxConcurrentRuns: String(cfg.maxConcurrentRuns || 3),
@@ -1218,6 +1220,20 @@ export default function ShibaStudio() {
 
   // "View answer" quick look on run rows (final output without the full trace)
   const [answerRun, setAnswerRun] = useState<RunSummaryLite | null>(null);
+  /** Agents whose Run was just clicked — instant "running" UI until the SSE
+   *  runs feed reports the real run (entries expire after 12s regardless). */
+  const [justStartedRunAgents, setJustStartedRunAgents] = useState<Set<string>>(new Set());
+  function markRunJustStarted(agentId: string) {
+    setJustStartedRunAgents((current) => new Set(current).add(agentId));
+    window.setTimeout(() => {
+      setJustStartedRunAgents((current) => {
+        if (!current.has(agentId)) return current;
+        const next = new Set(current);
+        next.delete(agentId);
+        return next;
+      });
+    }, 12_000);
+  }
 
   // Full run-details modal (automations run log) — prompt, trace, outcome,
   // tools, skills, side effects in one place.
@@ -2400,6 +2416,7 @@ export default function ShibaStudio() {
   async function saveCostSettings() {
     const payload = {
       usageBudgetUsd: Number(costSettings.usageBudgetUsd) || 0,
+      usageCostSource: costSettings.usageCostSource,
       dailyBudgetUsd: Number(costSettings.dailyBudgetUsd) || 0,
       budgetHardStop: costSettings.budgetHardStop,
       maxConcurrentRuns: Number(costSettings.maxConcurrentRuns) || 3,
@@ -3593,6 +3610,10 @@ export default function ShibaStudio() {
                   const runCount = scheduledRuns
                     ? scheduledRuns.filter((r) => r.agentId === a.id || r.agentName === a.name).length
                     : null;
+                  // Live "running now" — the SSE runs feed keeps `runs` fresh;
+                  // justStartedRuns bridges the click→feed gap.
+                  const agentRunning = runs.some((r) => r.agentId === a.id && r.status === 'running')
+                    || justStartedRunAgents.has(a.id);
                   return (
                   <div key={a.id} className="grok-card p-5 automation-card">
                     <div className="flex items-start justify-between gap-3">
@@ -3602,6 +3623,11 @@ export default function ShibaStudio() {
                           <div className="truncate flex flex-wrap items-center gap-1.5">
                             <span>{a.name}</span>
                             <ModelLine modelId={a.model} />
+                            {agentRunning && (
+                              <span className="automation-running-chip" title="An agent run is executing right now — watch it in the run log">
+                                <RefreshCw size={10} className="animate-spin" /> running
+                              </span>
+                            )}
                           </div>
                           {(a.skills||[]).length > 0 && <span className="text-xs badge badge-accent mt-1 inline-block">skills: {(a.skills||[]).join(', ')}</span>}
                         </div>
@@ -3669,6 +3695,19 @@ export default function ShibaStudio() {
                               aria-label="Run automation now"
                             >
                               <Play size={12}/>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                markRunJustStarted(a.id);
+                                void runAgent(a, { useScheduleInstructions: true, scheduleIndex: i });
+                              }}
+                              disabled={agentRunning}
+                              className="grok-btn grok-btn-ghost text-xs p-1"
+                              title={agentRunning ? 'This agent is running right now' : 'Run this automation now with its instructions'}
+                              aria-label={agentRunning ? 'Automation is running' : 'Run automation now'}
+                            >
+                              {agentRunning ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12}/>}
                             </button>
                             <button
                               type="button"
@@ -5085,6 +5124,19 @@ export default function ShibaStudio() {
                       />
                     </label>
                   </div>
+                  <label className="text-xs text-dim block mb-3">
+                    Usage figure source
+                    <select
+                      className="grok-select w-full mt-1"
+                      value={costSettings.usageCostSource}
+                      onChange={(e) => setCostSettings((s) => ({ ...s, usageCostSource: e.target.value as 'auto' | 'xai' | 'local' }))}
+                      title="Where the QUOTA badge and monthly figure come from"
+                    >
+                      <option value="auto">Auto — xAI account billing when available, else studio metering</option>
+                      <option value="xai">xAI account billing only</option>
+                      <option value="local">Studio metering (this app's own token accounting)</option>
+                    </select>
+                  </label>
                   <button type="button" onClick={() => void saveCostSettings()} className="grok-btn grok-btn-primary text-sm">
                     Save Cost &amp; Safety
                   </button>
@@ -5637,7 +5689,8 @@ export default function ShibaStudio() {
       {showAgentModal && (
           <div
             className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
-            onClick={() => { setShowAgentModal(false); setEditingAgent(null); setHighlightScheduleIdx(null); }}
+            /* No close-on-backdrop: agent setup is a long form and a stray
+               click outside must not throw the work away. Close via ✕/Cancel. */
           >
             <div className="modal modal-pop w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="text-xl font-semibold mb-4">{editingAgent ? 'Edit Agent' : 'Create New Agent'}</div>

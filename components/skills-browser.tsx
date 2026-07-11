@@ -329,7 +329,7 @@ export default function SkillsBrowser({
           <div className="relative flex-1 min-w-[140px]">
             <Search size={12} className="agent-skills-search-icon" />
             <input
-              className="grok-input text-xs pl-7"
+              className="grok-input text-xs input-icon-pad-sm"
               placeholder="Search capabilities…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -412,7 +412,7 @@ export default function SkillsBrowser({
         <div className="relative flex-1 min-w-[12rem] max-w-md">
           <Search size={14} className="skills-toolbar-search-icon" />
           <input
-            className="grok-input text-sm pl-9"
+            className="grok-input text-sm input-icon-pad"
             placeholder="Search skills by name or description…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}

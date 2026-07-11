@@ -117,9 +117,20 @@ export async function POST(req: NextRequest) {
     || body.perRunTokenCap !== undefined
     || body.runRetentionDays !== undefined
     || body.auditRetentionDays !== undefined
+    || body.usageCostSource !== undefined
   ) {
     const nonNeg = (v: unknown) => Math.max(0, Number(v) || 0);
+    if (body.usageCostSource !== undefined) {
+      // Nav quota badge re-resolves its source on next load.
+      try {
+        const { clearNavUsageCostCache } = await import('@/lib/nav-stats');
+        clearNavUsageCostCache();
+      } catch { /* cache clear is best-effort */ }
+    }
     const cfg = await saveConfig({
+      ...(body.usageCostSource === 'auto' || body.usageCostSource === 'xai' || body.usageCostSource === 'local'
+        ? { usageCostSource: body.usageCostSource }
+        : {}),
       ...(body.usageBudgetUsd !== undefined ? { usageBudgetUsd: nonNeg(body.usageBudgetUsd) } : {}),
       ...(body.dailyBudgetUsd !== undefined ? { dailyBudgetUsd: nonNeg(body.dailyBudgetUsd) } : {}),
       ...(body.budgetHardStop !== undefined ? { budgetHardStop: !!body.budgetHardStop } : {}),
