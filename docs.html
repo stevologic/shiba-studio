@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Shiba Studio Docs — install, chat, agents, automations, configuration</title>
-<meta name="description" content="Complete documentation for Shiba Studio: installation on Windows/macOS/Linux, Grok Chat with slash commands and workspaces, the annotation sub-browser, agents, automations, capabilities, sync, and configuration." />
+<meta name="description" content="Complete documentation for Shiba Studio: installation on Windows/macOS/Linux, Grok Chat with slash commands and workspaces, the shared Board with Linear/Jira sync, agents, automations, capabilities, sync, and configuration." />
 <link rel="icon" type="image/svg+xml" href="logo.svg" />
 <style>
   :root {
@@ -113,6 +113,7 @@
     <a href="#commands">Slash commands</a>
     <a href="#workspaces">Chat workspaces</a>
     <a href="#annotate">Annotation sub-browser</a>
+    <a href="#board">Board</a>
     <a href="#agents">Agents</a>
     <a href="#automations">Automations</a>
     <a href="#capabilities">Capabilities</a>
@@ -231,6 +232,17 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
       <p>It drives a real headless Chrome (no window ever appears), so it works with any URL — cross-origin dev servers included.</p>
     </section>
 
+    <section id="board">
+      <h2>Board</h2>
+      <p>The Board is the shared Kanban for people and agents. Cards can be created manually, assigned to an agent, started as agent work, and tracked through Backlog, Todo, In Progress, In Review, Done, or Cancelled.</p>
+      <ul>
+        <li><strong>Linear sync:</strong> connect a Linear API key, choose a team, and pull, push, or two-way sync Board cards with Linear issues.</li>
+        <li><strong>Jira sync:</strong> connect a Jira Cloud site, email, and API token, then target a project or Jira Kanban board.</li>
+        <li><strong>Modes:</strong> sync task fields only, or task fields plus workflow status/columns.</li>
+        <li><strong>Boundaries:</strong> Shiba Studio keeps stable <code>SHIB-#</code> refs and syncs title, description, status, and provider links; ordering, assignees, runs, sprints, activity, and deletions stay local/provider-native.</li>
+      </ul>
+    </section>
+
     <section id="agents">
       <h2>Agents</h2>
       <p>Agents are autonomous workers, each with its own model, workspace, git worktree, integration scopes, skills, peers, and persistent memory.</p>
@@ -257,7 +269,7 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
     <section id="capabilities">
       <h2>Capabilities</h2>
       <ul>
-        <li><strong>Integrations:</strong> GitHub (repos, issues, PRs), Slack, Google Drive, Discord, X (post + read timeline), and Obsidian (vault-aware notes). Scopes are granted per-agent.</li>
+        <li><strong>Integrations:</strong> GitHub (repos, issues, PRs), Slack, Google Drive, Discord, X (post + read timeline), Obsidian (vault-aware notes), Vercel, Netlify, Linear, and Jira. Agent integrations are granted per-agent; Linear/Jira are Board-scoped sync targets.</li>
         <li><strong>Custom skills:</strong> reusable prompt procedures you author once and attach to any agent.</li>
         <li><strong>MCP servers:</strong> connect Model Context Protocol servers from curated presets or your own commands; their tools join the agent toolbelt.</li>
         <li><strong>Tool catalog:</strong> the Capabilities page lists every built-in tool with its description — what agents can actually do, no guessing.</li>
@@ -273,6 +285,7 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
         <li><strong>Push</strong> replaces the previous snapshot; <strong>pull</strong> merges by id — local items are updated, new ones added, nothing deleted.</li>
         <li>Credentials are <strong>never</strong> included in snapshots.</li>
       </ul>
+      <p>Board sync is separate from xAI cloud sync: it mirrors selected Board card fields with Linear or Jira using the credentials you configure in Capabilities.</p>
     </section>
 
     <section id="configuration">

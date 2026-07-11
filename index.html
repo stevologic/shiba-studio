@@ -365,11 +365,12 @@
       <div class="reel-frame">
         <div class="term-bar"><span></span><span></span><span></span><em class="reel-url">localhost:3000</em></div>
         <div class="reel-stage">
-          <img class="reel-img active" src="shot-chat.png" alt="Grok Chat: session rail, streaming reasoning, slash-command composer, and the annotation sub-browser" />
+          <img class="reel-img active" src="shot-chat.png" alt="Grok Chat: session rail, suggested prompts, workspace control, voice-enabled composer, and model controls" />
           <img class="reel-img" src="shot-dashboard.png" alt="Dashboard: hero, readiness badges, quick stats, and recent agent runs with statuses and view-answer links" />
+          <img class="reel-img" src="shot-board.png" alt="Board: shared Kanban columns with the Linear and Jira sync modal open" />
           <img class="reel-img" src="shot-agents.png" alt="Agents: local and cloud Grok agents with models, workspaces, integration scopes, skills, and schedule state" />
           <img class="reel-img" src="shot-automations.png" alt="Automations: scheduled agents with Active/Paused states, per-schedule Run/Edit/Delete, and run-log access" />
-          <img class="reel-img" src="shot-capabilities.png" alt="Capabilities: core integrations (GitHub, Slack, Drive, Discord, X, Obsidian, Vercel, Netlify), skills, MCP servers, and the tool catalog" />
+          <img class="reel-img" src="shot-capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the tool catalog" />
           <img class="reel-img" src="shot-settings.png" alt="Settings: model sources, agent behavior, cost & safety guardrails, and backup & restore" />
           <img class="reel-img" src="shot-api-docs.png" alt="API Explorer: grouped endpoints with GET/POST badges and a live request/response panel" />
         </div>
@@ -377,11 +378,12 @@
       <div class="reel-nav">
         <button class="reel-dot active" data-i="0">Grok Chat</button>
         <button class="reel-dot" data-i="1">Dashboard</button>
-        <button class="reel-dot" data-i="2">Agents</button>
-        <button class="reel-dot" data-i="3">Automations</button>
-        <button class="reel-dot" data-i="4">Capabilities</button>
-        <button class="reel-dot" data-i="5">Settings</button>
-        <button class="reel-dot" data-i="6">API Explorer</button>
+        <button class="reel-dot" data-i="2">Board</button>
+        <button class="reel-dot" data-i="3">Agents</button>
+        <button class="reel-dot" data-i="4">Automations</button>
+        <button class="reel-dot" data-i="5">Capabilities</button>
+        <button class="reel-dot" data-i="6">Settings</button>
+        <button class="reel-dot" data-i="7">API Explorer</button>
       </div>
     </div>
   </section>
@@ -389,7 +391,7 @@
   <!-- Stats strip -->
   <div class="stats">
     <div class="stat"><b>40+</b><span>built-in agent tools</span></div>
-    <div class="stat"><b>8</b><span>core integrations</span></div>
+    <div class="stat"><b>10</b><span>core integrations</span></div>
     <div class="stat"><b>4</b><span>model routes: token · OAuth · CLI · local</span></div>
     <div class="stat"><b>100%</b><span>local — zero telemetry</span></div>
     <div class="stat"><b>AES-256</b><span>credentials at rest</span></div>
@@ -422,8 +424,10 @@
         <p>Each with its own model, git worktree, integration scopes, skills, peers, and persistent memory. 40+ built-in tools: files, shell, browser, web research, image generation, PRs, deploys.</p></div>
       <div class="card"><div class="ico">⏰</div><h3>Headless automations</h3>
         <p>Cron-scheduled runs with live execution traces. Schedules arm at server start — agents keep working with the browser closed. Deleted agents retire their own schedules.</p></div>
+      <div class="card"><div class="ico">🗂️</div><h3>Shared Board sync</h3>
+        <p>A shared Kanban where people and agents work the same cards, with optional pull, push, or two-way sync to Linear teams and Jira projects/Kanban boards.</p></div>
       <div class="card"><div class="ico">🔌</div><h3>Capabilities</h3>
-        <p>GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, Netlify, MCP servers, and custom skills. Scoped per-agent — an Obsidian-scoped agent knows its whole vault; Vercel/Netlify-scoped agents can deploy.</p></div>
+        <p>GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, Netlify, Linear, Jira, MCP servers, and custom skills. Agent integrations stay scoped per-agent; Linear/Jira are tightly coupled to the Board.</p></div>
       <div class="card"><div class="ico">🔒</div><h3>Local-first, audited</h3>
         <p>Credentials AES-256-GCM encrypted at rest. Runs, chats, and every action in an embedded SQLite audit log. Zero telemetry — traffic goes only to xAI and services you connect.</p></div>
     </div>
