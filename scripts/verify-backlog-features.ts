@@ -98,6 +98,16 @@ async function main() {
   assert((await read('app/api/mcp/route.ts')).includes('sanitizeIncomingEnv'), 'mcp env mask round-trip');
   assert((await read('components/shiba-studio.tsx')).includes('isMaskedSecret'), 'settings inputs treat masks as placeholders');
 
+  // Board "View work": answer + deliverable files behind Done cards, files
+  // served only through the owning card (capability check).
+  const boardWork = await read('lib/board-work.ts');
+  assert(boardWork.includes('collectCardWork'), 'card work collection');
+  assert(boardWork.includes('resolveCardDeliverable'), 'deliverable capability check');
+  assert((await read('app/api/board/work/route.ts')).includes('resolveCardDeliverable'), 'work file endpoint validates path');
+  assert((await read('components/kanban-board.tsx')).includes('View work'), 'view-work UI');
+  assert((await read('lib/agent-runs-store.ts')).includes('workspaceSnapshot'), 'runs store persists workspace');
+  assert((await read('lib/db.ts')).includes('addRunsWorkspaceColumn'), 'workspaceSnapshot migration');
+
   await log('PASS: all backlog feature structural checks');
   process.exit(0);
 }

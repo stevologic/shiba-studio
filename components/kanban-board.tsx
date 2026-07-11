@@ -7,12 +7,30 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw, Check, RotateCcw,
+  FileText, Image as ImageIcon, File, Copy, PackageOpen,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import BoardSyncModal from '@/components/board-sync-modal';
 import { toast } from '@/lib/toast';
 import type { BoardStatus, BoardTask } from '@/lib/board-types';
 import { BOARD_PRIORITY_LABELS, BOARD_STATUS_LABELS } from '@/lib/board-types';
+import type { CardWork, WorkFile } from '@/lib/board-work';
 import type { Agent } from '@/lib/types';
+
+// Markdown pipeline is heavy — load it only when a work modal opens.
+const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function FileKindIcon({ kind }: { kind: WorkFile['kind'] }) {
+  if (kind === 'image') return <ImageIcon size={14} className="kb-file-icon" />;
+  if (kind === 'text') return <FileText size={14} className="kb-file-icon" />;
+  return <File size={14} className="kb-file-icon" />;
+}
 
 const COLUMNS: BoardStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'];
 
@@ -143,6 +161,9 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   const [syncOpen, setSyncOpen] = useState(false);
   const [reviewFeedback, setReviewFeedback] = useState('');
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [work, setWork] = useState<CardWork | null>(null);
+  const [workLoading, setWorkLoading] = useState(false);
+  const [workOpen, setWorkOpen] = useState(false);
   const composerRef = useRef<HTMLInputElement | null>(null);
   const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
   const lastOpenCountRef = useRef<number | null>(null);
@@ -261,6 +282,36 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     if (updated) {
       setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
       toast.success(`${task.key} validated — moved to Done`);
+    }
+  }
+
+  /** Open the delivered-work modal: answer + files the runs created. */
+  async function viewWork(task: BoardTask) {
+    setWorkOpen(true);
+    setWorkLoading(true);
+    setWork(null);
+    try {
+      const res = await fetch(`/api/board/work?id=${encodeURIComponent(task.id)}`);
+      const data = await res.json();
+      if (data.ok) setWork(data.work);
+      else toast.error(data.error || 'Could not load the delivered work');
+    } catch {
+      toast.error('Could not load the delivered work');
+    }
+    setWorkLoading(false);
+  }
+
+  function deliverableHref(file: WorkFile): string {
+    if (!work) return '#';
+    return `/api/board/work?id=${encodeURIComponent(work.id)}&file=${encodeURIComponent(file.absPath)}`;
+  }
+
+  async function copyPath(p: string) {
+    try {
+      await navigator.clipboard.writeText(p);
+      toast.success('Path copied');
+    } catch {
+      toast.error('Could not copy the path');
     }
   }
 
@@ -495,6 +546,18 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                           </button>
                         </div>
                       )}
+                      {task.status === 'done' && task.runIds.length > 0 && (
+                        <div className="kb-card-review-row">
+                          <button
+                            type="button"
+                            className="kb-review-btn"
+                            title="See the answer, output, and files this card delivered"
+                            onClick={(e) => { e.stopPropagation(); void viewWork(task); }}
+                          >
+                            <PackageOpen size={12} /> View work
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -628,6 +691,17 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
               )}
             </div>
 
+            {selected.status === 'done' && selected.runIds.length > 0 && (
+              <button
+                type="button"
+                className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5 self-start"
+                title="See the answer, output, and files this card delivered"
+                onClick={() => void viewWork(selected)}
+              >
+                <PackageOpen size={13} /> View work
+              </button>
+            )}
+
             {selected.status === 'in_review' && !selected.working && (
               <div className="kb-review">
                 <div className="kb-review-head">
@@ -637,14 +711,26 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                 <p className="kb-review-hint">
                   The work is done — check the latest activity below. Validate to move it to Done, or describe what to change and send it back.
                 </p>
-                <button
-                  type="button"
-                  className="grok-btn grok-btn-primary text-sm inline-flex items-center gap-1.5 kb-review-validate"
-                  disabled={reviewBusy}
-                  onClick={() => void validateCard(selected)}
-                >
-                  <Check size={14} /> Validate — move to Done
-                </button>
+                <div className="kb-review-actions">
+                  <button
+                    type="button"
+                    className="grok-btn grok-btn-primary text-sm inline-flex items-center gap-1.5 kb-review-validate"
+                    disabled={reviewBusy}
+                    onClick={() => void validateCard(selected)}
+                  >
+                    <Check size={14} /> Validate — move to Done
+                  </button>
+                  {selected.runIds.length > 0 && (
+                    <button
+                      type="button"
+                      className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
+                      title="See the answer, output, and files delivered so far"
+                      onClick={() => void viewWork(selected)}
+                    >
+                      <PackageOpen size={13} /> View work
+                    </button>
+                  )}
+                </div>
                 <textarea
                   ref={feedbackRef}
                   className="grok-input kb-review-feedback"
@@ -712,6 +798,109 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
         onClose={() => setSyncOpen(false)}
         onSynced={() => void refresh()}
       />
+
+      {workOpen && (
+        <div className="kb-work-overlay" onClick={() => setWorkOpen(false)} role="presentation">
+          <div
+            className="kb-work-modal"
+            role="dialog"
+            aria-label={work ? `Delivered work for ${work.key}` : 'Delivered work'}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="kb-work-head">
+              <PackageOpen size={16} className="opacity-70" />
+              <div className="kb-work-title min-w-0">
+                {work ? (
+                  <>
+                    <span className="kb-card-key">{work.key}</span>
+                    <span className="kb-work-title-text">{work.title}</span>
+                  </>
+                ) : 'Delivered work'}
+              </div>
+              <button type="button" className="kb-icon-btn" title="Close" aria-label="Close" onClick={() => setWorkOpen(false)}>
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="kb-work-body">
+              {workLoading && (
+                <div className="kb-col-empty"><Loader2 size={14} className="kb-spin" /> Loading the delivered work…</div>
+              )}
+
+              {!workLoading && work && work.runs.length === 0 && (
+                <div className="kb-col-empty">No agent runs are linked to this card yet.</div>
+              )}
+
+              {!workLoading && work && work.runs.map((run, i) => (
+                <section key={run.runId} className="kb-work-run">
+                  <div className="kb-work-run-head">
+                    <span className="kb-work-run-label">
+                      {i === 0 ? 'Answer' : 'Earlier pass'} — {run.agentName}
+                    </span>
+                    {run.completedAt && (
+                      <span className="kb-activity-ts" title={run.completedAt}>{timeAgo(run.completedAt)}</span>
+                    )}
+                    <button
+                      type="button"
+                      className="kb-run-link"
+                      title="Open the full execution trace"
+                      onClick={() => onOpenRun?.(run.runId)}
+                    >
+                      <ExternalLink size={11} /> trace
+                    </button>
+                  </div>
+                  <div className="kb-work-answer">
+                    <ChatMarkdown content={run.finalOutput || '_(no output recorded)_'} />
+                  </div>
+                </section>
+              ))}
+
+              {!workLoading && work && (
+                <section className="kb-work-files">
+                  <div className="kb-work-run-label">
+                    Files created {work.files.length > 0 ? `(${work.files.length})` : ''}
+                  </div>
+                  {work.files.length === 0 && (
+                    <div className="kb-work-nofiles">No files were written by this card&apos;s runs.</div>
+                  )}
+                  {work.files.map((f) => (
+                    <div key={f.absPath} className={`kb-file-row ${f.exists ? '' : 'kb-file-missing'}`}>
+                      <FileKindIcon kind={f.kind} />
+                      {f.exists ? (
+                        <a
+                          className="kb-file-link"
+                          href={deliverableHref(f)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Open ${f.absPath}`}
+                        >
+                          {f.relPath}
+                        </a>
+                      ) : (
+                        <span className="kb-file-link kb-file-gone" title={`${f.absPath} (deleted or moved)`}>
+                          {f.relPath}
+                        </span>
+                      )}
+                      <span className="kb-file-meta">
+                        {f.exists ? formatBytes(f.size) : 'missing'}
+                      </span>
+                      <button
+                        type="button"
+                        className="kb-icon-btn"
+                        title={`Copy full path\n${f.absPath}`}
+                        aria-label={`Copy path of ${f.name}`}
+                        onClick={() => void copyPath(f.absPath)}
+                      >
+                        <Copy size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </section>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

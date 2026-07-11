@@ -22,6 +22,7 @@ interface RunRow {
   scheduleId: string | null;
   scheduleInstructions: string | null;
   sideEffects: string;
+  workspaceSnapshot?: string | null;
   trace?: string;
   traceSteps?: number;
 }
@@ -41,6 +42,7 @@ function rowToSummary(row: RunRow): AgentRunSummary {
     scheduleId: row.scheduleId ?? undefined,
     scheduleInstructions: row.scheduleInstructions ?? undefined,
     sideEffects: JSON.parse(row.sideEffects || '[]'),
+    workspaceSnapshot: row.workspaceSnapshot ?? undefined,
     traceSteps: row.traceSteps ?? 0,
   };
 }
@@ -57,14 +59,16 @@ export async function persistAgentRun(run: AgentRun): Promise<void> {
     .prepare(`
       INSERT OR REPLACE INTO runs
         (id, agentId, agentName, model, status, prompt, startedAt, completedAt,
-         finalOutput, projectId, scheduleId, scheduleInstructions, sideEffects, trace)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         finalOutput, projectId, scheduleId, scheduleInstructions, sideEffects,
+         workspaceSnapshot, trace)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .run(
       run.id, run.agentId, run.agentName, run.model, run.status, run.prompt,
       run.startedAt, run.completedAt ?? null, run.finalOutput ?? null,
       run.projectId ?? null, run.scheduleId ?? null, run.scheduleInstructions ?? null,
-      JSON.stringify(run.sideEffects || []), JSON.stringify(run.trace || []),
+      JSON.stringify(run.sideEffects || []), run.workspaceSnapshot ?? null,
+      JSON.stringify(run.trace || []),
     );
 }
 
@@ -87,7 +91,7 @@ export async function listRunSummaries(opts: {
   const select = `
     SELECT id, agentId, agentName, model, status, prompt, startedAt, completedAt,
            finalOutput, projectId, scheduleId, scheduleInstructions, sideEffects,
-           json_array_length(trace) AS traceSteps
+           workspaceSnapshot, json_array_length(trace) AS traceSteps
     FROM runs
   `;
   const where: string[] = [];

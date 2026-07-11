@@ -47,6 +47,8 @@ Two directions, both live:
 - **✓ Validate** — approve the work; the card moves to Done with a "Validated" note in the feed.
 - **↺ Refine** — describe what needs to change and send it back. The assigned agent reruns with the original brief, its previous outcome, *and your feedback*, told to address it specifically while keeping what was right. The card returns to In Progress while it works and comes back to In Review with the changes summarized. Loop as many times as it takes.
 
+**You collect the deliverables.** Done cards (and the review panel) carry **📦 View work** — a modal with the agent's answer rendered as formatted markdown (links in the output are clickable) and a **Files created** list assembled from the runs' actual trace: every file the agent wrote or image it generated, with its size and a hyperlink that opens it right from the board (code and text render as plain text, images and PDFs inline; a copy button gives you the full path on disk). Files are served only through the owning card — arbitrary paths are rejected.
+
 The header shows how much work is still ahead of review — the **open** count (Backlog + Todo + In Progress combined) — and the same number badges the Board entry in the left nav.
 
 **Agents use the board themselves.** Every agent — scheduled, chat-dispatched, or run manually — has board tools:

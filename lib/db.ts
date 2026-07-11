@@ -93,7 +93,7 @@ function dbPath(): string {
  * Migrations run in order inside a transaction on next open, so an existing
  * ~/.shiba-studio/data/shiba-studio.db always upgrades safely.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 5;
 
 /** MIGRATIONS[n] upgrades a database at user_version n to n+1. */
 const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
@@ -136,7 +136,72 @@ const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
     INSERT INTO audit_fts(rowid, action, detail, category)
       SELECT id, action, detail, category FROM audit_log;
   `),
+  // v2 → v3: move agent/chat memory into the versioned schema and add the
+  // metadata needed for automatic learning, review, pinning, provenance, and
+  // management. Older installs may already have the four-column table because
+  // memory used to create it lazily, so add columns only when they are absent.
+  2: (d) => {
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS agent_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agentId TEXT NOT NULL,
+        key TEXT NOT NULL,
+        content TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'fact',
+        status TEXT NOT NULL DEFAULT 'active',
+        source TEXT NOT NULL DEFAULT 'manual',
+        sourceId TEXT,
+        confidence REAL NOT NULL DEFAULT 1,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        createdAt TEXT,
+        updatedAt TEXT NOT NULL,
+        lastUsedAt TEXT,
+        useCount INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(agentId, key)
+      );
+    `);
+    const columns = new Set(
+      (d.prepare('PRAGMA table_info(agent_memory)').all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    const additions: Array<[string, string]> = [
+      ['kind', "TEXT NOT NULL DEFAULT 'fact'"],
+      ['status', "TEXT NOT NULL DEFAULT 'active'"],
+      ['source', "TEXT NOT NULL DEFAULT 'manual'"],
+      ['sourceId', 'TEXT'],
+      ['confidence', 'REAL NOT NULL DEFAULT 1'],
+      ['pinned', 'INTEGER NOT NULL DEFAULT 0'],
+      ['createdAt', 'TEXT'],
+      ['lastUsedAt', 'TEXT'],
+      ['useCount', 'INTEGER NOT NULL DEFAULT 0'],
+    ];
+    for (const [name, definition] of additions) {
+      if (!columns.has(name)) d.exec(`ALTER TABLE agent_memory ADD COLUMN ${name} ${definition}`);
+    }
+    d.exec(`
+      UPDATE agent_memory SET createdAt = updatedAt WHERE createdAt IS NULL OR createdAt = '';
+      CREATE INDEX IF NOT EXISTS idx_memory_agent ON agent_memory(agentId, status, pinned DESC, updatedAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_status ON agent_memory(status, updatedAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_source ON agent_memory(source, updatedAt DESC);
+    `);
+  },
+  // v3 → v5: persist the run's workspace path. The runtime always knew it
+  // (workspaceSnapshot) but the store dropped it, so deliverable links (Board
+  // "View work") couldn't resolve files written with workspace-relative paths.
+  // Registered at BOTH 3 and 4 (column-guarded, so idempotent): some dev
+  // databases were stamped user_version=4 by an interim build without this
+  // column, and both paths must converge on the same schema.
+  3: addRunsWorkspaceColumn,
+  4: addRunsWorkspaceColumn,
 };
+
+function addRunsWorkspaceColumn(d: DatabaseSync): void {
+  const columns = new Set(
+    (d.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>).map((row) => row.name),
+  );
+  if (!columns.has('workspaceSnapshot')) {
+    d.exec('ALTER TABLE runs ADD COLUMN workspaceSnapshot TEXT');
+  }
+}
 
 function schemaVersion(database: DatabaseSync): number {
   const row = database.prepare('PRAGMA user_version').get() as { user_version?: number };
@@ -151,6 +216,9 @@ function runMigrations(database: DatabaseSync): void {
     database.exec('BEGIN');
     try {
       if (migrate) migrate(database); // v0 → v1 is the baseline itself
+      // A gap in MIGRATIONS must never silently stamp the version forward —
+      // that leaves the schema behind the stamp and breaks every later check.
+      else if (v > 0) throw new Error(`No migration registered for v${v} → v${v + 1}`);
       database.exec(`PRAGMA user_version = ${v + 1}`);
       database.exec('COMMIT');
     } catch (e) {
