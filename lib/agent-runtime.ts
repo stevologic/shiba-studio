@@ -1078,7 +1078,6 @@ async function* agentRunGenerator(
           }
         }
 
-        const execRes = await executeTool(fn.name, args, agent, { id: runId }, workDir, runId);
         const execRes = preExecuted.get(tc.id)
           ?? await executeTool(fn.name, args, agent, { id: runId }, workDir, runId);
 

@@ -629,7 +629,7 @@ export async function POST(req: NextRequest) {
                 const execAgent = !agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
                   ? workspaceAgent
                   : agent;
-                const out = await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID);                const out = preExecuted.get(tc.id)
+                const out = preExecuted.get(tc.id)
                   ?? await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID);
                 toolsUsed.push(fn.name);
                 if (BROWSER_TOOL_NAMES.has(fn.name)) browserUsed = true;
