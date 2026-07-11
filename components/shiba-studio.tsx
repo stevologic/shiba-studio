@@ -5536,8 +5536,10 @@ export default function ShibaStudio() {
                       const res = await fetch(`/api/runs?id=${encodeURIComponent(id)}`);
                       const data = await res.json();
                       if (!data.ok || !data.run) throw new Error(data.error || 'Run not found');
+                      // Land on the full run summary (agent, prompt, tools,
+                      // outcome, trace, rail); its footer opens the dedicated
+                      // trace view for deep inspection.
                       setRunDetail(data.run);
-                      openExecutionTraceFromDetails(data.run);
                     } catch (e: unknown) {
                       toast.error(e instanceof Error ? e.message : 'Could not load run');
                     }
@@ -5659,6 +5661,16 @@ export default function ShibaStudio() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Preview rail — screenshots/artifacts along the trace,
+                        same as the dedicated trace view. */}
+                    {!runDetail.projectId && (
+                      <PreviewRail
+                        trace={runDetail.trace || []}
+                        selectedIdx={previewSelectedIdx}
+                        onSelect={setPreviewSelectedIdx}
+                      />
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between gap-3 mt-4">
