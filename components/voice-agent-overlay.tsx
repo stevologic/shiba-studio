@@ -36,8 +36,8 @@ export interface VoiceAgentOverlayProps {
 const PHASE_COPY: Record<VoiceAgentPhase, { title: string; hint: string }> = {
   idle: { title: 'Standby', hint: 'Voice online — speak when ready' },
   listening: { title: 'Listening', hint: 'Speak naturally · pause to send' },
-  thinking: { title: 'Processing', hint: 'Working… · speak ~2s to interrupt' },
-  speaking: { title: 'Speaking', hint: 'Speak ~2 seconds of words to interrupt' },
+  thinking: { title: 'Processing', hint: 'Working… · just start talking to interrupt' },
+  speaking: { title: 'Speaking', hint: 'Just start talking to interrupt' },
 };
 
 function phaseCopy(phase: VoiceAgentPhase, groupMode?: boolean, speaker?: string) {
@@ -46,10 +46,10 @@ function phaseCopy(phase: VoiceAgentPhase, groupMode?: boolean, speaker?: string
       return { title: 'Listening', hint: 'Agents keep the discussion going if you stay quiet' };
     }
     if (phase === 'thinking') {
-      return { title: speaker ? `${speaker} thinking` : 'Agent thinking', hint: 'Group table — speak ~2s to jump in' };
+      return { title: speaker ? `${speaker} thinking` : 'Agent thinking', hint: 'Group table — just start talking to jump in' };
     }
     if (phase === 'speaking') {
-      return { title: speaker ? speaker : 'Agent speaking', hint: 'Speak ~2 seconds of words to interrupt' };
+      return { title: speaker ? speaker : 'Agent speaking', hint: 'Just start talking to interrupt' };
     }
     return { title: 'Group voice', hint: 'Multi-agent table — stay quiet and they continue' };
   }
@@ -90,11 +90,9 @@ export default function VoiceAgentOverlay({
   const speedHint = GROK_TTS_SPEEDS.find((s) => Math.abs(s.value - speed) < 0.01)?.hint || 'Normal';
 
   useEffect(() => {
-    if (!open) {
-      setMounted(false);
-      return;
-    }
-    const t = requestAnimationFrame(() => setMounted(true));
+    // rAF in both branches — the compiler lint forbids synchronous setState
+    // directly in the effect body.
+    const t = requestAnimationFrame(() => setMounted(open));
     return () => cancelAnimationFrame(t);
   }, [open]);
 

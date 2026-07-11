@@ -42,6 +42,7 @@ import {
   VOICE_GROUP_AGENT_SILENCE_MS,
   VOICE_GROUP_MAX_CHAIN,
 } from '@/lib/voice-group-chat';
+import { startVoiceVad, type VoiceVadHandle } from '@/lib/voice-vad';
 import {
   abortLiveChatRun,
   beginLiveChatRun,
@@ -376,10 +377,14 @@ export default function GrokChatPanel({
   const VOICE_SILENCE_MS = 700;
   /** Mute window after TTS so room reverb / speaker ring isn't transcribed as the next user turn. */
   const VOICE_ECHO_MUTE_MS = 1100;
-  /** Don't cut Grok off until the user has spoken words for this long (anti-noise / short echo). */
-  const BARGE_IN_HOLD_MS = 2000;
-  /** If word activity gaps longer than this, restart the 2s barge-in hold. */
-  const BARGE_IN_GAP_RESET_MS = 450;
+  /**
+   * FALLBACK interrupt trigger only (no acoustic VAD available): sustained
+   * transcribed words for this long cut Grok off. The primary trigger is the
+   * echo-cancelled energy VAD (lib/voice-vad.ts), which reacts in ~250ms.
+   */
+  const BARGE_IN_HOLD_MS = 700;
+  /** If word activity gaps longer than this, restart the fallback hold. */
+  const BARGE_IN_GAP_RESET_MS = 900;
   /**
    * After a soft interrupt, wait this long for real user words.
    * Silence / noise → resume the paused reply from where it left off.
@@ -448,6 +453,10 @@ export default function GrokChatPanel({
   const interruptVoiceRef = useRef<() => void>(() => {});
   const confirmRealBargeInRef = useRef<() => void>(() => {});
   const resumeAfterFalseBargeInRef = useRef<() => void>(() => {});
+  /** Acoustic barge-in detector (echo-cancelled mic energy) — the primary trigger. */
+  const voiceVadRef = useRef<VoiceVadHandle | null>(null);
+  /** True while the VAD runs — the transcript trigger then only confirms. */
+  const vadActiveRef = useRef(false);
   // Multi-agent voice group: round-robin agent turns when chatTarget === 'all'.
   const voiceGroupCursorRef = useRef(0);
   const voiceGroupLastAgentIdRef = useRef<string | null>(null);
@@ -742,7 +751,10 @@ export default function GrokChatPanel({
           const heldMs = bargeInSpeechStartedAtRef.current
             ? now - bargeInSpeechStartedAtRef.current
             : 0;
-          const shouldInterrupt = hasWords && heldMs >= BARGE_IN_HOLD_MS;
+          // With the acoustic VAD running, transcription never triggers the
+          // interrupt (it only confirms after the soft pause) — otherwise TTS
+          // echo transcribed as words would chop the assistant's own speech.
+          const shouldInterrupt = !vadActiveRef.current && hasWords && heldMs >= BARGE_IN_HOLD_MS;
           if (shouldInterrupt) {
             bargeInSpeechStartedAtRef.current = 0;
             bargeInLastWordAtRef.current = 0;
@@ -939,15 +951,16 @@ export default function GrokChatPanel({
 
   /**
    * Prepare barge-in monitoring while Grok speaks: wipe composer echo state,
-   * require a fresh ~2s of user words before interrupt, keep mic armed.
+   * arm the acoustic VAD gate, keep mic armed for confirmation words.
    */
   const armBargeInForTts = useCallback(() => {
     clearSilenceTimer();
     clearVoiceTranscript();
     bargeInSpeechStartedAtRef.current = 0;
     bargeInLastWordAtRef.current = 0;
-    // Brief onset grace so the first TTS frames aren't an instant interrupt seed.
-    bargeInReadyAtRef.current = Date.now() + 700;
+    // Brief onset grace: the echo canceller needs a moment to converge on a
+    // fresh TTS chunk before mic energy is trustworthy.
+    bargeInReadyAtRef.current = Date.now() + 400;
     // Do not set voiceIgnoreUntil here — we need recognition events for barge-in.
     voiceIgnoreUntilRef.current = 0;
     if (!recognitionRef.current && autoSpeakRef.current) {
@@ -1185,7 +1198,43 @@ export default function GrokChatPanel({
     ttsResumeRef.current = null;
     stopDictation();
     stopSpeaking();
+    voiceVadRef.current?.stop();
+    voiceVadRef.current = null;
+    vadActiveRef.current = false;
   }, [clearSoftBargeInTimer, stopDictation, stopSpeaking]);
+
+  // Acoustic barge-in detector rides voice mode (covers the toggle AND the
+  // session-restore path). Speech onset while the assistant is talking or
+  // thinking soft-pauses it within ~250ms — the recognizer then confirms real
+  // words (hard barge-in) or the reply resumes where it left off.
+  useEffect(() => {
+    if (!autoSpeak) return;
+    let cancelled = false;
+    void (async () => {
+      const handle = await startVoiceVad({
+        onSpeechStart: () => {
+          if (!autoSpeakRef.current) return;
+          if (softBargeInPendingRef.current) return;
+          if (Date.now() < bargeInReadyAtRef.current) return;
+          if (!(isAssistantVoiceBusy() || voiceGroupBusyRef.current)) return;
+          interruptVoiceRef.current();
+        },
+      });
+      if (cancelled) {
+        handle?.stop();
+        return;
+      }
+      voiceVadRef.current = handle;
+      vadActiveRef.current = !!handle;
+    })();
+    return () => {
+      cancelled = true;
+      voiceVadRef.current?.stop();
+      voiceVadRef.current = null;
+      vadActiveRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs + stable callback; lifecycle keyed to voice mode
+  }, [autoSpeak]);
 
   function persistTtsVoice(id: string) {
     const next = id.trim().toLowerCase() || DEFAULT_TTS_VOICE;

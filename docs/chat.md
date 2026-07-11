@@ -26,6 +26,12 @@ The target select chooses *who* answers:
 - **Images & files:** drop, paste, or attach. Images render inline in the conversation — click for a full-screen lightbox.
 - The **QUOTA pill** in the top bar shows spend as a share of your monthly budget (Settings → Monthly Usage Quota).
 
+## Grok Voice — hands-free with real barge-in
+
+The ⚡ toggle in the composer starts hands-free voice mode: speak naturally, pause to send, and replies are spoken aloud in your chosen Grok voice (speed adjustable live on the HUD).
+
+**Interrupting works like a real conversation — just start talking.** An echo-cancelled acoustic detector watches the microphone signal itself (not the transcript), so it hears *you* while the assistant is mid-sentence and pauses the speech within a fraction of a second. Two-stage so noise can't derail a reply: speech onset pauses the audio instantly, then the recognizer confirms actual words — real speech becomes your next message (and cuts the rest of the old reply), while a cough, a door, or silence resumes the reply exactly where it stopped.
+
 ## Slash commands
 
 Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dismiss). Commands run instantly and post their result into the chat:

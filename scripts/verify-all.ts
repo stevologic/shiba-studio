@@ -16,6 +16,7 @@ const CHAIN = [
   'verify-runtime.ts',
   'verify-tool-dispatch.ts',
   'verify-mdns.ts',
+  'verify-voice-vad.ts',
   'verify-shell-state.ts',
   'verify-xai-oauth.ts',
   'verify-competitor-features.ts',

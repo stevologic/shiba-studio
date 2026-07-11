@@ -108,6 +108,14 @@ async function main() {
   assert((await read('lib/agent-runs-store.ts')).includes('workspaceSnapshot'), 'runs store persists workspace');
   assert((await read('lib/db.ts')).includes('addRunsWorkspaceColumn'), 'workspaceSnapshot migration');
 
+  // Voice barge-in: acoustic VAD is the trigger; transcription only confirms.
+  const vadLib = await read('lib/voice-vad.ts');
+  assert(vadLib.includes('createVadDetector') && vadLib.includes('startVoiceVad'), 'voice VAD module');
+  assert(vadLib.includes('echoCancellation: true'), 'VAD stream uses echo cancellation');
+  const chatPanel = await read('components/grok-chat-panel.tsx');
+  assert(chatPanel.includes('startVoiceVad'), 'chat panel starts the VAD with voice mode');
+  assert(chatPanel.includes('!vadActiveRef.current && hasWords'), 'transcript trigger is fallback-only');
+
   await log('PASS: all backlog feature structural checks');
   process.exit(0);
 }
