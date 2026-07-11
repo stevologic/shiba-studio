@@ -2,6 +2,7 @@
 // Uses controlled grokChat double to drive multi-step tool calling + side effects WITHOUT real key.
 // Produces real persisted runs + screenshots + traces. Also exercises schedule_task.
 
+import './verify-isolate'; // MUST be first: sandbox the data dir on direct runs
 import { setApiKey, type GrokChatResponse } from '../lib/grok-client';
 import { runAgentOnce, loadRuns } from '../lib/agent-runtime';
 import * as Sched from '../lib/scheduler';

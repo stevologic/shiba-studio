@@ -1,4 +1,5 @@
-﻿import * as fs from 'fs/promises';
+﻿import './verify-isolate'; // MUST be first: sandbox the data dir on direct runs
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import { setApiKey } from '../lib/grok-client';
 import { runAgentOnce } from '../lib/agent-runtime';
