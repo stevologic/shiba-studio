@@ -3,6 +3,7 @@
 // per-agent memory (SQLite), and xAI image generation.
 
 import * as fs from 'fs/promises';
+import { clipForModel } from './prompt-hygiene';
 import path from 'path';
 import { getDb } from './db';
 
@@ -43,10 +44,10 @@ export async function webFetch(rawUrl: string): Promise<{ url: string; status: n
   const contentType = res.headers.get('content-type') || '';
   const body = await res.text();
   if (!contentType.includes('html')) {
-    return { url: res.url, status: res.status, text: body.slice(0, TEXT_CAP) };
+    return { url: res.url, status: res.status, text: clipForModel(body, TEXT_CAP) };
   }
   const title = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim();
-  return { url: res.url, status: res.status, title, text: htmlToText(body).slice(0, TEXT_CAP) };
+  return { url: res.url, status: res.status, title, text: clipForModel(htmlToText(body), TEXT_CAP) };
 }
 
 export interface WebSearchResult { title: string; url: string; snippet: string }

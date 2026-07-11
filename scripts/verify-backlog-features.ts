@@ -131,6 +131,23 @@ async function main() {
   assert((await read('components/shiba-studio.tsx')).includes('subscribeLiveEvents'), 'shell subscribes live');
   assert((await read('components/kanban-board.tsx')).includes('subscribeLiveEvents'), 'board subscribes live');
 
+  // Context hygiene: explicit truncation markers, grounded dates, untrusted
+  // wrapping on every prompt surface, no-fabrication synthesis rules.
+  const hygiene = await read('lib/prompt-hygiene.ts');
+  assert(hygiene.includes('clipForModel') && hygiene.includes('environmentFacts') && hygiene.includes('asUntrustedContext'), 'prompt-hygiene helpers');
+  const streamRoute = await read('app/api/grok/stream/route.ts');
+  assert(streamRoute.includes('environmentFacts()'), 'chat prompts carry the current date');
+  assert(streamRoute.includes('clipForModel(JSON.stringify'), 'chat tool results clip with markers');
+  assert(streamRoute.includes('HISTORY_CAP'), 'chat history caps with an explicit omission note');
+  assert(streamRoute.includes('## Grounding'), 'chat grounding rules');
+  const runtime2 = await read('lib/agent-runtime.ts');
+  assert(runtime2.includes('environmentFacts()'), 'agent runs carry the current date');
+  assert(runtime2.includes('clipForModel(JSON.stringify'), 'run tool results clip with markers');
+  assert(runtime2.includes('Grounding:'), 'agent run grounding rules');
+  assert((await read('lib/multi-agent-chat.ts')).includes('asUntrustedContext'), 'multi-agent wraps integration context');
+  assert((await read('lib/chat-skill.ts')).includes('Faithfulness rules'), 'synthesis no-fabrication rules');
+  assert((await read('lib/agent-power-tools.ts')).includes('clipForModel'), 'web fetch clips with markers');
+
   await log('PASS: all backlog feature structural checks');
   process.exit(0);
 }

@@ -8,6 +8,7 @@ import { loadConfig } from '@/lib/persistence';
 import { buildGlobalUploadsChatContext } from '@/lib/workspace';
 import { buildGlobalInstructionsContext } from '@/lib/global-instructions';
 import { resolveCloudBearer } from '@/lib/xai-oauth';
+import { clipForModel, environmentFacts } from '@/lib/prompt-hygiene';
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -22,6 +23,9 @@ export async function POST(req: NextRequest) {
 
   const messages: ChatMessagePayload[] = [];
   const systemParts: string[] = [];
+
+  // Grounded time before anything else — models otherwise guess "now".
+  systemParts.push(environmentFacts());
 
   /** Wrap injected context so it can never be mistaken for the user's request. */
   const asBackgroundContext = (label: string, content: string): string => [
@@ -149,6 +153,10 @@ export async function POST(req: NextRequest) {
     'For current events, sports fixtures, news, docs, or anything time-sensitive: call web_search / web_fetch (or other tools) before answering.',
     'Never end with only a promise like "I\'ll check", "let me look that up", or "one moment" — the user only sees your final message after tools finish.',
     'Workflow: call tools as needed → then write a complete final answer with the facts. If tools fail, say what failed and answer with best effort.',
+    '## Grounding',
+    'Specifics (names, paths, versions, numbers, dates, URLs, quotes) must come from the conversation, the provided context, or a tool result — never from guesswork.',
+    'If the needed information is not available and no tool can obtain it, say plainly what is missing instead of inventing a plausible answer.',
+    'Tool results marked "[truncated…]" are incomplete — do not guess the missing part; re-read a narrower slice or say the data was cut off.',
   ].join('\n'));
 
   // Long-running work: dispatch to the background instead of blocking the chat.
@@ -176,7 +184,19 @@ export async function POST(req: NextRequest) {
   }
 
   if (Array.isArray(body.messages) && body.messages.length > 0) {
-    for (const m of body.messages) {
+    // Long chats: cap the replayed history and SAY SO — a silently missing
+    // start tempts the model to reconstruct "earlier" turns from imagination.
+    const HISTORY_CAP = 60;
+    const incoming = body.messages.length > HISTORY_CAP
+      ? body.messages.slice(-HISTORY_CAP)
+      : body.messages;
+    if (incoming.length < body.messages.length) {
+      messages.push({
+        role: 'system',
+        content: `[Note: this conversation is longer than shown — the earliest ${body.messages.length - incoming.length} message(s) are omitted here. If earlier details matter, ask the user rather than guessing what was said.]`,
+      });
+    }
+    for (const m of incoming) {
       if (!m?.role) continue;
       if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'system') continue;
       messages.push({
@@ -576,7 +596,7 @@ export async function POST(req: NextRequest) {
                     role: 'tool',
                     tool_call_id: tc.id,
                     name: fn.name,
-                    content: JSON.stringify(result).slice(0, 8000),
+                    content: clipForModel(JSON.stringify(result), 8000),
                   });
                   continue;
                 }
@@ -591,7 +611,7 @@ export async function POST(req: NextRequest) {
                   role: 'tool',
                   tool_call_id: tc.id,
                   name: fn.name,
-                  content: JSON.stringify(out.result).slice(0, 8000),
+                  content: clipForModel(JSON.stringify(out.result), 8000),
                 });
               }
             }

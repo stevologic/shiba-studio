@@ -3,6 +3,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { Agent, AgentRun, TraceStep, IntegrationScope } from './types';
+import { clipForModel, environmentFacts } from './prompt-hygiene';
 import type { AgentStreamEvent } from './agent-stream-types';
 import { grokChat, GrokMessage, GrokTool } from './grok-client';
 import { resolveWorkspace, ensureWorktree, getGlobalUploadsDir, GLOBAL_UPLOADS_SUBDIR } from './workspace';
@@ -671,6 +672,7 @@ Global shared uploads (all agents): ${globalUploadsPath} — files dropped here 
     ? 'You use tools to act through cloud services: GitHub/Slack/Drive/Discord/X/Obsidian when enabled, peer messaging, and self-scheduling.'
     : 'You use tools to take real actions: edit files, run shell, control Chrome browser, GitHub/Slack/Drive when enabled.';
   return `You are a powerful autonomous Grok agent named "${agent.name}" running inside Shiba Studio (localhost agent studio).
+${environmentFacts()}
 ${homeLine}
 Available scoped integrations: ${integ}
 ${skills}
@@ -684,6 +686,7 @@ ${actionLine}
 ${!isCloud && grokCliAvailable ? `Grok Build CLI is installed on this machine (${grokCliVersion || 'grok'}). Use grok_cli to delegate coding tasks to the local Grok CLI agent in headless mode.` : ''}
 ${!isCloud && mcpServers.length ? `Enabled MCP servers: ${mcpServers.map((s) => `${s.name} (id:${s.id})`).join(', ')}. Use mcp_list_tools then mcp_invoke to call their tools.` : ''}
 Be concise, decisive and goal-oriented. Always use tools when you need to act on the world.
+Grounding: specifics (paths, names, numbers, URLs, dates) must come from your task, the context above, or a tool result — never from guesswork. If information is missing and no tool can obtain it, state the assumption you are making in your summary instead of presenting it as fact. Tool results marked "[truncated…]" are incomplete — re-read a narrower slice rather than guessing the remainder.
 Inbox messages from peers: ${inbox.length ? inbox.join(' | ') : 'none'}
 Finish by giving a short summary when task is complete.`;
 }
@@ -980,7 +983,7 @@ async function* agentRunGenerator(
           role: 'tool' as const,
           tool_call_id: tc.id,
           name: fn.name,
-          content: JSON.stringify(execRes.result).slice(0, 8000),
+          content: clipForModel(JSON.stringify(execRes.result), 8000),
         };
         messages.push(toolResultMsg);
 
