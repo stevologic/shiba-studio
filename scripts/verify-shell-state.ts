@@ -153,6 +153,19 @@ async function main() {
   assert(agentsUi.hasCachedAgents() === true, 'agents cache set');
   assert((agentsUi.getCachedAgents() || []).length > 0, 'agents cache non-empty after set (remount restore source)');
 
+  // --- 5b) runs UI store remount simulation (Recent Agent Runs used to
+  // flash empty after every tab navigation until the 30s poll) ---
+  const runsUi = await import('../lib/runs-ui-store');
+  assert(runsUi.hasCachedRuns() === false, 'runs cache starts cold');
+  runsUi.setCachedRuns([{ id: 'r1' } as unknown as import('../lib/types').AgentRun]);
+  assert(runsUi.hasCachedRuns() === true, 'runs cache set');
+  assert((runsUi.getCachedRuns() || []).length === 1, 'runs cache non-empty after set (remount restore source)');
+  const shellSrc = await fs.readFile(path.resolve(__dirname, '../components/shiba-studio.tsx'), 'utf8');
+  assert(shellSrc.includes('getCachedRuns() ?? []'), 'runs state hydrates from cache');
+  assert(shellSrc.includes('void refreshRuns()'), 'remount path refreshes runs immediately');
+  assert(shellSrc.includes('applyConfigToForms(snap.config)'), 'remount path restores config-derived forms');
+  assert(shellSrc.includes('Promise.allSettled'), 'loadAll applies each endpoint independently');
+
   // --- 6) structural: layout hosts ShibaStudio (remount prevention) ---
   const layoutPath = path.resolve(__dirname, '../app/[[...section]]/layout.tsx');
   const layoutSrc = await fs.readFile(layoutPath, 'utf8');

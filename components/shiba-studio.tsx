@@ -90,6 +90,7 @@ import {
   hasCachedAgents,
   setCachedAgents,
 } from '@/lib/agents-ui-store';
+import { getCachedRuns, setCachedRuns } from '@/lib/runs-ui-store';
 import {
   getCachedIntegrationCreds,
   setCachedIntegrationCreds,
@@ -410,7 +411,9 @@ export default function ShibaStudio() {
   // Seed from module cache so remounts/tab hops never show a false empty list.
   const [agents, setAgents] = useState<Agent[]>(() => getCachedAgents() ?? []);
   const [agentsReady, setAgentsReady] = useState(() => hasCachedAgents());
-  const [runs, setRuns] = useState<AgentRun[]>([]);
+  // Runs ride the same remount cache: without it, every tab navigation showed
+  // an empty "Recent Agent Runs" until the next poll or a page refresh.
+  const [runs, setRuns] = useState<AgentRun[]>(() => getCachedRuns() ?? []);
   // Providers / auth — same remount cache so the rail doesn't flash "off".
   const [config, setConfig] = useState<AppConfig | null>(
     () => (getProvidersUiSnapshot()?.config as AppConfig | null) ?? null,
@@ -852,43 +855,120 @@ export default function ShibaStudio() {
     return opts;
   }
 
-  // Load everything
+  /** Runs update both state and the remount cache — always together. */
+  function applyRuns(next: AgentRun[]) {
+    setCachedRuns(next);
+    setRuns(next);
+  }
+
+  /** Refresh the run list alone (dashboard/automations data — changes often). */
+  async function refreshRuns() {
+    try {
+      const rRes = await fetch('/api/runs').then((r) => r.json());
+      if (Array.isArray(rRes.runs)) applyRuns(rRes.runs);
+    } catch {
+      /* keep last runs */
+    }
+  }
+
+  /**
+   * Push a loaded config into every form/display state derived from it.
+   * Called from loadAll AND from the remount-restore path — the Settings
+   * forms used to reset to defaults on every tab navigation because only
+   * loadAll populated them. Returns the derived values the providers
+   * snapshot needs.
+   */
+  function applyConfigToForms(cfg: any) {
+    setConfig(cfg as any);
+    // Server sends partial fingerprints ("xai-ab…7f3a"), never full keys —
+    // recognizable in the input without exposing the secret.
+    if (cfg.hasKey) setApiKeyInput(String(cfg.xaiApiKey || '') || '••••••••');
+    if (cfg.hasManagementKey) setManagementKeyInput(String(cfg.xaiManagementKey || '') || '••••••••');
+    const nextOauth: CachedOauthStatus = cfg.oauthStatus
+      ? cfg.oauthStatus
+      : { connected: false, expired: false };
+    if (cfg.oauthStatus) setOauthStatus(nextOauth);
+    const nextAuthMode = (cfg.cloudAuthMode === 'oauth' ? 'oauth' : 'api_key') as 'api_key' | 'oauth';
+    if (cfg.cloudAuthMode) setCloudAuthMode(nextAuthMode);
+    const nextLocalEnabled = cfg.localGrokEnabled !== undefined ? !!cfg.localGrokEnabled : localGrokEnabled;
+    if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(nextLocalEnabled);
+    const nextLocalBase = cfg.localGrokBaseUrl || localGrokBaseUrl;
+    if (cfg.localGrokBaseUrl) setLocalGrokBaseUrl(cfg.localGrokBaseUrl);
+    const nextAllowlist = Array.isArray(cfg.localModelAllowlist) ? cfg.localModelAllowlist : localModelAllowlist;
+    if (Array.isArray(cfg.localModelAllowlist)) setLocalModelAllowlist(nextAllowlist);
+    if (cfg.defaultGrokModel) {
+      setDefaultModelInput(cfg.defaultGrokModel);
+      setChatModel((current) => (
+        current === 'grok-4' || current === 'cloud:grok-4' || current === 'grok-3' || current === 'cloud:grok-3'
+          ? cfg.defaultGrokModel
+          : current
+      ) as GrokModel);
+    }
+    {
+      const studioVoice = String(cfg.defaultTtsVoice || '').trim().toLowerCase() || DEFAULT_TTS_VOICE;
+      setDefaultTtsVoiceInput(studioVoice);
+      const studioSpeed = clampTtsSpeed(cfg.defaultTtsSpeed ?? DEFAULT_TTS_SPEED);
+      setDefaultTtsSpeedInput(studioSpeed);
+      // Seed chat prefs when the user has never chosen a session override.
+      try {
+        if (!window.localStorage.getItem('shiba-tts-voice')) {
+          window.localStorage.setItem('shiba-tts-voice', studioVoice);
+        }
+        if (!window.localStorage.getItem('shiba-tts-speed')) {
+          window.localStorage.setItem('shiba-tts-speed', String(studioSpeed));
+        }
+      } catch { /* private mode */ }
+    }
+    if (cfg.defaultWorkspace) {
+      setDefaultWorkspaceInput(cfg.defaultWorkspace);
+      setWsPath(cfg.defaultWorkspace);
+    }
+    if (cfg.toolApprovalMode) setToolApprovalMode(cfg.toolApprovalMode);
+    if (cfg.globalInstructions != null) setGlobalInstructionsInput(cfg.globalInstructions);
+    if (cfg.useAgentsMd != null) setUseAgentsMd(!!cfg.useAgentsMd);
+    setCostSettings({
+      usageBudgetUsd: cfg.usageBudgetUsd ? String(cfg.usageBudgetUsd) : '',
+      dailyBudgetUsd: cfg.dailyBudgetUsd ? String(cfg.dailyBudgetUsd) : '',
+      budgetHardStop: cfg.budgetHardStop !== false,
+      maxConcurrentRuns: String(cfg.maxConcurrentRuns || 3),
+      perRunTokenCap: cfg.perRunTokenCap ? String(cfg.perRunTokenCap) : '',
+      runRetentionDays: cfg.runRetentionDays ? String(cfg.runRetentionDays) : '',
+      auditRetentionDays: cfg.auditRetentionDays ? String(cfg.auditRetentionDays) : '',
+    });
+    return { nextOauth, nextAuthMode, nextLocalEnabled, nextLocalBase, nextAllowlist };
+  }
+
+  // Load everything. Each part applies independently (allSettled) — one
+  // failing endpoint must not blank the other three until the next refresh.
   async function loadAll() {
     try {
-      const [aRes, rRes, cRes, intRes] = await Promise.all([
+      const settle = <T,>(r: PromiseSettledResult<T>): T | null =>
+        r.status === 'fulfilled' ? r.value : null;
+      const [aResS, rResS, cResS, intResS] = await Promise.allSettled([
         fetch('/api/agents').then(r => r.json()),
         fetch('/api/runs').then(r => r.json()),
         fetch('/api/config').then(r => r.json()),
         fetch('/api/integrations').then(r => r.json()),
       ]);
-      const nextAgents = (aRes.agents || []) as Agent[];
-      setCachedAgents(nextAgents);
-      setAgents(nextAgents);
-      setAgentsReady(true);
-      setRuns(rRes.runs || []);
-      const cfg = cRes;
-      setConfig(cfg as any);
-      if (intRes.integrations) {
+      const aRes = settle(aResS);
+      const rRes = settle(rResS);
+      const cRes = settle(cResS);
+      const intRes = settle(intResS);
+      if (aRes) {
+        const nextAgents = (aRes.agents || []) as Agent[];
+        setCachedAgents(nextAgents);
+        setAgents(nextAgents);
+        setAgentsReady(true);
+      }
+      if (rRes) applyRuns(rRes.runs || []);
+      if (intRes?.integrations) {
         const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...intRes.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
-      // Server sends partial fingerprints ("xai-ab…7f3a"), never full keys —
-      // recognizable in the input without exposing the secret.
-      if ((cfg as any).hasKey) setApiKeyInput(String((cfg as any).xaiApiKey || '') || '••••••••');
-      if ((cfg as any).hasManagementKey) setManagementKeyInput(String((cfg as any).xaiManagementKey || '') || '••••••••');
-      const nextOauth: CachedOauthStatus = (cfg as any).oauthStatus
-        ? (cfg as any).oauthStatus
-        : { connected: false, expired: false };
-      if ((cfg as any).oauthStatus) setOauthStatus(nextOauth);
-      const nextAuthMode = ((cfg as any).cloudAuthMode === 'oauth' ? 'oauth' : 'api_key') as 'api_key' | 'oauth';
-      if ((cfg as any).cloudAuthMode) setCloudAuthMode(nextAuthMode);
-      const nextLocalEnabled = cfg.localGrokEnabled !== undefined ? !!cfg.localGrokEnabled : localGrokEnabled;
-      if (cfg.localGrokEnabled !== undefined) setLocalGrokEnabled(nextLocalEnabled);
-      const nextLocalBase = cfg.localGrokBaseUrl || localGrokBaseUrl;
-      if (cfg.localGrokBaseUrl) setLocalGrokBaseUrl(cfg.localGrokBaseUrl);
-      const nextAllowlist = Array.isArray(cfg.localModelAllowlist) ? cfg.localModelAllowlist : localModelAllowlist;
-      if (Array.isArray(cfg.localModelAllowlist)) setLocalModelAllowlist(nextAllowlist);
+      if (!cRes) return;
+      const cfg = cRes;
+      const { nextOauth, nextAuthMode, nextLocalEnabled, nextLocalBase, nextAllowlist } = applyConfigToForms(cfg);
       // Persist Providers rail picture for remounts / tab hops (skip full loadAll).
       const probe = readProviderStatusCache();
       setProvidersUiSnapshot({
@@ -909,45 +989,6 @@ export default function ShibaStudio() {
         hasManagementKeyMasked: !!(cfg as any).hasManagementKey,
         apiKeyMasked: (cfg as any).hasKey ? String((cfg as any).xaiApiKey || '') : '',
         managementKeyMasked: (cfg as any).hasManagementKey ? String((cfg as any).xaiManagementKey || '') : '',
-      });
-      if (cfg.defaultGrokModel) {
-        setDefaultModelInput(cfg.defaultGrokModel);
-        setChatModel((current) => (
-          current === 'grok-4' || current === 'cloud:grok-4' || current === 'grok-3' || current === 'cloud:grok-3'
-            ? cfg.defaultGrokModel
-            : current
-        ) as GrokModel);
-      }
-      {
-        const studioVoice = String(cfg.defaultTtsVoice || '').trim().toLowerCase() || DEFAULT_TTS_VOICE;
-        setDefaultTtsVoiceInput(studioVoice);
-        const studioSpeed = clampTtsSpeed(cfg.defaultTtsSpeed ?? DEFAULT_TTS_SPEED);
-        setDefaultTtsSpeedInput(studioSpeed);
-        // Seed chat prefs when the user has never chosen a session override.
-        try {
-          if (!window.localStorage.getItem('shiba-tts-voice')) {
-            window.localStorage.setItem('shiba-tts-voice', studioVoice);
-          }
-          if (!window.localStorage.getItem('shiba-tts-speed')) {
-            window.localStorage.setItem('shiba-tts-speed', String(studioSpeed));
-          }
-        } catch { /* private mode */ }
-      }
-      if (cfg.defaultWorkspace) {
-        setDefaultWorkspaceInput(cfg.defaultWorkspace);
-        setWsPath(cfg.defaultWorkspace);
-      }
-      if (cfg.toolApprovalMode) setToolApprovalMode(cfg.toolApprovalMode);
-      if (cfg.globalInstructions != null) setGlobalInstructionsInput(cfg.globalInstructions);
-      if (cfg.useAgentsMd != null) setUseAgentsMd(!!cfg.useAgentsMd);
-      setCostSettings({
-        usageBudgetUsd: cfg.usageBudgetUsd ? String(cfg.usageBudgetUsd) : '',
-        dailyBudgetUsd: cfg.dailyBudgetUsd ? String(cfg.dailyBudgetUsd) : '',
-        budgetHardStop: cfg.budgetHardStop !== false,
-        maxConcurrentRuns: String(cfg.maxConcurrentRuns || 3),
-        perRunTokenCap: cfg.perRunTokenCap ? String(cfg.perRunTokenCap) : '',
-        runRetentionDays: cfg.runRetentionDays ? String(cfg.runRetentionDays) : '',
-        auditRetentionDays: cfg.auditRetentionDays ? String(cfg.auditRetentionDays) : '',
       });
       // Boot ping — hydrates server config; schedule arming is idempotent
       // (instrumentation.ts already armed everything at server start).
@@ -985,7 +1026,11 @@ export default function ShibaStudio() {
       }
       const snap = getProvidersUiSnapshot();
       if (snap) {
-        if (snap.config) setConfig(snap.config as unknown as AppConfig);
+        // Config-derived form states first (Settings inputs, guardrails,
+        // default model/voice/workspace) — these used to silently reset to
+        // factory defaults on every tab navigation.
+        if (snap.config) applyConfigToForms(snap.config);
+        // Snapshot fields override where the snapshot is fresher (probes).
         setOauthStatus(snap.oauthStatus);
         setCloudAuthMode(snap.cloudAuthMode);
         setLocalGrokEnabled(snap.localGrokEnabled);
@@ -999,6 +1044,9 @@ export default function ShibaStudio() {
         if (snap.hasApiKeyMasked) setApiKeyInput(snap.apiKeyMasked || '••••••••');
         if (snap.hasManagementKeyMasked) setManagementKeyInput(snap.managementKeyMasked || '••••••••');
       }
+      // Runs change constantly — the cache painted the first frame; refresh now
+      // instead of waiting out the 30s poll.
+      void refreshRuns();
       // Cold caches (HMR / partial remount) — full hydrate once.
       if (!hasCachedAgents() && !hasProvidersUiSnapshot()) {
         void loadAll();
@@ -2608,15 +2656,9 @@ export default function ShibaStudio() {
   // Light poll: runs list only (not full loadAll agents/config/integrations).
   // Full loadAll was a major nav jank source every 22s; runs need fresher data.
   useEffect(() => {
-    const t = setInterval(async () => {
-      try {
-        const rRes = await fetch('/api/runs').then((r) => r.json());
-        if (Array.isArray(rRes.runs)) setRuns(rRes.runs);
-      } catch {
-        /* keep last runs */
-      }
-    }, 30_000);
+    const t = setInterval(() => { void refreshRuns(); }, 30_000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable helper, interval armed once
   }, []);
 
   // Keep sidebar/footer commit SHA in sync with the tree Node is actually serving.
