@@ -6,7 +6,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw,
+  Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw, Check, RotateCcw,
 } from 'lucide-react';
 import BoardSyncModal from '@/components/board-sync-modal';
 import { toast } from '@/lib/toast';
@@ -128,9 +128,11 @@ interface KanbanBoardProps {
   agents: Agent[];
   /** Navigate to an Automations run trace. */
   onOpenRun?: (runId: string) => void;
+  /** Fires when the open-card count changes (drives the nav badge). */
+  onOpenCountChanged?: () => void;
 }
 
-export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
+export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: KanbanBoardProps) {
   const [tasks, setTasks] = useState<BoardTask[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -139,13 +141,31 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<{ col: BoardStatus; beforeId: string | null } | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [reviewFeedback, setReviewFeedback] = useState('');
+  const [reviewBusy, setReviewBusy] = useState(false);
   const composerRef = useRef<HTMLInputElement | null>(null);
+  const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastOpenCountRef = useRef<number | null>(null);
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const selected = useMemo(
     () => (selectedId ? tasks.find((t) => t.id === selectedId) || null : null),
     [selectedId, tasks],
   );
+  /** Open = work still ahead of review: backlog + todo + in progress. */
+  const openCount = useMemo(
+    () => tasks.filter((t) => t.status === 'backlog' || t.status === 'todo' || t.status === 'in_progress').length,
+    [tasks],
+  );
+
+  /** Select a card (or close with null) — review feedback never leaks across cards. */
+  function openCard(id: string | null, focusFeedback = false) {
+    setSelectedId(id);
+    setReviewFeedback('');
+    if (id && focusFeedback) {
+      setTimeout(() => feedbackRef.current?.focus(), 60);
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -153,10 +173,19 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
       const data = await res.json();
       if (data.ok && Array.isArray(data.tasks)) {
         setTasks(data.tasks);
+        // Nav badge shows the open count — nudge the shell only when it moves
+        // (covers agent-driven changes surfacing through the poll, too).
+        const open = (data.tasks as BoardTask[]).filter(
+          (t) => t.status === 'backlog' || t.status === 'todo' || t.status === 'in_progress',
+        ).length;
+        if (lastOpenCountRef.current !== null && lastOpenCountRef.current !== open) {
+          onOpenCountChanged?.();
+        }
+        lastOpenCountRef.current = open;
       }
     } catch { /* keep last board */ }
     setLoaded(true);
-  }, []);
+  }, [onOpenCountChanged]);
 
   // Live board: agents post progress while runs execute, so poll briskly.
   // First load also goes through the timer (0ms) — the compiler lint forbids
@@ -224,6 +253,47 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
     }
   }
 
+  /** Review approved: push the card to Done. */
+  async function validateCard(task: BoardTask) {
+    setReviewBusy(true);
+    const updated = await post({ action: 'validate', id: task.id });
+    setReviewBusy(false);
+    if (updated) {
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
+      toast.success(`${task.key} validated — moved to Done`);
+    }
+  }
+
+  /** Review needs changes: send feedback back and re-dispatch the agent. */
+  async function refineCard(task: BoardTask) {
+    const feedback = reviewFeedback.trim();
+    if (!feedback) {
+      feedbackRef.current?.focus();
+      return;
+    }
+    setReviewBusy(true);
+    let ok = false;
+    try {
+      const res = await fetch('/api/board', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'refine', id: task.id, feedback }),
+      });
+      const data = await res.json();
+      ok = !!data.ok;
+      if (!ok) toast.error(data.error || 'Could not send the card back');
+    } catch {
+      toast.error('Could not send the card back');
+    }
+    setReviewBusy(false);
+    if (ok) {
+      // Keep the typed feedback if the request failed; clear it on success.
+      setReviewFeedback('');
+      toast.success(`${task.key} sent back — ${agentById.get(task.assigneeAgentId || '')?.name || 'the agent'} is refining`);
+      await refresh();
+    }
+  }
+
   // ---- Drag & drop (native HTML5) ----
   function handleDrop(col: BoardStatus) {
     const id = dragId;
@@ -274,9 +344,17 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
     <div className="kb-root">
       <div className="kb-head">
         <div>
-          <div className="page-title">Board</div>
+          <div className="page-title kb-title-row">
+            Board
+            <span
+              className="kb-open-pill"
+              title="Open cards — Backlog, Todo, and In Progress combined"
+            >
+              {openCount} open
+            </span>
+          </div>
           <div className="page-subtitle">
-            Shared Kanban every agent can work from — assign a card, hit <span className="kb-inline-key">▶ Start work</span>, and watch progress land in the activity feed.
+            Shared Kanban every agent can work from — assign a card, hit <span className="kb-inline-key">▶ Start work</span>, then <span className="kb-inline-key">✓ Validate</span> reviewed work into Done or send it back with feedback.
           </div>
         </div>
         <div className="kb-head-actions">
@@ -363,10 +441,10 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
                         setDropHint({ col, beforeId: task.id });
                       }}
                       onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(col); }}
-                      onClick={() => setSelectedId(task.id)}
+                      onClick={() => openCard(task.id)}
                       role="button"
                       tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === 'Enter') setSelectedId(task.id); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') openCard(task.id); }}
                     >
                       <div className="kb-card-top">
                         <span className="kb-card-key">{task.key}</span>
@@ -396,6 +474,27 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
                           <AgentAvatar agent={agent} />
                         </div>
                       )}
+                      {task.status === 'in_review' && !task.working && (
+                        <div className="kb-card-review-row">
+                          <button
+                            type="button"
+                            className="kb-review-btn kb-review-approve"
+                            title="Validate — approve the work and move to Done"
+                            disabled={reviewBusy}
+                            onClick={(e) => { e.stopPropagation(); void validateCard(task); }}
+                          >
+                            <Check size={12} /> Validate
+                          </button>
+                          <button
+                            type="button"
+                            className="kb-review-btn"
+                            title="Needs changes — open the card and write feedback for the agent"
+                            onClick={(e) => { e.stopPropagation(); openCard(task.id, true); }}
+                          >
+                            <RotateCcw size={11} /> Refine
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -410,7 +509,7 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
 
       {selected && (
         <>
-          <div className="kb-panel-backdrop" onClick={() => setSelectedId(null)} aria-hidden />
+          <div className="kb-panel-backdrop" onClick={() => openCard(null)} aria-hidden />
           <aside className="kb-panel" role="dialog" aria-label={`Card ${selected.key}`}>
             <div className="kb-panel-head">
               <span className="kb-card-key">{selected.key}</span>
@@ -428,7 +527,7 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
               >
                 <Trash2 size={14} />
               </button>
-              <button type="button" className="kb-icon-btn" title="Close" aria-label="Close panel" onClick={() => setSelectedId(null)}>
+              <button type="button" className="kb-icon-btn" title="Close" aria-label="Close panel" onClick={() => openCard(null)}>
                 <X size={15} />
               </button>
             </div>
@@ -528,6 +627,47 @@ export default function KanbanBoard({ agents, onOpenRun }: KanbanBoardProps) {
                 </span>
               )}
             </div>
+
+            {selected.status === 'in_review' && !selected.working && (
+              <div className="kb-review">
+                <div className="kb-review-head">
+                  <StatusIcon status="in_review" />
+                  Ready for your review
+                </div>
+                <p className="kb-review-hint">
+                  The work is done — check the latest activity below. Validate to move it to Done, or describe what to change and send it back.
+                </p>
+                <button
+                  type="button"
+                  className="grok-btn grok-btn-primary text-sm inline-flex items-center gap-1.5 kb-review-validate"
+                  disabled={reviewBusy}
+                  onClick={() => void validateCard(selected)}
+                >
+                  <Check size={14} /> Validate — move to Done
+                </button>
+                <textarea
+                  ref={feedbackRef}
+                  className="grok-input kb-review-feedback"
+                  placeholder="What needs to change? Be specific — the agent gets exactly this, alongside its previous work."
+                  value={reviewFeedback}
+                  rows={3}
+                  onChange={(e) => setReviewFeedback(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
+                  disabled={reviewBusy || !reviewFeedback.trim() || !selected.assigneeAgentId}
+                  title={!selected.assigneeAgentId
+                    ? 'Assign an agent first — refinement re-dispatches the assignee'
+                    : 'Send the card back: the agent reruns with your feedback'}
+                  onClick={() => void refineCard(selected)}
+                >
+                  {reviewBusy
+                    ? <><Loader2 size={13} className="kb-spin" /> Working…</>
+                    : <><RotateCcw size={13} /> Send back for refinement</>}
+                </button>
+              </div>
+            )}
 
             <div className="kb-prop-name kb-desc-label">Description</div>
             <textarea

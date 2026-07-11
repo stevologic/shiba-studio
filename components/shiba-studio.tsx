@@ -731,6 +731,7 @@ export default function ShibaStudio() {
         const next: NavStats = {
           chatSessions: data.chatSessions ?? 0,
           projects: data.projects ?? 0,
+          boardOpen: data.boardOpen ?? 0,
           workspaceFiles: data.workspaceFiles ?? 0,
           automationsScheduled: data.automationsScheduled ?? 0,
           integrationsConfigured: data.integrationsConfigured ?? 0,
@@ -2811,7 +2812,8 @@ export default function ShibaStudio() {
             { id: 'dashboard', label: 'Dashboard', icon: Home, stat: null as string | null },
             { id: 'chat', label: 'Grok Chat', icon: MessageSquare, stat: navStats.chatSessions > 0 ? String(navStats.chatSessions) : null },
             { id: 'projects', label: 'Projects', icon: FolderKanban, stat: navStats.projects > 0 ? String(navStats.projects) : null },
-            { id: 'board', label: 'Board', icon: KanbanSquare, stat: null },
+            // Open = backlog + todo + in progress: the work still ahead of review.
+            { id: 'board', label: 'Board', icon: KanbanSquare, stat: navStats.boardOpen > 0 ? String(navStats.boardOpen) : null },
             { id: 'agents', label: 'Agents', icon: Users, stat: agents.length > 0 ? String(agents.length) : null },
             { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
@@ -4523,7 +4525,7 @@ export default function ShibaStudio() {
           )}
 
           {tab === 'board' && (
-            <KanbanBoard agents={agents} onOpenRun={openRunTrace} />
+            <KanbanBoard agents={agents} onOpenRun={openRunTrace} onOpenCountChanged={() => { void loadNavStats(); }} />
           )}
 
           {tab === 'usage' && (

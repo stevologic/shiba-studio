@@ -13,7 +13,19 @@ interface BoardRunGlobals {
 const g = globalThis as unknown as BoardRunGlobals;
 const active: Map<string, string | null> = g.__shibaBoardRuns ?? (g.__shibaBoardRuns = new Map());
 
-function buildCardPrompt(task: { key: string; title: string; description: string; labels: string[] }): string {
+interface CardPromptInput {
+  key: string;
+  title: string;
+  description: string;
+  labels: string[];
+  /** Reviewer feedback → the run is a refinement pass, not a fresh start. */
+  feedback?: string;
+  /** The agent's latest outcome note, echoed so it knows what it delivered. */
+  previousOutcome?: string;
+}
+
+function buildCardPrompt(task: CardPromptInput): string {
+  const refining = !!task.feedback;
   return [
     `You are working a Kanban card from the Shiba Studio board.`,
     ``,
@@ -21,19 +33,35 @@ function buildCardPrompt(task: { key: string; title: string; description: string
     task.labels.length ? `Labels: ${task.labels.join(', ')}` : '',
     ``,
     task.description ? `Brief:\n${task.description}` : 'No further description — use the title as the goal.',
+    refining && task.previousOutcome
+      ? `\nYour previous run delivered this outcome:\n${task.previousOutcome}`
+      : '',
+    refining
+      ? `\nThe reviewer looked at that work and sent it back with this feedback — address it specifically, keeping what was already right:\n${task.feedback}`
+      : '',
     ``,
     `Work the card to completion. You have board tools:`,
     `- board_update_task to post progress notes (do this at meaningful milestones) and change status`,
     `- board_get_task / board_list_tasks to re-read the card or see the rest of the board`,
-    `When you finish, post a clear summary of the outcome as a note on ${task.key}. Do not move the card to done — it lands in review automatically.`,
+    `When you finish, post a clear summary of ${refining ? 'what you changed in response to the feedback' : 'the outcome'} as a note on ${task.key}. Do not move the card to done — it lands in review automatically.`,
   ].filter((l) => l !== '').join('\n');
+}
+
+export interface StartWorkOpts {
+  /** Reviewer feedback: run as a refinement pass instead of a fresh start. */
+  feedback?: string;
 }
 
 /**
  * Start the assigned agent on a card. Returns the started state immediately;
- * the run continues in the background.
+ * the run continues in the background. With `feedback`, the run is a
+ * refinement pass: the agent sees its previous outcome plus the reviewer's
+ * notes and is told to address them specifically.
  */
-export async function startWorkOnTask(idOrKey: string): Promise<{ taskId: string; key: string; agentName: string }> {
+export async function startWorkOnTask(
+  idOrKey: string,
+  opts: StartWorkOpts = {},
+): Promise<{ taskId: string; key: string; agentName: string }> {
   const task = await getBoardTask(idOrKey);
   if (!task) throw new Error(`Board task not found: ${idOrKey}`);
   if (!task.assigneeAgentId) throw new Error(`${task.key} has no assigned agent — assign one first`);
@@ -43,22 +71,37 @@ export async function startWorkOnTask(idOrKey: string): Promise<{ taskId: string
   const agent = (await loadAgents()).find((a) => a.id === task.assigneeAgentId);
   if (!agent) throw new Error(`Assigned agent no longer exists — reassign ${task.key}`);
 
+  const feedback = opts.feedback?.trim() || undefined;
+  // Latest agent note = what the reviewer just looked at.
+  const previousOutcome = feedback
+    ? [...task.activity].reverse().find((a) => a.kind === 'agent')?.text?.slice(0, 3000)
+    : undefined;
+
   active.set(task.id, null);
   await updateBoardTask(task.id, {
     status: 'in_progress',
     working: true,
     actor: agent.name,
-    note: { kind: 'system', text: `${agent.name} started working this card` },
+    note: {
+      kind: 'system',
+      text: feedback
+        ? `${agent.name} started refining this card from review feedback`
+        : `${agent.name} started working this card`,
+    },
   });
 
   void (async () => {
     const { audit } = await import('./audit-log');
     try {
-      audit('run', 'board card dispatched', `${task.key}: ${task.title.slice(0, 100)}`, {
+      audit('run', feedback ? 'board card refinement dispatched' : 'board card dispatched', `${task.key}: ${task.title.slice(0, 100)}`, {
         taskId: task.id, agent: agent.name,
       });
       const { runAgentOnce } = await import('./agent-runtime');
-      const run: AgentRun = await runAgentOnce(agent, buildCardPrompt(task), {});
+      const run: AgentRun = await runAgentOnce(
+        agent,
+        buildCardPrompt({ ...task, feedback, previousOutcome }),
+        {},
+      );
       active.set(task.id, run.id);
       const ok = run.status !== 'error';
       await updateBoardTask(task.id, {

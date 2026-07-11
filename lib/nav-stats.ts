@@ -69,7 +69,8 @@ async function getCachedUsageCost(): Promise<{ costUsd: number; source: 'xai' | 
 
 export async function getNavStats(integrations: IntegrationCreds): Promise<NavStats> {
   const { cloudReachable } = await import('./run-guards');
-  const [sessions, projects, uploads, agents, mcpServers, usage, cfg, reach] = await Promise.all([
+  const { listBoardTasks } = await import('./board');
+  const [sessions, projects, uploads, agents, mcpServers, usage, cfg, reach, boardTasks] = await Promise.all([
     listChatSessions(),
     listProjects(),
     listGlobalUploadFiles(),
@@ -78,6 +79,7 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
     getCachedUsageCost(),
     loadConfig(),
     cloudReachable(),
+    listBoardTasks().catch(() => []),
   ]);
 
   let automationsScheduled = 0;
@@ -95,6 +97,9 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
   return {
     chatSessions: sessions.length,
     projects: projects.length,
+    boardOpen: boardTasks.filter(
+      (t) => t.status === 'backlog' || t.status === 'todo' || t.status === 'in_progress',
+    ).length,
     workspaceFiles: uploads.length,
     automationsScheduled,
     integrationsConfigured: countConfiguredIntegrations(integrations) + mcpConfigured,

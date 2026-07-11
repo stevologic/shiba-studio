@@ -1,6 +1,8 @@
 export interface NavStats {
   chatSessions: number;
   projects: number;
+  /** Open board cards: backlog + todo + in_progress combined. */
+  boardOpen: number;
   workspaceFiles: number;
   automationsScheduled: number;
   integrationsConfigured: number;

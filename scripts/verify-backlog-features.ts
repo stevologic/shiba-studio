@@ -71,8 +71,19 @@ async function main() {
     assert(runtimeSrc.includes(`'${t}'`), `agent tool ${t}`);
   }
   assert((await read('lib/agent-tool-exec.ts')).includes("case 'board_update_task'"), 'board tool exec');
-  assert((await read('components/kanban-board.tsx')).includes('Start work'), 'kanban UI');
+  const kanbanUi = await read('components/kanban-board.tsx');
+  assert(kanbanUi.includes('Start work'), 'kanban UI');
   assert((await read('lib/app-navigation.ts')).includes("'board'"), 'board nav tab');
+
+  // Board review stage: user validates In Review work into Done, or sends it
+  // back with feedback that re-dispatches the assigned agent as a refinement.
+  const boardApi = await read('app/api/board/route.ts');
+  assert(boardApi.includes("case 'validate'"), 'board validate action');
+  assert(boardApi.includes("case 'refine'"), 'board refine action');
+  assert((await read('lib/board-runner.ts')).includes('feedback'), 'refinement feedback reaches the run prompt');
+  assert(kanbanUi.includes('kb-review'), 'review UI on In Review cards');
+  assert((await read('lib/nav-stats-types.ts')).includes('boardOpen'), 'board open count in nav stats');
+  assert(kanbanUi.includes('kb-open-pill'), 'board open-count pill');
 
   await log('PASS: all backlog feature structural checks');
   process.exit(0);

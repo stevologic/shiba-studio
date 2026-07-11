@@ -42,6 +42,13 @@ Two directions, both live:
 
 **You assign work.** Pick an agent in the card's Assignee selector and hit **▶ Start work**. The agent receives the card (title, brief, labels) as a complete prompt plus board tools, runs as a normal agent run (visible on [Automations](automations.md) with a full execution trace, bounded by the run guards), posts progress notes into the card's activity feed as it goes, and the card lands in **In Review** with the outcome summarized when the run finishes. Failures stay in In Progress with the error noted.
 
+**You review the work.** In Review is your gate — nothing reaches Done without you. Every In Review card shows two actions (on the card and in its detail panel):
+
+- **✓ Validate** — approve the work; the card moves to Done with a "Validated" note in the feed.
+- **↺ Refine** — describe what needs to change and send it back. The assigned agent reruns with the original brief, its previous outcome, *and your feedback*, told to address it specifically while keeping what was right. The card returns to In Progress while it works and comes back to In Review with the changes summarized. Loop as many times as it takes.
+
+The header shows how much work is still ahead of review — the **open** count (Backlog + Todo + In Progress combined) — and the same number badges the Board entry in the left nav.
+
 **Agents use the board themselves.** Every agent — scheduled, chat-dispatched, or run manually — has board tools:
 
 | Tool | What it does |

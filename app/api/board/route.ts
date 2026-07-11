@@ -72,6 +72,34 @@ export async function POST(req: NextRequest) {
         const started = await startWorkOnTask(String(body.id || ''));
         return Response.json({ ok: true, started });
       }
+      // Review stage: the user validates finished work into Done…
+      case 'validate': {
+        const task = await updateBoardTask(String(body.id || ''), {
+          status: 'done',
+          actor: 'user',
+          note: {
+            kind: 'user',
+            text: body.note?.trim()
+              ? `✓ Validated: ${String(body.note).trim().slice(0, 2000)}`
+              : '✓ Validated — work approved',
+          },
+        });
+        audit('config', 'board card validated', `${task.key}: ${task.title.slice(0, 100)}`);
+        return Response.json({ ok: true, task });
+      }
+      // …or sends it back with feedback for the assigned agent to refine.
+      case 'refine': {
+        const feedback = String(body.feedback || '').trim();
+        if (!feedback) {
+          return Response.json({ ok: false, error: 'Refinement feedback is required' }, { status: 400 });
+        }
+        await updateBoardTask(String(body.id || ''), {
+          actor: 'user',
+          note: { kind: 'user', text: `↺ Sent back for refinement: ${feedback.slice(0, 2000)}` },
+        });
+        const started = await startWorkOnTask(String(body.id || ''), { feedback });
+        return Response.json({ ok: true, started });
+      }
       default:
         return Response.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });
     }

@@ -6511,6 +6511,101 @@ body::before {
 .kb-status-done { color: var(--success); }
 .kb-status-cancelled { color: var(--text-dim); }
 
+.kb-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.kb-open-pill {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-hover) 80%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.12rem 0.6rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* ── Review stage ── */
+
+.kb-card-review-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.kb-review-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.2rem 0.55rem;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.kb-review-btn:hover {
+  color: var(--text);
+  border-color: var(--border-light);
+  background: var(--bg-hover);
+}
+
+.kb-review-btn:disabled { opacity: 0.5; cursor: default; }
+
+.kb-review-approve {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+}
+
+.kb-review-approve:hover {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 60%, var(--border));
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+
+.kb-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border: 1px solid color-mix(in srgb, #38bdf8 30%, var(--border));
+  background: color-mix(in srgb, #38bdf8 5%, transparent);
+  border-radius: 10px;
+  padding: 0.75rem 0.8rem;
+}
+
+.kb-review-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.kb-review-hint {
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.kb-review-validate { align-self: flex-start; }
+
+.kb-review-feedback {
+  width: 100%;
+  resize: vertical;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .kb-composer { padding: 0.35rem; }
 
 .kb-composer-input {

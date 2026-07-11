@@ -12,6 +12,7 @@ import type { NavStats } from './nav-stats-types';
 export const EMPTY_NAV_STATS: NavStats = {
   chatSessions: 0,
   projects: 0,
+  boardOpen: 0,
   workspaceFiles: 0,
   automationsScheduled: 0,
   integrationsConfigured: 0,
@@ -28,6 +29,7 @@ function sameStats(a: NavStats, b: NavStats): boolean {
   return (
     a.chatSessions === b.chatSessions
     && a.projects === b.projects
+    && a.boardOpen === b.boardOpen
     && a.workspaceFiles === b.workspaceFiles
     && a.automationsScheduled === b.automationsScheduled
     && a.integrationsConfigured === b.integrationsConfigured
