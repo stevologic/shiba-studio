@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { saveConfig, loadConfig } from '@/lib/persistence';
 import * as Ints from '@/lib/integrations';
 import { audit } from '@/lib/audit-log';
+import { maskIntegrationCreds, restoreMaskedCreds } from '@/lib/secret-mask';
 
 export async function GET() {
   const cfg = await loadConfig();
@@ -10,7 +11,9 @@ export async function GET() {
     const { getChannelListenerStatuses } = await import('@/lib/channel-listeners');
     listeners = getChannelListenerStatuses();
   } catch { /* optional */ }
-  return NextResponse.json({ integrations: cfg.integrations, listeners });
+  // Secrets never leave the server in full — the browser gets partial
+  // fingerprints; save/test round-trips restore them (restoreMaskedCreds).
+  return NextResponse.json({ integrations: maskIntegrationCreds(cfg.integrations || {}), listeners });
 }
 
 export async function POST(req: NextRequest) {
@@ -24,25 +27,28 @@ export async function POST(req: NextRequest) {
       which && creds[which] !== undefined
         ? { [which]: creds[which] }
         : creds;
+    // The client only ever sees masked fingerprints — any field arriving as a
+    // mask placeholder means "unchanged": substitute the stored secret.
+    const restored = restoreMaskedCreds(partial, cfg.integrations || {});
     // Pasted tokens routinely arrive with stray whitespace/newlines — a top
     // cause of baffling 401s. Trim every string credential field on save.
-    for (const svc of Object.values(partial) as Array<Record<string, unknown>>) {
+    for (const svc of Object.values(restored) as Array<Record<string, unknown>>) {
       if (svc && typeof svc === 'object') {
         for (const [k, v] of Object.entries(svc)) {
           if (typeof v === 'string') (svc as Record<string, unknown>)[k] = v.trim();
         }
       }
     }
-    const next = await saveConfig({ integrations: partial });
+    const next = await saveConfig({ integrations: restored });
     Ints.setIntegrationCreds(next.integrations || {});
-    audit('integration', 'credentials saved', which || Object.keys(partial).join(', '));
+    audit('integration', 'credentials saved', which || Object.keys(restored).join(', '));
     // Restart mention listeners when Slack/Discord creds change.
     let listeners = null;
     try {
       const { syncChannelListeners } = await import('@/lib/channel-listeners');
       listeners = await syncChannelListeners();
     } catch { /* non-fatal */ }
-    return NextResponse.json({ ok: true, integrations: next.integrations, listeners });
+    return NextResponse.json({ ok: true, integrations: maskIntegrationCreds(next.integrations || {}), listeners });
   }
 
   if (body.action === 'delete') {
@@ -57,7 +63,7 @@ export async function POST(req: NextRequest) {
       const { syncChannelListeners } = await import('@/lib/channel-listeners');
       listeners = await syncChannelListeners();
     } catch { /* non-fatal */ }
-    return NextResponse.json({ ok: true, integrations: next.integrations, listeners });
+    return NextResponse.json({ ok: true, integrations: maskIntegrationCreds(next.integrations || {}), listeners });
   }
 
   if (body.action === 'listeners') {
@@ -82,11 +88,16 @@ export async function POST(req: NextRequest) {
     const next = await loadConfig();
     Ints.setIntegrationCreds(next.integrations || {});
     audit('integration', 'Google Drive disconnected', '');
-    return NextResponse.json({ ok: true, integrations: next.integrations });
+    return NextResponse.json({ ok: true, integrations: maskIntegrationCreds(next.integrations || {}) });
   }
 
   if (body.action === 'test') {
-    Ints.setIntegrationCreds(body.creds || cfg.integrations || {});
+    // Client-held creds are masked — swap placeholders for stored secrets so
+    // tests exercise the real credentials.
+    const effectiveCreds = body.creds
+      ? restoreMaskedCreds(body.creds, cfg.integrations || {})
+      : (cfg.integrations || {});
+    Ints.setIntegrationCreds(effectiveCreds);
     const which = body.which;
     if (which === 'github') {
       const r = await Ints.testGitHub();
@@ -109,23 +120,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(r);
     }
     if (which === 'obsidian') {
-      const r = await Ints.testObsidian(body.creds || cfg.integrations || {});
+      const r = await Ints.testObsidian(effectiveCreds);
       return NextResponse.json(r);
     }
     if (which === 'vercel') {
-      const r = await Ints.testVercel(body.creds || cfg.integrations || {});
+      const r = await Ints.testVercel(effectiveCreds);
       return NextResponse.json(r);
     }
     if (which === 'netlify') {
-      const r = await Ints.testNetlify(body.creds || cfg.integrations || {});
+      const r = await Ints.testNetlify(effectiveCreds);
       return NextResponse.json(r);
     }
     if (which === 'linear') {
-      const r = await Ints.testLinear(body.creds || cfg.integrations || {});
+      const r = await Ints.testLinear(effectiveCreds);
       return NextResponse.json(r);
     }
     if (which === 'jira') {
-      const r = await Ints.testJira(body.creds || cfg.integrations || {});
+      const r = await Ints.testJira(effectiveCreds);
       return NextResponse.json(r);
     }
   }

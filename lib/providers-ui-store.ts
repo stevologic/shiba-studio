@@ -45,6 +45,9 @@ export type ProvidersUiSnapshot = {
   modelsError: string | null;
   hasApiKeyMasked: boolean;
   hasManagementKeyMasked: boolean;
+  /** Partial fingerprints ("xai-ab…7f3a") shown in the Settings key inputs. */
+  apiKeyMasked?: string;
+  managementKeyMasked?: string;
 };
 
 const DEFAULT_OAUTH: CachedOauthStatus = { connected: false, expired: false };

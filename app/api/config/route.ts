@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { loadConfig, saveConfig } from '@/lib/persistence';
 import { getOAuthPublicStatus, resolveCloudBearer } from '@/lib/xai-oauth';
 import { secretKeyLocation } from '@/lib/secure-store';
+import { maskIntegrationCreds, maskSecret } from '@/lib/secret-mask';
 import type { CloudAuthMode } from '@/lib/types';
 
 export async function GET() {
@@ -11,10 +12,11 @@ export async function GET() {
   const { isGoogleClientReady, bundledGoogleClient } = await import('@/lib/google-oauth');
   const safe = {
     ...cfg,
-    xaiApiKey: cfg.xaiApiKey ? (cfg.xaiApiKey.slice(0, 6) + '…' + cfg.xaiApiKey.slice(-4)) : '',
-    xaiManagementKey: cfg.xaiManagementKey
-      ? (cfg.xaiManagementKey.slice(0, 6) + '…' + cfg.xaiManagementKey.slice(-4))
-      : '',
+    // Full secrets never reach the browser: keys go out as partial
+    // fingerprints, integrations through the same deep-masking helper.
+    xaiApiKey: maskSecret(cfg.xaiApiKey || ''),
+    xaiManagementKey: maskSecret(cfg.xaiManagementKey || ''),
+    integrations: maskIntegrationCreds(cfg.integrations || {}),
     hasKey: !!cfg.xaiApiKey,
     hasManagementKey: !!cfg.xaiManagementKey?.trim(),
     hasOAuth: oauth.connected,

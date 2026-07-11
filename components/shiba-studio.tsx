@@ -53,6 +53,7 @@ import {
   subscribeLiveChatRuns,
 } from '@/lib/chat-live-runs';
 import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
+import { isMaskedSecret, maskSecret } from '@/lib/secret-mask';
 import { THEME_IDENTITY } from '@/lib/theme';
 import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
 import {
@@ -541,12 +542,14 @@ export default function ShibaStudio() {
     () => getProvidersUiSnapshot()?.grokCli ?? null,
   );
 
-  const [apiKeyInput, setApiKeyInput] = useState(() =>
-    getProvidersUiSnapshot()?.hasApiKeyMasked ? '••••••••' : '',
-  );
-  const [managementKeyInput, setManagementKeyInput] = useState(() =>
-    getProvidersUiSnapshot()?.hasManagementKeyMasked ? '••••••••' : '',
-  );
+  const [apiKeyInput, setApiKeyInput] = useState(() => {
+    const snap = getProvidersUiSnapshot();
+    return snap?.apiKeyMasked || (snap?.hasApiKeyMasked ? '••••••••' : '');
+  });
+  const [managementKeyInput, setManagementKeyInput] = useState(() => {
+    const snap = getProvidersUiSnapshot();
+    return snap?.managementKeyMasked || (snap?.hasManagementKeyMasked ? '••••••••' : '');
+  });
   /** Persistent "Tested" badges for Settings probe buttons (localStorage). */
   type SettingsTestId = 'apiKey' | 'managementKey' | 'localGrok';
   const SETTINGS_TESTED_LS = 'shiba-settings-tested';
@@ -870,8 +873,10 @@ export default function ShibaStudio() {
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
-      if ((cfg as any).hasKey) setApiKeyInput('••••••••'); // masked
-      if ((cfg as any).hasManagementKey) setManagementKeyInput('••••••••');
+      // Server sends partial fingerprints ("xai-ab…7f3a"), never full keys —
+      // recognizable in the input without exposing the secret.
+      if ((cfg as any).hasKey) setApiKeyInput(String((cfg as any).xaiApiKey || '') || '••••••••');
+      if ((cfg as any).hasManagementKey) setManagementKeyInput(String((cfg as any).xaiManagementKey || '') || '••••••••');
       const nextOauth: CachedOauthStatus = (cfg as any).oauthStatus
         ? (cfg as any).oauthStatus
         : { connected: false, expired: false };
@@ -902,6 +907,8 @@ export default function ShibaStudio() {
         modelsError: getProvidersUiSnapshot()?.modelsError ?? null,
         hasApiKeyMasked: !!(cfg as any).hasKey,
         hasManagementKeyMasked: !!(cfg as any).hasManagementKey,
+        apiKeyMasked: (cfg as any).hasKey ? String((cfg as any).xaiApiKey || '') : '',
+        managementKeyMasked: (cfg as any).hasManagementKey ? String((cfg as any).xaiManagementKey || '') : '',
       });
       if (cfg.defaultGrokModel) {
         setDefaultModelInput(cfg.defaultGrokModel);
@@ -989,8 +996,8 @@ export default function ShibaStudio() {
         if (snap.grokCli) setGrokCliStatus(snap.grokCli);
         if (snap.availableModels?.length) setAvailableModels(snap.availableModels as ModelOption[]);
         if (snap.modelsError != null) setModelsError(snap.modelsError);
-        if (snap.hasApiKeyMasked) setApiKeyInput('••••••••');
-        if (snap.hasManagementKeyMasked) setManagementKeyInput('••••••••');
+        if (snap.hasApiKeyMasked) setApiKeyInput(snap.apiKeyMasked || '••••••••');
+        if (snap.hasManagementKeyMasked) setManagementKeyInput(snap.managementKeyMasked || '••••••••');
       }
       // Cold caches (HMR / partial remount) — full hydrate once.
       if (!hasCachedAgents() && !hasProvidersUiSnapshot()) {
@@ -1901,7 +1908,7 @@ export default function ShibaStudio() {
 
   // API Key
   async function saveApiKey() {
-    if (!apiKeyInput || apiKeyInput.startsWith('••••')) return;
+    if (!apiKeyInput || isMaskedSecret(apiKeyInput)) return;
     const res = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'validate', key: apiKeyInput }) });
     const data = await res.json();
     if (data.ok) {
@@ -1943,7 +1950,7 @@ export default function ShibaStudio() {
   }
 
   async function saveManagementKey() {
-    if (!managementKeyInput || managementKeyInput.startsWith('••••')) return;
+    if (!managementKeyInput || isMaskedSecret(managementKeyInput)) return;
     const res = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1952,7 +1959,7 @@ export default function ShibaStudio() {
     const data = await res.json().catch(() => ({}));
     if (data.ok) {
       toast.success('Management key saved — Usage will pull xAI billing data');
-      setManagementKeyInput('••••••••');
+      setManagementKeyInput(maskSecret(managementKeyInput));
       await loadAll();
       await loadNavStats();
     } else {
@@ -1962,7 +1969,7 @@ export default function ShibaStudio() {
 
   async function testManagementKey() {
     const key = managementKeyInput?.trim() || '';
-    const usingSaved = !key || key.startsWith('••••');
+    const usingSaved = !key || isMaskedSecret(key);
     if (usingSaved && !(config as any)?.hasManagementKey) {
       toast.error('Paste a management key (or save one) before testing');
       return;
@@ -2891,7 +2898,7 @@ export default function ShibaStudio() {
         {/* Model-source status — bottom of left nav, above footer separator */}
         {(() => {
           // Prefer live form/state mirrors of config so badges stay correct after save/load.
-          const hasKey = !!(config as any)?.hasKey || apiKeyInput === '••••••••';
+          const hasKey = !!(config as any)?.hasKey || isMaskedSecret(apiKeyInput);
           const oauthOn = !!oauthStatus.connected;
           const oauthExpired = !!oauthStatus.expired && !oauthOn;
           const cliOn = !!grokCliStatus?.installed;

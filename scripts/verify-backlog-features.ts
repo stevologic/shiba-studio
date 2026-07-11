@@ -85,6 +85,19 @@ async function main() {
   assert((await read('lib/nav-stats-types.ts')).includes('boardOpen'), 'board open count in nav stats');
   assert(kanbanUi.includes('kb-open-pill'), 'board open-count pill');
 
+  // Secret masking: full keys never reach the browser — GETs return partial
+  // fingerprints; masked values round-tripping back are restored server-side.
+  const maskLib = await read('lib/secret-mask.ts');
+  assert(maskLib.includes('maskSecret') && maskLib.includes('restoreMaskedCreds'), 'secret-mask helpers');
+  const intsRoute = await read('app/api/integrations/route.ts');
+  assert(intsRoute.includes('maskIntegrationCreds'), 'integrations GET masks secrets');
+  assert(intsRoute.includes('restoreMaskedCreds'), 'integrations save/test restore masked values');
+  const cfgRoute = await read('app/api/config/route.ts');
+  assert(cfgRoute.includes('maskIntegrationCreds'), 'config GET masks integration secrets');
+  assert(cfgRoute.includes('maskSecret'), 'config GET masks xAI keys');
+  assert((await read('app/api/mcp/route.ts')).includes('sanitizeIncomingEnv'), 'mcp env mask round-trip');
+  assert((await read('components/shiba-studio.tsx')).includes('isMaskedSecret'), 'settings inputs treat masks as placeholders');
+
   await log('PASS: all backlog feature structural checks');
   process.exit(0);
 }
