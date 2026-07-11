@@ -16,9 +16,9 @@ Build, orchestrate, and schedule AI agents with full computer use — chat, code
 
 <br/>
 
-<img src="docs/images/chat.png" alt="Grok Chat: annotated sub-browser element request with selector, HTML snippet, and mic-enabled composer" width="880" />
+<img src="docs/images/chat.png" alt="Grok Chat: session rail, suggested prompts, workspace control, voice-enabled composer, and model controls" width="880" />
 
-*Grok Chat in action — annotate the app you're building, refine with Grok, dictate messages, and ship from the same session.*
+*Grok Chat in action — bind a workspace, bring project context into the conversation, dictate messages, and ship from the same session.*
 
 *Upgrading from an older install? Legacy `~/.grokdesk` data (key, credentials, runs, chats) migrates to `~/.shiba-studio` automatically on first start.*
 
@@ -47,10 +47,15 @@ All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAut
 | <img src="docs/images/dashboard.png" alt="Dashboard: hero, readiness badges, quick stats, and recent agent runs with statuses and view-answer links" /> | <img src="docs/images/automations.png" alt="Automations: scheduled agents with Active/Paused states, per-schedule Run/Edit/Delete, and compact run-log icon" /> |
 | Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Cron-scheduled agents with compact run-log access — they keep firing headless as long as the server is up. |
 
-| Agents | Capabilities |
+| Shared Board | Capabilities |
 | :---: | :---: |
-| <img src="docs/images/agents.png" alt="Agents page: local and cloud Grok agents with models, workspaces, integration scopes, skills, and schedule state" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the built-in tool catalog" /> |
-| Local and cloud agents with their own model, workspace, worktree, integration scopes, skills, and schedules. | Every integration the studio can reach, plus skills, MCP servers, and the built-in agent tool catalog. |
+| <img src="docs/images/board.png" alt="Board page: shared Kanban columns with the Linear and Jira sync modal open" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the built-in tool catalog" /> |
+| A shared Kanban for people and agents, with Board-scoped Linear/Jira pull, push, and two-way sync. | Every integration the studio can reach, plus skills, MCP servers, and the built-in agent tool catalog. |
+
+| Agents | Workspace |
+| :---: | :---: |
+| <img src="docs/images/agents.png" alt="Agents page: local and cloud Grok agents with models, workspaces, integration scopes, skills, and schedule state" /> | <img src="docs/images/workspace.png" alt="Workspace page: local files, global uploads, cloud files, and workspace sync controls" /> |
+| Local and cloud agents with their own model, workspace, worktree, integration scopes, skills, and schedules. | Local files, uploads, and cloud workspace context in one place. |
 
 | Interactive API explorer | Settings |
 | :---: | :---: |
