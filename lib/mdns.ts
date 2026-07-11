@@ -1,8 +1,8 @@
 // Minimal multicast-DNS (mDNS / "Bonjour") responder so the app is reachable
-// on the local network by name — e.g. http://shib.local:3000 — instead of an
-// IP address. No dependency: a single static A record answered over UDP
-// multicast (224.0.0.251:5353), which is how every host on the network
-// resolves `.local` names.
+// on the local network by name — e.g. http://shiba.local:3000 — instead of an
+// IP address. No dependency: static A records answered over UDP multicast
+// (224.0.0.251:5353), which is how every host on the network resolves
+// `.local` names.
 //
 // Which address it advertises follows what the server is actually reachable at:
 //   • LAN mode  (SHIBA_LAN=1, i.e. `npm run *:lan`, bound to 0.0.0.0)
@@ -10,8 +10,9 @@
 //   • localhost (default, bound to 127.0.0.1)
 //                → 127.0.0.1, a convenience alias for this machine only.
 //
-// Disable with SHIBA_MDNS=off. Change the name with SHIBA_MDNS_HOST
-// (default "shib.local"; a bare label gets ".local" appended).
+// Disable with SHIBA_MDNS=off. Change the name(s) with SHIBA_MDNS_HOST —
+// comma-separated, a bare label gets ".local" appended. The default
+// advertises both "shiba.local" and the shorter alias "shib.local".
 
 import dgram from 'dgram';
 import os from 'os';
@@ -21,7 +22,7 @@ const MDNS_PORT = 5353;
 const TTL_SECONDS = 120;
 
 interface MdnsGlobals {
-  __shibaMdns?: { socket: dgram.Socket; hostname: string; ip: string } | null;
+  __shibaMdns?: { socket: dgram.Socket; hostnames: string[]; ip: string } | null;
 }
 const g = globalThis as unknown as MdnsGlobals;
 
@@ -42,10 +43,25 @@ export function primaryLanIPv4(): string | null {
 
 /** Normalize a configured host to a single-label `<name>.local`. */
 export function normalizeHostname(raw: string | undefined): string {
-  let h = (raw || 'shib.local').trim().toLowerCase().replace(/\.$/, '');
-  if (!h) h = 'shib.local';
+  let h = (raw || 'shiba.local').trim().toLowerCase().replace(/\.$/, '');
+  if (!h) h = 'shiba.local';
   if (!h.endsWith('.local')) h = `${h}.local`;
   return h;
+}
+
+/**
+ * The full list of `.local` names the app answers for. SHIBA_MDNS_HOST may
+ * hold several comma-separated names; unset, the app advertises shiba.local
+ * plus the shorter alias shib.local so either routes to the site.
+ */
+export function advertisedHostnames(raw?: string | undefined): string[] {
+  const src = raw ?? process.env.SHIBA_MDNS_HOST;
+  const names = (src || 'shiba.local,shib.local')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => normalizeHostname(p));
+  return [...new Set(names)];
 }
 
 /** Encode a dotted name as DNS labels (length-prefixed) + terminating 0. */
@@ -127,17 +143,17 @@ export function queryWantsHost(buf: Buffer, hostname: string): boolean {
   return false;
 }
 
-export interface MdnsInfo { hostname: string; ip: string }
+export interface MdnsInfo { hostnames: string[]; ip: string }
 
 /**
- * Start advertising `shib.local` (or SHIBA_MDNS_HOST). Idempotent and
- * best-effort — never throws; a bind failure just logs and skips.
+ * Start advertising shiba.local + shib.local (or SHIBA_MDNS_HOST). Idempotent
+ * and best-effort — never throws; a bind failure just logs and skips.
  */
 export function startMdns(): MdnsInfo | null {
   if (process.env.SHIBA_MDNS === 'off') return null;
-  if (g.__shibaMdns) return { hostname: g.__shibaMdns.hostname, ip: g.__shibaMdns.ip };
+  if (g.__shibaMdns) return { hostnames: g.__shibaMdns.hostnames, ip: g.__shibaMdns.ip };
 
-  const hostname = normalizeHostname(process.env.SHIBA_MDNS_HOST);
+  const hostnames = advertisedHostnames();
   const lanMode = process.env.SHIBA_LAN === '1';
   const ip = lanMode ? (primaryLanIPv4() || '127.0.0.1') : '127.0.0.1';
 
@@ -145,7 +161,7 @@ export function startMdns(): MdnsInfo | null {
 
   socket.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      console.warn(`[shiba-studio] mDNS port ${MDNS_PORT} busy — ${hostname} not advertised (another responder owns it)`);
+      console.warn(`[shiba-studio] mDNS port ${MDNS_PORT} busy — ${hostnames.join(', ')} not advertised (another responder owns it)`);
     } else {
       console.warn('[shiba-studio] mDNS error:', err.message);
     }
@@ -155,12 +171,14 @@ export function startMdns(): MdnsInfo | null {
 
   socket.on('message', (msg, rinfo) => {
     try {
-      if (!queryWantsHost(msg, hostname)) return;
-      const answer = buildAnswer(hostname, ip);
-      // Respond both to the multicast group (so every host caches it) and
-      // unicast to the asker (faster first resolve).
-      socket.send(answer, MDNS_PORT, MDNS_ADDR);
-      socket.send(answer, rinfo.port, rinfo.address);
+      for (const hostname of hostnames) {
+        if (!queryWantsHost(msg, hostname)) continue;
+        const answer = buildAnswer(hostname, ip);
+        // Respond both to the multicast group (so every host caches it) and
+        // unicast to the asker (faster first resolve).
+        socket.send(answer, MDNS_PORT, MDNS_ADDR);
+        socket.send(answer, rinfo.port, rinfo.address);
+      }
     } catch { /* malformed query — ignore */ }
   });
 
@@ -168,17 +186,18 @@ export function startMdns(): MdnsInfo | null {
     try {
       socket.addMembership(MDNS_ADDR);
       socket.setMulticastTTL(255);
-      // Unsolicited announcement so resolvers cache the record immediately.
-      const answer = buildAnswer(hostname, ip);
-      socket.send(answer, MDNS_PORT, MDNS_ADDR);
-      g.__shibaMdns = { socket, hostname, ip };
-      console.log(`[shiba-studio] mDNS advertising ${hostname} → ${ip}${lanMode ? ' (LAN)' : ' (localhost)'}`);
+      // Unsolicited announcements so resolvers cache the records immediately.
+      for (const hostname of hostnames) {
+        socket.send(buildAnswer(hostname, ip), MDNS_PORT, MDNS_ADDR);
+      }
+      g.__shibaMdns = { socket, hostnames, ip };
+      console.log(`[shiba-studio] mDNS advertising ${hostnames.join(', ')} → ${ip}${lanMode ? ' (LAN)' : ' (localhost)'}`);
     } catch (e) {
       console.warn('[shiba-studio] mDNS membership failed:', e instanceof Error ? e.message : String(e));
     }
   });
 
-  return { hostname, ip };
+  return { hostnames, ip };
 }
 
 export function stopMdns(): void {

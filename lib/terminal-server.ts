@@ -13,6 +13,7 @@ import {
   terminalShellPublicInfo,
   type TerminalShell,
 } from './terminal-shell';
+import { advertisedHostnames } from './mdns';
 
 export const DEFAULT_TERMINAL_WS_PORT = 3911;
 export const MAIN_SESSION_ID = 'main';
@@ -446,16 +447,14 @@ export function restartMainSession(): { ok: boolean; error?: string; pid?: numbe
   }
 }
 
-/** True for loopback origins and the app's own mDNS name (shib.local). */
+/** True for loopback origins and the app's own mDNS names (shiba.local / shib.local). */
 function isLoopbackOrigin(origin: string): boolean {
   try {
     const host = new URL(origin).hostname;
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return true;
-    // Accept the app's own mDNS name so the terminal works when the app is
-    // opened by name (http://shib.local:3000) instead of by loopback IP.
-    const mdnsHost = (process.env.SHIBA_MDNS_HOST || 'shib.local').trim().toLowerCase().replace(/\.$/, '');
-    const normalized = mdnsHost.endsWith('.local') ? mdnsHost : `${mdnsHost}.local`;
-    return host === normalized;
+    // Accept the app's own mDNS names so the terminal works when the app is
+    // opened by name (http://shiba.local:3000) instead of by loopback IP.
+    return advertisedHostnames().includes(host.toLowerCase());
   } catch {
     return false;
   }

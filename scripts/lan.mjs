@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Cross-platform LAN launch: sets SHIBA_LAN=1 (so the mDNS responder advertises
-// the machine's LAN IP for shib.local) and runs Next bound to 0.0.0.0.
+// the machine's LAN IP for shiba.local / shib.local) and runs Next bound to 0.0.0.0.
 //   node scripts/lan.mjs dev    → npm run dev:lan
 //   node scripts/lan.mjs start  → npm run start:lan
 import { spawn } from 'node:child_process';

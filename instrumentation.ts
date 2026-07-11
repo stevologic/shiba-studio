@@ -26,7 +26,7 @@ export async function register() {
   } catch (e) {
     console.error('[shiba-studio] failed to start retention pruning', e);
   }
-  // Advertise the app on the LAN by name (mDNS) — e.g. http://shib.local:3000.
+  // Advertise the app on the LAN by name (mDNS) — e.g. http://shiba.local:3000.
   try {
     const { startMdns } = await import('./lib/mdns');
     startMdns();

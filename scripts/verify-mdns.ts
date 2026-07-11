@@ -5,6 +5,7 @@ import * as path from 'path';
 import { GOAL_SCRATCH as SCRATCH } from '../lib/verify-scratch';
 import {
   normalizeHostname,
+  advertisedHostnames,
   buildAnswer,
   buildQuery,
   queryWantsHost,
@@ -53,10 +54,20 @@ function queryWantsHostAnswer(buf: Buffer, hostname: string): boolean {
 
 async function main() {
   // --- normalizeHostname ---
-  assert(normalizeHostname(undefined) === 'shib.local', 'default hostname is shib.local');
+  assert(normalizeHostname(undefined) === 'shiba.local', 'default hostname is shiba.local');
   assert(normalizeHostname('shib') === 'shib.local', 'bare label gets .local');
-  assert(normalizeHostname('Shib.Local') === 'shib.local', 'lowercased');
+  assert(normalizeHostname('Shiba.Local') === 'shiba.local', 'lowercased');
   assert(normalizeHostname('mybox.local.') === 'mybox.local', 'trailing dot trimmed');
+
+  // --- advertisedHostnames ---
+  assert(
+    JSON.stringify(advertisedHostnames('')) === JSON.stringify(['shiba.local', 'shib.local']),
+    'default advertises shiba.local + shib.local',
+  );
+  assert(
+    JSON.stringify(advertisedHostnames('a, B.local ,a.local')) === JSON.stringify(['a.local', 'b.local']),
+    'comma list normalized + deduped',
+  );
 
   // --- query detection ---
   assert(queryWantsHost(buildQuery('shib.local', 1), 'shib.local'), 'A query for shib.local matches');
@@ -75,18 +86,24 @@ async function main() {
   assert(lan === null || /^\d{1,3}(\.\d{1,3}){3}$/.test(lan), `primaryLanIPv4 is an IPv4 or null (${lan})`);
 
   // --- live UDP multicast round-trip (best-effort; multicast can be blocked) ---
-  // Use a UNIQUE hostname so only THIS responder answers — the mDNS bus is
+  // Use UNIQUE hostnames so only THIS responder answers — the mDNS bus is
   // shared, and a stale responder or a second Shiba instance on the network
-  // could otherwise answer `shib.local` and make the assertion flaky.
-  const uniqueHost = `shibtest-${process.pid}-${Date.now()}.local`;
-  process.env.SHIBA_MDNS_HOST = uniqueHost;
+  // could otherwise answer `shiba.local` and make the assertion flaky. Two
+  // names prove the multi-name answering path (shiba.local + shib.local).
+  const stamp = `${process.pid}-${Date.now()}`;
+  const uniqueHost = `shibtest-${stamp}.local`;
+  const aliasHost = `shibalias-${stamp}.local`;
+  process.env.SHIBA_MDNS_HOST = `${uniqueHost},${aliasHost}`;
   delete process.env.SHIBA_LAN; // localhost mode → advertises 127.0.0.1
   const info = startMdns();
   if (info) {
+    assert(info.hostnames.length === 2, 'responder carries both configured names');
     await new Promise((r) => setTimeout(r, 300));
     const resolved = await roundTrip(uniqueHost);
-    if (resolved) {
+    const resolvedAlias = await roundTrip(aliasHost);
+    if (resolved || resolvedAlias) {
       assert(resolved === '127.0.0.1', `round-trip resolves ${uniqueHost} → ${resolved} (localhost mode)`);
+      assert(resolvedAlias === '127.0.0.1', `round-trip resolves alias ${aliasHost} → ${resolvedAlias}`);
     } else {
       console.log('note: multicast round-trip returned nothing (multicast may be blocked here) — packet logic verified above');
     }
