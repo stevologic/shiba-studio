@@ -118,7 +118,9 @@ async function runHeadlessLaunch(runIndex: 1 | 2): Promise<{
   page.on('pageerror', (err) => consoleErrors.push(String(err)));
 
   await page.goto(`http://localhost:${PORT}/?themeVerify=${runIndex}-${Date.now()}`, {
-    waitUntil: 'networkidle0',
+    // networkidle2, not 0: the shell keeps one SSE connection (/api/events)
+    // open for live updates, so zero-in-flight never happens.
+    waitUntil: 'networkidle2',
     timeout: 30000,
   });
   await new Promise((r) => setTimeout(r, 1500));

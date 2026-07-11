@@ -46,7 +46,8 @@ async function main() {
   for (const shot of shots) {
     const url = `${base}${shot.path}`;
     console.log('capturing', url, '→', shot.file);
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
+    // networkidle2: the live-events SSE stream keeps one connection open.
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 90000 });
     await waitReady(page);
     // Let client data (agents, sessions, stats) settle
     await new Promise((r) => setTimeout(r, shot.waitMs));
