@@ -6,6 +6,15 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   try {
+    // A run left 'running' means the process died mid-execution — clear it so
+    // the Automations page doesn't show a permanent spinner.
+    const { reconcileOrphanedRuns } = await import('./lib/agent-runs-store');
+    const n = reconcileOrphanedRuns();
+    if (n > 0) console.log(`[shiba-studio] reconciled ${n} interrupted run(s) at server start`);
+  } catch (e) {
+    console.error('[shiba-studio] failed to reconcile orphaned runs', e);
+  }
+  try {
     const { loadAndScheduleAll } = await import('./lib/scheduler');
     await loadAndScheduleAll();
     const { audit } = await import('./lib/audit-log');

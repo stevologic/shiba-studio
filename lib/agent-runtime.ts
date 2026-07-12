@@ -902,6 +902,18 @@ async function* agentRunGenerator(
   // Use schedule-specific instructions as the prompt when originating from a schedule entry (AC3)
   const effectivePrompt = (opts.scheduleInstructions && opts.scheduled) ? opts.scheduleInstructions : prompt;
 
+  // Broadcast a 'running' record the moment execution begins so the Automations
+  // page (and dashboards) light a live spinner via SSE — including scheduled
+  // fires the user never clicked. The completion/error persists below upsert
+  // this same run id to its final status (INSERT OR REPLACE by id).
+  await persistAgentRun({
+    id: runId, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
+    model: agent.model, startedAt, status: 'running', trace: [], sideEffects: [],
+    ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
+    ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
+    ...(opts.projectId ? { projectId: opts.projectId } : {}),
+  }).catch(() => { /* best-effort live signal; the run proceeds regardless */ });
+
   // CLI-model agents delegate the whole task to the headless Grok CLI: it is
   // its own agentic harness (reads/edits files, runs commands) working in the
   // agent's workspace, with its own authentication.

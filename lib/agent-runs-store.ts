@@ -75,6 +75,27 @@ export async function persistAgentRun(run: AgentRun): Promise<void> {
   emitAppEvent('runs');
 }
 
+/**
+ * Mark any run still flagged 'running' as an interrupted error. A run only
+ * stays 'running' if the process died mid-execution (crash / restart) — call
+ * this on server start so orphaned runs don't leave a permanent spinner on the
+ * Automations page. Returns how many were reconciled.
+ */
+export function reconcileOrphanedRuns(): number {
+  const res = getDb()
+    .prepare(`
+      UPDATE runs
+      SET status = 'error',
+          completedAt = ?,
+          finalOutput = COALESCE(finalOutput, 'Run was interrupted (server restarted while it was executing).')
+      WHERE status = 'running'
+    `)
+    .run(new Date().toISOString());
+  const n = Number(res.changes || 0);
+  if (n > 0) emitAppEvent('runs');
+  return n;
+}
+
 /** Full runs including traces — kept for compatibility (agent-runtime, tests). */
 export async function loadRuns(agentId?: string): Promise<AgentRun[]> {
   const rows = agentId
