@@ -47,7 +47,6 @@ const FEATURE_GUARDS: Array<{ file: string; mustInclude: string; label: string }
   { file: 'components/workspace-page.tsx', mustInclude: "view === 'uploads'", label: 'workspace uploads view' },
   { file: 'components/workspace-page.tsx', mustInclude: "view === 'worktrees'", label: 'workspace worktrees view' },
   { file: 'components/shiba-studio.tsx', mustInclude: 'openCreateAgent', label: 'agent create' },
-  { file: 'components/shiba-studio.tsx', mustInclude: 'syncCloudAgents', label: 'cloud agent sync' },
   { file: 'components/usage-dashboard.tsx', mustInclude: 'XaiAccountSection', label: 'usage xAI account section' },
   { file: 'components/logs-panel.tsx', mustInclude: "exportLogs('csv')", label: 'logs CSV export' },
   { file: 'components/logs-panel.tsx', mustInclude: 'logs-search-input', label: 'logs search' },
