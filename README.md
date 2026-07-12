@@ -49,7 +49,7 @@ All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAut
 
 | Shared Board | Capabilities |
 | :---: | :---: |
-| <img src="docs/images/board.png" alt="Board page: shared Kanban columns with the Linear and Jira sync modal open" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the built-in tool catalog" /> |
+| <img src="docs/images/board.png" alt="Board page: Linear-style Kanban full of agent work — labeled research cards across Backlog and Todo, a card under review with View work / Validate / Refine, and a Done column of delivered assessments" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the built-in tool catalog" /> |
 | A shared Kanban for people and agents, with Board-scoped Linear/Jira pull, push, and two-way sync. | Every integration the studio can reach, plus skills, MCP servers, and the built-in agent tool catalog. |
 
 | Agents | Workspace |
