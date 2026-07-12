@@ -252,6 +252,17 @@ const AGENT_OVERRIDE_FIELDS: Record<string, Array<{ key: string; label: string; 
   ],
 };
 
+/** Enter-to-submit for single-line settings inputs: typing a value and pressing
+ *  Enter runs that field's Save action instead of doing nothing. */
+function submitOnEnter(run: () => void) {
+  return (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      run();
+    }
+  };
+}
+
 export default function ShibaStudio() {
   const pathname = usePathname();
   const router = useRouter();
@@ -4708,7 +4719,7 @@ export default function ShibaStudio() {
                     </div>
                     <InfoHint className="ml-auto" text="Get a key at console.x.ai. It is encrypted at rest (AES-256-GCM) with a machine key stored outside the project — never in source code." />
                   </div>
-                  <input value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder="xai-..." className="grok-input mb-2 font-mono" />
+                  <input value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} onKeyDown={submitOnEnter(saveApiKey)} placeholder="xai-..." className="grok-input mb-2 font-mono" />
                   <div className="flex flex-wrap gap-2">
                     <button onClick={saveApiKey} className="grok-btn grok-btn-primary">Save &amp; Validate Key</button>
                     <button onClick={quickValidate} className="grok-btn grok-btn-secondary">Test</button>
@@ -4739,6 +4750,7 @@ export default function ShibaStudio() {
                   <input
                     value={managementKeyInput}
                     onChange={(e) => setManagementKeyInput(e.target.value)}
+                    onKeyDown={submitOnEnter(() => void saveManagementKey())}
                     placeholder="Management key from console.x.ai → Settings → Management Keys"
                     className="grok-input mb-2 font-mono text-xs"
                   />
@@ -4861,6 +4873,7 @@ export default function ShibaStudio() {
                     className="grok-input font-mono text-xs mb-2"
                     value={localGrokBaseUrl}
                     onChange={e => setLocalGrokBaseUrl(e.target.value)}
+                    onKeyDown={submitOnEnter(saveLocalGrokSettings)}
                     placeholder="http://127.0.0.1:1234/v1"
                   />
                   <div className="flex gap-2 flex-wrap">
@@ -5145,6 +5158,7 @@ export default function ShibaStudio() {
                       className="grok-input flex-1 min-w-0 font-mono text-xs"
                       value={defaultWorkspaceInput}
                       onChange={(e) => setDefaultWorkspaceInput(e.target.value)}
+                      onKeyDown={submitOnEnter(saveDefaultWorkspace)}
                       placeholder="C:\Users\you\Projects\my-repo"
                     />
                     <button
@@ -5185,7 +5199,7 @@ export default function ShibaStudio() {
                       Monthly budget (USD)
                       <input
                         className="grok-input mt-1" type="number" min="0" step="1" placeholder="0 = none"
-                        value={costSettings.usageBudgetUsd}
+                        value={costSettings.usageBudgetUsd} onKeyDown={submitOnEnter(() => void saveCostSettings())}
                         onChange={(e) => setCostSettings((s) => ({ ...s, usageBudgetUsd: e.target.value }))}
                       />
                     </label>
@@ -5193,7 +5207,7 @@ export default function ShibaStudio() {
                       Daily budget (USD)
                       <input
                         className="grok-input mt-1" type="number" min="0" step="1" placeholder="0 = none"
-                        value={costSettings.dailyBudgetUsd}
+                        value={costSettings.dailyBudgetUsd} onKeyDown={submitOnEnter(() => void saveCostSettings())}
                         onChange={(e) => setCostSettings((s) => ({ ...s, dailyBudgetUsd: e.target.value }))}
                       />
                     </label>
@@ -5211,7 +5225,7 @@ export default function ShibaStudio() {
                       Max concurrent runs
                       <input
                         className="grok-input mt-1" type="number" min="1" max="20" step="1"
-                        value={costSettings.maxConcurrentRuns}
+                        value={costSettings.maxConcurrentRuns} onKeyDown={submitOnEnter(() => void saveCostSettings())}
                         onChange={(e) => setCostSettings((s) => ({ ...s, maxConcurrentRuns: e.target.value }))}
                       />
                     </label>
@@ -5219,7 +5233,7 @@ export default function ShibaStudio() {
                       Per-run token cap
                       <input
                         className="grok-input mt-1" type="number" min="0" step="1000" placeholder="0 = unlimited"
-                        value={costSettings.perRunTokenCap}
+                        value={costSettings.perRunTokenCap} onKeyDown={submitOnEnter(() => void saveCostSettings())}
                         onChange={(e) => setCostSettings((s) => ({ ...s, perRunTokenCap: e.target.value }))}
                       />
                     </label>
@@ -5229,7 +5243,7 @@ export default function ShibaStudio() {
                       Sandbox memory (MB)
                       <input
                         className="grok-input mt-1" type="number" min="128" max="16384" step="128" placeholder="512 = default"
-                        value={costSettings.sandboxMemoryMb}
+                        value={costSettings.sandboxMemoryMb} onKeyDown={submitOnEnter(() => void saveCostSettings())}
                         onChange={(e) => setCostSettings((s) => ({ ...s, sandboxMemoryMb: e.target.value }))}
                       />
                     </label>
@@ -5237,7 +5251,7 @@ export default function ShibaStudio() {
                       Sandbox CPUs
                       <input
                         className="grok-input mt-1" type="number" min="0.25" max="16" step="0.25" placeholder="1 = default"
-                        value={costSettings.sandboxCpus}
+                        value={costSettings.sandboxCpus} onKeyDown={submitOnEnter(() => void saveCostSettings())}
                         onChange={(e) => setCostSettings((s) => ({ ...s, sandboxCpus: e.target.value }))}
                       />
                     </label>
@@ -5247,7 +5261,7 @@ export default function ShibaStudio() {
                       Keep runs (days)
                       <input
                         className="grok-input mt-1" type="number" min="0" step="1" placeholder="0 = forever"
-                        value={costSettings.runRetentionDays}
+                        value={costSettings.runRetentionDays} onKeyDown={submitOnEnter(() => void saveCostSettings())}
                         onChange={(e) => setCostSettings((s) => ({ ...s, runRetentionDays: e.target.value }))}
                       />
                     </label>
@@ -5255,7 +5269,7 @@ export default function ShibaStudio() {
                       Keep audit log (days)
                       <input
                         className="grok-input mt-1" type="number" min="0" step="1" placeholder="0 = forever"
-                        value={costSettings.auditRetentionDays}
+                        value={costSettings.auditRetentionDays} onKeyDown={submitOnEnter(() => void saveCostSettings())}
                         onChange={(e) => setCostSettings((s) => ({ ...s, auditRetentionDays: e.target.value }))}
                       />
                     </label>
