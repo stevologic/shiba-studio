@@ -203,6 +203,12 @@ export async function executeAgentTool(
           priority = p in byWord ? byWord[p] : (Number.isFinite(Number(p)) ? Number(p) : undefined);
         }
 
+        // When an agent submits a card for review, link THIS run to the card
+        // so "View work" appears consistently — even when the run wasn't
+        // dispatched from the board (a scheduled agent that finds a card,
+        // works it, and moves it to in_review on its own).
+        const submittingForReview = status === 'in_review' || coercedDone;
+        const linkRunId = submittingForReview && run.id ? String(run.id) : undefined;
         const task = await updateBoardTask(String(args.id || ''), {
           status: status as import('./board-types').BoardStatus | undefined,
           assigneeAgentId,
@@ -210,6 +216,7 @@ export async function executeAgentTool(
           labels: Array.isArray(args.labels) ? args.labels.map(String) : undefined,
           title: args.title !== undefined ? String(args.title) : undefined,
           description: args.description !== undefined ? String(args.description) : undefined,
+          addRunId: linkRunId,
           actor: agent.name,
           note: args.note
             ? { kind: 'agent', text: String(args.note), agentName: agent.name }

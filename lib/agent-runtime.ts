@@ -755,6 +755,10 @@ Finish by giving a short summary when task is complete.`;
 
 type AgentRunOpts = {
   scheduled?: boolean;
+  /** No interactive approver watches this run (scheduler, board, background,
+   *  channel replies). Approval-gated tools proceed instead of waiting for a
+   *  click that can never come — the run's very dispatch is the authorization. */
+  autonomous?: boolean;
   /** Injectable chat double for tests — canned responses only need choices. */
   grokChatFn?: (params: {
     model: string;
@@ -1102,7 +1106,9 @@ async function* agentRunGenerator(
         });
 
         const { toolNeedsApproval, beginToolApproval } = await import('./tool-approval');
-        if (toolNeedsApproval(fn.name, cfg.toolApprovalMode)) {
+        // Autonomous runs have no one to approve — proceed (scheduling/dispatch
+        // is the authorization). Only interactive runs pause for a click.
+        if (!opts.autonomous && toolNeedsApproval(fn.name, cfg.toolApprovalMode)) {
           const { approvalId, wait } = beginToolApproval(runId, fn.name, args);
           yield emit({
             id: uuidv4(),
@@ -1233,8 +1239,12 @@ export async function runAgentOnce(
   prompt: string,
   opts: AgentRunOpts = {},
 ): Promise<AgentRun> {
+  // This collector never surfaces approval events to a UI (schedulers, board
+  // runs, background tasks, channel replies) — so gated tools must proceed
+  // rather than wait for an approval click that can never arrive.
+  const runOpts: AgentRunOpts = { ...opts, autonomous: true };
   let finalRun: AgentRun | undefined;
-  for await (const event of agentRunGenerator(agent, prompt, opts)) {
+  for await (const event of agentRunGenerator(agent, prompt, runOpts)) {
     if (event.kind === 'done') finalRun = event.run;
   }
   if (!finalRun) throw new Error('Agent run did not complete');
