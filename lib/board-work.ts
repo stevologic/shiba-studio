@@ -118,6 +118,39 @@ function filePathsFromTrace(run: AgentRun, workDir: string): Array<{ relPath: st
   return out;
 }
 
+/**
+ * Workspace-relative file paths an agent *mentions* in its answer — markdown
+ * link targets, backticked paths, or bare `a/b/c.ext` tokens. Lets a card
+ * surface the write-up its answer points to even when the file was produced by
+ * a shell command (or any tool) rather than a captured fs_write step. Paths are
+ * confined to the run's workspace: absolute paths and anything that escapes via
+ * `..` are dropped, since the answer text is agent-controlled and the card id
+ * later acts as the capability to read these files.
+ */
+function filePathsFromText(text: string, workDir: string): Array<{ relPath: string; absPath: string }> {
+  if (!text) return [];
+  const cands = new Set<string>();
+  for (const m of text.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) cands.add(m[1]);       // [label](target)
+  for (const m of text.matchAll(/`([^`]+?)`/g)) cands.add(m[1]);                     // `backticked`
+  for (const m of text.matchAll(/(?:^|[\s(])((?:\.{0,2}\/)?[\w.-]+(?:\/[\w.-]+)+\.[A-Za-z0-9]{1,8})/g)) cands.add(m[1]); // a/b/c.ext
+
+  const out: Array<{ relPath: string; absPath: string }> = [];
+  const seen = new Set<string>();
+  for (const raw of cands) {
+    const cand = raw.trim().replace(/[)\].,;:>]+$/, '');
+    if (!cand || /^[a-z][a-z0-9+.-]*:\/\//i.test(cand) || cand.startsWith('//') || cand.startsWith('#')) continue;
+    if (path.isAbsolute(cand)) continue;                       // workspace-relative refs only
+    const abs = path.normalize(path.join(workDir, cand));
+    const rel = path.relative(workDir, abs);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) continue; // never escape the workspace
+    const key = abs.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ relPath: cand, absPath: abs });
+  }
+  return out;
+}
+
 export async function collectCardWork(idOrKey: string): Promise<CardWork | null> {
   const task = await getBoardTask(idOrKey);
   if (!task) return null;
@@ -150,6 +183,26 @@ export async function collectCardWork(idOrKey: string): Promise<CardWork | null>
         mtime: stat?.isFile() ? stat.mtime.toISOString() : null,
         kind,
         preview: exists && kind === 'text' ? await textPreview(f.absPath) : undefined,
+        runId,
+      });
+    }
+    // Files the answer points to that weren't captured as fs_write steps —
+    // only real, in-workspace files, and never overriding a trace deliverable.
+    for (const f of filePathsFromText(run.finalOutput || '', workDir)) {
+      const key = f.absPath.toLowerCase();
+      if (fileMap.has(key)) continue;
+      const stat = await fs.stat(f.absPath).catch(() => null);
+      if (!stat?.isFile()) continue;
+      const kind = fileKind(f.absPath);
+      fileMap.set(key, {
+        name: path.basename(f.absPath),
+        relPath: f.relPath,
+        absPath: f.absPath,
+        exists: true,
+        size: stat.size,
+        mtime: stat.mtime.toISOString(),
+        kind,
+        preview: kind === 'text' ? await textPreview(f.absPath) : undefined,
         runId,
       });
     }

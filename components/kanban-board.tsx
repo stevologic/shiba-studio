@@ -424,6 +424,29 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     }
   }
 
+  /** A link in the answer that points to one of this card's deliverables opens
+   *  the in-app file viewer instead of navigating away. External links (http…)
+   *  are left alone. */
+  function openAnswerFileLink(e: React.MouseEvent) {
+    const anchor = (e.target as HTMLElement).closest('a');
+    if (!anchor) return;
+    const href = (anchor.getAttribute('href') || '').trim();
+    if (!href || /^[a-z][a-z0-9+.-]*:\/\//i.test(href) || href.startsWith('#')) return;
+    const norm = href.replace(/^\.?\//, '').toLowerCase();
+    const file = work?.files.find((f) =>
+      f.exists && (
+        f.relPath.toLowerCase() === norm ||
+        f.relPath.toLowerCase().endsWith(`/${norm}`) ||
+        norm.endsWith(f.relPath.toLowerCase()) ||
+        f.name.toLowerCase() === norm
+      ),
+    );
+    if (file) {
+      e.preventDefault();
+      void openFileView(file);
+    }
+  }
+
   /** Review needs changes: send feedback back and re-dispatch the agent. */
   async function refineCard(task: BoardTask) {
     const feedback = reviewFeedback.trim();
@@ -1086,7 +1109,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                       <ExternalLink size={11} /> trace
                     </button>
                   </div>
-                  <div className="kb-work-answer">
+                  <div className="kb-work-answer" onClick={openAnswerFileLink}>
                     <ChatMarkdown content={run.finalOutput || '_(no output recorded)_'} />
                   </div>
                 </section>
