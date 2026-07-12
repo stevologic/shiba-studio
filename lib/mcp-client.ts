@@ -20,6 +20,14 @@ async function loadSdk() {
   return { Client: ClientClass!, StdioClientTransport: StdioTransportClass! };
 }
 
+/** True for servers that do a one-time interactive OAuth sign-in on first run
+ *  (e.g. the X MCP via xurl, which opens a browser and holds the MCP handshake
+ *  open until you finish signing in). These need a much longer connect budget. */
+function needsInteractiveOAuth(server: McpServerRecord): boolean {
+  const hay = `${server.command} ${(server.args || []).join(' ')}`.toLowerCase();
+  return hay.includes('xurl');
+}
+
 export async function connectMcpServer(
   server: McpServerRecord,
   timeoutMs = 30_000,
@@ -34,9 +42,12 @@ export async function connectMcpServer(
 
   const client = new Client({ name: 'shiba-studio', version: '1.0.0' });
 
+  // A first-run OAuth login (browser sign-in) can take a couple of minutes; the
+  // MCP handshake is held until it completes, so don't cut it off at 30s.
+  const effectiveTimeout = needsInteractiveOAuth(server) ? Math.max(timeoutMs, 180_000) : timeoutMs;
   const connectPromise = client.connect(transport);
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`MCP connection timed out after ${timeoutMs}ms`)), timeoutMs);
+    setTimeout(() => reject(new Error(`MCP connection timed out after ${effectiveTimeout}ms`)), effectiveTimeout);
   });
 
   await Promise.race([connectPromise, timeout]);

@@ -144,7 +144,7 @@ export const MCP_PRESETS: McpPreset[] = [
     id: 'x',
     name: 'X (Twitter)',
     shortLabel: 'X',
-    description: 'Post, read, search, and analyze on X through the official X API MCP bridge',
+    description: 'Post, read, search, and analyze on X through the official X API MCP bridge. Signs in with X via OAuth 2.0 in the browser (like the providers) — you supply your X app\'s Client ID/Secret once, then it caches and refreshes the token.',
     icon: '/integrations/x.svg',
     command: 'npx',
     // xurl is X's official CLI; its `mcp` subcommand bridges stdio to X's
@@ -161,7 +161,7 @@ export const MCP_PRESETS: McpPreset[] = [
         label: 'X App Client ID',
         placeholder: 'OAuth 2.0 Client ID',
         required: true,
-        help: 'From your app at developer.x.com (Projects & Apps → OAuth 2.0). Auth is OAuth 2.0 PKCE — the first run opens a browser to sign in.',
+        help: 'X requires your own app (there is no shared/default X MCP client), so this Client ID is needed — it is NOT the same as the OAuth 1.0a keys used by the built-in x_post tool, nor the xAI "Sign in with X". Get it at developer.x.com → your app → OAuth 2.0. The MCP then signs in via the browser (OAuth 2.0 PKCE) and caches/refreshes the token itself.',
       },
       {
         key: 'CLIENT_SECRET',
