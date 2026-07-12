@@ -2690,9 +2690,24 @@ export default function ShibaStudio() {
   const seededEmptyAgentsRef = useRef(false);
   useEffect(() => {
     if (!agentsReady || !hasConfig) return;
-    if (agentCount > 0) return;
+    if (agentCount > 0) {
+      // The install has agents — remember that, so a later intentional
+      // full-delete is treated as the user's choice, not a fresh first run.
+      try { window.localStorage.setItem('shiba-seeded-agents', '1'); } catch { /* private mode */ }
+      return;
+    }
     if (seededEmptyAgentsRef.current) return;
+    // Seed the sample agent only on a genuine first run. Once this install has
+    // ever had agents (persisted flag), an empty roster means the user deleted
+    // them — never resurrect Explorer Agent against their wishes.
+    try {
+      if (window.localStorage.getItem('shiba-seeded-agents')) {
+        seededEmptyAgentsRef.current = true;
+        return;
+      }
+    } catch { /* private mode — fall through and seed */ }
     seededEmptyAgentsRef.current = true;
+    try { window.localStorage.setItem('shiba-seeded-agents', '1'); } catch { /* private mode */ }
     let cancelled = false;
     const cfg = config;
     (async () => {
