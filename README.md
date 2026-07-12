@@ -71,7 +71,7 @@ npm install
 npm run dev          # → http://127.0.0.1:3000 (localhost only, by design)
 ```
 
-Also reachable at **http://shiba.local:3000** (alias: `shib.local`) — the app advertises those names over mDNS. `npm run dev:lan` / `start:lan` make `shiba.local` resolve network-wide so other devices reach it by name (LAN exposure — read [SECURITY.md](SECURITY.md) first).
+Also reachable at **http://shiba.local:3000** — the app advertises that name over mDNS. `npm run dev:lan` / `start:lan` make `shiba.local` resolve network-wide so other devices reach it by name (LAN exposure — read [SECURITY.md](SECURITY.md) first).
 
 **Requirements:** Node.js ≥ 22.5 (the runs/audit database uses Node's built-in `node:sqlite` — nothing to compile on any platform). Runs on **Windows, macOS, and Linux**.
 

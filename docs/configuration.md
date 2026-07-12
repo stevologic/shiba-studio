@@ -29,7 +29,7 @@ Settings is a card grid; each card maps to a concern:
 | `SHIBA_GIT_COMMIT` | resolved via `git rev-parse` | Overrides the commit shown in the sidebar/footer for non-git installs |
 | `PUPPETEER_SKIP_DOWNLOAD` | unset | Set to `1` before `npm install` to skip the ~150 MB Chromium download (slim install). Browser tools then explain how to fetch it on first use |
 | `SHIBA_TEST_DATA_DIR` | unset | Persistent data dir for `npm test` (default: a fresh temp dir per run, so tests never touch your live data) |
-| `SHIBA_MDNS_HOST` | `shiba.local,shib.local` | The `.local` name(s) the app advertises via mDNS — comma-separated; a bare label gets `.local` appended |
+| `SHIBA_MDNS_HOST` | `shiba.local` | The `.local` name(s) the app advertises via mDNS — comma-separated; a bare label gets `.local` appended |
 | `SHIBA_MDNS` | on | Set to `off` to disable mDNS advertising entirely |
 | `SHIBA_LAN` | unset | Set by `npm run dev:lan`/`start:lan`; makes mDNS advertise the machine's LAN IP (network-wide) instead of `127.0.0.1` |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | unset | A bundled Google OAuth client for Drive. When both are set, Capabilities → Google Drive becomes zero-setup — users just click **Sign in with Google**. Unset = each user adds their own client under the card's Advanced section. See [Capabilities](capabilities.md) |
@@ -41,8 +41,7 @@ The pre-rebrand names `GROKDESK_DATA_DIR` / `GROKDESK_SECRET_KEY` are still hono
 ## Reach the app by name (mDNS / `shiba.local`)
 
 On start the app advertises itself over multicast DNS so you can open it at
-**`http://shiba.local:3000`** (or the shorter alias **`http://shib.local:3000`**)
-instead of an IP address — no hosts-file editing.
+**`http://shiba.local:3000`** instead of an IP address — no hosts-file editing.
 
 - **`npm run dev` / `start` (localhost):** `shiba.local` resolves to `127.0.0.1`
   on this machine — a convenient local alias.

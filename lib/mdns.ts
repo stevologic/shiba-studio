@@ -11,8 +11,7 @@
 //                → 127.0.0.1, a convenience alias for this machine only.
 //
 // Disable with SHIBA_MDNS=off. Change the name(s) with SHIBA_MDNS_HOST —
-// comma-separated, a bare label gets ".local" appended. The default
-// advertises both "shiba.local" and the shorter alias "shib.local".
+// comma-separated, a bare label gets ".local" appended (default "shiba.local").
 
 import dgram from 'dgram';
 import os from 'os';
@@ -51,12 +50,11 @@ export function normalizeHostname(raw: string | undefined): string {
 
 /**
  * The full list of `.local` names the app answers for. SHIBA_MDNS_HOST may
- * hold several comma-separated names; unset, the app advertises shiba.local
- * plus the shorter alias shib.local so either routes to the site.
+ * hold several comma-separated names; unset, the app advertises shiba.local.
  */
 export function advertisedHostnames(raw?: string | undefined): string[] {
   const src = raw ?? process.env.SHIBA_MDNS_HOST;
-  const names = (src || 'shiba.local,shib.local')
+  const names = (src || 'shiba.local')
     .split(',')
     .map((p) => p.trim())
     .filter(Boolean)
@@ -146,8 +144,8 @@ export function queryWantsHost(buf: Buffer, hostname: string): boolean {
 export interface MdnsInfo { hostnames: string[]; ip: string }
 
 /**
- * Start advertising shiba.local + shib.local (or SHIBA_MDNS_HOST). Idempotent
- * and best-effort — never throws; a bind failure just logs and skips.
+ * Start advertising shiba.local (or SHIBA_MDNS_HOST). Idempotent and
+ * best-effort — never throws; a bind failure just logs and skips.
  */
 export function startMdns(): MdnsInfo | null {
   if (process.env.SHIBA_MDNS === 'off') return null;

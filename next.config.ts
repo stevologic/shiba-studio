@@ -22,7 +22,7 @@ function resolveGitCommit(): string {
 // also accept them or Next blocks its own assets when the site is opened
 // as http://shiba.local:3000. Mirrors advertisedHostnames(); kept inline so
 // config load stays dependency-free.
-const mdnsDevOrigins = (process.env.SHIBA_MDNS_HOST || 'shiba.local,shib.local')
+const mdnsDevOrigins = (process.env.SHIBA_MDNS_HOST || 'shiba.local')
   .split(',')
   .map((p) => p.trim().toLowerCase().replace(/\.$/, ''))
   .filter(Boolean)

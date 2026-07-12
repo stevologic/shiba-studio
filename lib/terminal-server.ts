@@ -447,7 +447,7 @@ export function restartMainSession(): { ok: boolean; error?: string; pid?: numbe
   }
 }
 
-/** True for loopback origins and the app's own mDNS names (shiba.local / shib.local). */
+/** True for loopback origins and the app's own mDNS name (shiba.local). */
 function isLoopbackOrigin(origin: string): boolean {
   try {
     const host = new URL(origin).hostname;

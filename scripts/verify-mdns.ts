@@ -61,8 +61,8 @@ async function main() {
 
   // --- advertisedHostnames ---
   assert(
-    JSON.stringify(advertisedHostnames('')) === JSON.stringify(['shiba.local', 'shib.local']),
-    'default advertises shiba.local + shib.local',
+    JSON.stringify(advertisedHostnames('')) === JSON.stringify(['shiba.local']),
+    'default advertises shiba.local only',
   );
   assert(
     JSON.stringify(advertisedHostnames('a, B.local ,a.local')) === JSON.stringify(['a.local', 'b.local']),

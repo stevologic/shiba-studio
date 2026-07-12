@@ -21,7 +21,7 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 wi
 | `lib/git-actions.ts`, `lib/browser.ts`, `lib/grok-cli.ts` | Git ops, puppeteer control, CLI detection/execution |
 | `lib/db.ts`, `lib/agent-runs-store.ts`, `lib/audit-log.ts` | SQLite schema (`user_version` migrations + FTS5), run persistence, audit trail |
 | `lib/scheduler.ts` + `instrumentation.ts` | Cron scheduling, armed at server start; also starts the terminal bridge, retention pruning, channel listeners, and the mDNS responder |
-| `lib/mdns.ts` | Multicast-DNS responder advertising `shiba.local` + `shib.local` (dependency-free) |
+| `lib/mdns.ts` | Multicast-DNS responder advertising `shiba.local` (dependency-free) |
 | `lib/secure-store.ts`, `lib/persistence.ts` | AES-256-GCM sealing and config/agent stores |
 | `lib/run-guards.ts`, `lib/cron-estimate.ts` | Concurrency/spend/token-cap guards, offline probe, cron-frequency estimate |
 | `lib/backup.ts`, `lib/retention.ts`, `lib/global-search.ts` | One-file backup/restore, retention pruning, FTS5 search across chats/runs/logs |
