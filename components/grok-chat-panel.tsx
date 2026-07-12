@@ -3074,10 +3074,13 @@ export default function GrokChatPanel({
               className={`grok-chat-bubble ${isUser ? 'grok-chat-bubble-user' : 'grok-chat-bubble-assistant'}`}
             >
               <div className="grok-chat-bubble-header">
-                {!isUser && m.agentId && agents.find((a) => a.id === m.agentId) && (
+                {!isUser && m.agentId && (
+                  // Always render the agent's alien for agent responses — fall
+                  // back to the id-derived avatar so it survives the agents
+                  // list loading late or the agent being deleted since.
                   <img
-                    src={resolveAgentAvatarPath(agents.find((a) => a.id === m.agentId)!)}
-                    alt=""
+                    src={resolveAgentAvatarPath(agents.find((a) => a.id === m.agentId) || { id: m.agentId })}
+                    alt={m.agentName ? `${m.agentName} avatar` : 'Agent avatar'}
                     className="agent-avatar-xs"
                     width={20}
                     height={20}
