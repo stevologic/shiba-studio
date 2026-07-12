@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
-  CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
+  CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
   KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, CopyPlus
 } from 'lucide-react';
@@ -33,6 +33,7 @@ const SkillsBrowser = dynamic(() => import('@/components/skills-browser'), { loa
 const WorkspaceDiffPanel = dynamic(() => import('@/components/workspace-diff-panel'), { loading: panelLoading });
 const WorkspacePage = dynamic(() => import('@/components/workspace-page'), { loading: panelLoading });
 const KanbanBoard = dynamic(() => import('@/components/kanban-board'), { loading: panelLoading });
+const FilesPanel = dynamic(() => import('@/components/files-panel'), { loading: panelLoading });
 const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
 const ToolsCatalog = dynamic(() => import('@/components/tools-catalog'), { loading: panelLoading });
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
@@ -124,7 +125,7 @@ type RunSummaryLite = {
 // One source of truth for tab display names (nav, top bar, document titles).
 const TAB_LABELS: Record<string, string> = {
   dashboard: 'Dashboard', chat: 'Grok Chat', projects: 'Projects', board: 'Board', agents: 'Agents',
-  workspace: 'Workspace', automations: 'Automations', integrations: 'Capabilities',
+  workspace: 'Workspace', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
   usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
 
@@ -3034,6 +3035,7 @@ export default function ShibaStudio() {
             { id: 'board', label: 'Board', icon: KanbanSquare, stat: navStats.boardOpen > 0 ? String(navStats.boardOpen) : null },
             { id: 'agents', label: 'Agents', icon: Users, stat: agents.length > 0 ? String(agents.length) : null },
             { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
+            { id: 'files', label: 'Files', icon: FileText, stat: null as string | null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
             { id: 'integrations', label: 'Capabilities', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
             {
@@ -3695,6 +3697,9 @@ export default function ShibaStudio() {
               }}
             />
           )}
+
+          {/* FILES — every deliverable agents have written, across all runs */}
+          {tab === 'files' && <FilesPanel />}
 
           {/* AUTOMATIONS — schedules & orchestration */}
           {tab === 'automations' && (

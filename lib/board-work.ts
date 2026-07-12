@@ -6,7 +6,7 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 import { getBoardTask } from './board';
-import { getRun } from './agent-runs-store';
+import { getRun, loadRuns } from './agent-runs-store';
 import type { AgentRun, TraceStep } from './types';
 
 export interface WorkFile {
@@ -230,4 +230,61 @@ export async function resolveCardDeliverable(idOrKey: string, absPath: string): 
   if (!work) return null;
   const wanted = path.normalize(absPath).toLowerCase();
   return work.files.find((f) => f.absPath.toLowerCase() === wanted) || null;
+}
+
+/** A created file, plus which run/agent produced it — for the global Files view. */
+export interface CreatedFile extends WorkFile {
+  agentName: string;
+  createdAt: string | null;
+}
+
+/**
+ * Every file the agents have created that still exists on disk — the union of
+ * fs_write / generate_image trace outputs and files an answer points to, across
+ * all recent runs. Deduped by path (newest run wins), newest first. This is the
+ * data behind the Files page.
+ */
+export async function collectAllCreatedFiles(): Promise<CreatedFile[]> {
+  const runs = await loadRuns();
+  // Oldest → newest so the newest run wins the per-path dedupe below.
+  const ordered = [...runs].sort((a, b) => (a.startedAt || '').localeCompare(b.startedAt || ''));
+  const map = new Map<string, CreatedFile>();
+  for (const run of ordered) {
+    const workDir = await runWorkDir(run);
+    const candidates = [
+      ...filePathsFromTrace(run, workDir),
+      ...filePathsFromText(run.finalOutput || '', workDir),
+    ];
+    const seenInRun = new Set<string>();
+    for (const f of candidates) {
+      const key = f.absPath.toLowerCase();
+      if (seenInRun.has(key)) continue;
+      seenInRun.add(key);
+      const stat = await fs.stat(f.absPath).catch(() => null);
+      if (!stat?.isFile()) continue; // the Files view tracks real, on-disk deliverables
+      const kind = fileKind(f.absPath);
+      map.set(key, {
+        name: path.basename(f.absPath),
+        relPath: f.relPath,
+        absPath: f.absPath,
+        exists: true,
+        size: stat.size,
+        mtime: stat.mtime.toISOString(),
+        kind,
+        preview: kind === 'text' ? await textPreview(f.absPath) : undefined,
+        runId: run.id,
+        agentName: run.agentName,
+        createdAt: run.completedAt || run.startedAt || null,
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) => (b.mtime || '').localeCompare(a.mtime || ''));
+}
+
+/** Capability check for serving a Files-page file: only paths that really are
+ *  tracked created files may be read through the endpoint. */
+export async function resolveCreatedFile(absPath: string): Promise<CreatedFile | null> {
+  const all = await collectAllCreatedFiles();
+  const wanted = path.normalize(absPath).toLowerCase();
+  return all.find((f) => f.absPath.toLowerCase() === wanted) || null;
 }
