@@ -1189,7 +1189,9 @@ export default function ShibaStudio() {
       `Trace:\n${lines.join('\n')}`;
     try { window.localStorage.setItem('shiba-chat-seed', seed); } catch { /* private mode */ }
     setShowTraceModal(false);
-    navigateToTab('chat');
+    // Always a fresh chat window (not whatever session was last open) so the
+    // trace question starts a clean thread; the composer consumes the seed on mount.
+    void startNewChat();
   }
 
   function closeRunDetail() {
