@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
   CloudUpload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, CopyPlus
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -1525,6 +1525,43 @@ export default function ShibaStudio() {
     setShowAgentModal(true);
   }
 
+  /**
+   * Clone: open the create modal pre-filled from an existing agent so only the
+   * one thing that differs (model, a scope, a skill) needs changing. Goes
+   * through the CREATE path (editingAgent=null) so the server mints a fresh id
+   * — any stray id/timestamps in the form are ignored on create. Schedules are
+   * carried but disabled so the copy can't silently double an automation.
+   */
+  function openCloneAgent(a: Agent) {
+    setEditingAgent(null);
+    const norm = { ...a };
+    const srcSchedules = (norm.schedules && norm.schedules.length)
+      ? norm.schedules
+      : (norm.schedule
+        ? [{ id: 'legacy', enabled: norm.schedule.enabled, cron: norm.schedule.cron, instructions: norm.schedule.description || norm.description || 'Scheduled task' }]
+        : []);
+    setAgentForm({
+      ...norm,
+      id: undefined,
+      createdAt: undefined,
+      updatedAt: undefined,
+      name: `${norm.name} (copy)`,
+      avatar: resolveAgentAvatar(norm),
+      voiceId: typeof norm.voiceId === 'string' ? norm.voiceId : '',
+      workspace: { ...norm.workspace },
+      integrations: { ...norm.integrations },
+      integrationOverrides: norm.integrationOverrides ? JSON.parse(JSON.stringify(norm.integrationOverrides)) : {},
+      driveFolders: [...(norm.driveFolders || [])],
+      peers: [...(norm.peers || [])],
+      skills: [...(norm.skills || [])],
+      schedules: srcSchedules.map((s, i) =>
+        enrichScheduleForForm({ ...s, id: `sch-clone-${i}-${Date.now()}`, enabled: false })),
+    });
+    setDriveFolderOptions(null);
+    setShowAgentModal(true);
+    toast.success('Cloned — tweak what differs and Create. Schedules start paused.');
+  }
+
   // Load Grok TTS voices when the agent editor opens (for default voice picker).
   useEffect(() => {
     if (!showAgentModal) return;
@@ -2739,6 +2776,13 @@ export default function ShibaStudio() {
         keywords: ['edit', a.name],
         run: () => openEditAgent(a),
       },
+      {
+        id: `clone-${a.id}`,
+        label: `Clone ${a.name}`,
+        group: 'Agents',
+        keywords: ['clone', 'copy', 'duplicate', a.name],
+        run: () => openCloneAgent(a),
+      },
     ]);
 
     return [
@@ -3510,6 +3554,14 @@ export default function ShibaStudio() {
                       <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-default">
                         <button onClick={() => openEditAgent(agent)} className="grok-btn grok-btn-primary text-xs py-1 flex-1 min-w-0" title="Edit this agent's configuration">
                           <Edit2 size={14}/> Edit
+                        </button>
+                        <button
+                          onClick={() => openCloneAgent(agent)}
+                          className="grok-btn grok-btn-ghost text-xs py-1 shrink-0"
+                          title="Clone this agent — copies every setting into a new agent so you only change what differs"
+                          aria-label={`Clone ${agent.name}`}
+                        >
+                          <CopyPlus size={14}/>
                         </button>
                         <button
                           onClick={() => navigateToTab('automations')}
