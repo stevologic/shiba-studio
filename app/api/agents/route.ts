@@ -20,6 +20,11 @@ export async function POST(req: NextRequest) {
     const removed = agents.find(a => a.id === body.id);
     const filtered = agents.filter(a => a.id !== body.id);
     await saveAgents(filtered);
+    // The agent's sandbox container goes with it — fire-and-forget so a slow
+    // (or absent) Docker daemon never delays the delete response.
+    import('@/lib/agent-sandbox')
+      .then(({ removeSandbox }) => removeSandbox(String(body.id)))
+      .catch(() => {});
     await loadAndScheduleAll().catch(() => {});
     audit('agent', 'agent deleted', removed?.name || String(body.id), { agentId: body.id });
     return NextResponse.json({ ok: true });

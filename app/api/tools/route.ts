@@ -13,6 +13,8 @@ const TOOL_GROUPS: Record<string, { group: string; requires?: string; localOnly?
   fs_search: { group: 'Workspace & Files', localOnly: true },
   shell_exec: { group: 'Workspace & Files', localOnly: true },
   terminal_exec: { group: 'Workspace & Files', localOnly: true },
+  sandbox_exec: { group: 'Sandbox', localOnly: true },
+  sandbox_write_file: { group: 'Sandbox', localOnly: true },
   web_fetch: { group: 'Web & Research' },
   web_search: { group: 'Web & Research' },
   memory_save: { group: 'Memory' },

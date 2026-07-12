@@ -48,6 +48,7 @@ Filterable, grouped, and annotated with what unlocks each tool (local agents onl
 | Group | Tools |
 | --- | --- |
 | **Workspace & Files** | `fs_list`, `fs_read`, `fs_write`, `fs_search` (workspace-wide grep), `shell_exec` (one-shot), `terminal_exec` (runs in the shared Studio Terminal you can watch) |
+| **Sandbox** | `sandbox_exec`, `sandbox_write_file` — every agent owns a private **Alpine Linux container** (`shiba-sandbox-<agentId>`, created lazily via Docker) with root, network, and `apk` package installs. State persists in `/work` across runs; fully isolated from the host with memory/CPU/pid limits, and removed when the agent is deleted. Needs Docker running; tools explain that if it isn't |
 | **Web & Research** | `web_search` (keyless DuckDuckGo), `web_fetch` (page → clean text) |
 | **Browser Automation** | `browser_navigate`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_extract` |
 | **Memory** | `memory_save`, `memory_recall` — facts persist across runs per agent |

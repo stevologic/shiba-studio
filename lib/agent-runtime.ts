@@ -27,6 +27,9 @@ const MAX_STEPS = 18;
 const SEQUENTIAL_ONLY_TOOLS = new Set([
   'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
   'terminal_exec', 'grok_cli', 'github_create_pr', 'schedule_task',
+  // The agent's sandbox container is one stateful box: later commands depend
+  // on what earlier ones installed or wrote, so order must be preserved.
+  'sandbox_exec', 'sandbox_write_file',
 ]);
 
 export function getToolDefinitions(
@@ -84,6 +87,43 @@ export function getToolDefinitions(
             timeoutMs: { type: 'number', description: 'Optional timeout in ms (default 45000, max 180000)' },
           },
           required: ['command'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'sandbox_exec',
+        description:
+          'Run a shell command in YOUR private Alpine Linux container — your personal sandbox for solving problems. ' +
+          'Root access, network enabled, and it persists across runs: install anything with apk (e.g. `apk add python3 nodejs git curl jq`), ' +
+          'then build, test, and experiment freely. Files live in /work (the working directory). ' +
+          'Fully isolated from the host machine, so risky commands and throwaway experiments belong HERE, not in shell_exec. ' +
+          'The container is created automatically on first use.',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: 'Shell command to run inside the container (sh)' },
+            timeoutSec: { type: 'number', description: 'Optional timeout in seconds (default 60, max 300)' },
+          },
+          required: ['command'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'sandbox_write_file',
+        description:
+          'Write a file into your private Alpine Linux sandbox container (relative paths land in /work). ' +
+          'Use this to drop scripts or data in before running them with sandbox_exec — no shell-quoting headaches.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'File path in the container (relative = under /work)' },
+            content: { type: 'string', description: 'File content' },
+          },
+          required: ['path', 'content'],
         },
       },
     },
@@ -681,7 +721,8 @@ function buildSystem(
 Global shared uploads (all agents): ${globalUploadsPath} — files dropped here are available to every agent. Use fs_list/fs_read with paths under "${GLOBAL_UPLOADS_SUBDIR}/" relative to workspace root, or the absolute path above.`;
   const actionLine = isCloud
     ? 'You use tools to act through cloud services: GitHub/Slack/Drive/Discord/X/Obsidian when enabled, peer messaging, and self-scheduling.'
-    : 'You use tools to take real actions: edit files, run shell, control Chrome browser, GitHub/Slack/Drive when enabled.';
+    : 'You use tools to take real actions: edit files, run shell, control Chrome browser, GitHub/Slack/Drive when enabled. '
+      + 'You also own a private Alpine Linux container (sandbox_exec / sandbox_write_file): a persistent, isolated Linux box with root and network — install packages with apk, run any language, and do risky experiments there instead of on the host.';
   return `You are a powerful autonomous Grok agent named "${agent.name}" running inside Shiba Studio (localhost agent studio).
 ${environmentFacts()}
 ${homeLine}

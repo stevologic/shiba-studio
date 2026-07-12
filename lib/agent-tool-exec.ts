@@ -25,6 +25,7 @@ import { invokeMcpTool } from './mcp-client';
 /** Tools that touch this machine — never available to cloud agents. */
 const LOCAL_ONLY_TOOLS = new Set([
   'fs_list', 'fs_read', 'fs_write', 'fs_search', 'shell_exec', 'terminal_exec',
+  'sandbox_exec', 'sandbox_write_file',
   'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
   'grok_cli', 'mcp_list_tools', 'mcp_invoke',
 ]);
@@ -102,6 +103,33 @@ export async function executeAgentTool(
         const { fsSearch } = await import('./agent-power-tools');
         const hits = await fsSearch(workDir, String(args.pattern || ''), args.dir ? String(args.dir) : undefined);
         return { result: hits, sideEffect: `searched workspace for "${args.pattern}" → ${hits.length} hits` };
+      }
+      case 'sandbox_exec': {
+        const { sandboxExec } = await import('./agent-sandbox');
+        const out = await sandboxExec(
+          agent.id,
+          String(args.command || ''),
+          args.timeoutSec != null ? Number(args.timeoutSec) : undefined,
+        );
+        return {
+          result: {
+            ok: out.ok,
+            stdout: out.stdout.slice(0, 8000),
+            stderr: out.stderr.slice(0, 2000),
+            code: out.code,
+            ...(out.timedOut ? { timedOut: true } : {}),
+            ...(out.error ? { error: out.error } : {}),
+          },
+          sideEffect: `sandbox: ${String(args.command || '').slice(0, 120)}`,
+        };
+      }
+      case 'sandbox_write_file': {
+        const { sandboxWriteFile } = await import('./agent-sandbox');
+        const out = await sandboxWriteFile(agent.id, String(args.path || ''), String(args.content ?? ''));
+        return {
+          result: out,
+          sideEffect: out.ok ? `sandbox: wrote ${out.path} (${out.bytes} bytes)` : 'sandbox write failed',
+        };
       }
       case 'web_fetch': {
         const { webFetch } = await import('./agent-power-tools');

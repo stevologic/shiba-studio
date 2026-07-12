@@ -561,6 +561,7 @@ export async function POST(req: NextRequest) {
                 'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
                 'terminal_exec', 'grok_cli', 'github_create_pr', 'schedule_task',
                 'background_task', 'background_status',
+                'sandbox_exec', 'sandbox_write_file',
               ]);
               const preExecuted = new Map<string, { result: unknown; sideEffect?: string; screenshot?: string }>();
               if (toolCalls.length > 1 && toolCalls.every((tc: { function?: { name?: string } }) => {
