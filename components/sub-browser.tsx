@@ -392,7 +392,9 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
   const showShot = mode === 'annotate' && annotateShot;
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={onClose}>
+    // z-100: the annotation surface must sit above every chat window
+    // (chat lightbox 80, voice HUD 80, terminal panel 72).
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100] p-4" onClick={onClose}>
       <div className="modal modal-pop w-full max-w-5xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 mb-3">
           <div>

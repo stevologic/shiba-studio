@@ -633,6 +633,15 @@ export async function POST(req: NextRequest) {
                 const out = preExecuted.get(tc.id)
                   ?? await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID);
                 toolsUsed.push(fn.name);
+                // Files written this turn get linked under the response so the
+                // user can open them in the in-chat viewer.
+                if (fn.name === 'fs_write' && args?.path && !(out.result as { error?: string })?.error) {
+                  const p = String(args.path);
+                  send({
+                    type: 'file-created',
+                    file: { name: p.replace(/\\/g, '/').split('/').pop() || p, path: p },
+                  });
+                }
                 if (BROWSER_TOOL_NAMES.has(fn.name)) browserUsed = true;
                 send({ type: 'thinking', delta: `${resultPreview(fn.name, out.result)}\n` });
                 msgs.push({

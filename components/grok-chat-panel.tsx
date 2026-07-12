@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, FolderGit2, GitBranch, Mic, MicOff,
+  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, FileText, FolderGit2, GitBranch, Mic, MicOff,
   Paperclip, Pencil, RefreshCw, RotateCcw, Send, Sparkles, Square, Terminal, Volume2, VolumeX, X, Zap,
 } from 'lucide-react';
 import {
@@ -20,7 +20,7 @@ import { toast } from '@/lib/toast';
 import ChatMarkdown from '@/components/chat-markdown-lazy';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
-import type { ChatAttachment, ChatMessagePayload, ReasoningEffort } from '@/lib/chat-types';
+import type { ChatAttachment, ChatFileRef, ChatMessagePayload, ReasoningEffort } from '@/lib/chat-types';
 import { buildAgentChatSystem } from '@/lib/chat-skill';
 import { encodeModelRef, modelDisplayName, parseModelRef, providerLabel, providerTitle, supportsReasoning } from '@/lib/model-providers';
 import type { Agent } from '@/lib/types';
@@ -54,6 +54,7 @@ import {
 } from '@/lib/chat-live-runs';
 import { getStickyChatTarget, setStickyChatTarget } from '@/lib/chat-target-store';
 import { v4 as uuidv4 } from 'uuid';
+import { createPortal } from 'react-dom';
 
 const SubBrowser = dynamic(() => import('@/components/sub-browser'));
 const WorkspacePicker = dynamic(() => import('@/components/workspace-picker'));
@@ -119,6 +120,8 @@ type UiMessage = ChatMessagePayload & {
   agentName?: string;
   perspectives?: AgentPerspective[];
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /** Files written during this turn (fs_write) — linked under the response. */
+  files?: ChatFileRef[];
 };
 
 function fmtTokenCount(n: number | undefined): string {
@@ -137,6 +140,7 @@ function projectMessagesToUi(messages: ProjectChatMessage[]): UiMessage[] {
     agentId: m.agentId,
     agentName: m.agentName,
     perspectives: m.perspectives,
+    files: m.files,
     usage: m.usage,
     // Preserve in-progress assistant turns after leave/return or reload.
     streaming: !!m.streaming,
@@ -157,6 +161,7 @@ function uiToProjectMessages(messages: UiMessage[]): ProjectChatMessage[] {
       agentId: m.agentId,
       agentName: m.agentName,
       perspectives: m.perspectives,
+      files: m.files,
       usage: m.usage,
       streaming: !!m.streaming,
       createdAt: new Date().toISOString(),
@@ -176,6 +181,7 @@ function toLiveMessages(messages: UiMessage[]): LiveChatUiMessage[] {
       agentId: m.agentId,
       agentName: m.agentName,
       perspectives: m.perspectives,
+      files: m.files,
       usage: m.usage,
       streaming: m.streaming,
     }));
@@ -334,6 +340,47 @@ export default function GrokChatPanel({
   // Chat workspace: folder this conversation reads/writes/analyzes (fs tools
   // + /git). Persisted on the session so it survives reloads.
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(init.workspaceDir);
+  // In-chat file viewer: opened from the "files created" chips under a response.
+  const [chatFileView, setChatFileView] = useState<{
+    file: ChatFileRef;
+    loading: boolean;
+    binary?: boolean;
+    content?: string;
+    size?: number;
+    error?: string;
+  } | null>(null);
+
+  async function openChatFile(file: ChatFileRef) {
+    setChatFileView({ file, loading: true });
+    try {
+      // Relative tool paths resolve against the chat workspace when one is
+      // bound; otherwise the server resolves them against the default workspace.
+      const isAbs = /^([a-zA-Z]:[\\/]|[\\/])/.test(file.path);
+      const readPath = !isAbs && workspaceDir
+        ? `${workspaceDir.replace(/[\\/]+$/, '')}/${file.path}`
+        : file.path;
+      const res = await fetch('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'read', path: readPath }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setChatFileView({
+        file,
+        loading: false,
+        binary: !!data.binary,
+        content: String(data.content ?? ''),
+        size: Number(data.size) || 0,
+      });
+    } catch (e: unknown) {
+      setChatFileView({
+        file,
+        loading: false,
+        error: e instanceof Error ? e.message : 'Could not read the file',
+      });
+    }
+  }
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
 
   // Slash-command completion — filtered while the command token is typed.
@@ -2211,6 +2258,7 @@ export default function GrokChatPanel({
             name?: string;
             content?: string;
             usage?: Record<string, unknown>;
+            file?: ChatFileRef;
           };
           try {
             event = JSON.parse(payload);
@@ -2232,6 +2280,21 @@ export default function GrokChatPanel({
               msgs.map((m) =>
                 m.id === assistantId
                   ? { ...m, perspectives: [...(m.perspectives || []), perspective] }
+                  : m,
+              ),
+              { streaming: true },
+            );
+          } else if (event.type === 'file-created' && event.file?.path) {
+            const file = event.file;
+            mapMessages((msgs) =>
+              msgs.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      files: (m.files || []).some((f) => f.path === file.path)
+                        ? m.files
+                        : [...(m.files || []), file],
+                    }
                   : m,
               ),
               { streaming: true },
@@ -3181,6 +3244,21 @@ export default function GrokChatPanel({
                   <div className="grok-chat-content">
                     <ChatMarkdown content={m.content} />
                     {m.streaming && <span className="grok-chat-cursor" />}
+                    {!!m.files?.length && (
+                      <div className="chat-file-row" aria-label="Files created this turn">
+                        {m.files.map((f) => (
+                          <button
+                            key={f.path}
+                            type="button"
+                            className="chat-file-chip"
+                            title={`View ${f.path}`}
+                            onClick={() => void openChatFile(f)}
+                          >
+                            <FileText size={12} /> {f.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )
               ) : null}
@@ -3681,6 +3759,60 @@ export default function GrokChatPanel({
           <img src={lightboxImage.src} alt={lightboxImage.name} className="chat-lightbox-img" onClick={(e) => e.stopPropagation()} />
           <div className="chat-lightbox-caption">{lightboxImage.name} — click anywhere to close</div>
         </div>
+      )}
+
+      {/* In-chat file viewer — files an agent wrote this conversation.
+          Portaled to <body>: ancestor stacking contexts (session rail, chat
+          column) must never paint over it. */}
+      {chatFileView && typeof document !== 'undefined' && createPortal(
+        <div className="chat-file-view-overlay" onClick={() => setChatFileView(null)} role="presentation">
+          <div
+            className="chat-file-view-modal"
+            role="dialog"
+            aria-label={`File ${chatFileView.file.name}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="chat-file-view-head">
+              <FileText size={15} className="opacity-70 shrink-0" />
+              <span className="chat-file-view-name" title={chatFileView.file.path}>{chatFileView.file.path}</span>
+              {chatFileView.size != null && !chatFileView.loading && !chatFileView.error && (
+                <span className="chat-file-view-size">{(chatFileView.size / 1024).toFixed(1)} KB</span>
+              )}
+              <button
+                type="button"
+                className="grok-btn grok-btn-ghost p-1 ml-auto"
+                title="Close"
+                aria-label="Close file viewer"
+                onClick={() => setChatFileView(null)}
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <div className="chat-file-view-body">
+              {chatFileView.loading && <div className="text-sm text-dim py-6 text-center">Reading the file…</div>}
+              {!chatFileView.loading && chatFileView.error && (
+                <div className="text-sm text-dim py-6 text-center">{chatFileView.error}</div>
+              )}
+              {!chatFileView.loading && !chatFileView.error && chatFileView.binary && (
+                <div className="text-sm text-dim py-6 text-center">
+                  This is a binary file — no text preview.
+                </div>
+              )}
+              {!chatFileView.loading && !chatFileView.error && !chatFileView.binary && (() => {
+                const name = chatFileView.file.name;
+                const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+                const body = chatFileView.content || '';
+                // Markdown renders as markdown; everything else as a highlighted
+                // code fence (4 backticks so embedded ``` in the file survive).
+                const rendered = ext === 'md' || ext === 'markdown'
+                  ? body
+                  : `\`\`\`\`${ext}\n${body}\n\`\`\`\``;
+                return <ChatMarkdown content={rendered} />;
+              })()}
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

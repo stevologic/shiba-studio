@@ -1,4 +1,4 @@
-import type { ChatAttachment } from './chat-types';
+import type { ChatAttachment, ChatFileRef } from './chat-types';
 
 export interface ProjectFileMeta {
   id: string;
@@ -20,6 +20,8 @@ export interface ProjectChatMessage {
   agentId?: string;
   agentName?: string;
   perspectives?: Array<{ agentId: string; name: string; content: string }>;
+  /** Files written during this turn (fs_write) — linked under the response. */
+  files?: ChatFileRef[];
   /** Token usage reported by the xAI API for this reply. */
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   /** True while a background session turn is still generating this message. */

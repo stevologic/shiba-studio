@@ -11,7 +11,7 @@
 'use client';
 
 import { deriveSessionTitle } from './chat-session-types';
-import type { ChatAttachment } from './chat-types';
+import type { ChatAttachment, ChatFileRef } from './chat-types';
 import type { ProjectChatMessage } from './project-types';
 
 export type LiveChatUiMessage = {
@@ -24,6 +24,7 @@ export type LiveChatUiMessage = {
   agentId?: string;
   agentName?: string;
   perspectives?: Array<{ agentId: string; name: string; content: string }>;
+  files?: ChatFileRef[];
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   streaming?: boolean;
 };
@@ -129,6 +130,7 @@ export function liveMessagesToProject(messages: LiveChatUiMessage[]): ProjectCha
       agentId: m.agentId,
       agentName: m.agentName,
       perspectives: m.perspectives,
+      files: m.files,
       usage: m.usage,
       streaming: !!m.streaming,
       createdAt: new Date().toISOString(),
