@@ -1212,6 +1212,27 @@ export default function ShibaStudio() {
     await executeAgentRun(agent, prompt, !!run.scheduleId, run.scheduleId || undefined);
   }
 
+  /** Ask a running run to stop. It ends at the next step boundary; the modal's
+   *  live poll then shows it as cancelled. */
+  async function cancelRun(runId: string | undefined) {
+    if (!runId || runId === 'streaming') {
+      // Live ad-hoc run whose id hasn't landed yet — fall back to the agent's
+      // running run from the runs list.
+      runId = runs.find((r) => r.status === 'running')?.id;
+    }
+    if (!runId) { toast.error('No running run to cancel.'); return; }
+    try {
+      await fetch('/api/execute/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId }),
+      });
+      toast('Stopping the run — it ends at the next step.');
+    } catch {
+      toast.error('Could not cancel the run');
+    }
+  }
+
   const [pendingRunAgent, setPendingRunAgent] = useState<{ agentId: string; agentName?: string } | null>(null);
 
   useEffect(() => {
@@ -5686,6 +5707,16 @@ export default function ShibaStudio() {
                 </span>
               )}
               <div className="ml-auto flex items-center gap-2 shrink-0">
+                {activeRun && !activeRun.projectId && activeRun.status === 'running' && (
+                  <button
+                    type="button"
+                    className="grok-btn grok-btn-secondary text-xs text-error"
+                    onClick={() => void cancelRun(activeRun.id)}
+                    title="Stop this run at its next step"
+                  >
+                    <X size={13} /> Cancel
+                  </button>
+                )}
                 {activeRun && !activeRun.projectId && liveTrace.length > 0 && (
                   <button
                     type="button"
@@ -5924,6 +5955,16 @@ export default function ShibaStudio() {
                       <Terminal size={13} /> Open in trace view
                     </button>
                     <div className="flex items-center gap-2">
+                      {runDetail.status === 'running' && (
+                        <button
+                          type="button"
+                          onClick={() => void cancelRun(runDetail.id)}
+                          className="grok-btn grok-btn-secondary text-error"
+                          title="Stop this run at its next step"
+                        >
+                          <X size={13} /> Cancel run
+                        </button>
+                      )}
                       {runDetail.status === 'error' && (
                         <button
                           type="button"

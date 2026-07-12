@@ -18,6 +18,19 @@ export { postToAgentInbox, drainInbox } from './agent-inbox';
 
 const MAX_STEPS = 18;
 
+// Runs whose owner asked them to stop. The generator checks this at the top of
+// each step and ends the run cleanly (persisted, slot released) at the next
+// boundary. Works for interactive and background runs alike — both go through
+// agentRunGenerator in this same process.
+const runCancelRequests = new Set<string>();
+/** Ask an in-flight run to stop at its next step boundary. */
+export function requestRunCancel(runId: string): void {
+  if (runId) runCancelRequests.add(runId);
+}
+export function isRunCancelRequested(runId: string): boolean {
+  return runCancelRequests.has(runId);
+}
+
 /**
  * Tools that must never run concurrently with anything: they operate on a
  * shared stateful surface (the single controlled browser page, the shared
@@ -1006,6 +1019,13 @@ async function* agentRunGenerator(
   try {
     while (steps < MAX_STEPS) {
       steps++;
+      if (isRunCancelRequested(runId)) {
+        runCancelRequests.delete(runId);
+        finalOutput = 'Run cancelled by the user.';
+        yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: 'Run cancelled by the user.' });
+        audit('run', 'run cancelled', `${agent.name}: cancelled by user`, { runId, agentId: agent.id });
+        break;
+      }
       const chatFn = opts.grokChatFn || grokChat;
       const resp = await chatFn({
         model: agent.model,
