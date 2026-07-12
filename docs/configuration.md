@@ -41,7 +41,7 @@ The pre-rebrand names `GROKDESK_DATA_DIR` / `GROKDESK_SECRET_KEY` are still hono
 ## Reach the app by name (mDNS / `shiba.local`)
 
 On start the app advertises itself over multicast DNS so you can open it at
-**`http://shiba.local:3000`** instead of an IP address — no hosts-file editing.
+**`http://shiba.local`** (bare name — a port-80 redirect forwards to the app port; `http://shiba.local:3000` also works) instead of an IP address — no hosts-file editing.
 
 - **`npm run dev` / `start` (localhost):** `shiba.local` resolves to `127.0.0.1`
   on this machine — a convenient local alias.

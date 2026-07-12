@@ -42,6 +42,14 @@ export async function register() {
   } catch (e) {
     console.error('[shiba-studio] failed to start mDNS responder', e);
   }
+  // Let bare http://shiba.local (port 80) redirect to the app's real port, so
+  // users don't have to remember to type the port after the name.
+  try {
+    const { startPort80Redirect } = await import('./lib/port80-redirect');
+    startPort80Redirect();
+  } catch (e) {
+    console.error('[shiba-studio] failed to start port-80 redirect', e);
+  }
   // Slack Socket Mode + Discord Gateway: @mention → agent reply
   try {
     const { syncChannelListeners } = await import('./lib/channel-listeners');
