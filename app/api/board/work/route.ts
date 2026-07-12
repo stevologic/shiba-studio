@@ -61,6 +61,32 @@ export async function GET(req: NextRequest) {
   if (!data) {
     return Response.json({ ok: false, error: 'File no longer exists on disk' }, { status: 410 });
   }
+
+  // inspect=1 → JSON for the in-app file reader: text content when the file
+  // really is text, or a binary verdict so the UI can say so instead of
+  // rendering garbage. A NUL byte or invalid UTF-8 in the head = binary.
+  if (req.nextUrl.searchParams.get('inspect') === '1') {
+    const head = data.subarray(0, 8192);
+    let binary = head.includes(0);
+    if (!binary) {
+      try {
+        new TextDecoder('utf-8', { fatal: true }).decode(head);
+      } catch {
+        binary = true;
+      }
+    }
+    const VIEW_CAP = 512 * 1024;
+    const truncated = !binary && data.length > VIEW_CAP;
+    return Response.json({
+      ok: true,
+      name: deliverable.name,
+      size: data.length,
+      binary,
+      truncated,
+      content: binary ? '' : data.subarray(0, VIEW_CAP).toString('utf8'),
+    });
+  }
+
   const ext = path.extname(deliverable.absPath).toLowerCase();
   const inlineType = INLINE_TYPES[ext];
   return new Response(new Uint8Array(data), {

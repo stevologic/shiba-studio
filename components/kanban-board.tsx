@@ -85,9 +85,13 @@ function StatusIcon({ status, size = 14 }: { status: BoardStatus; size?: number 
 
 /** Linear-style priority glyphs: urgent box, then 3/2/1 signal bars. */
 function PriorityIcon({ priority, size = 14 }: { priority: number; size?: number }) {
+  // Hover tooltip names the level — the glyph alone is too esoteric.
+  const label = BOARD_PRIORITY_LABELS[priority as keyof typeof BOARD_PRIORITY_LABELS] || 'No priority';
+  const tip = label === 'No priority' ? label : `${label} priority`;
   if (priority === 1) {
     return (
-      <svg width={size} height={size} viewBox="0 0 14 14" className="kb-prio kb-prio-urgent" aria-hidden>
+      <svg width={size} height={size} viewBox="0 0 14 14" className="kb-prio kb-prio-urgent" role="img" aria-label={tip}>
+        <title>{tip}</title>
         <rect x="0.5" y="0.5" width="13" height="13" rx="3" fill="currentColor" />
         <path d="M7 3.4 L7 7.8 M7 10.2 L7 10.3" stroke="var(--bg)" strokeWidth="1.7" strokeLinecap="round" />
       </svg>
@@ -95,7 +99,8 @@ function PriorityIcon({ priority, size = 14 }: { priority: number; size?: number
   }
   const filled = priority === 2 ? 3 : priority === 3 ? 2 : priority === 4 ? 1 : 0;
   return (
-    <svg width={size} height={size} viewBox="0 0 14 14" className="kb-prio" aria-hidden>
+    <svg width={size} height={size} viewBox="0 0 14 14" className="kb-prio" role="img" aria-label={tip}>
+      <title>{tip}</title>
       {[0, 1, 2].map((i) => (
         <rect
           key={i}
@@ -323,6 +328,45 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   function deliverableHref(file: WorkFile): string {
     if (!work) return '#';
     return `/api/board/work?id=${encodeURIComponent(work.id)}&file=${encodeURIComponent(file.absPath)}`;
+  }
+
+  // In-app file reader: clicking a deliverable opens its text in a modal
+  // instead of navigating away; binary files get a verdict, not garbage.
+  const [fileView, setFileView] = useState<{
+    relPath: string;
+    href: string;
+    loading: boolean;
+    size?: number;
+    binary?: boolean;
+    truncated?: boolean;
+    content?: string;
+    error?: string;
+  } | null>(null);
+
+  async function openFileView(file: WorkFile) {
+    const href = deliverableHref(file);
+    setFileView({ relPath: file.relPath, href, loading: true });
+    try {
+      const res = await fetch(`${href}&inspect=1`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Could not read the file');
+      setFileView({
+        relPath: file.relPath,
+        href,
+        loading: false,
+        size: data.size,
+        binary: data.binary,
+        truncated: data.truncated,
+        content: data.content,
+      });
+    } catch (e: unknown) {
+      setFileView({
+        relPath: file.relPath,
+        href,
+        loading: false,
+        error: e instanceof Error ? e.message : 'Could not read the file',
+      });
+    }
   }
 
   async function copyPath(p: string) {
@@ -980,15 +1024,14 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                       <div className="kb-file-main">
                         <FileKindIcon kind={f.kind} />
                         {f.exists ? (
-                          <a
-                            className="kb-file-link"
-                            href={deliverableHref(f)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title={`Open ${f.absPath}`}
+                          <button
+                            type="button"
+                            className="kb-file-link kb-file-link-btn"
+                            title={`Read ${f.absPath}`}
+                            onClick={() => void openFileView(f)}
                           >
                             {f.relPath}
-                          </a>
+                          </button>
                         ) : (
                           <span className="kb-file-link kb-file-gone" title={`${f.absPath} (deleted or moved)`}>
                             {f.relPath}
@@ -1013,6 +1056,59 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                     </div>
                   ))}
                 </section>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {fileView && (
+        <div className="kb-work-overlay kb-file-view-overlay" onClick={() => setFileView(null)} role="presentation">
+          <div
+            className="kb-work-modal kb-file-view-modal"
+            role="dialog"
+            aria-label={`File ${fileView.relPath}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="kb-work-head">
+              <FileText size={15} className="opacity-70 shrink-0" />
+              <div className="kb-work-title min-w-0">
+                <span className="kb-work-title-text kb-file-view-name" title={fileView.relPath}>{fileView.relPath}</span>
+                {fileView.size != null && <span className="kb-file-meta">{formatBytes(fileView.size)}</span>}
+              </div>
+              <a
+                className="kb-icon-btn"
+                href={fileView.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open raw / download"
+                aria-label="Open raw file"
+              >
+                <ExternalLink size={13} />
+              </a>
+              <button type="button" className="kb-icon-btn" title="Close" aria-label="Close" onClick={() => setFileView(null)}>
+                <X size={15} />
+              </button>
+            </div>
+            <div className="kb-work-body kb-file-view-body">
+              {fileView.loading && (
+                <div className="kb-col-empty"><Loader2 size={14} className="kb-spin" /> Reading the file…</div>
+              )}
+              {!fileView.loading && fileView.error && (
+                <div className="kb-col-empty">{fileView.error}</div>
+              )}
+              {!fileView.loading && !fileView.error && fileView.binary && (
+                <div className="kb-col-empty">
+                  This is a binary file — no text preview. Use the raw link above to download it.
+                </div>
+              )}
+              {!fileView.loading && !fileView.error && !fileView.binary && (
+                <>
+                  <pre className="kb-file-view-content">{fileView.content}</pre>
+                  {fileView.truncated && (
+                    <div className="kb-file-view-note">Preview truncated at 512 KB — the raw link has the full file.</div>
+                  )}
+                </>
               )}
             </div>
           </div>

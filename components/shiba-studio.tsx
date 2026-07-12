@@ -468,7 +468,7 @@ export default function ShibaStudio() {
   }
   const [previewSelectedIdx, setPreviewSelectedIdx] = useState<number | null>(null);
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null);
-  const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>('yolo');
+  const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>('ask');
   const [globalInstructionsInput, setGlobalInstructionsInput] = useState('');
   const [useAgentsMd, setUseAgentsMd] = useState(true);
 
