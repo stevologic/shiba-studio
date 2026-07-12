@@ -7117,6 +7117,19 @@ body::before {
   line-height: 1.45;
 }
 
+/* Explicit Save for the card title/description. */
+.kb-details-save-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+.kb-details-dirty {
+  font-size: 0.7rem;
+  color: var(--warning, #eab308);
+}
+
 .kb-activity {
   display: flex;
   flex-direction: column;

@@ -179,6 +179,11 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   const [tableView, setTableView] = useState<BoardStatus | null>(null);
   /** Projects a card can be linked to (loaded once; refreshed with the board). */
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
+  /** Draft title/description for the open card — an explicit Save persists them.
+   *  Held locally so a live board refresh can't wipe an in-progress edit. */
+  const [draftTitle, setDraftTitle] = useState('');
+  const [draftDesc, setDraftDesc] = useState('');
+  const [savingDetails, setSavingDetails] = useState(false);
   const composerRef = useRef<HTMLInputElement | null>(null);
   const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
   const lastOpenCountRef = useRef<number | null>(null);
@@ -199,8 +204,31 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   function openCard(id: string | null, focusFeedback = false) {
     setSelectedId(id);
     setReviewFeedback('');
+    // Seed the title/description drafts from the card being opened.
+    const card = id ? tasks.find((t) => t.id === id) : null;
+    setDraftTitle(card?.title ?? '');
+    setDraftDesc(card?.description ?? '');
     if (id && focusFeedback) {
       setTimeout(() => feedbackRef.current?.focus(), 60);
+    }
+  }
+
+  /** True when the open card's title/description drafts differ from what's saved. */
+  const detailsDirty = !!selected
+    && (draftTitle.trim() !== selected.title || draftDesc !== selected.description);
+
+  /** Explicit Save: persist title + description and update the board card. */
+  async function saveCardDetails() {
+    if (!selected) return;
+    const title = draftTitle.trim();
+    if (!title) { toast.error('Title cannot be empty'); return; }
+    setSavingDetails(true);
+    const task = await patchCard(selected.id, { title, description: draftDesc });
+    setSavingDetails(false);
+    if (task) {
+      setDraftTitle(task.title);
+      setDraftDesc(task.description);
+      toast.success(`${task.key} saved`);
     }
   }
 
@@ -706,10 +734,11 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
 
             <input
               className="kb-panel-title"
-              value={selected.title}
+              value={draftTitle}
               aria-label="Card title"
-              onChange={(e) => setTasks((prev) => prev.map((t) => (t.id === selected.id ? { ...t, title: e.target.value } : t)))}
-              onBlur={(e) => { void patchCard(selected.id, { title: e.target.value }); }}
+              placeholder="Card title"
+              onChange={(e) => setDraftTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void saveCardDetails(); } }}
             />
 
             {!!selected.externalRefs?.length && (
@@ -883,11 +912,24 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
             <textarea
               className="grok-input kb-panel-desc"
               placeholder="Write a complete brief: goal, constraints, definition of done — the agent works from exactly this."
-              defaultValue={selected.description}
-              key={`${selected.id}-desc`}
+              value={draftDesc}
               rows={5}
-              onBlur={(e) => { void patchCard(selected.id, { description: e.target.value }); }}
+              onChange={(e) => setDraftDesc(e.target.value)}
             />
+            <div className="kb-details-save-row">
+              <button
+                type="button"
+                className="grok-btn grok-btn-primary text-sm"
+                disabled={!detailsDirty || savingDetails}
+                onClick={() => void saveCardDetails()}
+                title={detailsDirty ? 'Save title & description changes' : 'No unsaved changes'}
+              >
+                {savingDetails
+                  ? <><Loader2 size={13} className="kb-spin" /> Saving…</>
+                  : detailsDirty ? <><Check size={13} /> Save changes</> : <><Check size={13} /> Saved</>}
+              </button>
+              {detailsDirty && <span className="kb-details-dirty">Unsaved changes</span>}
+            </div>
 
             <div className="kb-prop-name kb-desc-label">Activity</div>
             <div className="kb-activity">
