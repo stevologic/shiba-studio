@@ -102,6 +102,9 @@ export interface BoardTask {
   priority: BoardPriority;
   /** Agent assigned to work this card (null = unassigned). */
   assigneeAgentId: string | null;
+  /** Project this card belongs to (null = none). Drives the run's workspace
+   *  and context when the card is dispatched. */
+  projectId?: string | null;
   labels: string[];
   /** Sort position within the column (fractional inserts allowed). */
   order: number;

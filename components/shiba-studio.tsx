@@ -687,6 +687,7 @@ export default function ShibaStudio() {
     auditRetentionDays: '',
   });
   const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null);
+  const [clearingBoard, setClearingBoard] = useState(false);
   const backupFileRef = useRef<HTMLInputElement | null>(null);
 
   async function refreshRuntimeVersion() {
@@ -2476,6 +2477,25 @@ export default function ShibaStudio() {
     } finally {
       setTimeout(() => setBackupBusy(null), 800);
     }
+  }
+
+  async function clearBoardData() {
+    if (!window.confirm('Delete ALL board cards and start from scratch? This cannot be undone.')) return;
+    setClearingBoard(true);
+    try {
+      const res = await fetch('/api/board', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clearBoard' }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Could not clear the board');
+      toast.success(data.removed ? `Board cleared — removed ${data.removed} card${data.removed === 1 ? '' : 's'}` : 'Board is already empty');
+      loadNavStats();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not clear the board');
+    }
+    setClearingBoard(false);
   }
 
   async function importBackup(file: File) {
@@ -5227,6 +5247,28 @@ export default function ShibaStudio() {
                   <div className="text-[11px] text-dim">
                     ⚠️ The export includes your <strong>encryption key</strong> so credentials restore on a new machine —
                     treat the file like a password. Screenshots and uploaded files are not included.
+                  </div>
+                </div>
+
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <Trash2 size={16} className="opacity-70 shrink-0 text-error" />
+                    <div>
+                      <div className="font-medium text-sm">Clear the board</div>
+                      <div className="text-[11px] text-dim">Remove every Kanban card and start fresh (keys reset to SHIB-1).</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void clearBoardData()}
+                    disabled={clearingBoard}
+                    className="grok-btn grok-btn-ghost text-sm text-error"
+                  >
+                    {clearingBoard ? 'Clearing…' : 'Clear all board cards'}
+                  </button>
+                  <div className="text-[11px] text-dim mt-2">
+                    ⚠️ Irreversible — deletes all cards in every column and their activity/run links. Agents, chats, and
+                    projects are not affected. A confirmation is required first.
                   </div>
                 </div>
 

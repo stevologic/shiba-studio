@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw, Check, RotateCcw,
-  FileText, Image as ImageIcon, File, Copy, PackageOpen,
+  FileText, Image as ImageIcon, File, Copy, PackageOpen, FolderKanban,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
@@ -177,11 +177,14 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   const [workOpen, setWorkOpen] = useState(false);
   /** Column opened as a full tabular list (crowded columns past the render cap). */
   const [tableView, setTableView] = useState<BoardStatus | null>(null);
+  /** Projects a card can be linked to (loaded once; refreshed with the board). */
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const composerRef = useRef<HTMLInputElement | null>(null);
   const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
   const lastOpenCountRef = useRef<number | null>(null);
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
+  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
   const selected = useMemo(
     () => (selectedId ? tasks.find((t) => t.id === selectedId) || null : null),
     [selectedId, tasks],
@@ -220,6 +223,21 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     } catch { /* keep last board */ }
     setLoaded(true);
   }, [onOpenCountChanged]);
+
+  // Projects (for the card → project link). Loaded once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/projects');
+        const data = await res.json();
+        if (!cancelled && data.ok && Array.isArray(data.projects)) {
+          setProjects(data.projects.map((p: { id: string; name: string }) => ({ id: p.id, name: p.name })));
+        }
+      } catch { /* project link is optional */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // Live board: SSE change events drive refreshes the moment anything writes
   // to the board (agent notes, moves from other tabs); the slow poll is only
@@ -580,6 +598,12 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                         )}
                       </div>
                       <div className="kb-card-title">{task.title}</div>
+                      {task.projectId && (
+                        <div className="kb-card-project" title="Linked project">
+                          <FolderKanban size={11} />
+                          {projectById.get(task.projectId)?.name || 'Project'}
+                        </div>
+                      )}
                       {(task.labels.length > 0 || agent || task.priority > 0) && (
                         <div className="kb-card-meta">
                           <PriorityIcon priority={task.priority} />
@@ -739,6 +763,21 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                 >
                   <option value="">Unassigned</option>
                   {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </label>
+              <label className="kb-prop">
+                <span className="kb-prop-name">Project</span>
+                <select
+                  className="grok-select kb-prop-input"
+                  value={selected.projectId || ''}
+                  onChange={(e) => void patchCard(selected.id, { projectId: e.target.value || null })}
+                  title="Link this card to a project — the assigned agent then runs in the project's workspace with its context"
+                >
+                  <option value="">No project</option>
+                  {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {selected.projectId && !projects.some((p) => p.id === selected.projectId) && (
+                    <option value={selected.projectId}>(project removed)</option>
+                  )}
                 </select>
               </label>
               <label className="kb-prop">

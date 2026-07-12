@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import {
+  clearBoard,
   createBoardTask,
   deleteBoardTask,
   getBoardTask,
@@ -33,6 +34,7 @@ export async function POST(req: NextRequest) {
           status: isBoardStatus(body.status) ? body.status : undefined,
           priority: body.priority,
           assigneeAgentId: body.assigneeAgentId ? String(body.assigneeAgentId) : null,
+          projectId: body.projectId ? String(body.projectId) : null,
           labels: Array.isArray(body.labels) ? body.labels : [],
         });
         audit('config', 'board card created', `${task.key}: ${task.title.slice(0, 100)}`);
@@ -46,6 +48,9 @@ export async function POST(req: NextRequest) {
           priority: body.priority,
           assigneeAgentId: body.assigneeAgentId !== undefined
             ? (body.assigneeAgentId ? String(body.assigneeAgentId) : null)
+            : undefined,
+          projectId: body.projectId !== undefined
+            ? (body.projectId ? String(body.projectId) : null)
             : undefined,
           labels: Array.isArray(body.labels) ? body.labels : undefined,
           note: body.note?.text
@@ -67,6 +72,11 @@ export async function POST(req: NextRequest) {
         await deleteBoardTask(String(body.id || ''));
         audit('config', 'board card deleted', String(body.id || ''));
         return Response.json({ ok: true });
+      }
+      case 'clearBoard': {
+        const { removed } = await clearBoard();
+        audit('config', 'board cleared', `${removed} card(s) removed`);
+        return Response.json({ ok: true, removed });
       }
       case 'startWork': {
         const started = await startWorkOnTask(String(body.id || ''));

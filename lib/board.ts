@@ -52,6 +52,7 @@ async function loadStore(): Promise<BoardStore> {
       nextNumber: Number.isInteger(parsed.nextNumber) && parsed.nextNumber > 0 ? parsed.nextNumber : 1,
       tasks: tasks.map((task: BoardTask) => ({
         ...task,
+        projectId: task.projectId || null,
         syncUpdatedAt: task.syncUpdatedAt || task.updatedAt || task.createdAt,
         externalRefs: Array.isArray(task.externalRefs) ? task.externalRefs : [],
       })),
@@ -108,6 +109,7 @@ export interface CreateBoardTaskInput {
   status?: BoardStatus;
   priority?: number;
   assigneeAgentId?: string | null;
+  projectId?: string | null;
   labels?: string[];
   /** Who created it — shows in the activity feed. */
   createdBy?: string;
@@ -132,6 +134,7 @@ export async function createBoardTask(input: CreateBoardTaskInput): Promise<Boar
       status,
       priority: clampPriority(input.priority),
       assigneeAgentId: input.assigneeAgentId || null,
+      projectId: input.projectId || null,
       labels: Array.isArray(input.labels)
         ? input.labels.map((l) => String(l).trim()).filter(Boolean).slice(0, 10)
         : [],
@@ -156,6 +159,7 @@ export interface UpdateBoardTaskInput {
   status?: BoardStatus;
   priority?: number;
   assigneeAgentId?: string | null;
+  projectId?: string | null;
   labels?: string[];
   working?: boolean;
   /** Appended to the activity feed (with attribution). */
@@ -209,6 +213,12 @@ export async function updateBoardTask(idOrKey: string, patch: UpdateBoardTaskInp
       task.assigneeAgentId = patch.assigneeAgentId || null;
       task.activity.push(systemEvent(
         task.assigneeAgentId ? `Assigned by ${actor}` : `Unassigned by ${actor}`,
+      ));
+    }
+    if (patch.projectId !== undefined && (patch.projectId || null) !== (task.projectId || null)) {
+      task.projectId = patch.projectId || null;
+      task.activity.push(systemEvent(
+        task.projectId ? `Linked to a project by ${actor}` : `Project removed by ${actor}`,
       ));
     }
     if (patch.status !== undefined && isBoardStatus(patch.status) && patch.status !== task.status) {
@@ -304,6 +314,20 @@ export async function deleteBoardTask(idOrKey: string): Promise<void> {
     if (idx < 0) throw new Error(`Board task not found: ${idOrKey}`);
     store.tasks.splice(idx, 1);
     await saveStore(store);
+  });
+}
+
+/**
+ * Wipe every card and start the board fresh (keys reset to SHIB-1). External
+ * sync state is cleared too, so a re-linked provider starts clean. Irreversible
+ * — the caller (Settings) gates this behind an explicit confirm.
+ */
+export async function clearBoard(): Promise<{ removed: number }> {
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    const removed = store.tasks.length;
+    await saveStore({ nextNumber: 1, tasks: [], syncState: {} });
+    return { removed };
   });
 }
 

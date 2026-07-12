@@ -97,10 +97,26 @@ export async function startWorkOnTask(
         taskId: task.id, agent: agent.name,
       });
       const { runAgentOnce } = await import('./agent-runtime');
+      // A card linked to a project runs in that project's workspace with its
+      // context, so board work and project work share one place.
+      const runOpts: Parameters<typeof runAgentOnce>[2] = {};
+      if (task.projectId) {
+        try {
+          const { getProject } = await import('./projects');
+          const { resolveProjectWorkspace, buildProjectContextHeader } = await import('./project-types');
+          const project = await getProject(task.projectId);
+          if (project) {
+            const ws = resolveProjectWorkspace(project, agent.workspace.path || process.cwd());
+            if (ws) runOpts.workspacePathOverride = ws;
+            runOpts.projectContext = buildProjectContextHeader(project, ws || undefined);
+            runOpts.projectId = project.id;
+          }
+        } catch { /* project context is best-effort — never block the run */ }
+      }
       const run: AgentRun = await runAgentOnce(
         agent,
         buildCardPrompt({ ...task, feedback, previousOutcome }),
-        {},
+        runOpts,
       );
       active.set(task.id, run.id);
       const ok = run.status !== 'error';
