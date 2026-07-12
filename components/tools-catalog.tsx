@@ -6,7 +6,7 @@
 // to disable it globally for agent runs and workspace chat.
 
 import React, { useEffect, useState } from 'react';
-import { Wrench, TerminalSquare, Globe, Plug2, Workflow, Boxes, Search, Compass, Brain, Image as ImageIcon, Container } from 'lucide-react';
+import { Wrench, TerminalSquare, Globe, Plug2, Workflow, Boxes, Search, Compass, Brain, Image as ImageIcon, Container, KanbanSquare } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import InfoHint from '@/components/info-hint';
 
@@ -27,6 +27,7 @@ const GROUP_ICONS: Record<string, React.ComponentType<{ size?: number; className
   'AI Generation': ImageIcon,
   Integrations: Plug2,
   Orchestration: Workflow,
+  Board: KanbanSquare,
   MCP: Boxes,
 };
 
@@ -39,11 +40,12 @@ const GROUP_BLURBS: Record<string, string> = {
   'AI Generation': 'Create images from prompts with xAI; results appear in the run trace.',
   Integrations: 'Act on connected services; each tool unlocks with its integration scope.',
   Orchestration: 'Agents coordinating agents — peer messages and self-scheduling.',
+  Board: 'Read and edit the shared Kanban — assign, prioritize, label, and route work across agents.',
   MCP: 'Discover and invoke tools on configured MCP servers.',
 };
 
 // Stable presentation order — most-used groups first.
-const GROUP_ORDER = ['Workspace & Files', 'Sandbox', 'Web & Research', 'Browser Automation', 'Memory', 'AI Generation', 'Integrations', 'Orchestration', 'MCP'];
+const GROUP_ORDER = ['Workspace & Files', 'Sandbox', 'Web & Research', 'Browser Automation', 'Memory', 'AI Generation', 'Integrations', 'Orchestration', 'Board', 'MCP'];
 
 function requirementChip(tool: ToolEntry): { label: string; cls: string } {
   if (!tool.enabled) return { label: 'disabled', cls: 'tool-chip-disabled' };

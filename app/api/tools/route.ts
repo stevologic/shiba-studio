@@ -52,6 +52,11 @@ const TOOL_GROUPS: Record<string, { group: string; requires?: string }> = {
   send_to_peer: { group: 'Orchestration', requires: 'peers' },
   schedule_task: { group: 'Orchestration' },
   grok_cli: { group: 'Orchestration' },
+  list_agents: { group: 'Board' },
+  board_list_tasks: { group: 'Board' },
+  board_get_task: { group: 'Board' },
+  board_update_task: { group: 'Board' },
+  board_create_task: { group: 'Board' },
   mcp_list_tools: { group: 'MCP', requires: 'mcp' },
   mcp_invoke: { group: 'MCP', requires: 'mcp' },
 };

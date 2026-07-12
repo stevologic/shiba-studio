@@ -582,6 +582,16 @@ export function getToolDefinitions(
   tools.push({
     type: 'function',
     function: {
+      name: 'list_agents',
+      description:
+        'List every agent on this instance — name, id, role/description, and how many active board cards each is currently assigned. '
+        + 'Use this to route work: e.g. as a project manager, assign each card to the best-suited or least-busy agent via board_update_task (assignee).',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
       name: 'board_get_task',
       description: 'Read one Kanban card in full (description + activity feed) by key (e.g. SHIB-12) or id.',
       parameters: { type: 'object', properties: { id: { type: 'string', description: 'Card key like SHIB-12, or id' } }, required: ['id'] },
@@ -591,13 +601,21 @@ export function getToolDefinitions(
     type: 'function',
     function: {
       name: 'board_update_task',
-      description: 'Update a Kanban card: post a progress note, and/or move its status. Post notes at meaningful milestones so the user can follow along on the board. Finished work goes to in_review — only the user can validate a card into done.',
+      description:
+        'Update any field of a Kanban card: post a progress note, move its status, (re)assign an agent, set priority, labels, title, or description. '
+        + 'Assigning is how a project-manager agent routes work — pair with list_agents to pick who. '
+        + 'Post notes at meaningful milestones so the user can follow along. Finished work goes to in_review — only the user can validate a card into done.',
       parameters: {
         type: 'object',
         properties: {
           id: { type: 'string', description: 'Card key like SHIB-12, or id' },
           note: { type: 'string', description: 'Progress note for the activity feed' },
           status: { type: 'string', description: 'New status: backlog | todo | in_progress | in_review | done | cancelled' },
+          assignee: { type: 'string', description: "Agent name or id to assign this card to. Use 'unassign' (or empty) to clear the assignee." },
+          priority: { type: 'string', description: 'Priority: none | urgent | high | medium | low (or 0-4, where 0=none, 1=urgent)' },
+          labels: { type: 'array', items: { type: 'string' }, description: 'Replace the card labels with this list' },
+          title: { type: 'string', description: 'New card title' },
+          description: { type: 'string', description: 'New card description / brief' },
         },
         required: ['id'],
       },

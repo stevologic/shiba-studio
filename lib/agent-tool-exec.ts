@@ -168,8 +168,48 @@ export async function executeAgentTool(
           status = 'in_review';
           coercedDone = true;
         }
+
+        // Resolve an assignee given as an agent name or id (so a PM agent can
+        // just say "assign to Engineer"). 'unassign'/'none'/'' clears it.
+        let assigneeAgentId: string | null | undefined;
+        let assigneeLabel = '';
+        if (args.assignee !== undefined) {
+          const raw = String(args.assignee || '').trim();
+          if (!raw || /^(unassign|none|nobody|clear)$/i.test(raw)) {
+            assigneeAgentId = null;
+            assigneeLabel = ' (unassigned)';
+          } else {
+            const { loadAgents } = await import('./persistence');
+            const all = await loadAgents();
+            const match = all.find((a) => a.id === raw)
+              || all.find((a) => a.name.toLowerCase() === raw.toLowerCase())
+              || all.find((a) => a.name.toLowerCase().includes(raw.toLowerCase()));
+            if (!match) {
+              return {
+                result: { error: `No agent matches "${raw}". Call list_agents to see valid names/ids.` },
+                sideEffect: `board assign failed: no agent "${raw}"`,
+              };
+            }
+            assigneeAgentId = match.id;
+            assigneeLabel = ` (→ ${match.name})`;
+          }
+        }
+
+        // Priority accepts words or 0-4 (0 none, 1 urgent, 2 high, 3 medium, 4 low).
+        let priority: number | undefined;
+        if (args.priority !== undefined) {
+          const p = String(args.priority).trim().toLowerCase();
+          const byWord: Record<string, number> = { none: 0, urgent: 1, high: 2, medium: 3, med: 3, low: 4 };
+          priority = p in byWord ? byWord[p] : (Number.isFinite(Number(p)) ? Number(p) : undefined);
+        }
+
         const task = await updateBoardTask(String(args.id || ''), {
           status: status as import('./board-types').BoardStatus | undefined,
+          assigneeAgentId,
+          priority,
+          labels: Array.isArray(args.labels) ? args.labels.map(String) : undefined,
+          title: args.title !== undefined ? String(args.title) : undefined,
+          description: args.description !== undefined ? String(args.description) : undefined,
           actor: agent.name,
           note: args.note
             ? { kind: 'agent', text: String(args.note), agentName: agent.name }
@@ -181,11 +221,35 @@ export async function executeAgentTool(
           result: {
             key: task.key,
             status: task.status,
+            assigneeAgentId: task.assigneeAgentId,
+            priority: task.priority,
+            labels: task.labels,
             updated: true,
             ...(coercedDone ? { note: 'Cards move to done only after the user validates them — this one is now In Review.' } : {}),
           },
-          sideEffect: `updated board card ${task.key}${status ? ` → ${status}` : ''}${args.note ? ' (+note)' : ''}`,
+          sideEffect: `updated board card ${task.key}${status ? ` → ${status}` : ''}${assigneeLabel}${args.note ? ' (+note)' : ''}`,
         };
+      }
+      case 'list_agents': {
+        const { loadAgents } = await import('./persistence');
+        const { listBoardTasks } = await import('./board');
+        const [all, tasks] = await Promise.all([loadAgents(), listBoardTasks().catch(() => [])]);
+        // Count each agent's open (non-terminal) board load so a PM can balance.
+        const openLoad = new Map<string, number>();
+        for (const t of tasks) {
+          if (t.assigneeAgentId && t.status !== 'done' && t.status !== 'cancelled') {
+            openLoad.set(t.assigneeAgentId, (openLoad.get(t.assigneeAgentId) || 0) + 1);
+          }
+        }
+        const roster = all.map((a) => ({
+          id: a.id,
+          name: a.name,
+          role: a.description || '',
+          skills: a.skills || [],
+          openBoardCards: openLoad.get(a.id) || 0,
+          isYou: a.id === agent.id,
+        }));
+        return { result: roster, sideEffect: `listed ${roster.length} agents` };
       }
       case 'board_create_task': {
         const { createBoardTask } = await import('./board');
