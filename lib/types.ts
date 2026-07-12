@@ -307,6 +307,10 @@ export interface AppConfig {
   maxConcurrentRuns?: number;
   /** Per-run cumulative token budget (0/unset = unlimited) */
   perRunTokenCap?: number;
+  /** Agent sandbox container memory limit in MB (default 512) */
+  sandboxMemoryMb?: number;
+  /** Agent sandbox container CPU limit (default 1; fractions allowed) */
+  sandboxCpus?: number;
   /** Auto-prune agent runs older than this many days (0/unset = keep forever) */
   runRetentionDays?: number;
   /** Auto-prune audit-log entries older than this many days (0/unset = keep forever) */

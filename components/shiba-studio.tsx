@@ -681,6 +681,8 @@ export default function ShibaStudio() {
     budgetHardStop: true,
     maxConcurrentRuns: '3',
     perRunTokenCap: '',
+    sandboxMemoryMb: '',
+    sandboxCpus: '',
     runRetentionDays: '',
     auditRetentionDays: '',
   });
@@ -935,6 +937,8 @@ export default function ShibaStudio() {
       budgetHardStop: cfg.budgetHardStop !== false,
       maxConcurrentRuns: String(cfg.maxConcurrentRuns || 3),
       perRunTokenCap: cfg.perRunTokenCap ? String(cfg.perRunTokenCap) : '',
+      sandboxMemoryMb: cfg.sandboxMemoryMb ? String(cfg.sandboxMemoryMb) : '',
+      sandboxCpus: cfg.sandboxCpus ? String(cfg.sandboxCpus) : '',
       runRetentionDays: cfg.runRetentionDays ? String(cfg.runRetentionDays) : '',
       auditRetentionDays: cfg.auditRetentionDays ? String(cfg.auditRetentionDays) : '',
     });
@@ -2421,6 +2425,8 @@ export default function ShibaStudio() {
       budgetHardStop: costSettings.budgetHardStop,
       maxConcurrentRuns: Number(costSettings.maxConcurrentRuns) || 3,
       perRunTokenCap: Number(costSettings.perRunTokenCap) || 0,
+      sandboxMemoryMb: Number(costSettings.sandboxMemoryMb) || 0,
+      sandboxCpus: Number(costSettings.sandboxCpus) || 0,
       runRetentionDays: Number(costSettings.runRetentionDays) || 0,
       auditRetentionDays: Number(costSettings.auditRetentionDays) || 0,
     };
@@ -5103,6 +5109,24 @@ export default function ShibaStudio() {
                         className="grok-input mt-1" type="number" min="0" step="1000" placeholder="0 = unlimited"
                         value={costSettings.perRunTokenCap}
                         onChange={(e) => setCostSettings((s) => ({ ...s, perRunTokenCap: e.target.value }))}
+                      />
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <label className="text-xs text-dim">
+                      Sandbox memory (MB)
+                      <input
+                        className="grok-input mt-1" type="number" min="128" max="16384" step="128" placeholder="512 = default"
+                        value={costSettings.sandboxMemoryMb}
+                        onChange={(e) => setCostSettings((s) => ({ ...s, sandboxMemoryMb: e.target.value }))}
+                      />
+                    </label>
+                    <label className="text-xs text-dim">
+                      Sandbox CPUs
+                      <input
+                        className="grok-input mt-1" type="number" min="0.25" max="16" step="0.25" placeholder="1 = default"
+                        value={costSettings.sandboxCpus}
+                        onChange={(e) => setCostSettings((s) => ({ ...s, sandboxCpus: e.target.value }))}
                       />
                     </label>
                   </div>

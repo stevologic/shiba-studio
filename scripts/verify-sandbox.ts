@@ -56,6 +56,23 @@ async function main() {
     const again = await ensureSandbox(agentId);
     assert(again.ok && !again.created, 'second ensure reuses the running container');
 
+    // --- resource guardrails: defaults, then a config change reconciles live ---
+    const { execFileSync } = await import('child_process');
+    const limitsOf = () => execFileSync(
+      'docker',
+      ['inspect', '-f', '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}', sandboxContainerName(agentId)],
+      { encoding: 'utf8', windowsHide: true },
+    ).trim();
+    assert(limitsOf() === `${512 * 1024 * 1024} ${1e9}`, 'container starts with default limits (512 MB / 1 CPU)');
+    const { saveConfig } = await import('../lib/persistence');
+    await saveConfig({ sandboxMemoryMb: 1024, sandboxCpus: 2 });
+    const reconciled = await ensureSandbox(agentId);
+    assert(reconciled.ok, 'ensure succeeds after limits change');
+    assert(limitsOf() === `${1024 * 1024 * 1024} ${2e9}`, 'settings change reconciles the LIVE container (1 GB / 2 CPUs)');
+    await saveConfig({ sandboxMemoryMb: 512, sandboxCpus: 1 });
+    await ensureSandbox(agentId);
+    assert(limitsOf() === `${512 * 1024 * 1024} ${1e9}`, 'limits reconcile back down without recreating the container');
+
     // --- it really is Alpine, with root and a /work cwd ---
     const os = await sandboxExec(agentId, 'cat /etc/os-release && whoami && pwd');
     assert(os.ok && os.stdout.includes('Alpine Linux'), 'container runs Alpine Linux');

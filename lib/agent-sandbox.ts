@@ -19,6 +19,33 @@ const DEFAULT_EXEC_TIMEOUT_SEC = 60;
 const MAX_EXEC_TIMEOUT_SEC = 300;
 const OUTPUT_CAP = 200_000; // bytes kept from a single exec before clipping
 
+// Resource guardrails — configurable in Settings → Cost & safety guardrails.
+const DEFAULT_MEMORY_MB = 512;
+const DEFAULT_CPUS = 1;
+
+export interface SandboxLimits { memoryMb: number; cpus: number }
+
+export function clampSandboxMemoryMb(v: unknown): number {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(16384, Math.max(128, n)) : DEFAULT_MEMORY_MB;
+}
+
+export function clampSandboxCpus(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.min(16, Math.max(0.25, Math.round(n * 100) / 100)) : DEFAULT_CPUS;
+}
+
+/** Effective limits from config (falls back to defaults if config is unreadable). */
+export async function sandboxLimits(): Promise<SandboxLimits> {
+  try {
+    const { loadConfig } = await import('./persistence');
+    const cfg = await loadConfig();
+    return { memoryMb: clampSandboxMemoryMb(cfg.sandboxMemoryMb), cpus: clampSandboxCpus(cfg.sandboxCpus) };
+  } catch {
+    return { memoryMb: DEFAULT_MEMORY_MB, cpus: DEFAULT_CPUS };
+  }
+}
+
 export interface SandboxExecResult {
   ok: boolean;
   stdout: string;
@@ -94,16 +121,31 @@ export function sandboxContainerName(agentId: string): string {
 /**
  * Make sure the agent's container exists and is running. Creates it on first
  * use (pulls the Alpine image if needed — hence the generous timeout) and
- * restarts it if it was stopped (e.g. after a Docker/host restart).
+ * restarts it if it was stopped (e.g. after a Docker/host restart). Existing
+ * containers are reconciled to the configured resource limits via
+ * `docker update`, so a Settings change applies on next use without losing
+ * the agent's state.
  */
 export async function ensureSandbox(agentId: string): Promise<{ ok: boolean; created?: boolean; error?: string }> {
   const probe = await detectDocker();
   if (!probe.available) return { ok: false, error: DOCKER_MISSING_MSG };
 
   const name = sandboxContainerName(agentId);
-  const inspect = await docker(['inspect', '-f', '{{.State.Running}}', name], { timeoutMs: 10_000 });
+  const limits = await sandboxLimits();
+  // Swap is pinned to 2× memory so raising the memory limit via `docker
+  // update` never trips the "memory > memoryswap" rejection.
+  const memArgs = ['--memory', `${limits.memoryMb}m`, '--memory-swap', `${limits.memoryMb * 2}m`, '--cpus', String(limits.cpus)];
+
+  const inspect = await docker(
+    ['inspect', '-f', '{{.State.Running}} {{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}', name],
+    { timeoutMs: 10_000 },
+  );
   if (inspect.code === 0) {
-    if (inspect.stdout.trim() === 'true') return { ok: true };
+    const [running, memBytes, nanoCpus] = inspect.stdout.trim().split(/\s+/);
+    if (Number(memBytes) !== limits.memoryMb * 1024 * 1024 || Number(nanoCpus) !== Math.round(limits.cpus * 1e9)) {
+      await docker(['update', ...memArgs, name], { timeoutMs: 20_000 }); // best-effort reconcile
+    }
+    if (running === 'true') return { ok: true };
     const start = await docker(['start', name], { timeoutMs: 30_000 });
     return start.code === 0
       ? { ok: true }
@@ -118,8 +160,7 @@ export async function ensureSandbox(agentId: string): Promise<{ ok: boolean; cre
       '--label', 'shiba.sandbox=1',
       '--label', `shiba.agent=${agentId}`,
       // Runaway protection — an agent experiment can't starve the host.
-      '--memory', '512m',
-      '--cpus', '1',
+      ...memArgs,
       '--pids-limit', '256',
       '--security-opt', 'no-new-privileges',
       SANDBOX_IMAGE,

@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     'localGrokEnabled', 'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode',
     'disabledTools', 'globalInstructions', 'useAgentsMd', 'usageBudgetUsd',
     'dailyBudgetUsd', 'budgetHardStop', 'maxConcurrentRuns', 'perRunTokenCap',
-    'runRetentionDays', 'auditRetentionDays',
+    'runRetentionDays', 'auditRetentionDays', 'sandboxMemoryMb', 'sandboxCpus',
   ].filter((k) => body[k] !== undefined);
   if (changedKeys.length) {
     const { audit } = await import('@/lib/audit-log');
@@ -118,6 +118,8 @@ export async function POST(req: NextRequest) {
     || body.runRetentionDays !== undefined
     || body.auditRetentionDays !== undefined
     || body.usageCostSource !== undefined
+    || body.sandboxMemoryMb !== undefined
+    || body.sandboxCpus !== undefined
   ) {
     const nonNeg = (v: unknown) => Math.max(0, Number(v) || 0);
     if (body.usageCostSource !== undefined) {
@@ -140,6 +142,14 @@ export async function POST(req: NextRequest) {
       ...(body.perRunTokenCap !== undefined ? { perRunTokenCap: Math.floor(nonNeg(body.perRunTokenCap)) } : {}),
       ...(body.runRetentionDays !== undefined ? { runRetentionDays: Math.floor(nonNeg(body.runRetentionDays)) } : {}),
       ...(body.auditRetentionDays !== undefined ? { auditRetentionDays: Math.floor(nonNeg(body.auditRetentionDays)) } : {}),
+      // Sandbox limits: 0/empty = back to defaults (512 MB / 1 CPU). Clamps
+      // mirror lib/agent-sandbox.ts; existing containers reconcile on next use.
+      ...(body.sandboxMemoryMb !== undefined
+        ? await import('@/lib/agent-sandbox').then(({ clampSandboxMemoryMb }) => ({ sandboxMemoryMb: clampSandboxMemoryMb(body.sandboxMemoryMb) }))
+        : {}),
+      ...(body.sandboxCpus !== undefined
+        ? await import('@/lib/agent-sandbox').then(({ clampSandboxCpus }) => ({ sandboxCpus: clampSandboxCpus(body.sandboxCpus) }))
+        : {}),
     });
     return NextResponse.json({
       ok: true,
@@ -150,6 +160,8 @@ export async function POST(req: NextRequest) {
       perRunTokenCap: cfg.perRunTokenCap,
       runRetentionDays: cfg.runRetentionDays,
       auditRetentionDays: cfg.auditRetentionDays,
+      sandboxMemoryMb: cfg.sandboxMemoryMb,
+      sandboxCpus: cfg.sandboxCpus,
     });
   }
   if (body.localModelAllowlist !== undefined) {
