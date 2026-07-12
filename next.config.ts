@@ -1,5 +1,6 @@
 import type { NextConfig } from 'next';
 import { execSync } from 'child_process';
+import os from 'os';
 
 // Initial bake only — the UI prefers live SHAs from GET /api/version which
 // re-reads git HEAD from the process project root (keeps pace with local commits
@@ -28,8 +29,25 @@ const mdnsDevOrigins = (process.env.SHIBA_MDNS_HOST || 'shiba.local')
   .filter(Boolean)
   .map((p) => (p.endsWith('.local') ? p : `${p}.local`));
 
+// The studio also gets opened by its LAN IP — either this machine or another
+// device on the network (npm run *:lan) — and Next 16 blocks its own /_next
+// dev resources as cross-origin unless that host is allowlisted. List every
+// non-internal IPv4 so opening the app by IP just works. Baked at startup; a
+// restart refreshes them if the address changes.
+function lanIPv4Origins(): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni && ni.family === 'IPv4' && !ni.internal && ni.address) out.push(ni.address);
+    }
+  }
+  return out;
+}
+
+const allowedDevOrigins = [...new Set([...mdnsDevOrigins, ...lanIPv4Origins(), '127.0.0.1'])];
+
 const nextConfig: NextConfig = {
-  allowedDevOrigins: mdnsDevOrigins,
+  allowedDevOrigins,
   // Real npm packages only — never Node builtins like `child_process`.
   // Listing builtins confuses Turbopack's import map and can panic with
   // "Next.js package not found" during HMR (especially when loading Chat).
