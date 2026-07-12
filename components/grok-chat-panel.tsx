@@ -527,8 +527,16 @@ export default function GrokChatPanel({
   // Voice only restores for the same session it was started on — switching chats ends it.
   useEffect(() => {
     try {
-      const draft = window.localStorage.getItem(draftKey);
-      if (draft) setInput(draft);
+      // A one-shot seed (e.g. "Ask agent about trace" from the trace view) wins
+      // over any saved draft, and is consumed so it only pre-fills once.
+      const seed = window.localStorage.getItem('shiba-chat-seed');
+      if (seed) {
+        window.localStorage.removeItem('shiba-chat-seed');
+        setInput(seed);
+      } else {
+        const draft = window.localStorage.getItem(draftKey);
+        if (draft) setInput(draft);
+      }
     } catch { /* private mode */ }
     void (async () => {
       try {

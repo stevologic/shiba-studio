@@ -1171,6 +1171,27 @@ export default function ShibaStudio() {
     }
   }
 
+  /** Hand this run's trace to Grok Chat so the user can ask what happened. The
+   *  chat composer consumes the seed (shiba-chat-seed) once, on mount. */
+  function askAgentAboutTrace() {
+    const run = activeRun;
+    const steps = (run?.trace && run.trace.length ? run.trace : liveTrace) || [];
+    if (steps.length === 0) { toast.error('No trace to ask about yet.'); return; }
+    const lines = steps.map((s: any) => {
+      const body = s.tool ? `${s.tool.name}(${JSON.stringify(s.tool.args)})` : (s.content || '');
+      return `- [${String(s.type || 'step').toUpperCase()}] ${String(body).replace(/\s+/g, ' ').slice(0, 240)}`;
+    });
+    const who = run?.agentName ? `${run.agentName}'s` : "an agent's";
+    const seed =
+      `Here is the execution trace from ${who} run` +
+      (run?.prompt ? ` on: "${run.prompt.slice(0, 200)}"` : '') + '.\n' +
+      `Status: ${run?.status || 'unknown'}. Please explain what it did, whether it succeeded, and anything that looks wrong or could be improved.\n\n` +
+      `Trace:\n${lines.join('\n')}`;
+    try { window.localStorage.setItem('shiba-chat-seed', seed); } catch { /* private mode */ }
+    setShowTraceModal(false);
+    navigateToTab('chat');
+  }
+
   function closeRunDetail() {
     setRunDetail(null);
     setRunDetailLoading(false);
@@ -5656,14 +5677,26 @@ export default function ShibaStudio() {
                   {activeRun.agentName} <ModelLine modelId={activeRun.model} />
                 </span>
               )}
-              <button
-                type="button"
-                className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0"
-                onClick={closeTraceModal}
-                title={runDetail ? 'Back to run details' : 'Close'}
-              >
-                <X size={16}/>
-              </button>
+              <div className="ml-auto flex items-center gap-2 shrink-0">
+                {activeRun && !activeRun.projectId && liveTrace.length > 0 && (
+                  <button
+                    type="button"
+                    className="grok-btn grok-btn-secondary text-xs"
+                    onClick={askAgentAboutTrace}
+                    title="Open Grok Chat seeded with this trace to ask what happened and why"
+                  >
+                    <MessageSquare size={13} /> Ask agent about trace
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="grok-btn grok-btn-ghost p-1.5"
+                  onClick={closeTraceModal}
+                  title={runDetail ? 'Back to run details' : 'Close'}
+                >
+                  <X size={16}/>
+                </button>
+              </div>
             </div>
             <div className="flex-1 min-h-0 overflow-auto space-y-3 pr-1">
               <div className="grok-card p-4 font-mono text-xs bg-black/40">
