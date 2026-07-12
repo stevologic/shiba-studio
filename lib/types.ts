@@ -167,6 +167,11 @@ export interface IntegrationCreds {
     apiSecret: string;
     accessToken: string;
     accessTokenSecret: string;
+    /** OAuth 2.0 app credentials — used to auto-configure the X MCP server.
+     *  Separate from the OAuth 1.0a keys above (which power the built-in
+     *  x_post / x_read tools); X requires each auth type's own credentials. */
+    clientId?: string;
+    clientSecret?: string;
   };
   obsidian?: {
     /** Local vault on disk, or remote REST API (cloud). */

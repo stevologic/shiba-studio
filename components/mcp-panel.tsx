@@ -29,6 +29,9 @@ interface McpPanelProps {
   onBrowsePath?: () => void;
   /** Path chosen via parent folder browser (e.g. filesystem preset). */
   externalAllowedPath?: string | null;
+  /** OAuth 2.0 app creds from the X integration — pre-fill the X MCP preset. */
+  xClientId?: string;
+  xClientSecret?: string;
 }
 
 function ExternalDocsLink({
@@ -58,7 +61,7 @@ function ExternalDocsLink({
   );
 }
 
-export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, externalAllowedPath }: McpPanelProps) {
+export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, externalAllowedPath, xClientId, xClientSecret }: McpPanelProps) {
   const [presets, setPresets] = useState<McpPreset[]>([]);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(false);
@@ -108,6 +111,10 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
         values[field.key] = githubToken;
       } else if (field.key === 'allowedPath' && defaultWorkspace) {
         values[field.key] = defaultWorkspace;
+      } else if (field.key === 'CLIENT_ID' && xClientId) {
+        values[field.key] = xClientId;
+      } else if (field.key === 'CLIENT_SECRET' && xClientSecret) {
+        values[field.key] = xClientSecret;
       }
     }
     setShowCustom(false);

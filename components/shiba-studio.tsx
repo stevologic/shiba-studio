@@ -4340,7 +4340,11 @@ export default function ShibaStudio() {
                         <input className="grok-input mb-2" placeholder="API Secret (Consumer Secret)" value={intCreds.x?.apiSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), apiSecret: e.target.value}}))} />
                         <input className="grok-input mb-2" placeholder="Access Token" value={intCreds.x?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessToken: e.target.value}}))} />
                         <input className="grok-input" placeholder="Access Token Secret" value={intCreds.x?.accessTokenSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessTokenSecret: e.target.value}}))} />
-                        <div className="mt-2 text-xs text-dim">Create an app at developer.x.com with Read and Write permissions, then generate user access tokens.</div>
+                        <div className="mt-2 text-xs text-dim">The four keys above (OAuth 1.0a) power the built-in <span className="font-mono">x_post</span> / <span className="font-mono">x_read</span> tools. Create an app at developer.x.com with Read and Write permissions, then generate user access tokens.</div>
+                        <div className="mt-3 mb-1 text-xs font-medium">OAuth 2.0 (for the X MCP server)</div>
+                        <input className="grok-input mb-2" placeholder="OAuth 2.0 Client ID" value={intCreds.x?.clientId || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), clientId: e.target.value}}))} />
+                        <input className="grok-input" placeholder="OAuth 2.0 Client Secret" value={intCreds.x?.clientSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), clientSecret: e.target.value}}))} />
+                        <div className="mt-2 text-xs text-dim">Set these once and the X MCP server (Capabilities → MCP) auto-fills them — no re-entry. Find them at developer.x.com → your app → User authentication settings → OAuth 2.0.</div>
                       </>
                     )}
                     {integration.id === 'vercel' && (
@@ -4747,6 +4751,8 @@ export default function ShibaStudio() {
                 defaultWorkspace={defaultWorkspaceInput || config?.defaultWorkspace}
                 externalAllowedPath={mcpBrowsePath}
                 onBrowsePath={() => setFolderBrowseFor('mcp')}
+                xClientId={intCreds.x?.clientId}
+                xClientSecret={intCreds.x?.clientSecret}
               />
 
               <ToolsCatalog />
