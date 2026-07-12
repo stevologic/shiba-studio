@@ -140,6 +140,39 @@ export const MCP_PRESETS: McpPreset[] = [
       },
     ],
   },
+  {
+    id: 'x',
+    name: 'X (Twitter)',
+    shortLabel: 'X',
+    description: 'Post, read, search, and analyze on X through the official X API MCP bridge',
+    icon: '/integrations/x.svg',
+    command: 'npx',
+    // xurl is X's official CLI; its `mcp` subcommand bridges stdio to X's
+    // hosted MCP endpoint. No separate install — npx fetches it on first run.
+    args: ['-y', '@xdevplatform/xurl', 'mcp', 'https://api.x.com/mcp'],
+    packageName: '@xdevplatform/xurl',
+    category: 'Social',
+    docsUrl: 'https://docs.x.com/tools/mcp',
+    homepageUrl: 'https://github.com/xdevplatform/xurl',
+    toolsHint: 'Post & read posts, search, timelines, user lookups',
+    envFields: [
+      {
+        key: 'CLIENT_ID',
+        label: 'X App Client ID',
+        placeholder: 'OAuth 2.0 Client ID',
+        required: true,
+        help: 'From your app at developer.x.com (Projects & Apps → OAuth 2.0). Auth is OAuth 2.0 PKCE — the first run opens a browser to sign in.',
+      },
+      {
+        key: 'CLIENT_SECRET',
+        label: 'X App Client Secret',
+        placeholder: 'OAuth 2.0 Client Secret',
+        secret: true,
+        required: true,
+        help: 'OAuth 2.0 client secret for the same X app.',
+      },
+    ],
+  },
 ];
 
 /** Protocol-level docs (always public). */
