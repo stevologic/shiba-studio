@@ -123,7 +123,7 @@ type RunSummaryLite = {
 
 // One source of truth for tab display names (nav, top bar, document titles).
 const TAB_LABELS: Record<string, string> = {
-  dashboard: 'Dashboard', chat: 'Grok Chat', projects: 'Projects', agents: 'Agents',
+  dashboard: 'Dashboard', chat: 'Grok Chat', projects: 'Projects', board: 'Board', agents: 'Agents',
   workspace: 'Workspace', automations: 'Automations', integrations: 'Capabilities',
   usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
