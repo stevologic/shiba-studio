@@ -18,6 +18,8 @@ interface SyncItem {
   count: number;
   status: ItemStatus;
   detail?: string;
+  /** User-chosen: only selected categories are pushed/pulled. */
+  selected: boolean;
 }
 
 interface SyncModalProps {
@@ -53,7 +55,7 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
     setItems(
       KIND_META
         .filter((m) => m.kind !== 'models' || localModelInUse)
-        .map((m) => ({ ...m, count: 0, status: 'pending' as ItemStatus })),
+        .map((m) => ({ ...m, count: 0, status: 'pending' as ItemStatus, selected: true })),
     );
     fetch('/api/cloud/entities')
       .then((r) => r.json())
@@ -76,8 +78,23 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
   const progressPct = items.length ? Math.round((doneCount / items.length) * 100) : 0;
   const finished = !running && doneCount > 0 && doneCount === items.length;
 
-  async function startSync() {
+  const selectedKinds = new Set(items.filter((it) => it.selected).map((it) => it.kind));
+  const selectedCount = selectedKinds.size;
+  const allSelected = items.length > 0 && selectedCount === items.length;
+
+  function toggleItem(kind: SyncKind) {
     if (running) return;
+    setItems((prev) => prev.map((it) => (it.kind === kind ? { ...it, selected: !it.selected } : it)));
+  }
+
+  function toggleAll() {
+    if (running) return;
+    const next = !allSelected;
+    setItems((prev) => prev.map((it) => ({ ...it, selected: next })));
+  }
+
+  async function startSync() {
+    if (running || selectedCount === 0) return;
     setRunning(true);
     cancelRef.current = false;
     setItems((prev) => prev.map((it) => ({ ...it, status: 'pending', detail: undefined })));
@@ -85,6 +102,8 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
     for (const meta of KIND_META) {
       if (cancelRef.current) break;
       if (meta.kind === 'models' && !localModelInUse) continue;
+      // Only sync the categories the user selected.
+      if (!selectedKinds.has(meta.kind)) continue;
 
       setItems((prev) => prev.map((it) => (it.kind === meta.kind ? { ...it, status: 'syncing' } : it)));
       try {
@@ -208,11 +227,31 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
               <a href="https://console.x.ai" target="_blank" rel="noreferrer" className="link-accent">console.x.ai</a>.
             </div>
 
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-dim">Choose what to {direction === 'push' ? 'send' : 'pull'}</span>
+              <button
+                type="button"
+                className="text-[11px] link-accent"
+                onClick={toggleAll}
+                disabled={running}
+              >
+                {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
+            </div>
+
             <div className="space-y-1.5 mb-4">
               {items.map((it) => {
                 const Icon = it.icon;
                 return (
-                  <div key={it.kind} className={`sync-item ${it.status === 'syncing' ? 'sync-item-active' : ''}`}>
+                  <label key={it.kind} className={`sync-item ${it.status === 'syncing' ? 'sync-item-active' : ''} ${it.selected ? '' : 'sync-item-unselected'}`}>
+                    <input
+                      type="checkbox"
+                      className="shrink-0"
+                      checked={it.selected}
+                      disabled={running}
+                      onChange={() => toggleItem(it.kind)}
+                      aria-label={`Include ${it.label} in sync`}
+                    />
                     <Icon size={14} className="text-muted shrink-0" />
                     <span className="text-sm">{it.label}</span>
                     {countsLoaded ? (
@@ -228,7 +267,7 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
                       )}
                       {statusIcon(it.status)}
                     </span>
-                  </div>
+                  </label>
                 );
               })}
             </div>
@@ -245,13 +284,14 @@ export default function SyncModal({ open, onClose, localModelInUse, onSynced }: 
               <button
                 type="button"
                 onClick={startSync}
-                disabled={running || !hasCloudAuth}
+                disabled={running || !hasCloudAuth || selectedCount === 0}
                 className="grok-btn grok-btn-primary flex-1"
+                title={selectedCount === 0 ? 'Select at least one category to sync' : undefined}
               >
                 {running ? (
                   <><Loader2 size={14} className="animate-spin" /> Syncing…</>
                 ) : (
-                  <><RefreshCw size={14} /> {direction === 'push' ? 'Send to cloud' : 'Pull to local'}</>
+                  <><RefreshCw size={14} /> {direction === 'push' ? 'Send' : 'Pull'} {selectedCount > 0 ? `${selectedCount} ` : ''}{selectedCount === 1 ? 'category' : 'categories'}</>
                 )}
               </button>
             </div>

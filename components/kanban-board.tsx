@@ -913,7 +913,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
               className="grok-input kb-panel-desc"
               placeholder="Write a complete brief: goal, constraints, definition of done — the agent works from exactly this."
               value={draftDesc}
-              rows={5}
+              rows={8}
               onChange={(e) => setDraftDesc(e.target.value)}
             />
             <div className="kb-details-save-row">

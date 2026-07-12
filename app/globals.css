@@ -1076,6 +1076,9 @@ body::before {
 }
 
 .sync-item-active { border-color: var(--border-light); }
+.sync-item { cursor: pointer; }
+.sync-item-unselected { opacity: 0.5; }
+.sync-item input[type="checkbox"] { accent-color: var(--accent-2, #6ee7a0); cursor: pointer; }
 
 .sync-item-dot {
   width: 6px;
@@ -7112,9 +7115,13 @@ body::before {
 
 .kb-panel-desc {
   width: 100%;
+  min-height: 9.5rem;
   resize: vertical;
-  font-size: 0.8rem;
-  line-height: 1.45;
+  font-size: 0.82rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
 }
 
 /* Explicit Save for the card title/description. */
