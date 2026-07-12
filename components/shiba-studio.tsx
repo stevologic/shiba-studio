@@ -1261,6 +1261,35 @@ export default function ShibaStudio() {
     setRunDetailLoading(false);
   }
 
+  /** Refresh the open run-details modal without the loading flicker — used to
+   *  poll a run that's still executing so status/trace update live. */
+  async function refreshRunDetailQuiet(runId: string) {
+    try {
+      const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
+      const data = await res.json();
+      if (data.ok && data.run) setRunDetail(data.run);
+    } catch { /* keep the last snapshot on a transient error */ }
+  }
+
+  /** Open the live status/trace for a running automation (its running run). */
+  function openRunningRun(scheduleId: string) {
+    const running = runs.find((r) => r.scheduleId === scheduleId && r.status === 'running')
+      || runs.find((r) => r.status === 'running' && !r.scheduleId);
+    if (running) { void openRunDetails(running.id); return; }
+    toast('This automation is starting — its trace will appear in a moment.');
+  }
+
+  // While the run-details modal shows a still-executing run, poll it so the
+  // status and trace update live (the runtime persists the trace each step).
+  const runDetailId = runDetail?.id;
+  const runDetailStatus = runDetail?.status;
+  useEffect(() => {
+    if (!runDetailId || runDetailStatus !== 'running') return;
+    const t = window.setInterval(() => { void refreshRunDetailQuiet(runDetailId); }, 2500);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshRunDetailQuiet is stable enough; keyed to the running run
+  }, [runDetailId, runDetailStatus]);
+
   // Automations tab: what has actually run (scheduled executions), per agent
   const [scheduledRuns, setScheduledRuns] = useState<RunSummaryLite[] | null>(null);
   useEffect(() => {
@@ -3739,9 +3768,14 @@ export default function ShibaStudio() {
                             {s.enabled ? 'Active' : 'Paused'}
                           </button>
                           {scheduleRunning && (
-                            <span className="automation-running-chip shrink-0" title="This automation is executing right now — watch it in the run log">
+                            <button
+                              type="button"
+                              className="automation-running-chip automation-running-chip-btn shrink-0"
+                              title="Show live status & trace of this run"
+                              onClick={() => openRunningRun(s.id)}
+                            >
                               <RefreshCw size={10} className="animate-spin" /> running
-                            </span>
+                            </button>
                           )}
                           <span className="font-mono text-[11px] shrink-0">{describeCron(s.cron)}</span>
                           {(() => {
@@ -3760,13 +3794,13 @@ export default function ShibaStudio() {
                             <button
                               type="button"
                               onClick={() => {
+                                if (scheduleRunning) { openRunningRun(s.id); return; }
                                 markScheduleRunJustStarted(s.id);
                                 void runAgent(a, { useScheduleInstructions: true, scheduleIndex: i });
                               }}
-                              disabled={scheduleRunning}
                               className="grok-btn grok-btn-ghost text-xs p-1"
-                              title={scheduleRunning ? 'This automation is running right now' : 'Run this automation now with its instructions'}
-                              aria-label={scheduleRunning ? 'Automation is running' : 'Run automation now'}
+                              title={scheduleRunning ? 'Running now — show live status & trace' : 'Run this automation now with its instructions'}
+                              aria-label={scheduleRunning ? 'Show running automation status' : 'Run automation now'}
                             >
                               {scheduleRunning ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12}/>}
                             </button>

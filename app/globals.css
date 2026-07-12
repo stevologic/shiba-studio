@@ -7284,6 +7284,10 @@ body::before {
   white-space: nowrap;
 }
 
+/* Clickable variant — opens the live status/trace modal. */
+.automation-running-chip-btn { cursor: pointer; transition: filter 0.12s ease; }
+.automation-running-chip-btn:hover { filter: brightness(1.2); }
+
 /* Inputs with a leading icon: Tailwind pl-* loses to .grok-input's own
    padding by cascade order, leaving the icon on top of the placeholder.
    These land later in the file and carry two-class specificity, so they win. */
