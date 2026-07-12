@@ -1175,6 +1175,19 @@ export default function ShibaStudio() {
     setRunDetailLoading(false);
   }
 
+  /** Re-run a run's prompt on its agent — offered for failed runs so a flaky
+   *  automation can be retried straight from the execution view. */
+  async function rerunFromDetail() {
+    const run = runDetail;
+    if (!run) return;
+    const agent = agents.find((a) => a.id === run.agentId) || agents.find((a) => a.name === run.agentName);
+    if (!agent) { toast.error('The agent for this run no longer exists.'); return; }
+    const prompt = (run.prompt || '').trim();
+    if (!prompt) { toast.error('This run has no saved prompt to rerun.'); return; }
+    closeRunDetail();
+    await executeAgentRun(agent, prompt, !!run.scheduleId, run.scheduleId || undefined);
+  }
+
   const [pendingRunAgent, setPendingRunAgent] = useState<{ agentId: string; agentName?: string } | null>(null);
 
   useEffect(() => {
@@ -1701,7 +1714,9 @@ export default function ShibaStudio() {
     }]);
     setPreviewSelectedIdx(null);
     setPendingToolApproval(null);
-    if (!runProjectId) setShowTraceModal(true); // watch the run live
+    // Ad-hoc runs pop the live trace; scheduled automations don't steal focus —
+    // their running indicator on the Automations page opens the trace on click.
+    if (!runProjectId && !scheduled) setShowTraceModal(true);
 
     try {
       const res = await fetch('/api/execute/stream', {
@@ -5862,13 +5877,25 @@ export default function ShibaStudio() {
                     >
                       <Terminal size={13} /> Open in trace view
                     </button>
-                    <button
-                      type="button"
-                      onClick={closeRunDetail}
-                      className="grok-btn grok-btn-secondary"
-                    >
-                      {historyAgent ? 'Back to run log' : 'Close'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {runDetail.status === 'error' && (
+                        <button
+                          type="button"
+                          onClick={() => void rerunFromDetail()}
+                          className="grok-btn grok-btn-primary"
+                          title="Run this agent again with the same prompt"
+                        >
+                          <RefreshCw size={13} /> Rerun
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={closeRunDetail}
+                        className="grok-btn grok-btn-secondary"
+                      >
+                        {historyAgent ? 'Back to run log' : 'Close'}
+                      </button>
+                    </div>
                   </div>
                 </>
               );
