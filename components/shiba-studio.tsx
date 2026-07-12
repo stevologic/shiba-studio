@@ -5700,7 +5700,14 @@ export default function ShibaStudio() {
             <div className="flex items-center gap-2 mb-3 shrink-0">
               <Terminal size={16}/>
               <div className="font-medium">Execution Trace</div>
-              {activeRun && !activeRun.projectId && <span className={`badge ${activeRun.status === 'running' ? 'badge-accent' : ''}`}>{activeRun.status}</span>}
+              {activeRun && !activeRun.projectId && (
+                <span
+                  className={`badge ${!pendingToolApproval && activeRun.status === 'running' ? 'badge-accent' : ''}`}
+                  style={pendingToolApproval ? { color: 'var(--warning)', borderColor: 'var(--warning)' } : undefined}
+                >
+                  {pendingToolApproval ? 'needs approval' : activeRun.status}
+                </span>
+              )}
               {activeRun && !activeRun.projectId && (
                 <span className="text-xs text-muted truncate min-w-0 flex items-center gap-1.5">
                   {activeRun.agentName} <ModelLine modelId={activeRun.model} />
@@ -5738,6 +5745,28 @@ export default function ShibaStudio() {
               </div>
             </div>
             <div className="flex-1 min-h-0 overflow-auto space-y-3 pr-1">
+              {pendingToolApproval && (
+                <div className="grok-card p-3" style={{ borderColor: 'var(--warning)' }}>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <ShieldCheck size={14} style={{ color: 'var(--warning)' }} />
+                    <span className="font-medium text-sm">Approval required</span>
+                  </div>
+                  <div className="text-xs text-muted mb-2">
+                    This run is paused — the agent wants to run <span className="font-mono" style={{ color: 'var(--warning)' }}>{pendingToolApproval.toolName}</span>.
+                  </div>
+                  {pendingToolApproval.args && Object.keys(pendingToolApproval.args).length > 0 && (
+                    <pre className="text-[11px] font-mono bg-black/40 p-2 rounded mb-2 max-h-32 overflow-auto">{JSON.stringify(pendingToolApproval.args, null, 2)}</pre>
+                  )}
+                  <div className="flex gap-2">
+                    <button type="button" className="grok-btn grok-btn-primary text-xs" onClick={() => void resolveToolApproval(pendingToolApproval.approvalId, true)}>
+                      <Check size={13} /> Approve
+                    </button>
+                    <button type="button" className="grok-btn grok-btn-secondary text-xs text-error" onClick={() => void resolveToolApproval(pendingToolApproval.approvalId, false)}>
+                      <X size={13} /> Deny
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="grok-card p-4 font-mono text-xs bg-black/40">
                 {liveTrace.length > 0 && !activeRun?.projectId ? liveTrace.map((step, idx) => (
                   <div key={idx} className={`trace-step mb-3 ${step.type}`}>
@@ -6491,7 +6520,7 @@ export default function ShibaStudio() {
         />
       )}
 
-      {pendingToolApproval && (
+      {pendingToolApproval && !showTraceModal && (
         <ToolApprovalModal
           pending={pendingToolApproval}
           onApprove={(id) => void resolveToolApproval(id, true)}
