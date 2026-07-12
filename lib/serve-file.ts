@@ -79,10 +79,14 @@ export async function rawFileResponse(absPath: string, name: string): Promise<Re
   const data = await fs.readFile(absPath).catch(() => null);
   if (!data) return Response.json({ ok: false, error: 'File no longer exists on disk' }, { status: 410 });
   const inlineType = INLINE_TYPES[path.extname(absPath).toLowerCase()];
+  // Agents can create files with arbitrary names; strip quotes and control
+  // characters (CR/LF) so the filename can't break out of the header value or
+  // inject a second header.
+  const safeName = name.replace(/[\r\n"\\]/g, '').replace(/[\x00-\x1f]/g, '').slice(0, 200) || 'file';
   return new Response(new Uint8Array(data), {
     headers: {
       'Content-Type': inlineType || 'application/octet-stream',
-      'Content-Disposition': `${inlineType ? 'inline' : 'attachment'}; filename="${name.replace(/"/g, '')}"`,
+      'Content-Disposition': `${inlineType ? 'inline' : 'attachment'}; filename="${safeName}"`,
       'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'no-store',
     },

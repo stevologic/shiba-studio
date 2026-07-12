@@ -28,6 +28,19 @@ interface RunRow {
   traceSteps?: number;
 }
 
+/** Tolerant parse for the JSON columns: one corrupt/truncated row must not
+ *  take down the whole list load (dashboard, automations, run log all read
+ *  through these), so bad JSON degrades to an empty array. */
+function parseJsonArray<T>(raw: string | null | undefined): T[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function rowToSummary(row: RunRow): AgentRunSummary {
   return {
     id: row.id,
@@ -42,7 +55,7 @@ function rowToSummary(row: RunRow): AgentRunSummary {
     projectId: row.projectId ?? undefined,
     scheduleId: row.scheduleId ?? undefined,
     scheduleInstructions: row.scheduleInstructions ?? undefined,
-    sideEffects: JSON.parse(row.sideEffects || '[]'),
+    sideEffects: parseJsonArray(row.sideEffects),
     workspaceSnapshot: row.workspaceSnapshot ?? undefined,
     traceSteps: row.traceSteps ?? 0,
   };
@@ -51,7 +64,7 @@ function rowToSummary(row: RunRow): AgentRunSummary {
 function rowToRun(row: RunRow): AgentRun {
   return {
     ...rowToSummary(row),
-    trace: JSON.parse(row.trace || '[]'),
+    trace: parseJsonArray(row.trace),
   };
 }
 
@@ -115,7 +128,8 @@ export async function listRunSummaries(opts: {
   const select = `
     SELECT id, agentId, agentName, model, status, prompt, startedAt, completedAt,
            finalOutput, projectId, scheduleId, scheduleInstructions, sideEffects,
-           workspaceSnapshot, json_array_length(trace) AS traceSteps
+           workspaceSnapshot,
+           CASE WHEN json_valid(trace) THEN json_array_length(trace) ELSE 0 END AS traceSteps
     FROM runs
   `;
   const where: string[] = [];

@@ -42,6 +42,18 @@ function escapeLike(raw: string): string {
   return raw.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
+/** Tolerant parse of the meta JSON column — bad JSON degrades to null instead
+ *  of throwing and 500ing the entire Logs listing. */
+function parseMeta(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function listAuditLogs(opts: {
   limit?: number;
   offset?: number;
@@ -89,7 +101,8 @@ export function listAuditLogs(opts: {
     entries: rows.map((r) => ({
       ...r,
       category: r.category as AuditCategory,
-      meta: r.meta ? (JSON.parse(r.meta) as Record<string, unknown>) : null,
+      // Tolerant: a corrupt meta cell must not 500 the whole Logs page.
+      meta: parseMeta(r.meta),
     })),
   };
 }
