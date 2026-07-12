@@ -259,11 +259,11 @@ export function getToolDefinitions(
       type: 'function',
       function: {
         name: 'x_post',
-        description: 'Post a tweet to X (max 280 characters).',
+        description: 'Post to X. Standard accounts are limited to 280 characters; X Premium/Premium+ accounts can post long-form (the full text is sent and X enforces the account limit — it is no longer truncated at 280).',
         parameters: {
           type: 'object',
           properties: {
-            text: { type: 'string', description: 'Tweet text' },
+            text: { type: 'string', description: 'Post text — write the complete post; it is not truncated at 280 characters.' },
           },
           required: ['text'],
         },

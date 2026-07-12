@@ -354,7 +354,10 @@ export async function xPostTweet(text: string) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: text.slice(0, 280) }),
+    // Don't pre-truncate at 280 — X Premium/Premium+ accounts post long-form
+    // (up to 25k chars). Send the full text (capped at X's absolute max) and let
+    // the API enforce the account's real limit rather than silently cutting it.
+    body: JSON.stringify({ text: text.slice(0, 25000) }),
   });
   if (!res.ok) {
     const txt = await res.text();
