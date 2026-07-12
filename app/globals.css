@@ -5813,6 +5813,33 @@ body::before {
   margin-top: 2px;
 }
 
+/* Grouped Settings sections — a labeled band per topic so cards are easy to find. */
+.settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.settings-section {
+  display: flex;
+  flex-direction: column;
+}
+.settings-section + .settings-section {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+}
+.settings-section-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 3px;
+}
+.settings-section-sub {
+  margin-bottom: 15px;
+  max-width: 60ch;
+}
+
 /* ── Annotation sub-browser ── */
 .subbrowser-stage {
   border: 1px solid rgba(255, 255, 255, 0.08);

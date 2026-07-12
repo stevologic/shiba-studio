@@ -4691,6 +4691,10 @@ export default function ShibaStudio() {
                 Model sources, agent behavior, and workspace — everything lives on this machine.
               </div>
 
+              <div className="settings-sections">
+              <section className="settings-section">
+                <h3 className="settings-section-title">Grok credentials &amp; sign-in</h3>
+                <div className="settings-section-sub text-[11px] text-dim">Keys and accounts that connect Shiba to xAI &mdash; all encrypted on this machine.</div>
               <div className="settings-grid">
                 <div className="grok-card p-5 settings-card">
                   <div className="settings-card-head">
@@ -4831,6 +4835,12 @@ export default function ShibaStudio() {
                   {oauthStatus.error && <div className="text-xs text-warning mt-2">{oauthStatus.error}</div>}
                 </div>
 
+              </div>
+              </section>
+              <section className="settings-section">
+                <h3 className="settings-section-title">Models, voice &amp; CLI</h3>
+                <div className="settings-section-sub text-[11px] text-dim">Where inference runs and how Grok sounds &mdash; cloud, local models, and the Build CLI.</div>
+              <div className="settings-grid">
                 <div className="grok-card p-5 settings-card">
                   <div className="settings-card-head">
                     <Server size={16} className="opacity-70 shrink-0" />
@@ -5077,6 +5087,12 @@ export default function ShibaStudio() {
                   )}
                 </div>
 
+              </div>
+              </section>
+              <section className="settings-section">
+                <h3 className="settings-section-title">Agent behavior &amp; workspace</h3>
+                <div className="settings-section-sub text-[11px] text-dim">Default approval mode, global instructions, and where agents read and write files.</div>
+              <div className="settings-grid">
                 <div className="grok-card p-5 settings-card">
                   <div className="settings-card-head">
                     <ShieldCheck size={16} className="opacity-70 shrink-0" />
@@ -5150,6 +5166,12 @@ export default function ShibaStudio() {
                   </div>
                 </div>
 
+              </div>
+              </section>
+              <section className="settings-section">
+                <h3 className="settings-section-title">Cost &amp; safety</h3>
+                <div className="settings-section-sub text-[11px] text-dim">Spend caps, run limits, and how long runs and logs are kept.</div>
+              <div className="settings-grid">
                 <div className="grok-card p-5 settings-card">
                   <div className="settings-card-head">
                     <Gauge size={16} className="opacity-70 shrink-0" />
@@ -5260,6 +5282,12 @@ export default function ShibaStudio() {
                   </div>
                 </div>
 
+              </div>
+              </section>
+              <section className="settings-section">
+                <h3 className="settings-section-title">Backup &amp; maintenance</h3>
+                <div className="settings-section-sub text-[11px] text-dim">Export or restore this machine&rsquo;s setup, and reset board data.</div>
+              <div className="settings-grid">
                 <div className="grok-card p-5 settings-card">
                   <div className="settings-card-head">
                     <Archive size={16} className="opacity-70 shrink-0" />
@@ -5326,6 +5354,8 @@ export default function ShibaStudio() {
                   </div>
                 </div>
 
+              </div>
+              </section>
               </div>
 
               <div className="mt-5 text-[11px] text-dim">
