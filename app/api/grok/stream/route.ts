@@ -99,9 +99,9 @@ export async function POST(req: NextRequest) {
       if (requested && fs.statSync(requested).isDirectory()) workspaceDir = requested;
     } catch { /* stale/unreachable folder — chat continues without it */ }
   }
-  // Local agents browse for real in chat: tell the model how that works so it
+  // Agents browse for real in chat: tell the model how that works so it
   // neither refuses nor invents results.
-  if (chatAgent && chatAgent.origin !== 'cloud') {
+  if (chatAgent) {
     systemParts.push([
       '## Browser',
       'Your browser tools (browser_navigate, browser_click, browser_type, browser_extract, browser_screenshot) drive a real headless Chrome — no window appears on screen by design.',
@@ -272,9 +272,9 @@ export async function POST(req: NextRequest) {
             const { normalizeAgent } = await import('@/lib/types');
 
             const agent = chatAgent;
-            // Workspace tools run as this synthetic local "agent" so a cloud-origin
-            // chat agent (or plain OAuth/token/local chat) can still touch the
-            // user-granted workspace folder.
+            // Workspace tools run as this synthetic "agent" so plain chat
+            // (no agent selected) can still touch the user-granted workspace
+            // folder.
             const WORKSPACE_TOOL_NAMES = new Set([
               'fs_list', 'fs_read', 'fs_write', 'fs_search', 'shell_exec', 'terminal_exec',
             ]);
@@ -341,20 +341,20 @@ export async function POST(req: NextRequest) {
               }
             };
 
-            const workspaceAgent = normalizeAgent({ id: '__chat__', name: 'Grok Chat', origin: 'local' });
+            const workspaceAgent = normalizeAgent({ id: '__chat__', name: 'Grok Chat' });
             // Base: agent tools if chatting as an agent; else empty.
             const tools = agent
-              ? getToolDefinitions(agent.integrations, false, agent.origin === 'cloud' ? 'cloud' : 'local')
+              ? getToolDefinitions(agent.integrations, false)
               : [];
             // Always merge chat-core research tools so plain Grok Chat can look things up.
             {
-              const core = getToolDefinitions(workspaceAgent.integrations, false, 'local')
+              const core = getToolDefinitions(workspaceAgent.integrations, false)
                 .filter((t) => CHAT_CORE_TOOL_NAMES.has(t.function.name));
               const have = new Set(tools.map((t) => t.function.name));
               tools.push(...core.filter((t) => !have.has(t.function.name)));
             }
             if (workspaceDir) {
-              const codingTools = getToolDefinitions(workspaceAgent.integrations, false, 'local')
+              const codingTools = getToolDefinitions(workspaceAgent.integrations, false)
                 .filter((t) => WORKSPACE_TOOL_NAMES.has(t.function.name));
               const have = new Set(tools.map((t) => t.function.name));
               tools.push(...codingTools.filter((t) => !have.has(t.function.name)));

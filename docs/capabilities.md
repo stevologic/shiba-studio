@@ -57,4 +57,3 @@ Filterable, grouped, and annotated with what unlocks each tool (local agents onl
 | **Orchestration** | `schedule_task`, `send_to_peer`, `grok_cli` (headless Grok CLI delegation with effort levels, self-verification `check`, best-of-N, and JSON-schema structured output) |
 | **MCP** | `mcp_list_tools`, `mcp_invoke` |
 
-Local-only tools are never offered to cloud agents.

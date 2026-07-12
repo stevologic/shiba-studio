@@ -65,7 +65,6 @@ export async function POST(req: NextRequest) {
     id: newId,
     name: body.name || 'New Agent',
     avatar: body.avatar && isValidAvatarId(body.avatar) ? body.avatar : defaultAvatarIdForAgent(newId),
-    origin: body.origin === 'cloud' ? 'cloud' : 'local',
     model: typeof body.model === 'string' && body.model ? body.model : (cfg.defaultGrokModel || 'grok-4'),
     description: body.description || '',
     workspace: {
@@ -89,6 +88,6 @@ export async function POST(req: NextRequest) {
   agents.push(newAgent);
   await saveAgents(agents);
   await loadAndScheduleAll().catch(() => {});
-  audit('agent', 'agent created', newAgent.name, { agentId: newAgent.id, model: newAgent.model, origin: newAgent.origin });
+  audit('agent', 'agent created', newAgent.name, { agentId: newAgent.id, model: newAgent.model });
   return NextResponse.json({ agent: normalizeAgent(newAgent) });
 }

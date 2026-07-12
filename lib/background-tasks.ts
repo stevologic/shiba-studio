@@ -43,7 +43,6 @@ function syntheticWorker(model: string, workspaceDir: string | undefined): Agent
     id: `bg-${uuidv4().slice(0, 8)}`,
     name: 'Background Task',
     model,
-    origin: 'local',
     description: 'One-off background task dispatched from chat',
     // Empty path → the runtime's default workspace (same as unconfigured agents).
     workspace: { path: workspaceDir || '', useWorktree: false },
@@ -73,9 +72,7 @@ export interface StartBackgroundTaskOpts {
  * proceeds through the standard agent runtime (guards, trace, persistence).
  */
 export function startBackgroundTask(opts: StartBackgroundTaskOpts): BackgroundTaskInfo {
-  const worker = opts.agent && opts.agent.origin !== 'cloud'
-    ? opts.agent
-    : syntheticWorker(opts.model, opts.workspaceDir);
+  const worker = opts.agent ?? syntheticWorker(opts.model, opts.workspaceDir);
   // A chat workspace wins over the worker's own folder so "code it here" works.
   const agentForRun: Agent = opts.workspaceDir
     ? { ...worker, workspace: { ...worker.workspace, path: opts.workspaceDir, useWorktree: false } }

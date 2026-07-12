@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload,
-  CloudUpload, CloudDownload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
+  CloudUpload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
   KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -489,7 +489,7 @@ export default function ShibaStudio() {
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [highlightScheduleIdx, setHighlightScheduleIdx] = useState<number | null>(null);
   const [agentForm, setAgentForm] = useState<any>({
-    name: 'Builder Agent', avatar: 'alien-01', origin: 'local', model: 'grok-4', workspace: { path: '', useWorktree: true },
+    name: 'Builder Agent', avatar: 'alien-01', model: 'grok-4', workspace: { path: '', useWorktree: true },
     integrations: { ...EMPTY_INTEGRATION_SCOPE },
     peers: [], skills: [], chatSkill: '', voiceId: '', schedules: [defaultScheduleEntry()], driveFolders: []
   });
@@ -1368,22 +1368,6 @@ export default function ShibaStudio() {
     setAgentsReady(true);
   }
 
-  const [cloudAgentSyncing, setCloudAgentSyncing] = useState(false);
-
-  async function syncCloudAgents() {
-    setCloudAgentSyncing(true);
-    try {
-      const res = await fetch('/api/agents/cloud-sync', { method: 'POST' });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Cloud agent sync failed');
-      toast.success(data.message || 'Cloud agents synced');
-      await refreshAgents();
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'Cloud agent sync failed');
-    }
-    setCloudAgentSyncing(false);
-  }
-
   async function createOrUpdateAgent() {
     setLoading(true);
     try {
@@ -1417,7 +1401,6 @@ export default function ShibaStudio() {
     setAgentForm({
       name: 'Code Agent ' + (agents.length + 1),
       avatar: ALIEN_AVATARS[agents.length % ALIEN_AVATARS.length].id,
-      origin: 'local',
       model: pickDefaultModel(),
       workspace: { path: config?.defaultWorkspace || process.cwd?.() || '', useWorktree: true },
       integrations: { ...EMPTY_INTEGRATION_SCOPE },
@@ -1439,7 +1422,6 @@ export default function ShibaStudio() {
     setAgentForm({
       name: `${project.name} Agent`,
       avatar: ALIEN_AVATARS[agents.length % ALIEN_AVATARS.length].id,
-      origin: 'local',
       model: pickDefaultModel(),
       description: project.description || `Agent for project: ${project.name}`,
       workspace: { path: ws, useWorktree: true },
@@ -1531,7 +1513,6 @@ export default function ShibaStudio() {
     setAgentForm({
       ...norm,
       avatar: resolveAgentAvatar(norm),
-      origin: norm.origin === 'cloud' ? 'cloud' : 'local',
       voiceId: typeof norm.voiceId === 'string' ? norm.voiceId : '',
       workspace: { ...norm.workspace },
       integrations: { ...norm.integrations },
@@ -3441,22 +3422,13 @@ export default function ShibaStudio() {
                 <div className="min-w-0">
                   <div className="page-title">
                     Agents
-                    <InfoHint text="Local agents get full machine access (files, shell, browser, MCP); cloud agents run against Grok cloud services only. Each agent has its own model, workspace, integrations, schedules, and peers." />
+                    <InfoHint text="Agents run on this machine with full access: files, shell, browser, MCP, and their own sandbox container. Each agent has its own model, workspace, integrations, schedules, and peers." />
                   </div>
                   <div className="page-subtitle">
-                    Local and cloud Grok agents — models, workspaces, schedules, integrations, and peers.
+                    Your Grok agents — models, workspaces, schedules, integrations, and peers.
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
-                  <button
-                    onClick={syncCloudAgents}
-                    disabled={cloudAgentSyncing}
-                    className="grok-btn grok-btn-secondary"
-                    title="Import heavy Grok cloud agents from your xAI account"
-                  >
-                    <CloudDownload size={15} className={cloudAgentSyncing ? 'animate-pulse' : ''} />
-                    {cloudAgentSyncing ? 'Syncing…' : 'Sync cloud agents'}
-                  </button>
                   <button onClick={openCreateAgent} className="grok-btn grok-btn-primary"><Plus size={15}/> Create Agent</button>
                 </div>
               </div>
@@ -3469,20 +3441,12 @@ export default function ShibaStudio() {
                       <div className="min-w-0 flex-1">
                         <div className="font-semibold text-base flex items-center gap-2 min-w-0">
                           <span className="truncate">{agent.name}</span>
-                          <span
-                            className={`agent-origin-badge shrink-0 ${agent.origin === 'cloud' ? 'agent-origin-cloud' : 'agent-origin-local'}`}
-                            title={agent.origin === 'cloud'
-                              ? 'Cloud agent — runs in the Grok cloud, no local system access'
-                              : 'Local agent — full access to this machine plus cloud services'}
-                          >
-                            {agent.origin === 'cloud' ? 'CLOUD' : 'LOCAL'}
-                          </span>
                         </div>
                         <div className="text-xs text-dim flex items-center gap-1.5 min-w-0 mt-0.5">
                           <span className="min-w-0 truncate" title={modelDisplayName(agent.model)}>
                             <ModelLine modelId={agent.model} />
                           </span>
-                          <span className="shrink-0">• {agent.origin === 'cloud' ? 'cloud' : (agent.workspace.useWorktree ? 'worktree' : 'workspace')}</span>
+                          <span className="shrink-0">• {agent.workspace.useWorktree ? 'worktree' : 'workspace'}</span>
                         </div>
                       </div>
                     </div>
@@ -3529,7 +3493,7 @@ export default function ShibaStudio() {
                     <div className="mt-auto pt-3">
                       <div className="flex items-center justify-between text-xs gap-2 min-w-0">
                         <div className="text-dim font-mono truncate min-w-0" title={agent.workspace.path}>
-                          {agent.origin === 'cloud' ? 'Grok cloud services' : agent.workspace.path}
+                          {agent.workspace.path}
                         </div>
                         <button
                           onClick={() => void toggleScheduleEntry(agent, 0)}
@@ -5763,30 +5727,6 @@ export default function ShibaStudio() {
                   </div>
                 </div>
                 <div>
-                  <div className="grok-label mb-1">Runs on</div>
-                  <div className="sync-direction">
-                    <button
-                      type="button"
-                      onClick={() => setAgentForm({ ...agentForm, origin: 'local' })}
-                      className={`sync-direction-option ${agentForm.origin !== 'cloud' ? 'sync-direction-active' : ''}`}
-                    >
-                      <Terminal size={14} /> Local machine
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAgentForm({ ...agentForm, origin: 'cloud' })}
-                      className={`sync-direction-option ${agentForm.origin === 'cloud' ? 'sync-direction-active' : ''}`}
-                    >
-                      <Globe size={14} /> Grok cloud
-                    </button>
-                  </div>
-                  <div className="text-[10px] text-dim mt-1">
-                    {agentForm.origin === 'cloud'
-                      ? 'Cloud agent — works through Grok cloud services and connected integrations only. No local files, shell, or browser access.'
-                      : 'Local agent — full system access on this machine: files, shell, Chrome browser, git worktrees, MCP tools, plus all cloud services.'}
-                  </div>
-                </div>
-                <div>
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="grok-label mb-0">Grok Model</div>
                     {agentForm.model && <ModelProviderBadge modelId={agentForm.model} />}
@@ -5845,21 +5785,13 @@ export default function ShibaStudio() {
                       : ` · app fallback is ${DEFAULT_TTS_VOICE}`}.
                   </div>
                 </div>
-                {agentForm.origin !== 'cloud' ? (
-                  <>
-                    <div>
-                      <div className="grok-label">Workspace Path</div>
-                      <input className="grok-input" value={agentForm.workspace?.path || ''} onChange={e => setAgentForm({ ...agentForm, workspace: { ...agentForm.workspace, path: e.target.value } })} />
-                    </div>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" checked={agentForm.workspace?.useWorktree} onChange={e => setAgentForm({ ...agentForm, workspace: { ...agentForm.workspace, useWorktree: e.target.checked } })} /> Use isolated git worktree (recommended)
-                    </label>
-                  </>
-                ) : (
-                  <div className="text-[11px] text-dim border border-default rounded p-3">
-                    Cloud agents have no local workspace — they act through Grok cloud services and the integrations you enable below.
-                  </div>
-                )}
+                <div>
+                  <div className="grok-label">Workspace Path</div>
+                  <input className="grok-input" value={agentForm.workspace?.path || ''} onChange={e => setAgentForm({ ...agentForm, workspace: { ...agentForm.workspace, path: e.target.value } })} />
+                </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={agentForm.workspace?.useWorktree} onChange={e => setAgentForm({ ...agentForm, workspace: { ...agentForm.workspace, useWorktree: e.target.checked } })} /> Use isolated git worktree (recommended)
+                </label>
 
                 <div className="agent-form-section">
                   <div className="agent-form-section-head">

@@ -1202,31 +1202,6 @@ body::before {
 .projects-list-action-danger:hover { color: var(--error); }
 
 /* ── Agent origin badges — local machine vs Grok cloud ── */
-.agent-origin-badge {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  padding: 2px 7px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  line-height: 1.4;
-}
-
-.agent-origin-local {
-  color: var(--text-muted);
-  background: var(--bg-elev);
-}
-
-/* Cloud chip stays legible as a status accent within monochrome UI */
-.agent-origin-cloud {
-  color: var(--accent-2);
-  border-color: var(--border-light);
-  background: rgba(255, 255, 255, 0.06);
-}
-
 /* ── Mobile navigation drawer ── */
 .sidebar-toggle { display: none; }
 
@@ -3054,12 +3029,6 @@ body::before {
   white-space: nowrap;
   flex-shrink: 0;
   line-height: 1.2;
-}
-
-.tool-chip-local {
-  border-color: rgba(96, 165, 250, 0.35);
-  color: #60a5fa;
-  background: rgba(96, 165, 250, 0.1);
 }
 
 .tool-chip-req {

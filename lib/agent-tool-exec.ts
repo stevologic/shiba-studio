@@ -22,14 +22,6 @@ import { detectGrokCli, runGrokCliPrompt } from './grok-cli';
 import { listEnabledMcpServers } from './mcp';
 import { invokeMcpTool } from './mcp-client';
 
-/** Tools that touch this machine — never available to cloud agents. */
-const LOCAL_ONLY_TOOLS = new Set([
-  'fs_list', 'fs_read', 'fs_write', 'fs_search', 'shell_exec', 'terminal_exec',
-  'sandbox_exec', 'sandbox_write_file',
-  'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
-  'grok_cli', 'mcp_list_tools', 'mcp_invoke',
-]);
-
 export async function executeAgentTool(
   name: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tool args arrive as model-produced JSON; each case coerces its own fields
@@ -40,12 +32,6 @@ export async function executeAgentTool(
   runIdForBrowser?: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- results are tool-shaped JSON, serialized straight back to the model
 ): Promise<{ result: any; sideEffect?: string; screenshot?: string }> {
-  if (agent.origin === 'cloud' && LOCAL_ONLY_TOOLS.has(name)) {
-    return {
-      result: { error: `Tool "${name}" requires local system access, which cloud agents do not have. Use cloud integrations instead.` },
-      sideEffect: `blocked local tool ${name} for cloud agent`,
-    };
-  }
   // Global Capabilities → Tools toggle — never run a disabled tool even if the
   // model still tries (stale context, race after toggle, etc.).
   try {

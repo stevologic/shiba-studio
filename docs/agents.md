@@ -2,19 +2,9 @@
 
 Agents are autonomous Grok workers with their own model, workspace, capabilities, and schedules. The **Agents page** is where you view, create, and edit them; running and traces live on **[Automations](automations.md)**.
 
-<img src="images/agents.png" alt="Agents page: local and cloud Grok agents with models, workspaces, integration scopes, skills, and schedule state" width="880" />
+<img src="images/agents.png" alt="Agents page: Grok agents with models, workspaces, integration scopes, skills, and schedule state" width="880" />
 
-## Local vs cloud agents
-
-| | Local agent | Cloud agent |
-| --- | --- | --- |
-| Files & shell in workspace | ✅ | ❌ |
-| Browser automation (Chrome) | ✅ | ❌ |
-| Grok CLI delegation, MCP tools | ✅ | ❌ |
-| Cloud integrations (GitHub, Slack, …) | ✅ | ✅ |
-| Web research, memory, scheduling | ✅ | ✅ |
-
-Cloud agents are labeled `CLOUD` and are safe to sync from your xAI account (*Sync cloud agents* imports heavy Grok cloud agents in one click).
+Every agent runs on this machine with full access: files and shell in its workspace, browser automation (Chrome), its own Alpine Linux sandbox container, Grok CLI delegation, MCP tools, cloud integrations (GitHub, Slack, …), web research, memory, and scheduling.
 
 ## Anatomy of an agent
 
@@ -27,7 +17,7 @@ Cloud agents are labeled `CLOUD` and are safe to sync from your xAI account (*Sy
 
 ## The agent card
 
-Each card shows model, origin, scopes, skills, workspace, and schedule state, plus:
+Each card shows model, scopes, skills, workspace, and schedule state, plus:
 
 - **Edit** — the full configuration modal.
 - **Terminal icon** — jump to Automations (runs, traces, run-now).

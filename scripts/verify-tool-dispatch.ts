@@ -27,7 +27,6 @@ async function main() {
   const tools = getToolDefinitions(
     { github: false, slack: false, googledrive: false, discord: false, x: false, obsidian: false, vercel: false, netlify: false } as never,
     false,
-    'local',
   );
   assert(tools.length > 10, `local agent has a full tool list (${tools.length})`);
 
@@ -42,7 +41,6 @@ async function main() {
   const tools2 = getToolDefinitions(
     { github: false, slack: false, googledrive: false, discord: false, x: false, obsidian: false, vercel: false, netlify: false } as never,
     false,
-    'local',
   );
   const minusList = filterToolsByDisabled(tools2, ['fs_list']);
   assert(!minusList.some((t) => t.function.name === 'fs_list'), 'disabled tool is removed');

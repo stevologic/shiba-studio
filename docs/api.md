@@ -62,7 +62,6 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | --- | --- | --- |
 | GET | `/api/agents` | All agents (models, workspaces, scopes, skills, schedules). |
 | POST | `/api/agents` | `{ action: 'create'\|'update'\|'delete', … }` — manage agents. |
-| POST | `/api/agents/cloud-sync` | Import cloud (Grok) agents from your xAI account. |
 | GET | `/api/runs` | Run summaries. Filters: `?agentId`, `?scheduleId`, `?scheduledOnly=1`, `?limit`. `?id=<runId>` returns one run **with its full trace**. |
 | GET | `/api/scheduler` | Armed cron schedules. |
 | POST | `/api/scheduler` | Update an agent's schedule (`{ agentId, cron, enabled }`). |

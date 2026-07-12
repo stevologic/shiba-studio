@@ -92,8 +92,7 @@ async function resolveMentionAgent(
     return platform === 'slack' ? !!integ.slack : !!integ.discord;
   });
   if (scoped) return scoped;
-  // Prefer a local agent for tool access when nothing is scoped.
-  return agents.find((a) => (a.origin || 'local') === 'local') || agents[0] || null;
+  return agents[0] || null;
 }
 
 function stripBotMention(text: string, botUserId?: string): string {

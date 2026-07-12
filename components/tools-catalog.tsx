@@ -15,7 +15,6 @@ interface ToolEntry {
   description: string;
   group: string;
   requires?: string;
-  localOnly: boolean;
   enabled: boolean;
 }
 
@@ -48,7 +47,6 @@ const GROUP_ORDER = ['Workspace & Files', 'Sandbox', 'Web & Research', 'Browser 
 
 function requirementChip(tool: ToolEntry): { label: string; cls: string } {
   if (!tool.enabled) return { label: 'disabled', cls: 'tool-chip-disabled' };
-  if (tool.localOnly) return { label: 'local agents', cls: 'tool-chip-local' };
   if (tool.requires === 'peers') return { label: 'needs peers', cls: 'tool-chip-req' };
   if (tool.requires === 'mcp') return { label: 'needs MCP server', cls: 'tool-chip-req' };
   if (tool.requires === 'xai') return { label: 'needs xAI auth', cls: 'tool-chip-req' };

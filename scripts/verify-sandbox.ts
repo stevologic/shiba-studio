@@ -1,7 +1,7 @@
 import './verify-isolate'; // MUST be first: sandbox the data dir on direct runs
 // Verifies per-agent Alpine sandbox containers: lifecycle (create/start/remove),
 // command exec with in-container timeout, file writes, state persistence across
-// calls, and the agent-tool dispatch wiring (including the cloud-agent block).
+// calls, and the agent-tool dispatch wiring.
 // Skips gracefully when Docker isn't available (e.g. slim CI runners).
 
 import {
@@ -21,11 +21,10 @@ function assert(cond: boolean, msg: string) {
   if (!cond) { console.error(`FAIL: ${msg}`); failures++; } else console.log(`ok: ${msg}`);
 }
 
-function fixtureAgent(id: string, origin: 'local' | 'cloud'): Agent {
+function fixtureAgent(id: string): Agent {
   return {
     id,
     name: 'Sandbox Verify Agent',
-    origin,
     model: 'grok-3',
     description: '',
     workspace: { path: process.cwd(), useWorktree: false },
@@ -97,20 +96,15 @@ async function main() {
     assert(!slow.ok && slow.timedOut === true, 'timeout fires inside the container');
 
     // --- dispatch wiring (the exact path agent runs take) ---
-    const local = fixtureAgent(agentId, 'local');
-    const viaTool = await executeAgentTool('sandbox_exec', { command: 'echo via-dispatch' }, local, {}, process.cwd());
+    const fixture = fixtureAgent(agentId);
+    const viaTool = await executeAgentTool('sandbox_exec', { command: 'echo via-dispatch' }, fixture, {}, process.cwd());
     const toolRes = viaTool.result as { ok?: boolean; stdout?: string };
     assert(toolRes.ok === true && (toolRes.stdout || '').includes('via-dispatch'), 'sandbox_exec dispatches through executeAgentTool');
     assert((viaTool.sideEffect || '').startsWith('sandbox:'), 'dispatch records a sandbox side-effect');
 
-    const viaWrite = await executeAgentTool('sandbox_write_file', { path: 'notes.md', content: '# hi' }, local, {}, process.cwd());
+    const viaWrite = await executeAgentTool('sandbox_write_file', { path: 'notes.md', content: '# hi' }, fixture, {}, process.cwd());
     const writeRes = viaWrite.result as { ok?: boolean; path?: string };
     assert(writeRes.ok === true && writeRes.path === '/work/notes.md', 'sandbox_write_file dispatches through executeAgentTool');
-
-    const cloud = fixtureAgent(`${agentId}-cloud`, 'cloud');
-    const blocked = await executeAgentTool('sandbox_exec', { command: 'echo nope' }, cloud, {}, process.cwd());
-    const blockedRes = blocked.result as { error?: string };
-    assert(!!blockedRes.error && blockedRes.error.includes('local system access'), 'cloud agents are blocked from the sandbox');
   } finally {
     // --- teardown: agent deletion removes the container ---
     const rm = await removeSandbox(agentId);

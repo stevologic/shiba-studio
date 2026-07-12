@@ -89,10 +89,10 @@ async function main() {
   // --- Runtime tool definitions ---
   const { getToolDefinitions } = await import('../lib/agent-runtime');
   const { EMPTY_INTEGRATION_SCOPE } = await import('../lib/types');
-  const off = getToolDefinitions({ ...EMPTY_INTEGRATION_SCOPE }, false, 'local');
+  const off = getToolDefinitions({ ...EMPTY_INTEGRATION_SCOPE }, false);
   assert(!off.some((t) => t.function.name.startsWith('netlify_')), 'tools hidden when scope off');
 
-  const on = getToolDefinitions({ ...EMPTY_INTEGRATION_SCOPE, netlify: true }, false, 'local');
+  const on = getToolDefinitions({ ...EMPTY_INTEGRATION_SCOPE, netlify: true }, false);
   const names = on.map((t) => t.function.name);
   for (const n of [
     'netlify_list_sites',

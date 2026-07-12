@@ -2312,7 +2312,7 @@ export default function GrokChatPanel({
     opts?: { continuation?: boolean },
   ) {
     if (voiceGroupBusyRef.current || streamingRef.current) return;
-    const pool = agentsRef.current.filter((a) => a.origin !== 'cloud' || true); // all agents welcome
+    const pool = agentsRef.current; // all agents welcome
     if (pool.length < 1) return;
 
     const pick = pickNextVoiceGroupAgent(

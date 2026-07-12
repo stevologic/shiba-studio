@@ -787,12 +787,12 @@ export default function WorkspacePage({
                 </div>
               )}
 
-              {isGitRepo && agents.filter((a) => a.origin !== 'cloud' && a.workspace?.useWorktree).length > 0 && (
+              {isGitRepo && agents.filter((a) => a.workspace?.useWorktree).length > 0 && (
                 <div className="ws-wt-create mt-4">
                   <div className="text-xs font-medium text-muted mb-2">Create worktree for agent</div>
                   <div className="flex flex-wrap gap-1.5">
                     {agents
-                      .filter((a) => a.origin !== 'cloud' && a.workspace?.useWorktree)
+                      .filter((a) => a.workspace?.useWorktree)
                       .map((a) => (
                         <button
                           key={a.id}

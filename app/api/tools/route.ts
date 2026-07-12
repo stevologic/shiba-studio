@@ -6,25 +6,26 @@ import { setToolDisabled } from '@/lib/disabled-tools';
 
 // Catalog metadata layered over the real runtime tool definitions so the
 // Capabilities page always reflects what agents can actually call.
-const TOOL_GROUPS: Record<string, { group: string; requires?: string; localOnly?: boolean }> = {
-  fs_list: { group: 'Workspace & Files', localOnly: true },
-  fs_read: { group: 'Workspace & Files', localOnly: true },
-  fs_write: { group: 'Workspace & Files', localOnly: true },
-  fs_search: { group: 'Workspace & Files', localOnly: true },
-  shell_exec: { group: 'Workspace & Files', localOnly: true },
-  terminal_exec: { group: 'Workspace & Files', localOnly: true },
-  sandbox_exec: { group: 'Sandbox', localOnly: true },
-  sandbox_write_file: { group: 'Sandbox', localOnly: true },
+const TOOL_GROUPS: Record<string, { group: string; requires?: string }> = {
+  fs_list: { group: 'Workspace & Files' },
+  fs_read: { group: 'Workspace & Files' },
+  fs_write: { group: 'Workspace & Files' },
+  fs_search: { group: 'Workspace & Files' },
+  shell_exec: { group: 'Workspace & Files' },
+  terminal_exec: { group: 'Workspace & Files' },
+  sandbox_exec: { group: 'Sandbox' },
+  sandbox_write_file: { group: 'Sandbox' },
   web_fetch: { group: 'Web & Research' },
   web_search: { group: 'Web & Research' },
   memory_save: { group: 'Memory' },
   memory_recall: { group: 'Memory' },
+  memory_forget: { group: 'Memory' },
   generate_image: { group: 'AI Generation', requires: 'xai' },
-  browser_navigate: { group: 'Browser Automation', localOnly: true },
-  browser_click: { group: 'Browser Automation', localOnly: true },
-  browser_type: { group: 'Browser Automation', localOnly: true },
-  browser_screenshot: { group: 'Browser Automation', localOnly: true },
-  browser_extract: { group: 'Browser Automation', localOnly: true },
+  browser_navigate: { group: 'Browser Automation' },
+  browser_click: { group: 'Browser Automation' },
+  browser_type: { group: 'Browser Automation' },
+  browser_screenshot: { group: 'Browser Automation' },
+  browser_extract: { group: 'Browser Automation' },
   github_create_issue: { group: 'Integrations', requires: 'github' },
   github_list_repos: { group: 'Integrations', requires: 'github' },
   github_create_pr: { group: 'Integrations', requires: 'github' },
@@ -50,7 +51,7 @@ const TOOL_GROUPS: Record<string, { group: string; requires?: string; localOnly?
   netlify_set_env: { group: 'Integrations', requires: 'netlify' },
   send_to_peer: { group: 'Orchestration', requires: 'peers' },
   schedule_task: { group: 'Orchestration' },
-  grok_cli: { group: 'Orchestration', localOnly: true },
+  grok_cli: { group: 'Orchestration' },
   mcp_list_tools: { group: 'MCP', requires: 'mcp' },
   mcp_invoke: { group: 'MCP', requires: 'mcp' },
 };
@@ -60,7 +61,6 @@ export interface ToolCatalogEntry {
   description: string;
   group: string;
   requires?: string;
-  localOnly: boolean;
   /** false when the user disabled this tool in Capabilities */
   enabled: boolean;
 }
@@ -82,7 +82,6 @@ export async function GET() {
         netlify: true,
       },
       true,
-      'local',
     ),
     ...(cli.installed ? [grokCliToolDefinition()] : []),
     ...mcpToolDefinitions(),
@@ -94,7 +93,6 @@ export async function GET() {
       description: t.function.description || '',
       group: meta.group,
       requires: meta.requires,
-      localOnly: !!meta.localOnly,
       enabled: !disabled.has(t.function.name),
     };
   });

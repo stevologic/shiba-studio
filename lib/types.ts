@@ -43,20 +43,11 @@ export interface ScheduleEntry {
   description?: string;
 }
 
-/**
- * Where an agent executes:
- * - 'local'  — this machine: full system access (files, shell, browser, worktrees, MCP) plus cloud services.
- * - 'cloud'  — Grok cloud: only xAI-hosted capabilities and connected cloud integrations; no local system access.
- */
-export type AgentOrigin = 'local' | 'cloud';
-
 export interface Agent {
   id: string;
   name: string;
   /** Alien avatar id, e.g. alien-01 … alien-50 */
   avatar?: string;
-  /** Execution home — 'local' (this machine) or 'cloud' (Grok cloud). Defaults to 'local'. */
-  origin?: AgentOrigin;
   model: GrokModel;
   description?: string;
   workspace: {
@@ -357,7 +348,9 @@ type LegacyScheduleEntry = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- input is untyped legacy JSON from disk; every field is normalized below
 export function normalizeAgent(agent: any): Agent {
   const base = { ...agent };
-  base.origin = base.origin === 'cloud' ? 'cloud' : 'local';
+  // Agents stored before the local/cloud split was removed may carry an
+  // `origin` field — drop it; every agent runs on this machine.
+  delete base.origin;
   if (!base.skills) base.skills = [];
   if (base.chatSkill === undefined || base.chatSkill === null) base.chatSkill = '';
   // Optional Grok TTS voice — keep only non-empty string ids ('' clears on save).

@@ -49,7 +49,6 @@ async function main() {
       {
         id: probeId,
         name: 'Verify Probe Agent',
-        origin: 'local',
         model: 'cloud:grok-4',
         description: 'temp',
         workspace: { path: '.', useWorktree: false },
