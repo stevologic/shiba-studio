@@ -2512,7 +2512,13 @@ export default function ShibaStudio() {
       toast.error('Failed to save agent behavior settings');
       return;
     }
-    setConfig((c: any) => ({ ...c, toolApprovalMode, globalInstructions: globalInstructionsInput, useAgentsMd }));
+    setConfig((c: any) => {
+      const next = { ...c, toolApprovalMode, globalInstructions: globalInstructionsInput, useAgentsMd };
+      // Keep the remount snapshot in sync, or navigating away and back restores
+      // the stale mode (e.g. YOLO reverts to Ask) from the cached config.
+      patchProvidersUiSnapshot({ config: next as Record<string, unknown> });
+      return next;
+    });
     toast.success('Agent behavior settings saved');
   }
 
