@@ -671,17 +671,35 @@ export async function fetchXaiAccountUsage(opts?: {
         });
       }
 
-      // Month-to-date cost: prefer postpaid preview, else sum analytics for this calendar month
-      let monthToDateCostUsd = postpaid.monthCostUsd;
+      // Month-to-date cost. The postpaid invoice preview reports the amount
+      // DUE — which is $0 on prepaid accounts whose spend draws from the
+      // credit balance — so a zero preview must never override real spend
+      // from the analytics series or invoices. Take the strongest signal.
+      const monthPrefix = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}`;
+      let monthAnalyticsSum = 0;
+      for (const [day, cost] of dailyCost) {
+        if (day.startsWith(monthPrefix)) monthAnalyticsSum += cost;
+      }
+      // Without a daily series the by-model total (whole 30-day range) is the
+      // closest month approximation we have; with one, the calendar-month sum
+      // is strictly better.
+      const rangeTotal = dailyCost.size === 0 ? byModel.reduce((s, m) => s + m.costUsd, 0) : 0;
+      let monthToDateCostUsd: number | undefined = Math.max(
+        postpaid.monthCostUsd ?? 0,
+        monthAnalyticsSum,
+        invoiceData.monthCostCents ? invoiceData.monthCostCents / 100 : 0,
+        rangeTotal,
+      ) || undefined;
       if (monthToDateCostUsd == null) {
-        const monthPrefix = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}`;
-        let sum = 0;
-        for (const [day, cost] of dailyCost) {
-          if (day.startsWith(monthPrefix)) sum += cost;
-        }
-        if (sum > 0) monthToDateCostUsd = sum;
-        else if (invoiceData.monthCostCents) monthToDateCostUsd = invoiceData.monthCostCents / 100;
-        else monthToDateCostUsd = byModel.reduce((s, m) => s + m.costUsd, 0);
+        // No positive signal anywhere. A genuinely idle month is only
+        // trustworthy when billing actually answered — otherwise leave it
+        // undefined so callers fall back to studio metering instead of
+        // presenting a fabricated $0 as authoritative.
+        const billingAnswered = costDaily.series.length > 0
+          || costByModel.series.length > 0
+          || postpaid.monthCostUsd != null
+          || invoiceData.byModel.size > 0;
+        monthToDateCostUsd = billingAnswered ? 0 : undefined;
       }
 
       const result: XaiAccountUsage = {
