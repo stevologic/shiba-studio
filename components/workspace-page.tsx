@@ -11,7 +11,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic';
 import {
   Bot, CalendarClock, ChevronRight, ChevronsUp, Cloud, CloudDownload, CloudUpload,
-  FileCode, FileText, Folder, FolderOpen, GitBranch, HardDrive, MessageSquare,
+  ExternalLink, FileCode, FileText, Folder, FolderOpen, GitBranch, HardDrive, MessageSquare,
   RefreshCw, Save, Search, Trash2, Upload, X,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
@@ -105,6 +105,7 @@ export default function WorkspacePage({
   const [fileLoading, setFileLoading] = useState(false);
   const [fileBinary, setFileBinary] = useState(false);
   const [explorerLoading, setExplorerLoading] = useState(false);
+  const [fileCtxMenu, setFileCtxMenu] = useState<{ x: number; y: number; path: string; name: string } | null>(null);
   const [pathInput, setPathInput] = useState(defaultWorkspace || '');
   const [showFolderBrowse, setShowFolderBrowse] = useState(false);
   const [treeFilter, setTreeFilter] = useState('');
@@ -337,6 +338,13 @@ export default function WorkspacePage({
       toast.error(e instanceof Error ? e.message : 'Download failed');
     }
     setWsSyncing(null);
+  }
+
+  /** Open a workspace file in a real browser tab — images and PDFs render,
+   *  HTML and code are served as text/plain (never executed against the studio
+   *  origin). Served same-origin only. */
+  function openFileInNewTab(fpath: string) {
+    window.open(`/api/workspace?file=${encodeURIComponent(fpath)}`, '_blank', 'noopener,noreferrer');
   }
 
   async function openFile(fpath: string, isDir?: boolean) {
@@ -915,7 +923,12 @@ export default function WorkspacePage({
                           type="button"
                           className={`ws-tree-item ${active ? 'ws-tree-item-active' : ''} ${f.isDir ? 'ws-tree-item-dir' : ''}`}
                           onClick={() => void openFile(f.path, !!f.isDir)}
-                          title={f.path}
+                          onContextMenu={(e) => {
+                            if (f.isDir) return; // folders open in-place, not in a tab
+                            e.preventDefault();
+                            setFileCtxMenu({ x: e.clientX, y: e.clientY, path: f.path, name: f.name });
+                          }}
+                          title={f.isDir ? f.path : `${f.path}\nRight-click to open in a new browser tab`}
                         >
                           <Icon size={14} className="shrink-0 opacity-70" />
                           <span className="truncate">{f.name}</span>
@@ -1066,6 +1079,33 @@ export default function WorkspacePage({
             void loadExplorer(p, { userInitiated: true });
           }}
         />
+      )}
+
+      {fileCtxMenu && (
+        <div
+          className="fixed inset-0 z-[90]"
+          onClick={() => setFileCtxMenu(null)}
+          onContextMenu={(e) => { e.preventDefault(); setFileCtxMenu(null); }}
+        >
+          <div
+            className="grok-card p-1 absolute shadow-xl"
+            style={{
+              top: Math.min(fileCtxMenu.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 60),
+              left: Math.min(fileCtxMenu.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 240),
+              minWidth: 220,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-2 py-1 text-[11px] text-dim truncate max-w-[220px]" title={fileCtxMenu.path}>{fileCtxMenu.name}</div>
+            <button
+              type="button"
+              className="grok-btn grok-btn-ghost text-xs w-full justify-start gap-2"
+              onClick={() => { openFileInNewTab(fileCtxMenu.path); setFileCtxMenu(null); }}
+            >
+              <ExternalLink size={13} /> Open in new browser tab
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
