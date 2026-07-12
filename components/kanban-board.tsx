@@ -1185,7 +1185,17 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
               )}
               {!fileView.loading && !fileView.error && !fileView.binary && (
                 <>
-                  <pre className="kb-file-view-content">{fileView.content}</pre>
+                  {(() => {
+                    // Markdown deliverables render as markdown; any other text
+                    // renders as a highlighted code fence keyed to its extension
+                    // (4 backticks so any ``` inside the file survive intact).
+                    const ext = fileView.relPath.includes('.') ? fileView.relPath.split('.').pop()!.toLowerCase() : '';
+                    const body = fileView.content || '';
+                    const rendered = ext === 'md' || ext === 'markdown'
+                      ? body
+                      : `\`\`\`\`${ext}\n${body}\n\`\`\`\``;
+                    return <ChatMarkdown content={rendered} className="kb-file-view-md" />;
+                  })()}
                   {fileView.truncated && (
                     <div className="kb-file-view-note">Preview truncated at 512 KB — the raw link has the full file.</div>
                   )}
