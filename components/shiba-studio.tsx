@@ -1225,16 +1225,19 @@ export default function ShibaStudio() {
 
   // "View answer" quick look on run rows (final output without the full trace)
   const [answerRun, setAnswerRun] = useState<RunSummaryLite | null>(null);
-  /** Agents whose Run was just clicked — instant "running" UI until the SSE
-   *  runs feed reports the real run (entries expire after 12s regardless). */
-  const [justStartedRunAgents, setJustStartedRunAgents] = useState<Set<string>>(new Set());
-  function markRunJustStarted(agentId: string) {
-    setJustStartedRunAgents((current) => new Set(current).add(agentId));
+  /** Schedules whose Run was just clicked — instant "running" UI on THAT row
+   *  until the SSE runs feed reports the real run (expires after 12s). Keyed by
+   *  schedule id so only the specific automation shows running, not the agent's
+   *  other schedules. */
+  const [justStartedRunScheds, setJustStartedRunScheds] = useState<Set<string>>(new Set());
+  function markScheduleRunJustStarted(scheduleId: string) {
+    if (!scheduleId) return;
+    setJustStartedRunScheds((current) => new Set(current).add(scheduleId));
     window.setTimeout(() => {
-      setJustStartedRunAgents((current) => {
-        if (!current.has(agentId)) return current;
+      setJustStartedRunScheds((current) => {
+        if (!current.has(scheduleId)) return current;
         const next = new Set(current);
-        next.delete(agentId);
+        next.delete(scheduleId);
         return next;
       });
     }, 12_000);
@@ -3667,10 +3670,16 @@ export default function ShibaStudio() {
                   const runCount = scheduledRuns
                     ? scheduledRuns.filter((r) => r.agentId === a.id || r.agentName === a.name).length
                     : null;
-                  // Live "running now" — the SSE runs feed keeps `runs` fresh;
-                  // justStartedRuns bridges the click→feed gap.
-                  const agentRunning = runs.some((r) => r.agentId === a.id && r.status === 'running')
-                    || justStartedRunAgents.has(a.id);
+                  // Live "running now" is per-SCHEDULE: a run carries the
+                  // scheduleId that fired it, so only that automation's row
+                  // shows running — not the agent's other schedules. The SSE
+                  // runs feed keeps `runs` fresh; justStartedRunScheds bridges
+                  // the click→feed gap.
+                  const runningSchedIds = new Set(
+                    runs
+                      .filter((r) => r.agentId === a.id && r.status === 'running' && r.scheduleId)
+                      .map((r) => r.scheduleId as string),
+                  );
                   return (
                   <div key={a.id} className="grok-card p-5 automation-card">
                     <div className="flex items-start justify-between gap-3">
@@ -3680,11 +3689,6 @@ export default function ShibaStudio() {
                           <div className="truncate flex flex-wrap items-center gap-1.5">
                             <span>{a.name}</span>
                             <ModelLine modelId={a.model} />
-                            {agentRunning && (
-                              <span className="automation-running-chip" title="An agent run is executing right now — watch it in the run log">
-                                <RefreshCw size={10} className="animate-spin" /> running
-                              </span>
-                            )}
                           </div>
                           {(a.skills||[]).length > 0 && <span className="text-xs badge badge-accent mt-1 inline-block">skills: {(a.skills||[]).join(', ')}</span>}
                         </div>
@@ -3720,7 +3724,11 @@ export default function ShibaStudio() {
                     </div>
                     {/* One row per automation — its own status pill + run/edit/delete */}
                     <div className="mt-2 text-xs space-y-1">
-                      {scheds.map((s: any, i: number) => (
+                      {scheds.map((s: any, i: number) => {
+                        // This specific automation is running (matched by the
+                        // firing run's scheduleId), not the agent as a whole.
+                        const scheduleRunning = runningSchedIds.has(s.id) || justStartedRunScheds.has(s.id);
+                        return (
                         <div key={s.id || i} className="text-muted flex items-center gap-x-2 gap-y-1 min-w-0">
                           <button
                             type="button"
@@ -3730,6 +3738,11 @@ export default function ShibaStudio() {
                           >
                             {s.enabled ? 'Active' : 'Paused'}
                           </button>
+                          {scheduleRunning && (
+                            <span className="automation-running-chip shrink-0" title="This automation is executing right now — watch it in the run log">
+                              <RefreshCw size={10} className="animate-spin" /> running
+                            </span>
+                          )}
                           <span className="font-mono text-[11px] shrink-0">{describeCron(s.cron)}</span>
                           {(() => {
                             const perDay = estimateCronRunsPerDay(String(s.cron || ''));
@@ -3746,25 +3759,16 @@ export default function ShibaStudio() {
                           <span className="ml-auto flex items-center gap-1 shrink-0">
                             <button
                               type="button"
-                              onClick={() => runAgent(a, { useScheduleInstructions: true, scheduleIndex: i })}
-                              className="grok-btn grok-btn-ghost text-xs p-1"
-                              title="Run this automation now with its instructions"
-                              aria-label="Run automation now"
-                            >
-                              <Play size={12}/>
-                            </button>
-                            <button
-                              type="button"
                               onClick={() => {
-                                markRunJustStarted(a.id);
+                                markScheduleRunJustStarted(s.id);
                                 void runAgent(a, { useScheduleInstructions: true, scheduleIndex: i });
                               }}
-                              disabled={agentRunning}
+                              disabled={scheduleRunning}
                               className="grok-btn grok-btn-ghost text-xs p-1"
-                              title={agentRunning ? 'This agent is running right now' : 'Run this automation now with its instructions'}
-                              aria-label={agentRunning ? 'Automation is running' : 'Run automation now'}
+                              title={scheduleRunning ? 'This automation is running right now' : 'Run this automation now with its instructions'}
+                              aria-label={scheduleRunning ? 'Automation is running' : 'Run automation now'}
                             >
-                              {agentRunning ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12}/>}
+                              {scheduleRunning ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12}/>}
                             </button>
                             <button
                               type="button"
@@ -3786,7 +3790,8 @@ export default function ShibaStudio() {
                             </button>
                           </span>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )})}
