@@ -2928,6 +2928,29 @@ body::before {
   overflow: hidden;
 }
 
+/* "Read all" lifts the 2-line clamp so the full description is readable. */
+.tool-tile-desc-open {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.tool-desc-more {
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.tool-desc-more:hover {
+  color: var(--text);
+}
+
 .tool-group-head .cap-card-title,
 .tool-group-head .font-medium {
   font-size: 0.875rem;

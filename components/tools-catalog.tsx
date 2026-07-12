@@ -6,7 +6,7 @@
 // to disable it globally for agent runs and workspace chat.
 
 import React, { useEffect, useState } from 'react';
-import { Wrench, TerminalSquare, Globe, Plug2, Workflow, Boxes, Search, Compass, Brain, Image as ImageIcon } from 'lucide-react';
+import { Wrench, TerminalSquare, Globe, Plug2, Workflow, Boxes, Search, Compass, Brain, Image as ImageIcon, Container } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import InfoHint from '@/components/info-hint';
 
@@ -21,6 +21,7 @@ interface ToolEntry {
 
 const GROUP_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   'Workspace & Files': TerminalSquare,
+  Sandbox: Container,
   'Web & Research': Compass,
   'Browser Automation': Globe,
   Memory: Brain,
@@ -32,6 +33,7 @@ const GROUP_ICONS: Record<string, React.ComponentType<{ size?: number; className
 
 const GROUP_BLURBS: Record<string, string> = {
   'Workspace & Files': 'Read, write, search, and run commands inside the agent workspace.',
+  Sandbox: 'Each agent\'s own Alpine Linux container — install packages and experiment in isolation.',
   'Web & Research': 'Search the web and read pages — no API keys required.',
   'Browser Automation': 'Drive the controlled Chrome browser — navigate, click, extract.',
   Memory: 'Facts persist across runs — agents remember and recall on their own.',
@@ -42,7 +44,7 @@ const GROUP_BLURBS: Record<string, string> = {
 };
 
 // Stable presentation order — most-used groups first.
-const GROUP_ORDER = ['Workspace & Files', 'Web & Research', 'Browser Automation', 'Memory', 'AI Generation', 'Integrations', 'Orchestration', 'MCP'];
+const GROUP_ORDER = ['Workspace & Files', 'Sandbox', 'Web & Research', 'Browser Automation', 'Memory', 'AI Generation', 'Integrations', 'Orchestration', 'MCP'];
 
 function requirementChip(tool: ToolEntry): { label: string; cls: string } {
   if (!tool.enabled) return { label: 'disabled', cls: 'tool-chip-disabled' };
@@ -58,6 +60,8 @@ export default function ToolsCatalog() {
   const [tools, setTools] = useState<ToolEntry[] | null>(null);
   const [filter, setFilter] = useState('');
   const [pending, setPending] = useState<Record<string, boolean>>({});
+  // Tool names whose description is expanded past the 2-line clamp.
+  const [openDescs, setOpenDescs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let stale = false;
@@ -271,7 +275,27 @@ export default function ToolsCatalog() {
                             </span>
                           </label>
                         </div>
-                        <div className="tool-tile-desc">{tool.description}</div>
+                        <div
+                          id={`tool-desc-${tool.name}`}
+                          className={`tool-tile-desc ${openDescs.has(tool.name) ? 'tool-tile-desc-open' : ''}`}
+                        >
+                          {tool.description}
+                        </div>
+                        {tool.description.length > 100 && (
+                          <button
+                            type="button"
+                            className="tool-desc-more"
+                            aria-expanded={openDescs.has(tool.name)}
+                            aria-controls={`tool-desc-${tool.name}`}
+                            onClick={() => setOpenDescs((s) => {
+                              const next = new Set(s);
+                              if (next.has(tool.name)) next.delete(tool.name); else next.add(tool.name);
+                              return next;
+                            })}
+                          >
+                            {openDescs.has(tool.name) ? 'Show less' : 'Read all'}
+                          </button>
+                        )}
                         <div className="mt-2">
                           <span className={`tool-chip ${chip.cls}`}>{chip.label}</span>
                         </div>
