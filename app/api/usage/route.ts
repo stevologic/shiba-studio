@@ -11,9 +11,16 @@ export async function GET(req: NextRequest) {
 
     const cfg = await loadConfig();
     const defaultModel = cfg.defaultGrokModel?.trim() || 'cloud:grok-4';
-    const [summary, xaiAccount] = await Promise.all([
+    if (force) {
+      // Keep the sidebar badge in step with a manual page refresh.
+      const { clearNavUsageCostCache } = await import('@/lib/nav-stats');
+      clearNavUsageCostCache();
+    }
+    const { getNavUsageBadge } = await import('@/lib/nav-stats');
+    const [summary, xaiAccount, usageBadge] = await Promise.all([
       getUsageSummary(defaultModel),
       fetchXaiAccountUsage({ force, days: 30 }),
+      getNavUsageBadge(),
     ]);
 
     // Prefer xAI month-to-date for the "authoritative" cost badge consumers.
@@ -26,6 +33,7 @@ export async function GET(req: NextRequest) {
       ...summary,
       xaiAccount,
       authoritativeCostUsd,
+      usageBadge,
       pricingNote: xaiAccount.available
         ? `${xaiAccount.note} Studio-local metering (below) attributes tokens to chat/agents in this app only.`
         : summary.pricingNote,

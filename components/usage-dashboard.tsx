@@ -363,10 +363,76 @@ function XaiAccountSection({ xai }: { xai: XaiAccountUsage }) {
   );
 }
 
+interface UsageBadge {
+  costUsd: number;
+  source: 'xai' | 'local';
+  pref: 'auto' | 'xai' | 'local';
+}
+
+/**
+ * Explains the sidebar "Usage" badge in place: the exact figure, which source
+ * it resolved to, why that source was chosen, and — when the billed number
+ * differs from the studio estimate — how to reconcile the two.
+ */
+function UsageBadgeExplainer({
+  badge,
+  studioEstimateUsd,
+}: {
+  badge: UsageBadge;
+  studioEstimateUsd: number;
+}) {
+  const isXai = badge.source === 'xai';
+  const sourceName = isXai ? 'xAI billing' : 'studio metering';
+  const sourceDesc = isXai
+    ? 'your account’s month-to-date spend, pulled live from the xAI Billing API'
+    : 'estimated from the tokens this app sent and received, priced at public xAI rates';
+
+  const prefLine =
+    badge.pref === 'auto'
+      ? 'Source: Auto — xAI billing when a Management Key or cloud sign-in can read it, otherwise studio metering.'
+      : badge.pref === 'xai'
+        ? 'Source: xAI billing (pinned in Settings → Cost & safety).'
+        : 'Source: Studio metering (pinned in Settings → Cost & safety).';
+
+  // Only reconcile when the billed figure is authoritative AND the studio
+  // estimate is materially higher (the usual cached-token-discount gap).
+  const showGap = isXai && studioEstimateUsd > badge.costUsd + 0.01;
+
+  return (
+    <div className="grok-card p-5 mb-5 usage-badge-explainer">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="text-xs uppercase tracking-wider text-dim">Sidebar “Usage” badge</span>
+        <span className="text-2xl font-semibold font-mono">{fmtUsd(badge.costUsd)}</span>
+        <span className={`usage-source-tag ${isXai ? 'usage-source-xai' : 'usage-source-local'}`}>
+          {isXai ? 'xAI billing' : 'studio metering'}
+        </span>
+      </div>
+      <div className="text-sm text-muted mt-2">
+        The <strong>{fmtUsd(badge.costUsd)}</strong> in your sidebar is <strong>{sourceName}</strong> — {sourceDesc}.
+      </div>
+      <div className="text-xs text-dim mt-1">{prefLine}</div>
+      {showGap && (
+        <div className="text-xs text-muted mt-2 usage-badge-gap">
+          Studio metering below estimates <strong>{fmtUsd(studioEstimateUsd)}</strong> from full public
+          per-token rates. The billed figure is lower because xAI discounts cached-prompt tokens and
+          applies your account’s actual pricing — the sidebar shows the billed number.
+        </div>
+      )}
+      {!isXai && (
+        <div className="text-xs text-dim mt-2">
+          This is an estimate. Add a Management Key (or cloud sign-in) in Settings to show authoritative
+          billed spend from xAI instead.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function UsageDashboard() {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [xaiAccount, setXaiAccount] = useState<XaiAccountUsage | null>(null);
   const [authoritativeCostUsd, setAuthoritativeCostUsd] = useState<number | null>(null);
+  const [usageBadge, setUsageBadge] = useState<UsageBadge | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -382,6 +448,7 @@ export default function UsageDashboard() {
       setAuthoritativeCostUsd(
         typeof data.authoritativeCostUsd === 'number' ? data.authoritativeCostUsd : null,
       );
+      setUsageBadge((data.usageBadge as UsageBadge) || null);
     } catch (e: any) {
       setError(e.message);
     }
@@ -425,6 +492,10 @@ export default function UsageDashboard() {
           </button>
         </div>
       </div>
+
+      {usageBadge && (
+        <UsageBadgeExplainer badge={usageBadge} studioEstimateUsd={summary.estimatedCostUsd} />
+      )}
 
       {xaiAccount && <XaiAccountSection xai={xaiAccount} />}
 

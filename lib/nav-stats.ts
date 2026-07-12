@@ -71,6 +71,22 @@ async function getCachedUsageCost(): Promise<{ costUsd: number; source: 'xai' | 
   return { costUsd: usageCostCache.costUsd, source: 'local' };
 }
 
+/**
+ * The exact figure shown in the sidebar "Usage" badge, plus which source it
+ * resolved to and the user's configured preference. The Usage & Cost page
+ * uses this to explain the badge instead of re-deriving (and possibly
+ * disagreeing with) it.
+ */
+export async function getNavUsageBadge(): Promise<{
+  costUsd: number;
+  source: 'xai' | 'local';
+  pref: 'auto' | 'xai' | 'local';
+}> {
+  const pref = ((await loadConfig()).usageCostSource || 'auto') as 'auto' | 'xai' | 'local';
+  const { costUsd, source } = await getCachedUsageCost();
+  return { costUsd, source, pref };
+}
+
 export async function getNavStats(integrations: IntegrationCreds): Promise<NavStats> {
   const { cloudReachable } = await import('./run-guards');
   const { listBoardTasks } = await import('./board');

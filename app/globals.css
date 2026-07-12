@@ -1282,6 +1282,40 @@ body::before {
   cursor: default;
 }
 
+/* Sidebar-badge explainer at the top of Usage & Cost. */
+.usage-badge-explainer {
+  border-left: 3px solid var(--accent, #6ee7a0);
+}
+
+.usage-source-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.usage-source-xai {
+  color: var(--success);
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.06);
+}
+
+.usage-source-local {
+  color: var(--text-muted);
+  background: var(--bg-elev);
+}
+
+.usage-badge-gap {
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+
 .usage-live-connected {
   color: var(--success);
   border-color: rgba(34, 197, 94, 0.3);
