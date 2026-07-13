@@ -25,6 +25,8 @@ const MAX_STEPS = 18;
 const runCancelGlobals = globalThis as typeof globalThis & {
   __shibaRunCancelRequests?: Set<string>;
   __shibaRunAbortControllers?: Map<string, AbortController>;
+  __shibaRunPauseRequests?: Set<string>;
+  __shibaRunSteering?: Map<string, string[]>;
 };
 // Route chunks can load separate module instances. Keep cancellation state on
 // globalThis so /api/execute/cancel always reaches the generator/controller
@@ -33,15 +35,41 @@ const runCancelRequests = runCancelGlobals.__shibaRunCancelRequests
   ?? (runCancelGlobals.__shibaRunCancelRequests = new Set<string>());
 const runAbortControllers = runCancelGlobals.__shibaRunAbortControllers
   ?? (runCancelGlobals.__shibaRunAbortControllers = new Map<string, AbortController>());
+const runPauseRequests = runCancelGlobals.__shibaRunPauseRequests
+  ?? (runCancelGlobals.__shibaRunPauseRequests = new Set<string>());
+const runSteering = runCancelGlobals.__shibaRunSteering
+  ?? (runCancelGlobals.__shibaRunSteering = new Map<string, string[]>());
 /** Ask an in-flight run to stop at its next step boundary. */
 export function requestRunCancel(runId: string): void {
   if (!runId) return;
   runCancelRequests.add(runId);
   runAbortControllers.get(runId)?.abort(new Error('Run cancelled by the user'));
+  void import('./tool-approval').then(({ resolveRunApprovals }) => resolveRunApprovals(runId, false));
   void Browser.closeRunPage(runId).catch(() => {});
 }
 export function isRunCancelRequested(runId: string): boolean {
   return runCancelRequests.has(runId);
+}
+/** Cooperatively pause at the next model/tool boundary. */
+export function requestRunPause(runId: string): void {
+  if (runId) runPauseRequests.add(runId);
+}
+export function requestRunResume(runId: string): void {
+  if (runId) runPauseRequests.delete(runId);
+}
+/** Append a bounded user instruction that is injected at the next step boundary. */
+export function appendRunInstruction(runId: string, instruction: string): void {
+  const value = instruction.trim().slice(0, 8_000);
+  if (!runId || !value) return;
+  const pending = runSteering.get(runId) || [];
+  pending.push(value);
+  runSteering.set(runId, pending.slice(-20));
+}
+
+async function waitWhileRunPaused(runId: string, signal: AbortSignal): Promise<void> {
+  while (runPauseRequests.has(runId) && !signal.aborted && !isRunCancelRequested(runId)) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 /**
@@ -52,7 +80,8 @@ export function isRunCancelRequested(runId: string): boolean {
  */
 const SEQUENTIAL_ONLY_TOOLS = new Set([
   'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
-  'terminal_exec', 'grok_cli', 'github_create_pr', 'schedule_task',
+  'shell_exec', 'terminal_exec', 'grok_cli', 'github_create_pr', 'schedule_task', 'delegate_task_team',
+  'native_node_action',
   // The agent's sandbox container is one stateful box: later commands depend
   // on what earlier ones installed or wrote, so order must be preserved.
   'sandbox_exec', 'sandbox_write_file',
@@ -188,6 +217,39 @@ export function getToolDefinitions(
         name: 'browser_extract',
         description: 'Extract visible text from page or specific selector.',
         parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'native_node_action',
+        description: 'Last-resort, approval-gated one-shot native desktop action. Before calling, try the connector/MCP, controlled browser, then signed-in browser in that exact order and include concrete failure evidence for each. Requires a paired node and exact current app grant for capture/click/type/clipboard/file-open. Never available to autonomous runs.',
+        parameters: {
+          type: 'object',
+          properties: {
+            node_id: { type: 'string', description: 'Exact paired native node id from the user-approved configuration' },
+            action: { type: 'string', enum: ['list_apps', 'capture', 'notify', 'clipboard_read', 'clipboard_write', 'file_open', 'click', 'type'] },
+            action_args: { type: 'object', description: 'Exact action arguments: notify title/body, clipboard text, file path, click x/y/button, or type text' },
+            target_app_id: { type: 'string', description: 'Exact normalized executable path or system boundary id from the grant' },
+            target_app_revision: { type: 'string', description: 'Exact revision discovered by native inventory and recorded in the grant' },
+            grant_id: { type: 'string', description: 'Current app grant id' },
+            expected_grant_revision: { type: 'number', description: 'Current grant revision; stale revisions are rejected' },
+            escalation_evidence: {
+              type: 'array',
+              description: 'Exactly three ordered attempts: connector_or_mcp, controlled_browser, signed_in_browser',
+              items: {
+                type: 'object',
+                properties: {
+                  stage: { type: 'string', enum: ['connector_or_mcp', 'controlled_browser', 'signed_in_browser'] },
+                  outcome: { type: 'string', enum: ['unavailable', 'failed', 'not_applicable'] },
+                  evidence: { type: 'string' },
+                },
+                required: ['stage', 'outcome', 'evidence'],
+              },
+            },
+          },
+          required: ['node_id', 'action', 'action_args', 'escalation_evidence'],
+        },
       },
     },
     {
@@ -584,6 +646,77 @@ export function getToolDefinitions(
   tools.push({
     type: 'function',
     function: {
+      name: 'meeting_search',
+      description: 'Search reviewed meeting transcripts. Returns exact speaker turns, start/end timestamps, and stable citation links that open the recording at the cited moment.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Words or phrase to find in meeting transcripts' },
+          limit: { type: 'number', description: 'Maximum results, 1-20 (default 8)' },
+        },
+        required: ['query'],
+      },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'delegate_task_team',
+      description: 'Create and dispatch a bounded dependency graph of specialist child workers for the current task. Use only when work is genuinely separable. Each worker must name an existing agent and explicit workspace roots.',
+      parameters: {
+        type: 'object',
+        properties: {
+          workers: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 12,
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string' },
+                title: { type: 'string' },
+                instructions: { type: 'string' },
+                agentId: { type: 'string' },
+                dependsOn: { type: 'array', items: { type: 'string' } },
+                workspaceRootIds: { type: 'array', items: { type: 'string' } },
+                readOnly: { type: 'boolean' },
+                required: { type: 'boolean' },
+                maxTurns: { type: 'number' },
+                tokenCap: { type: 'number' },
+                timeoutSeconds: { type: 'number' },
+                integrationScopes: { type: 'array', items: { type: 'string' } },
+                allowedTools: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['key', 'title', 'instructions', 'agentId', 'workspaceRootIds'],
+            },
+          },
+        },
+        required: ['workers'],
+      },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'session_search',
+      description: 'Search durable earlier chat, project, and run context, or retrieve one exact cited source by source_id. Returns bounded exact excerpts, stable source citations, and adjacent conversation bookends instead of an ungrounded summary.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Words or phrase to retrieve' },
+          source_id: { type: 'string', description: 'Stable source citation to retrieve exactly' },
+          session_id: { type: 'string', description: 'Optional exact chat session id' },
+          project_id: { type: 'string', description: 'Optional project id; current run project is used by default' },
+          run_id: { type: 'string', description: 'Optional exact agent run id' },
+          limit: { type: 'number', description: 'Maximum results, 1-20 (default 8)' },
+        },
+        required: [],
+      },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
       name: 'memory_forget',
       description: 'Delete one obsolete or incorrect memory by its exact key. Use sparingly; the user can also manage memories from the Memories page.',
       parameters: { type: 'object', properties: { key: { type: 'string', description: 'Exact memory key to delete' } }, required: ['key'] },
@@ -741,10 +874,11 @@ async function executeTool(
   runIdForBrowser?: string,
   integrationCreds?: import('./types').IntegrationCreds,
   signal?: AbortSignal,
+  authorization?: import('./agent-tool-exec').AgentToolAuthorization,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tool-shaped JSON serialized back to the model
 ): Promise<{ result: any; sideEffect?: string; screenshot?: string }> {
   const { executeAgentTool } = await import('./agent-tool-exec');
-  return executeAgentTool(name, args, agent, run, workDir, runIdForBrowser, integrationCreds, signal);
+  return executeAgentTool(name, args, agent, run, workDir, runIdForBrowser, integrationCreds, signal, authorization);
 }
 
 function buildSystem(
@@ -769,7 +903,8 @@ function buildSystem(
   const homeLine = `Workspace: ${agent.workspace.path} ${agent.workspace.useWorktree ? '(using isolated git worktree)' : ''}
 Global shared uploads (all agents): ${globalUploadsPath} — files dropped here are available to every agent. Use fs_list/fs_read with paths under "${GLOBAL_UPLOADS_SUBDIR}/" relative to workspace root, or the absolute path above.`;
   const actionLine = 'You use tools to take real actions: edit files, run shell, control Chrome browser, GitHub/Slack/Drive when enabled. '
-    + 'You also own a private Alpine Linux container (sandbox_exec / sandbox_write_file): a persistent, isolated Linux box with root and network — install packages with apk, run any language, and do risky experiments there instead of on the host.';
+    + 'You also own a private Alpine Linux container (sandbox_exec / sandbox_write_file): a persistent, isolated Linux box with root and network — install packages with apk, run any language, and do risky experiments there instead of on the host. '
+    + 'Native desktop access is the final escalation only: first use a connector or MCP, then the controlled browser, then a user-signed-in browser. native_node_action requires exact evidence for all three earlier stages and a fresh user approval.';
   return `You are a powerful autonomous Grok agent named "${agent.name}" running inside Shiba Studio (localhost agent studio).
 ${environmentFacts()}
 ${homeLine}
@@ -791,11 +926,11 @@ Inbox messages from peers: ${inbox.length ? inbox.join(' | ') : 'none'}
 Finish by giving a short summary when task is complete.`;
 }
 
-type AgentRunOpts = {
+export type AgentRunOpts = {
   scheduled?: boolean;
   /** No interactive approver watches this run (scheduler, board, background,
-   *  channel replies). Approval-gated tools proceed instead of waiting for a
-   *  click that can never come — the run's very dispatch is the authorization. */
+   *  channel replies). Most gated tools proceed because dispatch is the
+   *  authorization; native GUI actions are denied without a live approver. */
   autonomous?: boolean;
   /** Injectable chat double for tests — canned responses only need choices. */
   grokChatFn?: (params: {
@@ -810,6 +945,10 @@ type AgentRunOpts = {
   }) => Promise<{ choices: Array<{ message?: { role?: string; content?: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }; finish_reason?: string }>; usage?: unknown }>;
   scheduleId?: string;
   scheduleInstructions?: string;
+  /** Preallocated durable task/run identity. Retries keep taskId and increment attemptNo. */
+  taskId?: string;
+  runId?: string;
+  attemptNo?: number;
   /** Pre-built project context (instructions, workspace, uploads) */
   projectContext?: string;
   /** Override agent workspace path for project-scoped builds */
@@ -817,6 +956,12 @@ type AgentRunOpts = {
   projectId?: string;
   /** Cancels model requests when the caller disconnects. */
   signal?: AbortSignal;
+  /** Remove mutation-capable tools for research workers. */
+  readOnly?: boolean;
+  /** Per-worker ceiling, bounded by the runtime hard maximum. */
+  maxTurns?: number;
+  /** Per-worker token ceiling; the stricter of this and the global cap wins. */
+  tokenCap?: number;
 };
 
 type AgentRunEvent =
@@ -829,7 +974,9 @@ async function* agentRunGenerator(
   prompt: string,
   opts: AgentRunOpts = {},
 ): AsyncGenerator<AgentRunEvent> {
-  const runId = uuidv4();
+  const runId = opts.runId || uuidv4();
+  const taskId = opts.taskId || `run:${runId}`;
+  const attemptNo = Math.max(1, Number(opts.attemptNo) || 1);
   const startedAt = new Date().toISOString();
   const trace: TraceStep[] = [];
   const { audit } = await import('./audit-log');
@@ -883,7 +1030,7 @@ async function* agentRunGenerator(
   if (modelError) {
     yield emit({ id: uuidv4(), ts: startedAt, type: 'error', content: modelError });
     const r: AgentRun = {
-      id: runId, agentId: agent.id, agentName: agent.name, prompt, model: agent.model,
+      id: runId, taskId, attemptNo, agentId: agent.id, agentName: agent.name, prompt, model: agent.model,
       startedAt, status: 'error', trace, sideEffects: [],
     };
     await persistAgentRun(r);
@@ -933,6 +1080,41 @@ async function* agentRunGenerator(
       content: `Project scope active${opts.projectId ? ` (${opts.projectId})` : ''} — workspace: ${workDir}`,
     });
   }
+  const effectivePrompt = (opts.scheduleInstructions && opts.scheduled) ? opts.scheduleInstructions : prompt;
+
+  // Tool grants are derived from durable workspace roots, so project the
+  // resolved runtime cwd before filtering/offering any host tool.
+  try {
+    const { createTask, ensureTaskWorkspaceRoot, getTask } = await import('./task-ledger');
+    if (!getTask(taskId)) {
+      createTask({
+        id: taskId,
+        kind: opts.scheduled ? 'routine' : 'agent',
+        title: effectivePrompt.slice(0, 120) || `${agent.name} run`,
+        description: effectivePrompt,
+        status: 'queued',
+        originType: opts.scheduled ? 'schedule' : 'run',
+        originId: opts.scheduleId || runId,
+        agentId: agent.id,
+        projectId: opts.projectId,
+        runId,
+        workspaceRoots: [{
+          id: 'runtime-workspace', path: workDir,
+          label: agent.workspace.useWorktree ? 'Isolated run worktree' : 'Resolved run workspace',
+          permission: opts.readOnly ? 'read' : 'write',
+        }],
+        metadata: { agentName: agent.name, model: agent.model },
+      });
+    }
+    ensureTaskWorkspaceRoot(taskId, {
+      id: 'runtime-workspace',
+      path: workDir,
+      label: agent.workspace.useWorktree ? 'Isolated run worktree' : 'Resolved run workspace',
+      permission: opts.readOnly ? 'read' : 'write',
+    });
+  } catch {
+    /* legacy/unprojected runs retain only non-host capabilities */
+  }
 
   const tools = getToolDefinitions(agent.integrations, agent.peers.length > 0);
   const cliStatus = await detectGrokCli();
@@ -943,26 +1125,30 @@ async function* agentRunGenerator(
   const { filterToolsByDisabled } = await import('./disabled-tools');
   const enabledTools = filterToolsByDisabled(tools, cfg.disabledTools);
   tools.length = 0;
-  tools.push(...enabledTools);
+  const { taskToolDecision } = await import('./task-workspace-policy');
+  const readOnlyDenied = new Set([
+    'fs_write', 'shell_exec', 'terminal_exec', 'browser_navigate', 'browser_click', 'browser_type',
+    'github_create_issue', 'slack_post', 'discord_post', 'x_post', 'drive_upload', 'obsidian_write',
+    'vercel_deploy', 'vercel_set_env', 'netlify_deploy', 'netlify_set_env', 'grok_cli', 'mcp_invoke',
+    'memory_forget', 'schedule_task', 'board_update_task',
+  ]);
+  const taskScopedTools = enabledTools.filter((tool) => taskToolDecision(taskId, tool.function.name).allowed);
+  tools.push(...(opts.readOnly ? taskScopedTools.filter((tool) => !readOnlyDenied.has(tool.function.name)) : taskScopedTools));
   const globalUploadsPath = await getGlobalUploadsDir();
   const { buildGlobalInstructionsContext } = await import('./global-instructions');
   const globalInstructionsText = await buildGlobalInstructionsContext(cfg);
-
-  // Use schedule-specific instructions as the prompt when originating from a schedule entry (AC3)
-  const effectivePrompt = (opts.scheduleInstructions && opts.scheduled) ? opts.scheduleInstructions : prompt;
 
   // Broadcast a 'running' record the moment execution begins so the Automations
   // page (and dashboards) light a live spinner via SSE — including scheduled
   // fires the user never clicked. The completion/error persists below upsert
   // this same run id to its final status (INSERT OR REPLACE by id).
   await persistAgentRun({
-    id: runId, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
+    id: runId, taskId, attemptNo, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
     model: agent.model, startedAt, status: 'running', trace: [], sideEffects: [],
     ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
     ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
   }).catch(() => { /* best-effort live signal; the run proceeds regardless */ });
-
   // CLI-model agents delegate the whole task to the headless Grok CLI: it is
   // its own agentic harness (reads/edits files, runs commands) working in the
   // agent's workspace, with its own authentication.
@@ -1004,13 +1190,15 @@ async function* agentRunGenerator(
       }
       trace.push({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: finalOutput.slice(0, 500) });
       const run: AgentRun = {
-        id: runId, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
+        id: runId, taskId, attemptNo, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
         model: agent.model, startedAt, completedAt: new Date().toISOString(),
         status: cliStatusOut, trace, finalOutput, workspaceSnapshot: workDir, sideEffects: cliSideEffects,
         ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
         ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
         ...(opts.projectId ? { projectId: opts.projectId } : {}),
       };
+      const { recordCapabilityPackUsage } = await import('./capability-packs');
+      recordCapabilityPackUsage(agent.skills || [], run.status === 'completed' ? run.id : undefined);
       await persistAgentRun(run);
       audit('run', `run ${run.status}`, `${agent.name}: ${(finalOutput || prompt).slice(0, 120)}`, {
         runId, agent: agent.name, agentId: agent.id, model: agent.model,
@@ -1063,18 +1251,50 @@ async function* agentRunGenerator(
   let finalOutput = '';
   let steps = 0;
   const sideEffects: string[] = [];
-  const tokenCap = guards.perRunTokenCap(cfg);
+  const configuredTokenCap = guards.perRunTokenCap(cfg);
+  const requestedTokenCap = Math.max(0, Math.floor(Number(opts.tokenCap) || 0));
+  const tokenCap = configuredTokenCap > 0 && requestedTokenCap > 0
+    ? Math.min(configuredTokenCap, requestedTokenCap)
+    : configuredTokenCap || requestedTokenCap;
+  const maxSteps = Math.max(1, Math.min(MAX_STEPS, Math.floor(Number(opts.maxTurns) || MAX_STEPS)));
   let runTokens = 0;
 
   try {
-    while (steps < MAX_STEPS) {
+    while (steps < maxSteps) {
       steps++;
+      try {
+        const { heartbeatTask } = await import('./task-ledger');
+        heartbeatTask(taskId, {
+          progress: Math.min(0.95, steps / maxSteps),
+          currentStep: `Agent turn ${steps} of ${maxSteps}`,
+          nextAction: 'Continue the active plan',
+        });
+      } catch {
+        /* heartbeat projection is best-effort */
+      }
+      await waitWhileRunPaused(runId, runSignal);
       if (runSignal.aborted || isRunCancelRequested(runId)) {
         runCancelRequests.delete(runId);
         finalOutput = 'Run cancelled by the user.';
         yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: 'Run cancelled by the user.' });
         audit('run', 'run cancelled', `${agent.name}: cancelled by user`, { runId, agentId: agent.id });
         break;
+      }
+      const steering = runSteering.get(runId) || [];
+      if (steering.length) {
+        runSteering.delete(runId);
+        messages.push({
+          role: 'user',
+          content: steering
+            .map((instruction) => `<steering_instruction>${instruction}</steering_instruction>`)
+            .join('\n'),
+        });
+        yield emit({
+          id: uuidv4(),
+          ts: new Date().toISOString(),
+          type: 'think',
+          content: `Applied ${steering.length} steering instruction${steering.length === 1 ? '' : 's'}.`,
+        });
       }
       const chatFn = opts.grokChatFn || grokChat;
       const resp = await chatFn({
@@ -1086,6 +1306,10 @@ async function* agentRunGenerator(
         tool_choice: 'auto',
         usageContext: { source: 'agent', sourceId: runId },
       });
+      await waitWhileRunPaused(runId, runSignal);
+      if (runSignal.aborted || isRunCancelRequested(runId)) {
+        throw runSignal.reason instanceof Error ? runSignal.reason : new Error('Run cancelled by the user');
+      }
       if (tokenCap > 0) {
         const { parseGrokUsage } = await import('./usage');
         runTokens += parseGrokUsage(resp?.usage)?.totalTokens ?? 0;
@@ -1153,7 +1377,7 @@ async function* agentRunGenerator(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced JSON, coerced per tool by the executor
             let args: any = {};
             try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
-            const res = await executeTool(fn.name, args, agent, { id: runId }, workDir, runId, integrationCreds, runSignal)
+            const res = await executeTool(fn.name, args, agent, { id: runId, taskId }, workDir, runId, integrationCreds, runSignal)
               .catch((e: unknown) => ({
                 result: { error: e instanceof Error ? e.message : String(e) },
                 sideEffect: '',
@@ -1177,10 +1401,78 @@ async function* agentRunGenerator(
         });
 
         const { toolNeedsApproval, beginToolApproval } = await import('./tool-approval');
+        const taskDispatchPolicy = taskToolDecision(taskId, fn.name, args);
+        if (!taskDispatchPolicy.allowed) {
+          const denied = { denied: true, reason: taskDispatchPolicy.reason || 'Tool is outside this task grant.' };
+          messages.push({ role: 'tool' as const, tool_call_id: tc.id, name: fn.name, content: JSON.stringify(denied) });
+          yield emit({
+            id: uuidv4(), ts: new Date().toISOString(), type: 'result', content: denied.reason,
+            tool: { name: fn.name, args, result: denied },
+          });
+          continue;
+        }
+        if (opts.autonomous && taskDispatchPolicy.requiresLiveApproval) {
+          const denied = { denied: true, reason: 'Task shell commands require an exact live approval and cannot run autonomously.' };
+          messages.push({ role: 'tool' as const, tool_call_id: tc.id, name: fn.name, content: JSON.stringify(denied) });
+          yield emit({
+            id: uuidv4(), ts: new Date().toISOString(), type: 'result', content: denied.reason,
+            tool: { name: fn.name, args, result: denied },
+          });
+          continue;
+        }
+        if (opts.autonomous && fn.name === 'native_node_action') {
+          const denied = { denied: true, reason: 'Native desktop actions require a live user approval and cannot run autonomously.' };
+          messages.push({ role: 'tool' as const, tool_call_id: tc.id, name: fn.name, content: JSON.stringify(denied) });
+          yield emit({
+            id: uuidv4(),
+            ts: new Date().toISOString(),
+            type: 'result',
+            content: denied.reason,
+            tool: { name: fn.name, args, result: denied },
+          });
+          continue;
+        }
         // Autonomous runs have no one to approve — proceed (scheduling/dispatch
-        // is the authorization). Only interactive runs pause for a click.
-        if (!opts.autonomous && toolNeedsApproval(fn.name, cfg.toolApprovalMode)) {
+        // is the authorization). Native GUI was denied above; interactive
+        // native access always pauses regardless of the global approval mode.
+        let liveTaskShellApproval = false;
+        if (!opts.autonomous && (taskDispatchPolicy.requiresLiveApproval || toolNeedsApproval(fn.name, cfg.toolApprovalMode))) {
           const { approvalId, wait } = beginToolApproval(runId, fn.name, args);
+          let taskAttentionId: string | undefined;
+          try {
+            const ledger = await import('./task-ledger');
+            const task = ledger.getTask(taskId);
+            if (task && task.status === 'running') {
+              ledger.transitionTask({
+                taskId,
+                status: 'waiting_for_approval',
+                expectedVersion: task.version,
+                currentStep: `Approval required: ${fn.name}`,
+                nextAction: 'Approve or deny the exact tool action',
+              });
+            }
+            taskAttentionId = ledger.requestTaskAttention({
+              taskId,
+              kind: 'approval',
+              severity: 'warning',
+              title: taskDispatchPolicy.requiresLiveApproval
+                ? `${agent.name} requests contained host-shell access`
+                : `${agent.name} requests approval`,
+              body: taskDispatchPolicy.requiresLiveApproval
+                ? `Exact command: ${String(args.command || '').slice(0, 1_500)}\n\nThe cwd is constrained to a writable task root and source changes are checkpointed, but this runtime is not an OS filesystem sandbox.`
+                : `${fn.name}(${JSON.stringify(args).slice(0, 1_500)})`,
+              dedupeKey: `tool-approval:${approvalId}`,
+              action: {
+                taskId,
+                approvalId,
+                toolName: fn.name,
+                args,
+                expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+              },
+            }).id;
+          } catch {
+            /* the interactive approval still works if task projection is unavailable */
+          }
           yield emit({
             id: uuidv4(),
             ts: new Date().toISOString(),
@@ -1190,6 +1482,22 @@ async function* agentRunGenerator(
           });
           yield { kind: 'approval', approvalId, toolName: fn.name, args };
           const approved = await wait;
+          try {
+            const ledger = await import('./task-ledger');
+            if (taskAttentionId) ledger.resolveAttention(taskAttentionId, 'resolved');
+            const task = ledger.getTask(taskId);
+            if (task?.status === 'waiting_for_approval') {
+              ledger.transitionTask({
+                taskId,
+                status: 'running',
+                expectedVersion: task.version,
+                currentStep: approved ? `Approved: ${fn.name}` : `Denied: ${fn.name}`,
+                nextAction: approved ? 'Continue execution' : 'Choose a safe alternative',
+              });
+            }
+          } catch {
+            /* best-effort task projection */
+          }
           if (!approved) {
             const denied = { denied: true, reason: 'User denied or approval timed out' };
             messages.push({
@@ -1207,12 +1515,30 @@ async function* agentRunGenerator(
             });
             continue;
           }
+          liveTaskShellApproval = taskDispatchPolicy.requiresLiveApproval === true;
         }
 
         const execRes = preExecuted.get(tc.id)
-          ?? await executeTool(fn.name, args, agent, { id: runId }, workDir, runId, integrationCreds, runSignal);
+          ?? await executeTool(
+            fn.name, args, agent, { id: runId, taskId }, workDir, runId, integrationCreds, runSignal,
+            liveTaskShellApproval ? { liveTaskShellApproval: true } : undefined,
+          );
 
         if (execRes.sideEffect) sideEffects.push(execRes.sideEffect);
+        try {
+          const { recordRuntimeToolEvidence } = await import('./task-evidence-runtime');
+          await recordRuntimeToolEvidence({
+            taskId,
+            runId,
+            toolName: fn.name,
+            args,
+            result: execRes.result,
+            screenshot: execRes.screenshot,
+            workspacePath: workDir,
+          });
+        } catch {
+          /* evidence projection must never interrupt the underlying tool run */
+        }
         const toolResultMsg = {
           role: 'tool' as const,
           tool_call_id: tc.id,
@@ -1345,6 +1671,8 @@ async function* agentRunGenerator(
 
   const run: AgentRun = {
     id: runId,
+    taskId,
+    attemptNo,
     agentId: agent.id,
     agentName: agent.name,
     prompt: effectivePrompt,
@@ -1361,6 +1689,8 @@ async function* agentRunGenerator(
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
   };
 
+  const { recordCapabilityPackUsage } = await import('./capability-packs');
+  recordCapabilityPackUsage(agent.skills || [], run.status === 'completed' ? run.id : undefined);
   await persistAgentRun(run);
   audit('run', `run ${run.status}`, `${agent.name}: ${(run.finalOutput || prompt).slice(0, 120)}`, {
     runId, agent: agent.name, agentId: agent.id, model: agent.model,
@@ -1370,6 +1700,8 @@ async function* agentRunGenerator(
   } finally {
     runCancelRequests.delete(runId);
     runAbortControllers.delete(runId);
+    runPauseRequests.delete(runId);
+    runSteering.delete(runId);
     if (runSlotClaimed) guards.releaseActiveRun(runId);
   }
 }

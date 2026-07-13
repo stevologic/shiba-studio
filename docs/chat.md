@@ -32,6 +32,13 @@ The ⚡ toggle in the composer starts hands-free voice mode: speak naturally, pa
 
 **Interrupting works like a real conversation — just start talking.** An echo-cancelled acoustic detector watches the microphone signal itself (not the transcript), so it hears *you* while the assistant is mid-sentence and pauses the speech within a fraction of a second. Two-stage so noise can't derail a reply: speech onset pauses the audio instantly, then the recognizer confirms actual words — real speech becomes your next message (and cuts the rest of the old reply), while a cough, a door, or silence resumes the reply exactly where it stopped.
 
+The expanded voice HUD and the minimized sidebar dock both expose two direct playback controls:
+
+- **Repeat last reply** speaks the latest completed assistant reply again without sending a new prompt or rerunning tools. It remains disabled until a completed reply is available and while another response is in progress.
+- **Stop response** immediately stops the active assistant response and speech playback. It is enabled only while the assistant is generating or speaking, so an idle click cannot alter the conversation.
+
+Both controls have visible labels or tooltips, keyboard focus, accessible names, and native disabled states. Minimizing Grok Voice does not change their behavior; it only moves the controls into the sidebar dock.
+
 ## Slash commands
 
 Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dismiss). Commands run instantly and post their result into the chat:

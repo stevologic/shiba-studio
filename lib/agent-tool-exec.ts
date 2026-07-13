@@ -5,8 +5,8 @@ import { listFiles, readFile, writeFile, shellExec } from './workspace';
 
 /** Resolve a workspace-relative path with a project-root anchor for Next file tracing. */
 function agentPath(workDir: string, rel: string): string {
-  const normalized = (rel || '.').replace(/^[/\\]+/, '');
-  if (path.isAbsolute(normalized)) return normalized;
+  const normalized = String(rel || '.');
+  if (path.isAbsolute(normalized)) return path.resolve(normalized);
   const absolute = path.resolve(workDir, normalized);
   const relFromRoot = path.relative(projectRoot(), absolute);
   if (relFromRoot.startsWith('..') || path.isAbsolute(relFromRoot)) {
@@ -21,6 +21,12 @@ import { scheduleFromAgentTool } from './scheduler';
 import { detectGrokCli, runGrokCliPrompt } from './grok-cli';
 import { listEnabledMcpServers } from './mcp';
 import { invokeMcpTool } from './mcp-client';
+import { assertTaskShellCommand, resolveTaskPath, taskToolDecision } from './task-workspace-policy';
+
+export interface AgentToolAuthorization {
+  /** Set only after this exact task shell command receives a live approval. */
+  liveTaskShellApproval?: boolean;
+}
 
 export function executeAgentTool(
   name: string,
@@ -32,11 +38,37 @@ export function executeAgentTool(
   runIdForBrowser?: string,
   integrationCreds?: IntegrationCreds,
   signal?: AbortSignal,
+  authorization?: AgentToolAuthorization,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tool results are heterogeneous and serialized to the model
 ): Promise<{ result: any; sideEffect?: string; screenshot?: string }> {
   return Ints.withIntegrationCreds(integrationCreds, () =>
-    executeAgentToolScoped(name, args, agent, run, workDir, runIdForBrowser, signal),
+    executeAgentToolScoped(name, args, agent, run, workDir, runIdForBrowser, signal, authorization),
   );
+}
+
+async function writeTaskOwnedFile(input: {
+  taskId?: string;
+  target: string;
+  content: string;
+  requestedPath: string;
+  runId?: string;
+  workspaceRootId?: string;
+  relativePath?: string;
+}): Promise<void> {
+  if (!input.taskId) {
+    await writeFile(input.target, input.content);
+    return;
+  }
+  if (!input.workspaceRootId || input.relativePath == null) throw new Error('Task write path was not authorized');
+  const relativePath = input.relativePath;
+  if (!relativePath || relativePath.startsWith('..')) throw new Error('Write target must be a file inside the workspace root');
+  const { withTaskCheckpoint } = await import('./task-checkpoints');
+  await withTaskCheckpoint({
+    taskId: input.taskId,
+    reason: `Before fs_write ${relativePath}`,
+    files: [{ workspaceRootId: input.workspaceRootId, path: relativePath }],
+    context: { runId: input.runId, tool: 'fs_write', requestedPath: input.requestedPath },
+  }, async () => writeFile(input.target, input.content));
 }
 
 async function executeAgentToolScoped(
@@ -48,9 +80,20 @@ async function executeAgentToolScoped(
   workDir: string,
   runIdForBrowser?: string,
   signal?: AbortSignal,
+  authorization?: AgentToolAuthorization,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- results are tool-shaped JSON, serialized straight back to the model
 ): Promise<{ result: any; sideEffect?: string; screenshot?: string }> {
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Tool execution aborted');
+  const policy = taskToolDecision(run.taskId, name, args && typeof args === 'object' ? args : {});
+  if (!policy.allowed) {
+    return { result: { error: policy.reason, denied: true }, sideEffect: `blocked task tool ${name}` };
+  }
+  if (policy.requiresLiveApproval && !authorization?.liveTaskShellApproval) {
+    return {
+      result: { error: 'Task shell execution requires an exact live approval.', denied: true },
+      sideEffect: `blocked unapproved task shell ${name}`,
+    };
+  }
   // Global Capabilities → Tools toggle — never run a disabled tool even if the
   // model still tries (stale context, race after toggle, etc.).
   try {
@@ -71,19 +114,67 @@ async function executeAgentToolScoped(
     switch (name) {
       case 'fs_list': {
         const dir = args.dir || '.';
-        const entries = await listFiles(agentPath(workDir, dir), 1);
+        const target = run.taskId
+          ? (await resolveTaskPath({ taskId: run.taskId, requestedPath: String(dir), workDir, access: 'read', requireDirectory: true })).absolute
+          : agentPath(workDir, dir);
+        const entries = await listFiles(target, 1);
         return { result: entries.slice(0, 40), sideEffect: `listed ${entries.length} files in ${dir}` };
       }
       case 'fs_read': {
-        const content = await readFile(agentPath(workDir, args.path));
+        const target = run.taskId
+          ? (await resolveTaskPath({ taskId: run.taskId, requestedPath: String(args.path || ''), workDir, access: 'read' })).absolute
+          : agentPath(workDir, args.path);
+        const content = await readFile(target);
         return { result: content.slice(0, 12000), sideEffect: `read ${args.path}` };
       }
       case 'fs_write': {
-        await writeFile(agentPath(workDir, args.path), args.content || '');
+        const owned = run.taskId
+          ? await resolveTaskPath({ taskId: run.taskId, requestedPath: String(args.path || ''), workDir, access: 'write' })
+          : undefined;
+        const target = owned?.absolute || agentPath(workDir, args.path);
+        await writeTaskOwnedFile({
+          taskId: run.taskId,
+          target,
+          content: args.content || '',
+          requestedPath: String(args.path || ''),
+          runId: run.id,
+          workspaceRootId: owned?.root.id,
+          relativePath: owned?.relativePath,
+        });
         return { result: `wrote ${args.path} (${(args.content || '').length} chars)`, sideEffect: `wrote file ${args.path}` };
       }
       case 'shell_exec': {
-        const out = await shellExec(args.command, workDir, 45000, signal);
+        const command = run.taskId ? assertTaskShellCommand(args.command) : String(args.command || '');
+        const owned = run.taskId
+          ? await resolveTaskPath({ taskId: run.taskId, requestedPath: '.', workDir, access: 'write', requireDirectory: true })
+          : undefined;
+        let out: Awaited<ReturnType<typeof shellExec>>;
+        if (run.taskId && owned) {
+          const { withTaskWorkspaceCheckpoint } = await import('./task-checkpoints');
+          const guarded = await withTaskWorkspaceCheckpoint({
+            taskId: run.taskId,
+            workspaceRootIds: [owned.root.id],
+            reason: `Before approved shell command: ${command.slice(0, 300)}`,
+            context: { runId: run.id, tool: 'shell_exec', command: command.slice(0, 2_000) },
+          }, () => shellExec(command, owned.absolute, 45_000, signal));
+          out = guarded.value;
+          const changed = guarded.checkpoint.files.filter((file) =>
+            file.beforeExists !== file.afterExists || file.beforeHash !== file.afterHash);
+          if (changed.length) {
+            const { recordTaskEvidence } = await import('./task-ledger');
+            recordTaskEvidence({
+              taskId: run.taskId,
+              kind: 'diff',
+              status: 'informational',
+              label: 'Approved shell workspace changes',
+              summary: `${changed.length} task-owned path(s) changed behind checkpoint ${guarded.checkpoint.id}.`,
+              scope: owned.root.id,
+              metadata: { checkpointId: guarded.checkpoint.id, paths: changed.slice(0, 200).map((file) => file.relativePath), runId: run.id },
+            });
+          }
+        } else {
+          out = await shellExec(command, workDir, 45_000, signal);
+        }
         return { result: { stdout: out.stdout.slice(0, 4000), stderr: out.stderr.slice(0, 1200), code: out.code }, sideEffect: `shell: ${args.command}` };
       }
       case 'terminal_exec': {
@@ -106,7 +197,10 @@ async function executeAgentToolScoped(
       }
       case 'fs_search': {
         const { fsSearch } = await import('./agent-power-tools');
-        const hits = await fsSearch(workDir, String(args.pattern || ''), args.dir ? String(args.dir) : undefined);
+        const searchRoot = run.taskId
+          ? (await resolveTaskPath({ taskId: run.taskId, requestedPath: args.dir ? String(args.dir) : '.', workDir, access: 'read', requireDirectory: true })).absolute
+          : workDir;
+        const hits = await fsSearch(searchRoot, String(args.pattern || ''));
         return { result: hits, sideEffect: `searched workspace for "${args.pattern}" → ${hits.length} hits` };
       }
       case 'sandbox_exec': {
@@ -155,6 +249,41 @@ async function executeAgentToolScoped(
         const { memoryRecall } = await import('./agent-power-tools');
         const entries = memoryRecall(agent.id, args.query ? String(args.query) : undefined);
         return { result: entries, sideEffect: `recalled ${entries.length} memories` };
+      }
+      case 'meeting_search': {
+        const { searchMeetingTranscripts } = await import('./meetings');
+        const query = String(args.query || '').trim();
+        const limit = Math.min(20, Math.max(1, Number(args.limit) || 8));
+        const results = searchMeetingTranscripts(query, limit);
+        return {
+          result: results,
+          sideEffect: `searched meeting transcripts for "${query.slice(0, 80)}" (${results.length} results)`,
+        };
+      }
+      case 'session_search': {
+        const { getContextSource, searchContext } = await import('./context-engine');
+        const citedSourceId = args.source_id ? String(args.source_id) : '';
+        if (citedSourceId) {
+          const result = getContextSource(citedSourceId);
+          return {
+            result,
+            sideEffect: `retrieved durable context source ${citedSourceId.slice(0, 120)}`,
+          };
+        }
+        const sessionId = args.session_id ? String(args.session_id) : undefined;
+        const explicitProjectId = args.project_id ? String(args.project_id) : undefined;
+        const runId = args.run_id ? String(args.run_id) : undefined;
+        const result = searchContext({
+          query: String(args.query || ''),
+          ...(sessionId ? { scopeType: 'session' as const, scopeId: sessionId } : {}),
+          projectId: explicitProjectId || run.projectId || undefined,
+          runId,
+          maxResults: args.limit == null ? undefined : Number(args.limit),
+        });
+        return {
+          result,
+          sideEffect: `searched durable context for "${String(args.query || '').slice(0, 80)}" (${result.matches.length} results)`,
+        };
       }
       case 'memory_forget': {
         const { deleteMemoryByKey } = await import('./agent-memory');
@@ -485,6 +614,19 @@ async function executeAgentToolScoped(
         const schedRes = await scheduleFromAgentTool(agent.id, String(args.when || ''), String(args.prompt || ''));
         return { result: schedRes, sideEffect: `scheduled task (${schedRes.type || 'unknown'})` };
       }
+      case 'delegate_task_team': {
+        if (!run.taskId) return { result: { error: 'This run has no durable parent task' }, sideEffect: 'team delegation unavailable' };
+        const { createTaskTeam, dispatchReadyTeamWorkers } = await import('./task-teams');
+        const graph = await createTaskTeam(run.taskId, Array.isArray(args.workers) ? args.workers : []);
+        const started = await dispatchReadyTeamWorkers(run.taskId);
+        return {
+          result: {
+            workers: graph.map((node) => ({ id: node.task.id, key: node.key, status: node.task.status, dependencies: node.dependencies })),
+            started,
+          },
+          sideEffect: `delegated ${graph.length} specialist worker${graph.length === 1 ? '' : 's'}`,
+        };
+      }
       case 'mcp_list_tools': {
         const servers = await listEnabledMcpServers();
         const key = String(args.server || '');
@@ -516,6 +658,33 @@ async function executeAgentToolScoped(
         return {
           result: out.ok ? out.result : { error: out.error },
           sideEffect: `mcp_invoke ${args.tool} on ${server.name}`,
+        };
+      }
+      case 'native_node_action': {
+        const { enqueueNativeNodeJob, validateNativeEscalation, waitForNativeNodeJob } = await import('./native-nodes');
+        validateNativeEscalation(args.escalation_evidence);
+        const job = enqueueNativeNodeJob({
+          nodeId: String(args.node_id || ''),
+          action: String(args.action || '') as import('./native-nodes').NativeNodeAction,
+          args: args.action_args && typeof args.action_args === 'object' ? args.action_args : {},
+          targetAppId: args.target_app_id ? String(args.target_app_id) : undefined,
+          targetAppRevision: args.target_app_revision ? String(args.target_app_revision) : undefined,
+          grantId: args.grant_id ? String(args.grant_id) : undefined,
+          expectedGrantRevision: args.expected_grant_revision == null ? undefined : Number(args.expected_grant_revision),
+        });
+        const completed = await waitForNativeNodeJob(job.id, 60_000);
+        const screenshot = typeof completed.result?.screenshotPath === 'string' ? completed.result.screenshotPath : undefined;
+        return {
+          result: {
+            jobId: completed.id,
+            status: completed.status,
+            actionDigest: completed.actionDigest,
+            result: completed.result,
+            error: completed.error,
+            securityScan: completed.securityScan,
+          },
+          sideEffect: `native ${completed.action} ${completed.status}`,
+          ...(screenshot ? { screenshot } : {}),
         };
       }
       case 'grok_cli': {

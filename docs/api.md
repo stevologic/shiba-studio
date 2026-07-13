@@ -19,8 +19,12 @@ runs, saving config — is a call you can make yourself.
   in your browser get **403**. Calls from `curl`/scripts (no `Origin` header)
   and from the app's own pages are allowed. This is why the interactive
   explorer lives inside the app rather than on the docs site.
-- **No auth tokens.** The API is unauthenticated by design (single-user,
-  localhost). Do not expose it beyond localhost without your own auth in front.
+- **Local API has no auth token.** The full API is single-user and localhost
+  only. In `dev:lan` / `start:lan`, network clients are restricted to the
+  paired Companion API and the signed native-node protocol. Their data/action
+  handlers require separate scoped bearer keys; administration and captures
+  remain localhost-only. Do not manually bind the full app beyond localhost
+  outside that supported mode.
 - **Responses are JSON** unless noted (streams are SSE; backup is a file
   download). Most return `{ ok: true, ... }`; errors return a non-2xx status
   with `{ error }` or `{ ok: false, error }`.
@@ -71,6 +75,35 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | POST | `/api/execute/stream` | Run an agent with a live **SSE** trace (`{ agentId, prompt, … }`). |
 | POST | `/api/execute/approve` | Approve/deny a pending tool call (`{ approvalId, approved }`). |
 
+### Dispatch, evidence, and Attention
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET/POST | `/api/tasks` | List/create universal durable tasks; supports mode, origin, parent, workspace roots, budgets, and a completion contract. |
+| POST | `/api/tasks/recommend` | Recommend Quick chat, Work, Code, or Routine routing without overriding the user. |
+| GET/PATCH | `/api/tasks/:id` | Read full task/children/evidence/attention state or update the durable plan/progress fields. |
+| POST | `/api/tasks/:id/dispatch` | Dispatch a queued task through the existing agent runtime. |
+| POST | `/api/tasks/:id/commands` | Idempotent optimistic pause, resume, steer, cancel, retry, approve, or deny. |
+| GET/POST | `/api/tasks/:id/evidence` | Read or record typed, scoped verification evidence. |
+| GET/PUT | `/api/tasks/:id/contract` | Read or replace the versioned completion contract. |
+| POST | `/api/tasks/:id/verify` | Re-evaluate every contract requirement and transition only when proven. |
+| GET/POST | `/api/tasks/:id/checkpoints` | List or capture bounded task-owned checkpoints. |
+| GET/POST | `/api/tasks/:id/checkpoints/:checkpointId` | Inspect or restore an exact file/task/chat checkpoint. |
+| GET/POST | `/api/tasks/:id/team` | Read or create the bounded specialist dependency graph. |
+| POST | `/api/tasks/:id/team/dispatch` | Claim and start all dependency-ready worker tasks. |
+| GET | `/api/attention` | List the shared questions, exact approvals, failures, and completions inbox. |
+| PATCH | `/api/attention/:id` | Resolve/dismiss an eligible Attention item. Exact approvals use task commands. |
+
+### Routines
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET/POST | `/api/routines` | List/create durable manual, scheduled, webhook, event, filesystem, or health-check Routines. |
+| GET/PATCH/DELETE | `/api/routines/:id` | Read, version-update, enable/disable, reset a circuit, or remove a Routine. |
+| POST | `/api/routines/:id/run` | Trigger a saved Routine manually with idempotency and parameters. |
+| POST | `/api/routines/:id/webhook` | Receive a timestamped HMAC-signed, replay-protected webhook delivery. |
+| GET | `/api/routines/:id/export` | Export a portable JSON or YAML definition. |
+
 ### Board
 
 | Method | Path | Purpose |
@@ -100,6 +133,21 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | GET | `/api/search` | Global FTS5 search across chats, runs, and the audit log (`?q=`). |
 | GET | `/api/logs` | Audit log, paginated (`?q`, `?category`, `?limit`, `?offset`). |
 | GET | `/api/usage` | Usage & cost summary (studio metering + optional xAI billing backport). |
+| GET | `/api/doctor` | Machine-readable, secret-free, read-only model/auth, static MCP launch readiness, isolated browser launch health, task/storage, worktree/Git-origin, firewall/LAN-origin boundary, and pack/native-helper compatibility diagnostics. Arbitrary MCP processes start only through their separate explicit Test action. |
+| GET/POST | `/api/doctor/repairs` | Preview or apply one exact-confirmed, audited repair. |
+
+### Context and meetings
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET/PATCH | `/api/context/scopes/:scopeType/:scopeId` | Inspect meter/sources/compactions or pin/rebuild one session, project, or run context scope. |
+| GET | `/api/context/search` | Bounded grounded source search with exact citations. |
+| GET | `/api/context/sources/:sourceId` | Resolve an exact immutable source citation. |
+| GET/POST | `/api/meetings` | List meetings or stream a consent-confirmed local microphone/upload recording. |
+| GET/PATCH/DELETE | `/api/meetings/:id` | Read/update reviewed transcript metadata, delete retained audio, or delete the meeting. |
+| GET | `/api/meetings/:id/audio` | Range-capable local audio playback without exposing a filesystem path. |
+| POST | `/api/meetings/:id/transcribe` | Start xAI STT diarization with word timestamps. |
+| POST | `/api/meetings/:id/outputs` | After exact confirmation, create selected idempotent Board cards/Routines and ledger evidence. |
 
 ### Workspace, projects & files
 
@@ -113,6 +161,23 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | GET/POST | `/api/projects`, `/api/projects/context`, `/api/projects/upload` | Project CRUD, context, and file uploads. |
 | POST | `/api/git` | Git actions (status/checkout/commit/pr) against a workspace. |
 
+### Artifact Studio
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET/POST | `/api/artifacts` | List task artifacts or register a checkpoint-backed immutable artifact from a task-owned file. |
+| GET | `/api/artifacts/:id` | Read an artifact, immutable versions, and anchored annotations. |
+| POST | `/api/artifacts/:id/versions` | Capture changed source bytes as a new checkpoint-backed version. |
+| GET | `/api/artifacts/:id/versions/:versionId/raw` | Integrity-check and stream one private preview snapshot. |
+| POST | `/api/artifacts/:id/versions/:versionId/verify` | Record visual pass/fail evidence in the task ledger. |
+| GET/POST/PATCH | `/api/artifacts/:id/annotations` | List, create, resolve, or reopen version-anchored feedback. |
+| POST | `/api/artifacts/:id/refresh` | Read an explicitly approved read-only live source into a new version. |
+| POST | `/api/artifacts/:id/rollback` | Make an existing immutable version current. |
+| GET/POST | `/api/artifacts/:id/publish` | List publications; publish, revoke, or take down a verified version. |
+| GET | `/api/artifact-public/:token` | Serve a valid, audience-allowed publication with integrity checks and no caching. |
+
+See [Artifact Studio](artifact-studio.md) for checkpoint, renderer, sandbox, and publishing guarantees.
+
 ### Integrations & capabilities
 
 | Method | Path | Purpose |
@@ -121,8 +186,39 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | GET/POST | `/api/google-drive/folders` | List Drive folders for per-agent scoping. |
 | GET/POST | `/api/skills` | Built-in + custom skills; create/edit/assign. |
 | GET/POST | `/api/mcp` | Configured MCP servers; add/enable/remove. |
+| GET/POST | `/api/capability-packs` | List/export packs; create inert proposals; activate, reject, rollback, uninstall, or instantiate reviewed Routine templates. |
+| GET | `/api/capability-packs/journey` | Combined learned-pack and learned-memory provenance timeline. |
 | GET/POST | `/api/subbrowser`, `/api/subbrowser/stream` | The annotation sub-browser (navigate, annotate, screenshot). |
 | GET/POST | `/api/terminal` | Studio terminal session info and control. |
+
+### Native companion nodes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET/POST | `/api/native-nodes/admin` | Localhost-only node, grant, and recent-job administration. POST creates pairings/grants/jobs or revokes a node/grant. |
+| POST | `/api/native-nodes/pair` | Consume a five-minute pairing code and a verified signed-release proof; returns a node key once. HTTPS or loopback. |
+| GET | `/api/native-nodes/poll` | Authenticated helper poll for the next HMAC-signed, leased one-shot job. |
+| POST | `/api/native-nodes/complete` | Authenticated signed job completion, optional screenshot, accessibility/clipboard text security scan, and audit. |
+| POST | `/api/native-nodes/events` | Authenticated signed quick-entry or file-drop event; creates a durable task and Attention item. |
+| GET | `/api/native-nodes/captures/:id` | Localhost-only stored PNG for a completed capture job. |
+| GET | `/api/native-nodes/release/:file` | Public signed helper release file. HTTPS or loopback; contains no secret. |
+
+See [Native companion nodes](native-nodes.md) for the signed protocol, escalation ladder, expiring app grants, sensitive-app block, and Windows helper operations.
+
+### Remote companion and external harnesses
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET/POST | `/api/companion/admin` | Localhost-only remote-access toggle, scoped pairing creation, and device revocation. |
+| POST | `/api/companion/pair` | Consume a short-lived pairing code and return one expiring device key once. |
+| GET | `/api/companion/status` | Public disabled/enabled and pairing status without task data. |
+| GET | `/api/companion/data` | Authenticated redacted tasks/evidence/Attention/Routine projection plus sanitized voice-request status for devices with `action:voice`. |
+| POST | `/api/companion/actions` | Scoped, revision-bound, idempotent exact approval/deny, steering, cancel, or Routine action. |
+| POST | `/api/companion/voice` | Stream one consent-confirmed, SHA-256-bound microphone request from a device with `action:voice`. Supported audio is capped at 50 MB, retained locally for one day, transcribed through server-side xAI auth, and dispatched as a durable task. |
+| GET/POST | `/api/harness-grants` | List or issue one-workspace, action-level, TTL-bound external coding grants. |
+| POST | `/api/harness-grants/:id/start` | Activate a one-session grant and start/attach the selected harness. |
+| POST | `/api/harness-grants/:id/callback` | Authenticated external worker status and typed evidence callback. |
+| POST | `/api/harness-grants/:id/revoke` | Revoke the grant and cancel its child task. |
 
 ### OAuth (browser-driven)
 

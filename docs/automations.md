@@ -1,8 +1,21 @@
-# Automations
+# Routines
 
-The Automations page is where everything that *runs* lives: schedules, live execution traces, and per-schedule run logs.
+The Routines page is where durable recurring, one-time, monitored, and event-driven work lives. Existing per-agent cron schedules remain available in the same surface, while new Routines share the universal task ledger, Attention inbox, evidence, retries, and delivery system.
 
 <img src="images/automations.png" alt="Automations: scheduled agents with Active/Paused states, per-schedule Run/Edit/Delete, and run-log access" width="880" />
+
+## Durable Routines
+
+A Routine can be run manually or activated by one or more triggers:
+
+- cron and natural-language one-time schedules;
+- generic HMAC-signed webhooks with replay and delivery deduplication;
+- GitHub, Linear, Jira, Slack, Discord, or other normalized integration events;
+- bounded filesystem changes and local URL/process health checks.
+
+Definitions support template parameters, conditions, dependent steps, exponential retry/backoff, timeouts, concurrency keys, catch-up policies, and a circuit breaker. Repeated failures open one Attention item instead of creating notification noise. Each invocation and step uses durable leases/checkpoints, so duplicate webhook delivery or a restart cannot silently duplicate a side effect. Definitions can be exported as JSON or YAML.
+
+Starting from a successful run or reviewed Capability Pack remains proposal-first: a user must activate the resulting Routine before it can fire.
 
 ## Schedules
 

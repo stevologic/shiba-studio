@@ -17,6 +17,7 @@ const TOOL_GROUPS: Record<string, { group: string; requires?: string }> = {
   sandbox_write_file: { group: 'Sandbox' },
   web_fetch: { group: 'Web & Research' },
   web_search: { group: 'Web & Research' },
+  meeting_search: { group: 'Meetings' },
   memory_save: { group: 'Memory' },
   memory_recall: { group: 'Memory' },
   memory_forget: { group: 'Memory' },

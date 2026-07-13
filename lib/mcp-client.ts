@@ -65,6 +65,10 @@ export async function connectMcpServer(
   timeoutMs = 30_000,
   signal?: AbortSignal,
 ): Promise<McpClientHandle & { _client: InstanceType<typeof import('@modelcontextprotocol/sdk/client/index.js').Client> }> {
+  const { loadConfig } = await import('./persistence');
+  if ((await loadConfig()).safeMode) {
+    throw new Error('Safe mode disables MCP process startup and tool invocation');
+  }
   const { Client, StdioClientTransport } = await loadSdk();
 
   const transport = new StdioClientTransport({

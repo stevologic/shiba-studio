@@ -8055,6 +8055,43 @@ button.voice-jarvis-speed-chip:focus-visible {
   outline: 1px solid rgba(255, 255, 255, 0.4);
   outline-offset: 2px;
 }
+.voice-jarvis-controls {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+.voice-jarvis-control-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.voice-jarvis-control-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--text);
+}
+.voice-jarvis-control-btn:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+}
+.voice-jarvis-control-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
 .voice-jarvis-footer {
   position: relative;
   z-index: 1;
@@ -8198,6 +8235,14 @@ button.voice-jarvis-speed-chip:focus-visible {
 .voice-nav-dock-action:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+.voice-nav-dock-action:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+.voice-nav-dock-action:focus-visible {
+  outline: 1px solid var(--border-light);
+  outline-offset: 1px;
 }
 .voice-nav-dock-action-exit:hover {
   color: var(--error);

@@ -31,6 +31,12 @@ export interface GrokCliRunOptions {
   bestOfN?: number;
   /** JSON Schema string constraining output to structured JSON — CLI --json-schema */
   jsonSchema?: string;
+  /** Never default to bypassPermissions; callers must opt into an allowed CLI mode. */
+  permissionMode?: 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan';
+  /** Remove memory, subagents, web search, and ambient tool surfaces for scoped handoffs. */
+  isolated?: boolean;
+  /** Additional non-secret environment entries for a scoped child process. */
+  env?: Record<string, string>;
 }
 
 let cachedStatus: { at: number; value: GrokCliStatus } | null = null;
@@ -46,12 +52,49 @@ async function runExec(command: string, timeout = 8000): Promise<{ stdout: strin
 async function spawnCli(
   executable: string,
   args: string[],
-  opts: { cwd?: string; signal?: AbortSignal },
+  opts: { cwd?: string; signal?: AbortSignal; env?: Record<string, string>; isolated?: boolean },
 ): Promise<ChildProcess> {
   const { spawn } = await import('child_process');
+  const safeKeys = [
+    'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC',
+    'TMP', 'TEMP', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM',
+  ];
+  if (!opts.isolated) safeKeys.push('HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA');
+  const env: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
+  for (const key of safeKeys) {
+    if (process.env[key] != null) env[key] = process.env[key];
+  }
+  for (const [key, value] of Object.entries(opts.env || {})) {
+    if (/^[A-Z][A-Z0-9_]{0,63}$/i.test(key) && !/(TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|COOKIE|AUTH)/i.test(key)) {
+      env[key] = value.slice(0, 4_000);
+    }
+  }
+  let isolatedHome: string | undefined;
+  if (opts.isolated) {
+    const [{ mkdtemp, rm }, os, path] = await Promise.all([
+      import('fs/promises'),
+      import('os'),
+      import('path'),
+    ]);
+    isolatedHome = await mkdtemp(path.join(os.tmpdir(), 'shiba-grok-isolated-'));
+    env.HOME = isolatedHome;
+    env.USERPROFILE = isolatedHome;
+    env.LOCALAPPDATA = path.join(isolatedHome, 'local');
+    env.APPDATA = path.join(isolatedHome, 'roaming');
+    const child = spawn(executable, args, {
+      cwd: opts.cwd || projectRoot(),
+      env,
+      shell: false,
+      windowsHide: true,
+      detached: process.platform !== 'win32',
+    });
+    child.once('exit', () => { void rm(isolatedHome!, { recursive: true, force: true }); });
+    child.once('error', () => { void rm(isolatedHome!, { recursive: true, force: true }); });
+    return child;
+  }
   return spawn(executable, args, {
     cwd: opts.cwd || projectRoot(),
-    env: process.env,
+    env,
     shell: false,
     windowsHide: true,
     detached: process.platform !== 'win32',
@@ -165,8 +208,9 @@ const PROMPT_INLINE_MAX_BYTES = 4_000;
 function buildCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): string[] {
   const args = [
     '--output-format', opts.outputFormat || 'plain',
-    '--permission-mode', 'bypassPermissions',
+    '--permission-mode', opts.permissionMode || 'acceptEdits',
   ];
+  if (opts.isolated) args.push('--no-memory', '--no-subagents', '--disable-web-search');
   if (opts.cwd) args.push('--cwd', opts.cwd);
   const model = grokCliModelId(opts.model);
   if (model) args.push('-m', model);
@@ -322,7 +366,7 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
   });
   const executable = status.path || 'grok';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const child = await spawnCli(executable, args, { cwd: opts.cwd, signal: opts.signal });
+  const child = await spawnCli(executable, args, { cwd: opts.cwd, signal: opts.signal, env: opts.env, isolated: opts.isolated });
 
   return new Promise((resolve) => {
     let stdout = '';
@@ -403,7 +447,7 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
   for (let attempt = 0; attempt < modelAttempts.length; attempt++) {
     const model = modelAttempts[attempt];
     const { args, cleanup } = await materializeCliArgs({ ...opts, model, prompt: safePrompt });
-    const child = await spawnCli(executable, args, { cwd: opts.cwd, signal: opts.signal });
+    const child = await spawnCli(executable, args, { cwd: opts.cwd, signal: opts.signal, env: opts.env, isolated: opts.isolated });
 
     let stderr = '';
     let exitCode: number | null = null;

@@ -1,0 +1,7 @@
+# Signed native-node release bytes must remain identical across Windows and
+# POSIX checkouts; the manifest signature and helper hashes cover raw bytes.
+scripts/native-node/release-manifest.json text eol=lf
+scripts/native-node/release-manifest.sig text eol=lf
+scripts/native-node/release-public.json text eol=lf
+scripts/native-node/shiba-node-helper.ps1 text eol=lf
+scripts/native-node/shiba-node-helper-core.ps1 text eol=lf

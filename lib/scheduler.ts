@@ -196,7 +196,7 @@ export function stopAllScheduledTasks() {
   agentMap.clear();
 }
 
-// Support for schedule_task tool: parse natural "when" and register into agent's schedules[] with instructions
+// Support for schedule_task tool: durable one-time routines or legacy cron entries.
 export async function scheduleFromAgentTool(agentId: string, when: string, prompt: string) {
   let agents = await loadAgents();
   agents = agents.map(normalizeAgent);
@@ -205,27 +205,8 @@ export async function scheduleFromAgentTool(agentId: string, when: string, promp
 
   const instructions = prompt || 'Scheduled follow-up task';
 
-  // Support "in 15m", "in 90s", or raw cron -> add ScheduleEntry
-  const mMin = when.match(/in\s+(\d+)\s*m/i);
-  const mSec = when.match(/in\s+(\d+)\s*s/i);
-  if (mMin) {
-    const delay = parseInt(mMin[1], 10) * 60 * 1000;
-    // timeout one-off, do not pollute; but pass scheduleInstructions for metadata (AC3)
-    setTimeout(async () => {
-      try { await runScheduledAgent(ag, instructions, { scheduled: true, scheduleInstructions: instructions }); } catch (e) { console.error(e); }
-    }, Math.max(1000, delay));
-    return { ok: true, type: 'timeout', delayMs: delay };
-  }
-  if (mSec) {
-    const delay = parseInt(mSec[1], 10) * 1000;
-    setTimeout(async () => {
-      try { await runScheduledAgent(ag, instructions, { scheduled: true, scheduleInstructions: instructions }); } catch (e) { console.error(e); }
-    }, Math.max(500, delay));
-    return { ok: true, type: 'timeout', delayMs: delay };
-  }
-
   // Treat as cron string: add as enabled schedule entry
-  if (when && (when.includes('*') || when.includes('/'))) {
+  if (when && cron.validate(when)) {
     const entry: ScheduleEntry = { id: 'sch-tool-' + Date.now(), enabled: true, cron: when, instructions, description: (prompt || '').slice(0, 80) };
     const scheduled = await mutateAgents((current) => {
       const idx = current.findIndex((agent) => agent.id === agentId);
@@ -240,9 +221,19 @@ export async function scheduleFromAgentTool(agentId: string, when: string, promp
     return { ok: true, type: 'cron', cron: when };
   }
 
-  // default: immediate one-off using instructions -- DO NOT pollute schedules with 'manual' entry
-  setTimeout(async () => {
-    try { await runScheduledAgent(ag, instructions, { scheduled: true, scheduleInstructions: instructions }); } catch (e) { console.error(e); }
-  }, 1000);
-  return { ok: true, type: 'immediate' };
+  // Relative, ISO, and small natural-language forms become durable one-time
+  // routines. The SQLite trigger + invocation survive process restarts.
+  try {
+    const { createDurableOneTimeRoutine } = await import('./routines');
+    const created = createDurableOneTimeRoutine({ agentId, when, prompt: instructions });
+    return {
+      ok: true,
+      type: 'one_time',
+      durable: true,
+      routineId: created.routine.id,
+      runAt: created.runAt,
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Could not understand the requested schedule' };
+  }
 }

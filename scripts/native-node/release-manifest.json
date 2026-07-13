@@ -1,0 +1,18 @@
+{
+  "releaseId": "shiba-native-windows-1.0.0",
+  "protocolVersion": 1,
+  "platforms": [
+    "windows"
+  ],
+  "createdAt": "2026-07-12T00:00:00.000Z",
+  "files": {
+    "shiba-node-helper.ps1": {
+      "sha256": "cfa2273845ad3d8c6834f83e973f1799b283de60d96cb7f062d607515c6e6509",
+      "bytes": 3051
+    },
+    "shiba-node-helper-core.ps1": {
+      "sha256": "a8d56f763a34f839836e5792892acb35bb8e155666f838ae13a016f267403c20",
+      "bytes": 15460
+    }
+  }
+}

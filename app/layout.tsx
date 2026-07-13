@@ -3,8 +3,7 @@ import { Geist, Geist_Mono, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "sonner";
 import { THEME_IDENTITY } from "@/lib/theme";
-import StudioTerminalHost from "@/components/studio-terminal-host";
-import VoiceAgentHost from "@/components/voice-agent-host";
+import { PrivilegedHostBoundary } from "@/components/privileged-host-boundary";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -45,9 +44,8 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-shell text-primary">
         {children}
-        {/* Terminal + Grok Voice HUD live in the root layout so they survive navigation. */}
-        <StudioTerminalHost />
-        <VoiceAgentHost />
+        {/* Privileged hosts survive normal navigation but never mount in Companion. */}
+        <PrivilegedHostBoundary />
         <Toaster
           position="bottom-left"
           theme="dark"

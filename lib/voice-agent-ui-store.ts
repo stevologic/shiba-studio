@@ -26,6 +26,8 @@ type VoiceAgentUiState = {
   groupMode?: boolean;
   /** Live speech rate multiplier (xAI TTS 0.7–1.5). */
   speechSpeed: number;
+  /** A completed assistant reply is available to replay from the beginning. */
+  canRepeat: boolean;
 };
 
 const listeners = new Set<Listener>();
@@ -44,12 +46,15 @@ let state: VoiceAgentUiState = {
   micActive: false,
   groupMode: false,
   speechSpeed: 1,
+  canRepeat: false,
 };
 
 /** Callbacks registered by the chat panel (engine). */
 let onCloseVoice: (() => void) | null = null;
 let onToggleMic: (() => void) | null = null;
 let onSetSpeechSpeed: ((speed: number) => void) | null = null;
+let onRepeatLast: (() => void) | null = null;
+let onStopResponse: (() => void) | null = null;
 
 function emit() {
   for (const l of listeners) {
@@ -98,6 +103,7 @@ export function setVoiceAgentActive(active: boolean, boundSessionId?: string | n
     phase: 'idle',
     interim: '',
     micActive: false,
+    canRepeat: false,
   };
   emit();
 }
@@ -113,15 +119,21 @@ export function registerVoiceAgentHandlers(handlers: {
   onClose: () => void;
   onToggleMic: () => void;
   onSetSpeechSpeed?: (speed: number) => void;
+  onRepeatLast?: () => void;
+  onStopResponse?: () => void;
 }) {
   onCloseVoice = handlers.onClose;
   onToggleMic = handlers.onToggleMic;
   onSetSpeechSpeed = handlers.onSetSpeechSpeed || null;
+  onRepeatLast = handlers.onRepeatLast || null;
+  onStopResponse = handlers.onStopResponse || null;
   return () => {
     // Only clear if still our handlers (avoid clobbering a remounted panel).
     if (onCloseVoice === handlers.onClose) onCloseVoice = null;
     if (onToggleMic === handlers.onToggleMic) onToggleMic = null;
     if (onSetSpeechSpeed === handlers.onSetSpeechSpeed) onSetSpeechSpeed = null;
+    if (onRepeatLast === handlers.onRepeatLast) onRepeatLast = null;
+    if (onStopResponse === handlers.onStopResponse) onStopResponse = null;
   };
 }
 
@@ -131,6 +143,16 @@ export function invokeVoiceAgentClose() {
 
 export function invokeVoiceAgentToggleMic() {
   onToggleMic?.();
+}
+
+/** Replay the latest completed assistant reply without regenerating it. */
+export function invokeVoiceAgentRepeatLast() {
+  onRepeatLast?.();
+}
+
+/** Stop current generation/playback while keeping Grok Voice active. */
+export function invokeVoiceAgentStopResponse() {
+  onStopResponse?.();
 }
 
 /** Apply speech speed via the chat engine when bound; always patches HUD state. */

@@ -120,6 +120,9 @@ export interface TraceStep {
 
 export interface AgentRun {
   id: string;
+  /** Universal task ledger identity; retries keep taskId and increment attemptNo. */
+  taskId?: string;
+  attemptNo?: number;
   agentId: string;
   agentName: string;
   prompt: string;
@@ -260,6 +263,8 @@ export type ToolApprovalMode = 'yolo' | 'ask';
 
 export interface AppConfig {
   xaiApiKey: string;
+  /** Recovery mode: keep core data/UI available while optional listeners and packs stay disabled. */
+  safeMode?: boolean;
   /**
    * Optional xAI Management API key (Console → Settings → Management Keys).
    * Used to backport authoritative team usage / billing into the Usage page.
@@ -324,6 +329,17 @@ export interface AppConfig {
   runRetentionDays?: number;
   /** Auto-prune audit-log entries older than this many days (0/unset = keep forever) */
   auditRetentionDays?: number;
+  /**
+   * Narrow mobile Attention companion. Disabled unless the local user opts in;
+   * it never enables generic remote access to Studio APIs.
+   */
+  remoteAccess?: {
+    enabled: boolean;
+    /** One-time pairing-code lifetime (default 5 minutes, max 10). */
+    pairingTtlMinutes?: number;
+    /** Paired device-key lifetime (default 30 days, max 90). */
+    deviceTtlDays?: number;
+  };
 }
 
 export interface InterAgentMessage {

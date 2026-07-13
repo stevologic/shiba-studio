@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MessageSquare, Pencil, Plus, X, Search, Archive, ArchiveRestore, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronsLeft, ChevronsRight, EyeOff, GitBranch, Plus, Search } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import GrokChatPanel from '@/components/grok-chat-panel';
-import type { ChatSession } from '@/lib/chat-session-types';
+import { groupChatSessionsByProject, type ChatSession } from '@/lib/chat-session-types';
 import type { Project } from '@/lib/project-types';
 import type { Agent } from '@/lib/types';
 import { writeLastChatSessionId } from '@/lib/app-navigation';
@@ -17,6 +17,12 @@ import {
   subscribeLiveChatRuns,
 } from '@/lib/chat-live-runs';
 import InfoHint from '@/components/info-hint';
+import { ChatSessionRailItem } from '@/components/chat-session-rail-item';
+import { ContextInspector } from '@/components/context-inspector';
+import {
+  registerBrowserEphemeralSession,
+  unregisterBrowserEphemeralSession,
+} from '@/lib/ephemeral-chat-lifecycle';
 
 type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' | 'cli' };
 
@@ -71,6 +77,19 @@ export default function ChatSessionsPanel({
   const [linkedProject, setLinkedProject] = useState<Project | null>(null);
   const linkedProjectRequestRef = useRef(0);
   const [projects, setProjects] = useState<Project[]>([]);
+  const sessionGroups = useMemo(() => {
+    const names = new Map(projects.map((project) => [project.id, project.name]));
+    return groupChatSessionsByProject(sessions)
+      .map((group) => ({
+        ...group,
+        label: group.projectId ? (names.get(group.projectId) || 'Missing project') : 'Standalone chats',
+      }))
+      .sort((left, right) => {
+        if (left.projectId === null) return 1;
+        if (right.projectId === null) return -1;
+        return left.label.localeCompare(right.label);
+      });
+  }, [projects, sessions]);
   const [bootstrapping, setBootstrapping] = useState(() => {
     // Warm start from module cache after a `/chat` → `/chat/:id` remount.
     if (sessionId && sessionCache.loadedId === sessionId && sessionCache.active?.id === sessionId) {
@@ -185,6 +204,7 @@ export default function ChatSessionsPanel({
    * commit a different session over this (classic “click B, still stuck on A”).
    */
   const preferredSessionIdRef = useRef<string | null>(sessionId);
+  const markedReadCursorRef = useRef(new Map<string, string>());
   // External navigations (Quick access, New Chat, URL) update the prop — mirror that.
   useEffect(() => {
     if (sessionId) preferredSessionIdRef.current = sessionId;
@@ -193,10 +213,31 @@ export default function ChatSessionsPanel({
   function commitActive(session: ChatSession | null) {
     // Switching chats ends Grok Voice; same session keep-alive is a no-op.
     endVoiceIfSessionChanges(session?.id ?? null);
-    sessionCache.active = session;
-    sessionCache.loadedId = session?.id ?? null;
-    setActiveSession(session);
-    if (session?.id) writeLastChatSessionId(session.id);
+    const lastMessageId = session?.messages.at(-1)?.id || '';
+    const viewed = session ? { ...session, unreadCount: 0 } : null;
+    sessionCache.active = viewed;
+    sessionCache.loadedId = viewed?.id ?? null;
+    setActiveSession(viewed);
+    if (viewed?.id) {
+      if (sessionsRef.current.some((item) => item.id === viewed.id && (item.unreadCount || 0) > 0)) {
+        const nextSessions = sessionsRef.current.map((item) =>
+          item.id === viewed.id ? { ...item, unreadCount: 0 } : item);
+        sessionsRef.current = nextSessions;
+        sessionCache.sessions = nextSessions;
+        setSessions(nextSessions);
+      }
+      writeLastChatSessionId(viewed.id);
+      const alreadyMarked = markedReadCursorRef.current.get(viewed.id) === lastMessageId;
+      const serverCursorMatches = !lastMessageId || viewed.lastReadMessageId === lastMessageId;
+      if (!alreadyMarked && !serverCursorMatches) {
+        markedReadCursorRef.current.set(viewed.id, lastMessageId);
+        void fetch('/api/chat-sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'markRead', id: viewed.id, throughMessageId: lastMessageId || undefined }),
+        }).catch(() => { /* read receipts are best-effort */ });
+      }
+    }
   }
 
   /** True when an async bootstrap/load is still allowed to apply this id. */
@@ -527,19 +568,20 @@ export default function ChatSessionsPanel({
     return () => { cancelled = true; };
   }, [sessionId, showArchived, loadSessions, loadSession, loadLinkedProject]);
 
-  async function createSession() {
+  async function createSession(ephemeral = false) {
     try {
       const res = await fetch('/api/chat-sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'create',
-          defaults: { chatModel: defaultChatModel },
+          defaults: { chatModel: defaultChatModel, ephemeral },
         }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       const created = data.session as ChatSession;
+      if (created.ephemeral) registerBrowserEphemeralSession(created.id);
       commitSessions([created, ...sessionsRef.current.filter((s) => s.id !== created.id)]);
       preferredSessionIdRef.current = created.id;
       endVoiceIfSessionChanges(created.id);
@@ -547,7 +589,7 @@ export default function ChatSessionsPanel({
       await loadLinkedProject(null, created.id);
       onStatsChange?.();
       onSessionChange(created.id);
-      toast.success('New chat session');
+      toast.success(ephemeral ? 'New ephemeral chat' : 'New chat session');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to create session');
     }
@@ -634,6 +676,7 @@ export default function ChatSessionsPanel({
         body: JSON.stringify({ action: 'delete', id }),
       });
       const remaining = sessions.filter((s) => s.id !== id);
+      unregisterBrowserEphemeralSession(id);
       commitSessions(remaining);
       onStatsChange?.();
       if (sessionId === id) {
@@ -734,11 +777,21 @@ export default function ChatSessionsPanel({
             <span className="chat-session-rail-count">{sessions.length}</span>
             <button
               type="button"
-              onClick={createSession}
+              onClick={() => void createSession(false)}
               className="chat-session-rail-btn"
               title="New chat session"
+              aria-label="New chat session"
             >
               <Plus size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => void createSession(true)}
+              className="chat-session-rail-btn"
+              title="New ephemeral chat — no memory, deleted when this browser page closes"
+              aria-label="New ephemeral chat"
+            >
+              <EyeOff size={14} />
             </button>
             <button
               type="button"
@@ -768,90 +821,37 @@ export default function ChatSessionsPanel({
           </label>
           <div className="chat-session-rail-list">
             {/* railLabelTick: re-paint when a frozen label is filled or chatTarget changes */}
-            {sessions.map((s) => {
-              void railLabelTick;
-              // Prefer optimistic activeSession; fall back to URL sessionId.
-              const active = s.id === (activeSession?.id ?? sessionId);
-              // Agent under the title: frozen at page-load (or after a send that
-              // changed chatTarget). Selecting another session never re-resolves it.
-              if (!railAgentLabelRef.current.has(s.id)) {
-                railAgentLabelRef.current.set(s.id, agentLabelForTarget(s.chatTarget));
-              }
-              const agentName = railAgentLabelRef.current.get(s.id) ?? null;
-              const label = s.title || 'New chat';
-              const isRunning = liveRunIds.includes(s.id)
-                || !!getLiveChatRun(s.id)?.streaming
-                || !!s.running;
-              return (
-                <div
-                  key={s.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
-                    // Ignore clicks that originated on rename/archive/delete.
-                    if ((e.target as HTMLElement).closest('.chat-session-item-action')) return;
-                    selectSession(s.id);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      selectSession(s.id);
-                    }
-                  }}
-                  className={`chat-session-item ${active ? 'chat-session-item-active' : ''} ${isRunning ? 'chat-session-item-running' : ''}`}
-                  title={isRunning
-                    ? `${label} · working…`
-                    : (agentName ? `${label} · ${agentName}` : label)}
-                  aria-current={active ? 'true' : undefined}
-                >
-                  <MessageSquare size={13} className={`shrink-0 ${isRunning ? 'opacity-90 text-accent' : 'opacity-50'}`} />
-                  <span className="chat-session-item-body">
-                    <span className="chat-session-item-title">
-                      {label}
-                      {isRunning && <span className="chat-session-item-live"> · working</span>}
-                    </span>
-                    {agentName && <span className="chat-session-item-meta">{agentName}</span>}
-                  </span>
-                  <span className="chat-session-item-actions">
-                    <button
-                      type="button"
-                      className="chat-session-item-action"
-                      onClick={(e) => void renameSession(s.id, e)}
-                      title="Rename chat"
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    {s.archived ? (
-                      <button
-                        type="button"
-                        className="chat-session-item-action"
-                        onClick={(e) => restoreSession(s.id, e)}
-                        title="Restore session"
-                      >
-                        <ArchiveRestore size={12} />
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="chat-session-item-action"
-                        onClick={(e) => archiveSession(s.id, e)}
-                        title="Archive session"
-                      >
-                        <Archive size={12} />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="chat-session-item-action chat-session-item-action-danger"
-                      onClick={(e) => closeSession(s.id, e)}
-                      title="Delete session"
-                    >
-                      <X size={12} />
-                    </button>
-                  </span>
+            {sessionGroups.map((group) => (
+              <section key={group.projectId || 'standalone'} aria-label={group.label} className="mb-2">
+                <div className="flex items-center gap-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-dim">
+                  <span className="truncate">{group.label}</span>
+                  <span className="ml-auto font-mono">{group.sessions.length}</span>
+                  {group.unreadCount > 0 && <span className="text-accent">{group.unreadCount} unread</span>}
                 </div>
-              );
-            })}
+                {group.sessions.map((chatSession) => {
+                  void railLabelTick;
+                  if (!railAgentLabelRef.current.has(chatSession.id)) {
+                    railAgentLabelRef.current.set(chatSession.id, agentLabelForTarget(chatSession.chatTarget));
+                  }
+                  return (
+                    <ChatSessionRailItem
+                      key={chatSession.id}
+                      session={chatSession}
+                      active={chatSession.id === (activeSession?.id ?? sessionId)}
+                      isRunning={liveRunIds.includes(chatSession.id)
+                        || !!getLiveChatRun(chatSession.id)?.streaming
+                        || !!chatSession.running}
+                      agentName={railAgentLabelRef.current.get(chatSession.id) ?? null}
+                      onSelect={selectSession}
+                      onRename={(id, event) => void renameSession(id, event)}
+                      onArchive={(id, event) => void archiveSession(id, event)}
+                      onRestore={(id, event) => void restoreSession(id, event)}
+                      onDelete={(id, event) => void closeSession(id, event)}
+                    />
+                  );
+                })}
+              </section>
+            ))}
             {sessions.length === 0 && (
               <div className="text-xs text-dim px-2 py-4 text-center">No chats{searchQuery ? ' match your search' : ' yet'}.</div>
             )}
@@ -870,17 +870,56 @@ export default function ChatSessionsPanel({
           </button>
           <button
             type="button"
-            onClick={createSession}
+            onClick={() => void createSession(false)}
             className="chat-session-rail-btn"
             title="New chat session"
+            aria-label="New chat session"
           >
             <Plus size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={() => void createSession(true)}
+            className="chat-session-rail-btn"
+            title="New ephemeral chat"
+            aria-label="New ephemeral chat"
+          >
+            <EyeOff size={15} />
           </button>
           <span className="chat-session-rail-count-collapsed" title={`${sessions.length} chat session(s)`}>{sessions.length}</span>
         </div>
       )}
 
       <div className="chat-sessions-main flex flex-col flex-1 min-w-0">
+      {activeSession && (
+        <div className="mb-2 flex min-h-8 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-elev)] px-2 py-1 text-xs">
+          {activeSession.ephemeral && (
+            <span className="inline-flex items-center gap-1 text-accent" title="No memories are read or written; deleted when this page closes">
+              <EyeOff size={13} /> Ephemeral
+            </span>
+          )}
+          {activeSession.branch && (
+            <button
+              type="button"
+              className="grok-btn grok-btn-ghost text-xs py-1"
+              onClick={() => selectSession(activeSession.branch!.parentSessionId)}
+              title={`Return to parent at message ${activeSession.branch.sourceMessageId}`}
+            >
+              <GitBranch size={13} /> Fork {activeSession.branch.depth}
+            </button>
+          )}
+          <span className="min-w-0 truncate text-dim">
+            {linkedProject ? linkedProject.name : 'Standalone'} · {activeSession.messages.length} messages
+          </span>
+          <div className="ml-auto">
+            <ContextInspector
+              key={`${activeSession.id}:${activeSession.chatModel}`}
+              sessionId={activeSession.id}
+              model={activeSession.chatModel}
+            />
+          </div>
+        </div>
+      )}
       {activeSession && (
         <GrokChatPanel
           key={activeSession.id}

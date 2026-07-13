@@ -30,6 +30,10 @@ Build, orchestrate, and schedule AI agents with full computer use — chat, code
 
 Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok into a hands-on engineering copilot:
 
+- **Dispatch & Attention** — every substantial chat, code job, Routine, Board run, external harness, and specialist worker becomes one durable task with a heartbeat, retries, pause/resume/steering, completion contract, typed evidence, exact-once delivery, and one shared decision inbox.
+- **Artifact Studio & Meetings** — checkpoint-backed HTML/PDF/Office previews with anchored review and revocable publishing, plus consent-first local recording/upload, diarized timestamp citations, summaries, and confirmed Board/Routine follow-ups.
+- **Remote and native companions** — a paired, scoped, encrypted-offline PWA for Attention and voice requests, and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
+
 - **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Bind any chat to a **workspace folder** (a cloned repo, say) and Grok reads, writes, and searches its files directly.
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, peers, and schedules. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Learning & Memories** — agents automatically recall relevant local knowledge before runs and can extract durable facts, decisions, procedures, preferences, and lessons afterward in **Review** or **Automatic** mode. The Memories page provides search, approval, editing, pinning, archiving, scope moves, provenance, and deletion.
@@ -72,9 +76,11 @@ npm install
 npm run dev          # → http://127.0.0.1:3000 (localhost only, by design)
 ```
 
-Also reachable by name at **http://shiba.local** — the app advertises that name over mDNS and a port-80 redirect forwards bare `shiba.local` to the app port (so **http://shiba.local:3000** works too, and is the fallback if port 80 is taken). `npm run dev:lan` / `start:lan` make `shiba.local` resolve network-wide so other devices reach it by name (LAN exposure — read [SECURITY.md](SECURITY.md) first).
+Also reachable by name at **http://shiba.local** — the app advertises that name over mDNS and a port-80 redirect forwards bare `shiba.local` to the app port (so **http://shiba.local:3000** works too, and is the fallback if port 80 is taken). `npm run dev:lan` / `start:lan` make the paired Companion/native-node gateway reachable network-wide while keeping the full Studio local (read [SECURITY.md](SECURITY.md) first).
 
 **Requirements:** Node.js ≥ 22.5 (the runs/audit database uses Node's built-in `node:sqlite` — nothing to compile on any platform). Runs on **Windows, macOS, and Linux**.
+
+In LAN mode, network peers reach only the authenticated Companion/native-node gateway; the full Studio stays on an internal loopback listener. See [Security](SECURITY.md) before enabling it.
 
 Then open **Settings** and connect a model source (any one works):
 
@@ -98,6 +104,11 @@ The top bar shows a readiness badge for each source.
 | [Memories](docs/memories.md) | Automatic learning modes, relevance recall, review queue, scopes, safety, and management |
 | [Automations](docs/automations.md) | Cron schedules, execution traces, run logs, headless operation |
 | [Capabilities](docs/capabilities.md) | Integrations, skills, MCP servers, and the full built-in tool catalog |
+| [Context Engine](docs/context-engine.md) | Bounded replay, deterministic compaction, citations, pinning, search, forks, and ephemeral chats |
+| [Capability Packs](docs/capability-packs.md) | Governed learn → review → activate workflow packs, permissions, versions, rollback, and uninstall |
+| [Artifact Studio](docs/artifact-studio.md) | Immutable previews, visual evidence, annotations, live refresh, rollback, and publishing |
+| [Meetings](docs/meetings.md) | Consent, local audio retention, speaker-aware transcripts, citations, and confirmed follow-ups |
+| [Native Nodes](docs/native-nodes.md) | Optional signed Windows helper, per-app grants, escalation policy, capture, and quick entry |
 | [Grok CLI](docs/cli.md) | Routing chat through the local `grok` CLI, the `grok_cli` agent tool, effort/check/best-of-N/structured output |
 | [API Reference](docs/api.md) | Every `/api/*` endpoint, curl examples, and the in-app interactive explorer at `/api-docs` |
 | [Cloud Sync](docs/sync.md) | What sync does, where snapshots live, push/pull semantics |
@@ -119,6 +130,8 @@ The top bar shows a readiness badge for each source.
 - **Grok CLI deep integration** — route chats through the local CLI, and give agents `grok_cli` with effort levels, self-verification, best-of-N, and structured JSON output.
 
 ## Security
+
+- **Scoped LAN gateway** — `dev:lan` / `start:lan` keep Next on an internal loopback listener and classify the real socket peer at the gateway, so a forged `Host: localhost` cannot expose generic Studio APIs. Remote clients reach only paired Companion/native-node routes.
 
 - **Localhost only, by default** — the server binds `127.0.0.1`; a same-origin guard (`proxy.ts`) blocks any other website in your browser from reaching the API, and the terminal bridge rejects foreign WebSocket origins. `npm run dev:lan` / `start:lan` opt into LAN exposure.
 - **Ask-before-act** — sensitive tools (shell, file writes, posting) require per-call approval by default; YOLO mode is an explicit opt-in.

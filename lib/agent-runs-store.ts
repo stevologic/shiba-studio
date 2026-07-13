@@ -5,12 +5,15 @@
 import type { AgentRun } from './types';
 import { getDb } from './db';
 import { emitAppEvent } from './app-events';
+import { indexRunContext } from './context-engine';
 
 /** A run without its (potentially huge) trace — what lists and tables need. */
 export type AgentRunSummary = Omit<AgentRun, 'trace'> & { traceSteps: number };
 
 interface RunRow {
   id: string;
+  taskId?: string | null;
+  attemptNo?: number | null;
   agentId: string;
   agentName: string;
   model: string;
@@ -44,6 +47,8 @@ function parseJsonArray<T>(raw: string | null | undefined): T[] {
 function rowToSummary(row: RunRow): AgentRunSummary {
   return {
     id: row.id,
+    taskId: row.taskId ?? undefined,
+    attemptNo: row.attemptNo ?? undefined,
     agentId: row.agentId,
     agentName: row.agentName,
     model: row.model,
@@ -71,19 +76,40 @@ function rowToRun(row: RunRow): AgentRun {
 export async function persistAgentRun(run: AgentRun): Promise<void> {
   getDb()
     .prepare(`
-      INSERT OR REPLACE INTO runs
-        (id, agentId, agentName, model, status, prompt, startedAt, completedAt,
+      INSERT INTO runs
+        (id, taskId, attemptNo, agentId, agentName, model, status, prompt, startedAt, completedAt,
          finalOutput, projectId, scheduleId, scheduleInstructions, sideEffects,
          workspaceSnapshot, trace)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        taskId = COALESCE(excluded.taskId, runs.taskId),
+        attemptNo = excluded.attemptNo,
+        agentId = excluded.agentId,
+        agentName = excluded.agentName,
+        model = excluded.model,
+        status = excluded.status,
+        prompt = excluded.prompt,
+        startedAt = excluded.startedAt,
+        completedAt = excluded.completedAt,
+        finalOutput = excluded.finalOutput,
+        projectId = excluded.projectId,
+        scheduleId = excluded.scheduleId,
+        scheduleInstructions = excluded.scheduleInstructions,
+        sideEffects = excluded.sideEffects,
+        workspaceSnapshot = excluded.workspaceSnapshot,
+        trace = excluded.trace
     `)
     .run(
-      run.id, run.agentId, run.agentName, run.model, run.status, run.prompt,
+      run.id, run.taskId ?? null, run.attemptNo ?? 1,
+      run.agentId, run.agentName, run.model, run.status, run.prompt,
       run.startedAt, run.completedAt ?? null, run.finalOutput ?? null,
       run.projectId ?? null, run.scheduleId ?? null, run.scheduleInstructions ?? null,
       JSON.stringify(run.sideEffects || []), run.workspaceSnapshot ?? null,
       JSON.stringify(run.trace || []),
     );
+  const { syncTaskFromRun } = await import('./task-ledger');
+  syncTaskFromRun({ ...run, taskId: run.taskId || undefined, attemptNo: run.attemptNo || 1 });
+  indexRunContext(run);
   // Live UI: dashboards refresh the run list the moment a run starts/finishes.
   emitAppEvent('runs');
 }
@@ -127,7 +153,7 @@ export async function listRunSummaries(opts: {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const select = `
     SELECT id, agentId, agentName, model, status, prompt, startedAt, completedAt,
-           finalOutput, projectId, scheduleId, scheduleInstructions, sideEffects,
+           taskId, attemptNo, finalOutput, projectId, scheduleId, scheduleInstructions, sideEffects,
            workspaceSnapshot,
            CASE WHEN json_valid(trace) THEN json_array_length(trace) ELSE 0 END AS traceSteps
     FROM runs

@@ -1,5 +1,6 @@
 export const APP_TABS = [
   'dashboard',
+  'attention',
   'chat',
   'projects',
   'board',
@@ -8,9 +9,11 @@ export const APP_TABS = [
   'workspace',
   'files',
   'automations',
+  'meetings',
   'integrations',
   'usage',
   'logs',
+  'doctor',
   'settings',
 ] as const;
 
@@ -27,9 +30,11 @@ export function isAppTab(value: string | undefined): value is AppTab {
  */
 const PATH_ALIASES: Record<string, AppTab> = {
   capabilities: 'integrations',
+  routines: 'automations',
 };
 
 export function tabToPath(tab: AppTab): string {
+  if (tab === 'automations') return '/routines';
   return tab === 'dashboard' ? '/' : `/${tab}`;
 }
 
@@ -74,11 +79,25 @@ export function pathToChatSessionId(pathname: string): string | null {
   return null;
 }
 
+/** Task details are intentionally a deep link, not another permanent sidebar tab. */
+export function pathToTaskId(pathname: string): string | null {
+  const segments = pathname.replace(/\/$/, '').split('/').filter(Boolean);
+  if (segments[0] === 'tasks' && segments.length === 2 && segments[1]) {
+    try {
+      return decodeURIComponent(segments[1]);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 /** True for `/`, `/chat`, `/chat/:id`, etc. — false for unknown nested paths. */
 export function isKnownAppPath(pathname: string): boolean {
   const segments = pathname.replace(/\/$/, '').split('/').filter(Boolean);
   if (segments.length === 0) return true;
   if (segments.length === 1) return isAppTab(segments[0]) || segments[0] in PATH_ALIASES;
   if (segments.length === 2 && segments[0] === 'chat') return true;
+  if (segments.length === 2 && segments[0] === 'tasks' && !!pathToTaskId(pathname)) return true;
   return false;
 }

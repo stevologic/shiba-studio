@@ -5,6 +5,7 @@
 
 import type { AgentRun } from './types';
 import { getBoardTask, updateBoardTask } from './board';
+import { randomUUID } from 'node:crypto';
 
 /** Cards currently being worked (taskId → runId|null while starting). */
 interface BoardRunGlobals {
@@ -90,6 +91,33 @@ export async function startWorkOnTask(
     },
   });
 
+  const ledger = await import('./task-ledger');
+  const controlTaskId = `board-${randomUUID()}`;
+  const runId = randomUUID();
+  const controlTask = ledger.createTask({
+    id: controlTaskId,
+    kind: 'board',
+    title: `${task.key}: ${task.title}`,
+    description: buildCardPrompt({ ...task, feedback, previousOutcome }),
+    status: 'queued',
+    originType: 'board',
+    originId: task.id,
+    agentId: agent.id,
+    projectId: task.projectId || undefined,
+    runId,
+    workspaceRoots: agent.workspace.path
+      ? [{ id: 'board-workspace', path: agent.workspace.path, permission: 'write' }]
+      : [],
+    maxRetries: 2,
+    metadata: { boardKey: task.key, refinement: !!feedback, agentName: agent.name, model: agent.model },
+  });
+  ledger.transitionTask({
+    taskId: controlTask.id,
+    status: 'running',
+    expectedVersion: controlTask.version,
+    currentStep: feedback ? 'Refining card from review feedback' : 'Starting board work',
+  });
+
   void (async () => {
     const { audit } = await import('./audit-log');
     try {
@@ -100,6 +128,9 @@ export async function startWorkOnTask(
       // A card linked to a project runs in that project's workspace with its
       // context, so board work and project work share one place.
       const runOpts: Parameters<typeof runAgentOnce>[2] = {};
+      runOpts.taskId = controlTaskId;
+      runOpts.runId = runId;
+      runOpts.attemptNo = 1;
       if (task.projectId) {
         try {
           const { getProject } = await import('./projects');
@@ -136,6 +167,10 @@ export async function startWorkOnTask(
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      const currentControlTask = ledger.getTask(controlTaskId);
+      if (currentControlTask && currentControlTask.status === 'running') {
+        ledger.transitionTask({ taskId: controlTaskId, status: 'failed', error: msg });
+      }
       await updateBoardTask(task.id, {
         working: false,
         actor: agent.name,

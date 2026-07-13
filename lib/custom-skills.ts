@@ -61,7 +61,9 @@ export async function listCustomSkills(): Promise<CustomSkill[]> {
 export async function getAllSkillPresets(): Promise<SkillPreset[]> {
   return withStoreLock(async () => {
     const custom = await loadStoreUnlocked();
-    return [...SKILL_PRESETS, ...custom];
+    const { listActiveCapabilityPackSkills } = await import('./capability-packs');
+    const packs = await listActiveCapabilityPackSkills();
+    return [...SKILL_PRESETS, ...custom, ...packs];
   });
 }
 

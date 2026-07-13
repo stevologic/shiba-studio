@@ -40,12 +40,13 @@ export async function POST(req: NextRequest) {
   // must not audit as "settings updated" (they used to spam the log on every
   // page load via the silent local-models probe).
   const changedKeys = body.action ? [] : [
-    'xaiApiKey', 'xaiManagementKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel',
+    'xaiApiKey', 'xaiManagementKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel', 'safeMode',
     'defaultTtsVoice', 'defaultTtsSpeed',
     'localGrokEnabled', 'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode',
     'disabledTools', 'globalInstructions', 'useAgentsMd', 'usageBudgetUsd',
     'dailyBudgetUsd', 'budgetHardStop', 'maxConcurrentRuns', 'perRunTokenCap',
     'runRetentionDays', 'auditRetentionDays', 'sandboxMemoryMb', 'sandboxCpus',
+    'remoteAccess',
   ].filter((k) => body[k] !== undefined);
   if (changedKeys.length) {
     const { audit } = await import('@/lib/audit-log');
@@ -106,6 +107,15 @@ export async function POST(req: NextRequest) {
       defaultTtsVoice: cfg.defaultTtsVoice || '',
       defaultTtsSpeed: cfg.defaultTtsSpeed ?? 1,
     });
+  }
+  if (body.remoteAccess !== undefined) {
+    const raw = body.remoteAccess && typeof body.remoteAccess === 'object' ? body.remoteAccess : {};
+    const pairingTtlMinutes = Math.min(10, Math.max(1, Math.floor(Number(raw.pairingTtlMinutes) || 5)));
+    const deviceTtlDays = Math.min(90, Math.max(1, Math.floor(Number(raw.deviceTtlDays) || 30)));
+    const cfg = await saveConfig({
+      remoteAccess: { enabled: raw.enabled === true, pairingTtlMinutes, deviceTtlDays },
+    });
+    return NextResponse.json({ ok: true, remoteAccess: cfg.remoteAccess });
   }
   // Cost & safety guardrails + retention — saved as one group so the Settings
   // card can submit them together (each field remains individually optional).

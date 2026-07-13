@@ -128,6 +128,8 @@ async function main() {
   // --- 4) nav-stats cache (shipped writeCachedNavStats) ---
   const nav = await import('../lib/nav-stats-store');
   const base = {
+    tasksActive: 2,
+    attentionOpen: 1,
     chatSessions: 2,
     projects: 1,
     boardOpen: 3,

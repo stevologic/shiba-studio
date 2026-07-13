@@ -18,6 +18,7 @@ import {
 } from '@/lib/xai-tts';
 import dynamic from 'next/dynamic';
 import { toast } from '@/lib/toast';
+import { registerBrowserEphemeralSession } from '@/lib/ephemeral-chat-lifecycle';
 import ChatMarkdown from '@/components/chat-markdown-lazy';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
@@ -378,7 +379,8 @@ export default function GrokChatPanel({
   const [slashIdx, setSlashIdx] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const slashToken = input.trimStart();
-  const slashMatches = slashCommandMatches(slashToken);
+  const slashMatches = slashCommandMatches(slashToken)
+    .filter((command) => !session?.ephemeral || command.category !== 'Memory');
   const slashMenuOpen = !streaming && !slashDismissed && slashMatches.length > 0;
   const slashSelected = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
 
@@ -396,6 +398,7 @@ export default function GrokChatPanel({
   const [cliModelsLoading, setCliModelsLoading] = useState(true);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [forkingMsgId, setForkingMsgId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
   // Speech-to-text (Web Speech API) — Chrome/Edge; graceful no-op elsewhere.
@@ -444,6 +447,10 @@ export default function GrokChatPanel({
   /** Last user phrase sent via voice (shown in Jarvis HUD). */
   const [voiceLastHeard, setVoiceLastHeard] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** Abort an in-flight synthesis request when the user stops or restarts speech. */
+  const ttsFetchAbortRef = useRef<AbortController | null>(null);
+  /** Explicitly settle the current Audio promise; pause alone never fires ended. */
+  const settleAudioPlaybackRef = useRef<(() => void) | null>(null);
   const autoSpeakRef = useRef(autoSpeak);
   const ttsVoiceRef = useRef(ttsVoice);
   const ttsSpeedRef = useRef(ttsSpeed);
@@ -499,6 +506,8 @@ export default function GrokChatPanel({
   const voiceGroupChainRef = useRef(0);
   const voiceGroupSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceGroupBusyRef = useRef(false);
+  /** Manual/replay TTS must not trigger another free-talk group turn. */
+  const suppressVoiceGroupContinuationRef = useRef(false);
   const messagesRef = useRef<UiMessage[]>([]);
   const chatTargetRef = useRef(chatTarget);
   const agentsRef = useRef(agents);
@@ -1046,6 +1055,8 @@ export default function GrokChatPanel({
 
   const stopSpeaking = useCallback(() => {
     ttsFetchGenRef.current += 1;
+    ttsFetchAbortRef.current?.abort();
+    ttsFetchAbortRef.current = null;
     ttsQueueRef.current = [];
     currentTtsChunkRef.current = null;
     ttsPlayingRef.current = false;
@@ -1054,6 +1065,10 @@ export default function GrokChatPanel({
       if (audioRef.current?.src?.startsWith('blob:')) URL.revokeObjectURL(audioRef.current.src);
     } catch { /* ignore */ }
     audioRef.current = null;
+    // Pausing an HTMLAudioElement does not trigger onended. Resolve the queue's
+    // pending playback promise explicitly so stopped speech cannot leak a task.
+    settleAudioPlaybackRef.current?.();
+    settleAudioPlaybackRef.current = null;
     try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
     setSpeakingMsgId(null);
     setTtsLoadingId(null);
@@ -1101,6 +1116,8 @@ export default function GrokChatPanel({
     voiceGroupChainRef.current = 0;
     // Pause audio only — do not wipe stream buffers (needed to resume).
     ttsFetchGenRef.current += 1;
+    ttsFetchAbortRef.current?.abort();
+    ttsFetchAbortRef.current = null;
     ttsPlayingRef.current = false;
     ttsQueueRef.current = [];
     currentTtsChunkRef.current = null;
@@ -1109,6 +1126,8 @@ export default function GrokChatPanel({
       if (audioRef.current?.src?.startsWith('blob:')) URL.revokeObjectURL(audioRef.current.src);
     } catch { /* ignore */ }
     audioRef.current = null;
+    settleAudioPlaybackRef.current?.();
+    settleAudioPlaybackRef.current = null;
     try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
     setTtsLoadingId(null);
     // Keep speakingMsgId for resume continuity when possible.
@@ -1311,6 +1330,7 @@ export default function GrokChatPanel({
       clearVoiceGroupSilenceTimer();
       voiceGroupChainRef.current = 0;
       voiceGroupBusyRef.current = false;
+      suppressVoiceGroupContinuationRef.current = false;
       setVoiceAgentActive(false);
       setVoiceAgentMinimized(false);
       stopDictation();
@@ -1321,6 +1341,7 @@ export default function GrokChatPanel({
   /** Browser SpeechSynthesis fallback when xAI TTS is unavailable. */
   function speakWithBrowser(text: string, msgId: string) {
     if (typeof window === 'undefined' || !window.speechSynthesis) {
+      suppressVoiceGroupContinuationRef.current = false;
       toast.error('Speech is not available in this browser.');
       resumeListeningAfterVoice();
       return;
@@ -1341,11 +1362,13 @@ export default function GrokChatPanel({
     u.rate = clampTtsSpeed(ttsSpeedRef.current);
     u.onend = () => {
       ttsPlayingRef.current = false;
+      suppressVoiceGroupContinuationRef.current = false;
       setSpeakingMsgId(null);
       resumeListeningAfterVoice();
     };
     u.onerror = () => {
       ttsPlayingRef.current = false;
+      suppressVoiceGroupContinuationRef.current = false;
       setSpeakingMsgId(null);
       resumeListeningAfterVoice();
     };
@@ -1356,28 +1379,36 @@ export default function GrokChatPanel({
   /** Fetch one short TTS chunk (low-latency settings for voice agent). */
   async function fetchTtsBlob(text: string, gen: number): Promise<Blob | null> {
     if (!text.trim() || gen !== ttsFetchGenRef.current) return null;
-    const res = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        preprocessed: true,
-        voice_id: speakVoiceRef.current || ttsVoiceRef.current,
-        language: 'en',
-        speed: clampTtsSpeed(ttsSpeedRef.current),
-        fast: true,
-      }),
-    });
-    if (gen !== ttsFetchGenRef.current) return null;
-    if (!res.ok) {
-      if (res.status === 401) {
-        // Signal caller to fall back to browser TTS for the whole remaining text.
-        throw Object.assign(new Error('auth'), { status: 401 });
+    ttsFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    ttsFetchAbortRef.current = controller;
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          preprocessed: true,
+          voice_id: speakVoiceRef.current || ttsVoiceRef.current,
+          language: 'en',
+          speed: clampTtsSpeed(ttsSpeedRef.current),
+          fast: true,
+        }),
+        signal: controller.signal,
+      });
+      if (gen !== ttsFetchGenRef.current) return null;
+      if (!res.ok) {
+        if (res.status === 401) {
+          // Signal caller to fall back to browser TTS for the whole remaining text.
+          throw Object.assign(new Error('auth'), { status: 401 });
+        }
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || `TTS failed (${res.status})`);
       }
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `TTS failed (${res.status})`);
+      return await res.blob();
+    } finally {
+      if (ttsFetchAbortRef.current === controller) ttsFetchAbortRef.current = null;
     }
-    return res.blob();
   }
 
   /** Play queued TTS chunks; fetch next while current plays. */
@@ -1396,10 +1427,7 @@ export default function GrokChatPanel({
         if (softBargeInPendingRef.current) break;
         const chunk = ttsQueueRef.current.shift()!;
         currentTtsChunkRef.current = chunk;
-        // Prefetch next while we synthesize current when possible
-        const nextPrefetch = ttsQueueRef.current[0]
-          ? fetchTtsBlob(ttsQueueRef.current[0], gen).catch(() => null)
-          : null;
+        setTtsLoadingId(msgId);
 
         let blob: Blob | null;
         try {
@@ -1411,6 +1439,10 @@ export default function GrokChatPanel({
             ttsQueueRef.current = [];
             currentTtsChunkRef.current = null;
             ttsPlayingRef.current = false;
+            setTtsLoadingId(null);
+            // Keep the queue's finally block from clearing the browser fallback
+            // state or reopening the microphone while it is still speaking.
+            ttsFetchGenRef.current += 1;
             speakWithBrowser(rest, msgId);
             return;
           }
@@ -1426,21 +1458,25 @@ export default function GrokChatPanel({
         await new Promise<void>((resolve, reject) => {
           const audio = new Audio(url);
           audioRef.current = audio;
-          audio.onended = () => {
+          let settled = false;
+          const settle = (error?: Error) => {
+            if (settled) return;
+            settled = true;
             URL.revokeObjectURL(url);
             if (audioRef.current === audio) audioRef.current = null;
             if (currentTtsChunkRef.current === chunk) currentTtsChunkRef.current = null;
-            resolve();
+            if (settleAudioPlaybackRef.current === settleStopped) settleAudioPlaybackRef.current = null;
+            if (error) reject(error);
+            else resolve();
           };
-          audio.onerror = () => {
-            URL.revokeObjectURL(url);
-            if (currentTtsChunkRef.current === chunk) currentTtsChunkRef.current = null;
-            reject(new Error('Audio playback failed'));
-          };
-          void audio.play().catch(reject);
+          const settleStopped = () => settle();
+          settleAudioPlaybackRef.current = settleStopped;
+          audio.onended = () => settle();
+          audio.onerror = () => settle(new Error('Audio playback failed'));
+          void audio.play()
+            .then(() => setTtsLoadingId((id) => (id === msgId ? null : id)))
+            .catch((error) => settle(error instanceof Error ? error : new Error('Audio playback failed')));
         });
-
-        if (nextPrefetch) void nextPrefetch;
       }
     } catch (e: unknown) {
       if (gen === ttsFetchGenRef.current) {
@@ -1463,9 +1499,14 @@ export default function GrokChatPanel({
           }
           if (!streamingRef.current) {
             resumeListeningAfterVoice();
-            if (isVoiceGroupMode() && !voiceBargeInRef.current) {
+            if (
+              isVoiceGroupMode()
+              && !voiceBargeInRef.current
+              && !suppressVoiceGroupContinuationRef.current
+            ) {
               scheduleVoiceGroupContinuation();
             }
+            suppressVoiceGroupContinuationRef.current = false;
           }
         } else {
           void pumpTtsQueue(msgId);
@@ -1498,6 +1539,7 @@ export default function GrokChatPanel({
     voiceMsgIdRef.current = msgId;
     voiceStreamBufRef.current = '';
     voiceSpokenLenRef.current = 0;
+    suppressVoiceGroupContinuationRef.current = false;
     // Don't cancel in-flight speech from a previous turn until first new chunk.
   }
 
@@ -1590,15 +1632,83 @@ export default function GrokChatPanel({
       toast.error('Nothing to speak in this message.');
       return;
     }
+    if (streamingRef.current || voiceGroupBusyRef.current) {
+      toast.message('Stop the current response before reading another reply.');
+      return;
+    }
     if (speakingMsgId === msg.id && ttsPlayingRef.current) {
       stopSpeaking();
       return;
     }
+    clearVoiceGroupSilenceTimer();
+    voiceGroupChainRef.current = 0;
     stopSpeaking();
     stopDictation();
     beginVoiceStream(msg.id);
+    suppressVoiceGroupContinuationRef.current = true;
     voiceSpokenLenRef.current = spoken.length;
     enqueueTtsChunks(msg.id, splitSpeechChunks(spoken, 240));
+  }
+
+  /** Replay only re-synthesizes the latest completed reply; it never calls the model. */
+  function repeatLastVoiceReply() {
+    if (streamingRef.current || voiceGroupBusyRef.current) {
+      toast.message('Stop the current response before repeating a reply.');
+      return;
+    }
+    const last = [...messagesRef.current].reverse().find((message) => (
+      message.role === 'assistant'
+      && message.id !== 'welcome'
+      && !message.streaming
+      && Boolean(textForSpeech(message.content || ''))
+    ));
+    if (!last) {
+      toast.message('There is no completed reply to repeat yet.');
+      return;
+    }
+    const spoken = textForSpeech(last.content || '');
+    if (!spoken) return;
+
+    clearVoiceGroupSilenceTimer();
+    voiceGroupChainRef.current = 0;
+    clearSoftBargeInTimer();
+    softBargeInPendingRef.current = false;
+    ttsResumeRef.current = null;
+    voiceBargeInRef.current = false;
+    stopSpeaking();
+    stopDictation();
+    beginVoiceStream(last.id);
+    suppressVoiceGroupContinuationRef.current = true;
+    voiceSpokenLenRef.current = spoken.length;
+    enqueueTtsChunks(last.id, splitSpeechChunks(spoken, 240));
+  }
+
+  /** Stop generation and speech without leaving hands-free voice mode. */
+  function stopVoiceResponse() {
+    const wasGenerating = streamingRef.current || voiceGroupBusyRef.current;
+    clearVoiceGroupSilenceTimer();
+    voiceGroupChainRef.current = 0;
+    voiceGroupBusyRef.current = false;
+    suppressVoiceGroupContinuationRef.current = false;
+    clearSoftBargeInTimer();
+    softBargeInPendingRef.current = false;
+    ttsResumeRef.current = null;
+    voiceStreamBufRef.current = '';
+    voiceSpokenLenRef.current = 0;
+    voiceMsgIdRef.current = null;
+    // Prevent stream finalization from speaking any residual text after abort.
+    voiceBargeInRef.current = wasGenerating;
+    stopSpeaking();
+
+    if (wasGenerating) {
+      const boundSessionId = getVoiceAgentUiState().boundSessionId;
+      if (boundSessionId) abortLiveChatRun(boundSessionId);
+      abortRef.current?.abort();
+      return;
+    }
+
+    voiceBargeInRef.current = false;
+    if (autoSpeakRef.current) resumeListeningAfterVoice();
   }
 
   // When streaming ends in voice mode, flush remaining unspoken text.
@@ -1659,6 +1769,16 @@ export default function GrokChatPanel({
           ? 'listening'
           : 'idle';
 
+  const hasCompletedVoiceReply = messages.some((message) => (
+    message.role === 'assistant'
+    && message.id !== 'welcome'
+    && !message.streaming
+    && Boolean(textForSpeech(message.content || ''))
+  ));
+  const canRepeatVoiceReply = hasCompletedVoiceReply
+    && voicePhase !== 'thinking'
+    && voicePhase !== 'speaking';
+
   // Keep shell aware of voice so chat stays mounted while browsing other pages.
   useEffect(() => {
     if (autoSpeak) {
@@ -1681,6 +1801,8 @@ export default function GrokChatPanel({
       onSetSpeechSpeed: (speed) => {
         persistTtsSpeed(speed, { quiet: true });
       },
+      onRepeatLast: repeatLastVoiceReply,
+      onStopResponse: stopVoiceResponse,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startDictation, stopDictation]);
@@ -2087,8 +2209,9 @@ export default function GrokChatPanel({
       micActive: dictating,
       groupMode,
       speechSpeed: clampTtsSpeed(ttsSpeed),
+      canRepeat: canRepeatVoiceReply,
     });
-  }, [autoSpeak, voicePhase, effectiveVoiceLabel, dictationInterim, voiceLastHeard, dictating, chatTarget, agents.length, ttsSpeed]);
+  }, [autoSpeak, voicePhase, effectiveVoiceLabel, dictationInterim, voiceLastHeard, dictating, chatTarget, agents.length, ttsSpeed, canRepeatVoiceReply]);
 
   const supportsMultimodal = chatTarget !== 'all';
 
@@ -2461,6 +2584,7 @@ export default function GrokChatPanel({
         voiceGroupChainRef.current = opts?.continuation
           ? voiceGroupChainRef.current + 1
           : 1;
+        suppressVoiceGroupContinuationRef.current = false;
         enqueueTtsChunks(assistantId, splitSpeechChunks(content, 200));
       } else if (autoSpeakRef.current) {
         resumeListeningAfterVoice();
@@ -2577,6 +2701,7 @@ export default function GrokChatPanel({
     abortRef.current = ac;
 
     const payloadMessages = history.map((m) => ({
+      id: m.id,
       role: m.role,
       content: m.content,
       attachments: m.attachments,
@@ -2835,6 +2960,12 @@ export default function GrokChatPanel({
       return true;
     }
 
+    if (session?.ephemeral && ['remember', 'recall', 'forget'].includes(parsed.name)) {
+      setInput('');
+      appendExchange('Ephemeral chat keeps no memories. Start a regular chat to save or recall durable memory.');
+      return true;
+    }
+
     const memoryAgentId = chatTarget !== 'grok' && chatTarget !== 'all' ? chatTarget : undefined;
 
     if (parsed.name === 'remember') {
@@ -2845,7 +2976,7 @@ export default function GrokChatPanel({
       if (!key?.trim() || !content) { appendExchange('Usage: `/remember <key> | <content>` — e.g. `/remember deploy-cmd | npm run deploy:prod`'); return true; }
       const res = await fetch('/api/chat-tools', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'remember', key: key.trim(), content, agentId: memoryAgentId }),
+        body: JSON.stringify({ action: 'remember', key: key.trim(), content, agentId: memoryAgentId, sessionId: session?.id }),
       }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
       appendExchange(res.ok ? `🧠 Remembered \`${res.entry.key}\` — recall it any time with \`/recall\`.` : `⚠️ ${res.error || 'Save failed'}`);
       return true;
@@ -2856,7 +2987,7 @@ export default function GrokChatPanel({
       setInput('');
       const res = await fetch('/api/chat-tools', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'recall', query: query || undefined, agentId: memoryAgentId }),
+        body: JSON.stringify({ action: 'recall', query: query || undefined, agentId: memoryAgentId, sessionId: session?.id }),
       }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
       appendExchange(res.ok
         ? (res.entries.length
@@ -2872,7 +3003,7 @@ export default function GrokChatPanel({
       if (!key) { appendExchange('Usage: `/forget <key>` — deletes one exact memory key.'); return true; }
       const res = await fetch('/api/chat-tools', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'forget', key, agentId: memoryAgentId }),
+        body: JSON.stringify({ action: 'forget', key, agentId: memoryAgentId, sessionId: session?.id }),
       }).then((response) => response.json()).catch((error) => ({ ok: false, error: String(error) }));
       appendExchange(res.ok
         ? (res.removed ? `🧠 Forgot \`${key}\`.` : `No memory named \`${key}\` in this scope.`)
@@ -3086,6 +3217,33 @@ export default function GrokChatPanel({
       setTimeout(() => setCopiedMsgId((id) => (id === m.id ? null : id)), 1600);
     } catch {
       /* clipboard unavailable */
+    }
+  }
+
+  async function forkFromMessage(messageId: string) {
+    if (!session?.id || messageId === 'welcome' || forkingMsgId) return;
+    setForkingMsgId(messageId);
+    try {
+      const response = await fetch('/api/chat-sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'fork',
+          parentSessionId: session.id,
+          sourceMessageId: messageId,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.session?.id) {
+        throw new Error(data.error || 'Could not fork chat');
+      }
+      if (data.session.ephemeral) registerBrowserEphemeralSession(String(data.session.id));
+      toast.success('Forked chat from this message');
+      router.push(`/chat/${encodeURIComponent(String(data.session.id))}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not fork chat');
+    } finally {
+      setForkingMsgId(null);
     }
   }
 
@@ -3386,6 +3544,18 @@ export default function GrokChatPanel({
                     {copiedMsgId === m.id ? <Check size={13} /> : <Copy size={13} />}
                     {copiedMsgId === m.id ? 'Copied' : 'Copy'}
                   </button>
+                  {session?.id && m.id !== 'welcome' && (
+                    <button
+                      type="button"
+                      className="grok-chat-msg-action"
+                      onClick={() => void forkFromMessage(m.id)}
+                      disabled={streaming || !!forkingMsgId}
+                      title="Fork a new chat from this exact message"
+                    >
+                      {forkingMsgId === m.id ? <RefreshCw size={13} className="animate-spin" /> : <GitBranch size={13} />}
+                      Fork
+                    </button>
+                  )}
                 </div>
               ) : null}
 
@@ -3395,7 +3565,7 @@ export default function GrokChatPanel({
                     type="button"
                     className={`grok-chat-msg-action ${speakingMsgId === m.id ? 'grok-chat-msg-action-speaking' : ''}`}
                     onClick={() => void speakMessage(m)}
-                    disabled={ttsLoadingId === m.id}
+                    disabled={streaming || (!!ttsLoadingId && ttsLoadingId !== m.id)}
                     title={speakingMsgId === m.id ? 'Stop speaking' : `Speak this reply (${effectiveVoiceLabel})`}
                   >
                     {ttsLoadingId === m.id
@@ -3414,6 +3584,18 @@ export default function GrokChatPanel({
                     {copiedMsgId === m.id ? <Check size={13} /> : <Copy size={13} />}
                     {copiedMsgId === m.id ? 'Copied' : 'Copy'}
                   </button>
+                  {session?.id && (
+                    <button
+                      type="button"
+                      className="grok-chat-msg-action"
+                      onClick={() => void forkFromMessage(m.id)}
+                      disabled={streaming || !!forkingMsgId}
+                      title="Fork a new chat from this exact message"
+                    >
+                      {forkingMsgId === m.id ? <RefreshCw size={13} className="animate-spin" /> : <GitBranch size={13} />}
+                      Fork
+                    </button>
+                  )}
                   {isLastAssistant && (
                     <button
                       type="button"
@@ -3571,7 +3753,8 @@ export default function GrokChatPanel({
             // prior React render. This keeps paste-then-Enter command execution
             // exact even when autocomplete state has not painted yet.
             const liveSlashToken = e.currentTarget.value.trimStart();
-            const liveSlashMatches = slashCommandMatches(liveSlashToken);
+            const liveSlashMatches = slashCommandMatches(liveSlashToken)
+              .filter((command) => !session?.ephemeral || command.category !== 'Memory');
             const liveSlashMenuOpen = !streaming && !slashDismissed && liveSlashMatches.length > 0;
             const liveSlashSelected = Math.min(slashIdx, Math.max(0, liveSlashMatches.length - 1));
             if (liveSlashMenuOpen) {
@@ -3824,7 +4007,9 @@ export default function GrokChatPanel({
             Listening… click the mic again when you&apos;re done
             {dictationInterim ? ` · “${dictationInterim.slice(0, 48)}${dictationInterim.length > 48 ? '…' : ''}”` : ''}
           </span>
-        ) : useGrokCli && grokCliInstalled
+        ) : session?.ephemeral
+          ? 'Ephemeral chat · Shiba memories and autonomous learning are disabled · deleted when this browser page closes'
+          : useGrokCli && grokCliInstalled
           ? `CLI mode — Grok CLI on this machine${grokCliVersion ? ` (${grokCliVersion})` : ''} · global uploads still included as context`
           : isSessionMode && project
           ? `Session chat · global uploads + ${project.files.length} linked project file(s) in context`

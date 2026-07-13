@@ -37,6 +37,8 @@ When an agent has the Google Drive scope, its editor shows a **Drive folder scop
 
 Reusable prompt capabilities you assign to agents — presets plus your own custom skills (create, edit, and manage agent assignments right from the page). An agent's skills are injected into its system prompt on every run.
 
+Versioned workflow bundles are available through [Capability Packs and the governed Skill Workshop](capability-packs.md). Pack updates cannot broaden permissions without a new explicit review.
+
 ## MCP servers
 
 One-click presets or any custom stdio MCP server (command, args, env). Enabled servers give agents `mcp_list_tools` and `mcp_invoke` to discover and call their tools. The X preset uses the official `xurl` bridge: register `http://localhost:8080/callback`, save the X app's OAuth 2.0 Client ID/Secret in the X integration, then click **Add & sign in with X**. On a desktop source install, the first connection opens browser consent; later connections reuse and refresh the isolated cached login automatically. The slim Docker image requires pre-authentication because it has no browser.
@@ -57,3 +59,6 @@ Filterable, grouped, and annotated with what unlocks each tool (local agents onl
 | **Orchestration** | `schedule_task`, `send_to_peer`, `grok_cli` (headless Grok CLI delegation with effort levels, self-verification `check`, best-of-N, and JSON-schema structured output) |
 | **MCP** | `mcp_list_tools`, `mcp_invoke` |
 
+# Native companion nodes
+
+Optional signed native nodes add one-shot Windows inventory, active-window capture and accessibility text, notification, clipboard, file-open, click/type, and quick-entry capabilities. They are a final escalation after connector/MCP and browser surfaces, require live approval plus expiring exact app grants, and block sensitive applications. See [Native companion nodes](./native-nodes.md).

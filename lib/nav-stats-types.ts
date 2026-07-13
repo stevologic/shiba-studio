@@ -1,4 +1,6 @@
 export interface NavStats {
+  tasksActive: number;
+  attentionOpen: number;
   chatSessions: number;
   projects: number;
   /** Open board cards: backlog + todo + in_progress combined. */

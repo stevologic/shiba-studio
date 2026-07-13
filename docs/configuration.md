@@ -56,14 +56,48 @@ On start the app advertises itself over multicast DNS so you can open it at
 - **`npm run dev` / `start` (localhost):** `shiba.local` resolves to `127.0.0.1`
   on this machine — a convenient local alias.
 - **`npm run dev:lan` / `start:lan` (LAN):** `shiba.local` resolves to this
-  machine's **LAN IP**, so any device on the network (phone, laptop) can reach
-  the app by name. Because this exposes the app on the network, only use LAN
-  mode on a trusted network and read [SECURITY.md](../SECURITY.md) first.
+  machine's **LAN IP**. Network clients are restricted to the scoped
+  `/companion` PWA; the full Studio and its generic APIs remain localhost-only.
+  The launcher keeps Next on a private loopback port and exposes a small outer
+  proxy that classifies clients from their TCP address; changing `Host` or
+  `X-Forwarded-*` headers cannot turn a network request into a local request.
+  Remote access is disabled until it is enabled and a device is paired from
+  `http://localhost:3000/companion/admin`. Only use LAN mode on a trusted
+  network and read [SECURITY.md](../SECURITY.md) first.
 
 Resolution needs an mDNS resolver on the client: Windows 10+ and macOS have it
 built in, Linux via Avahi/nss-mdns. Rename with `SHIBA_MDNS_HOST`
 (comma-separated for several names, e.g. `mybox.local`) or turn it off with
 `SHIBA_MDNS=off`.
+
+## Secure remote companion
+
+Open `/companion/admin` through `localhost` on the Shiba host to explicitly
+enable remote access, choose device scopes, and create a short-lived one-time
+pairing URL. Pairing codes and device keys are stored only as hashes; device
+keys expire, can be revoked individually, and stop working immediately when
+remote access is disabled. The companion exposes redacted task/evidence
+summaries and the shared Attention queue, never workspace file contents,
+workspace roots, integration configuration, or raw command evidence.
+
+The optional `action:voice` device permission adds consent-gated microphone
+requests. Recording requires HTTPS because browsers restrict microphone and
+WebCrypto APIs in insecure contexts. The phone reviews the recording before
+sending it with a stable idempotency key, byte count, and SHA-256 digest. The
+handler authenticates and authorizes the device again, streams only supported
+audio up to 50 MB into generated local meeting storage, fixes retention at one
+day, and uses the host's xAI credentials for diarized transcription. It then
+creates and dispatches one durable task from the transcript. Retries cannot
+duplicate the recording, transcription, or task. Companion status contains
+only the user-supplied title, phase, task identifier, and a sanitized error;
+raw audio and transcript text are never returned to or cached by the PWA.
+
+For an installable PWA and encrypted offline summaries, serve the companion in
+a secure browser context (HTTPS or localhost). If a same-machine TLS proxy is
+used, it must connect to the LAN address rather than the loopback address;
+loopback is intentionally trusted as the local Studio user. Plain LAN HTTP can
+use live controls but browsers do not allow service workers or WebCrypto-backed
+offline storage there. There is no public relay.
 
 ## Data locations
 
@@ -81,4 +115,4 @@ Upgrades are automatic: a legacy `~/.grokdesk` directory (including its key and 
 - **Local-first:** no telemetry; outbound traffic goes only to xAI and integrations you configure.
 - **Secrets:** AES-256-GCM at rest (`enc:v1:` prefix), machine key outside the project, plaintext migrated on load, never included in cloud-sync snapshots.
 - **Audit:** every consequential action (runs, chats, config, integrations, sync, git, sub-browser) lands in the Logs page with agent/model provenance and CSV/JSON export.
-- **Network boundary:** `npm run dev`/`npm run start` bind `127.0.0.1` only (use `dev:lan`/`start:lan` to expose deliberately), every `/api/*` request from a non-loopback browser origin is rejected (`proxy.ts`), the terminal WebSocket bridge refuses foreign origins, and tool approval defaults to **Ask**. The APIs themselves are unauthenticated by design — if you expose the server beyond localhost, front it with your own auth. Full threat model: [SECURITY.md](../SECURITY.md).
+- **Network boundary:** `npm run dev`/`npm run start` bind `127.0.0.1` only. In explicit `dev:lan`/`start:lan` mode, an outer listener classifies the TCP peer and forwards to a loopback-only Next server; non-loopback requests are redirected to `/companion`, while generic Studio APIs and companion administration are rejected even if a client spoofs `Host: localhost`. Companion data/actions require a scoped, expiring, revocable device key in addition to same-origin checks. Localhost Studio APIs remain unauthenticated for the single local user. The terminal WebSocket bridge refuses foreign origins, and tool approval defaults to **Ask**. Full threat model: [SECURITY.md](../SECURITY.md).
