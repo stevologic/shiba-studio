@@ -7,11 +7,25 @@ import {
   registerBrowserEphemeralSession,
   unregisterBrowserEphemeralSession,
 } from '../lib/ephemeral-chat-lifecycle';
+import {
+  invokeVoiceAgentRepeatLast,
+  invokeVoiceAgentStopResponse,
+  registerVoiceAgentHandlers,
+} from '../lib/voice-agent-ui-store';
 
 const root = path.resolve(__dirname, '..');
 
 async function source(file: string): Promise<string> {
   return fs.readFile(path.join(root, file), 'utf8');
+}
+
+function buttonContaining(value: string, marker: string): string {
+  const markerIndex = value.indexOf(marker);
+  assert.notEqual(markerIndex, -1, `Expected button marker: ${marker}`);
+  const start = value.lastIndexOf('<button', markerIndex);
+  const end = value.indexOf('</button>', markerIndex);
+  assert.ok(start >= 0 && end > markerIndex, `Expected button containing: ${marker}`);
+  return value.slice(start, end + '</button>'.length);
 }
 
 async function main() {
@@ -58,6 +72,69 @@ async function main() {
 
   const nativeNodes = await source('components/native-nodes-panel.tsx');
   check(nativeNodes.includes('const confirmed = await confirmDialog') && nativeNodes.includes("confirmLabel: kind === 'node' ? 'Revoke node' : 'Revoke grant'"), 'native node and grant revocation require confirmation');
+
+  const voiceOverlay = await source('components/voice-agent-overlay.tsx');
+  const voiceStore = await source('lib/voice-agent-ui-store.ts');
+  const voiceHost = await source('components/voice-agent-host.tsx');
+  const voiceDock = await source('components/voice-agent-nav-dock.tsx');
+  const overlayRepeat = buttonContaining(voiceOverlay, 'Repeat last reply');
+  const overlayStop = buttonContaining(voiceOverlay, 'Stop response');
+  const dockRepeat = buttonContaining(voiceDock, 'aria-label="Repeat last reply"');
+  const dockStop = buttonContaining(voiceDock, 'aria-label="Stop response"');
+  check(
+    voiceOverlay.includes('canRepeat?: boolean')
+      && voiceOverlay.includes('canStop?: boolean')
+      && voiceOverlay.includes('onRepeatLast?: () => void')
+      && voiceOverlay.includes('onStopResponse?: () => void'),
+    'voice HUD exposes explicit repeat and stop contracts',
+  );
+  check(
+    overlayRepeat.includes('aria-label="Repeat last reply"')
+      && overlayRepeat.includes('disabled=')
+      && overlayRepeat.includes('Repeat last reply'),
+    'expanded voice HUD repeat control is named and natively disabled when unavailable',
+  );
+  check(
+    overlayStop.includes('aria-label="Stop response"')
+      && overlayStop.includes('disabled=')
+      && overlayStop.includes('Stop response'),
+    'expanded voice HUD stop control is named and natively disabled when unavailable',
+  );
+  check(
+    voiceStore.includes('canRepeat: boolean')
+      && voiceStore.includes('invokeVoiceAgentRepeatLast')
+      && voiceStore.includes('invokeVoiceAgentStopResponse'),
+    'voice UI store carries repeat availability and repeat/stop invokers',
+  );
+  check(
+    voiceHost.includes('canRepeat={ui.canRepeat}')
+      && voiceHost.includes("canStop={ui.phase === 'thinking' || ui.phase === 'speaking'}")
+      && voiceHost.includes('invokeVoiceAgentRepeatLast()')
+      && voiceHost.includes('invokeVoiceAgentStopResponse()'),
+    'root voice host wires repeat and stop controls to the bound chat engine',
+  );
+  check(
+    dockRepeat.includes('disabled=')
+      && dockStop.includes('disabled=')
+      && voiceDock.includes('invokeVoiceAgentRepeatLast()')
+      && voiceDock.includes('invokeVoiceAgentStopResponse()'),
+    'minimized voice dock keeps accessible repeat and stop controls with disabled states',
+  );
+  let repeatCalls = 0;
+  let stopCalls = 0;
+  const unregisterVoiceHandlers = registerVoiceAgentHandlers({
+    onClose: () => undefined,
+    onToggleMic: () => undefined,
+    onRepeatLast: () => { repeatCalls++; },
+    onStopResponse: () => { stopCalls++; },
+  });
+  invokeVoiceAgentRepeatLast();
+  invokeVoiceAgentStopResponse();
+  check(repeatCalls === 1 && stopCalls === 1, 'voice repeat and stop invokers call the bound engine exactly once');
+  unregisterVoiceHandlers();
+  invokeVoiceAgentRepeatLast();
+  invokeVoiceAgentStopResponse();
+  check(repeatCalls === 1 && stopCalls === 1, 'unregistered voice handlers cannot receive later repeat or stop actions');
 
   console.log(`${passed} passed, 0 failed`);
 }

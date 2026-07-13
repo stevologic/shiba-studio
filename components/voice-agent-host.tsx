@@ -9,7 +9,9 @@ import dynamic from 'next/dynamic';
 import {
   getVoiceAgentUiState,
   invokeVoiceAgentClose,
+  invokeVoiceAgentRepeatLast,
   invokeVoiceAgentSetSpeechSpeed,
+  invokeVoiceAgentStopResponse,
   invokeVoiceAgentToggleMic,
   setVoiceAgentMinimized,
   subscribeVoiceAgentUi,
@@ -39,7 +41,11 @@ export default function VoiceAgentHost() {
       minimized={ui.minimized}
       groupMode={!!ui.groupMode}
       speechSpeed={ui.speechSpeed ?? 1}
+      canRepeat={ui.canRepeat}
+      canStop={ui.phase === 'thinking' || ui.phase === 'speaking'}
       onSpeechSpeedChange={(speed) => invokeVoiceAgentSetSpeechSpeed(speed)}
+      onRepeatLast={() => invokeVoiceAgentRepeatLast()}
+      onStopResponse={() => invokeVoiceAgentStopResponse()}
       onMinimizedChange={setVoiceAgentMinimized}
       onToggleMic={() => invokeVoiceAgentToggleMic()}
       onClose={() => invokeVoiceAgentClose()}

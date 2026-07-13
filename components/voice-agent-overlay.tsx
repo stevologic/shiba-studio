@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Mic, MicOff, Minimize2, Volume2, X, Zap } from 'lucide-react';
+import { Mic, MicOff, Minimize2, RotateCcw, Square, Volume2, X, Zap } from 'lucide-react';
 import { GROK_TTS_SPEEDS, clampTtsSpeed, DEFAULT_TTS_SPEED } from '@/lib/xai-tts';
 
 export type VoiceAgentPhase = 'idle' | 'listening' | 'thinking' | 'speaking';
@@ -31,6 +31,12 @@ export interface VoiceAgentOverlayProps {
   speechSpeed?: number;
   /** Live change speech rate (applies to next utterance) */
   onSpeechSpeedChange?: (speed: number) => void;
+  /** A completed reply exists and can be replayed without another model call. */
+  canRepeat?: boolean;
+  /** Generation or speech is active and can be stopped. */
+  canStop?: boolean;
+  onRepeatLast?: () => void;
+  onStopResponse?: () => void;
 }
 
 const PHASE_COPY: Record<VoiceAgentPhase, { title: string; hint: string }> = {
@@ -70,6 +76,10 @@ export default function VoiceAgentOverlay({
   groupMode = false,
   speechSpeed = DEFAULT_TTS_SPEED,
   onSpeechSpeedChange,
+  canRepeat = false,
+  canStop = false,
+  onRepeatLast,
+  onStopResponse,
 }: VoiceAgentOverlayProps) {
   const [tick, setTick] = useState(0);
   const [mounted, setMounted] = useState(false);
@@ -258,6 +268,31 @@ export default function VoiceAgentOverlay({
           <div className="voice-jarvis-caption" title={caption}>
             {caption}
           </div>
+        </div>
+
+        <div className="voice-jarvis-controls" role="toolbar" aria-label="Voice response controls">
+          <button
+            type="button"
+            className="voice-jarvis-control-btn"
+            onClick={onRepeatLast}
+            disabled={!canRepeat}
+            title={canRepeat ? 'Replay the last completed reply from the beginning' : 'No completed reply to repeat yet'}
+            aria-label="Repeat last reply"
+          >
+            <RotateCcw size={14} />
+            Repeat last reply
+          </button>
+          <button
+            type="button"
+            className="voice-jarvis-control-btn"
+            onClick={onStopResponse}
+            disabled={!canStop}
+            title={canStop ? 'Stop the current answer and keep voice mode listening' : 'No active response to stop'}
+            aria-label="Stop response"
+          >
+            <Square size={13} />
+            Stop response
+          </button>
         </div>
 
         <div className="voice-jarvis-footer">

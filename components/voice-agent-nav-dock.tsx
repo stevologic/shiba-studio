@@ -5,10 +5,12 @@
  * Full HUD still renders from VoiceAgentHost when expanded.
  */
 import React, { useSyncExternalStore } from 'react';
-import { Maximize2, Mic, MicOff, Volume2, X, Zap } from 'lucide-react';
+import { Maximize2, Mic, MicOff, RotateCcw, Square, Volume2, X, Zap } from 'lucide-react';
 import {
   getVoiceAgentUiState,
   invokeVoiceAgentClose,
+  invokeVoiceAgentRepeatLast,
+  invokeVoiceAgentStopResponse,
   invokeVoiceAgentToggleMic,
   setVoiceAgentMinimized,
   subscribeVoiceAgentUi,
@@ -89,6 +91,26 @@ export default function VoiceAgentNavDock({
         </span>
       </button>
       <div className="voice-nav-dock-actions">
+        <button
+          type="button"
+          className="voice-nav-dock-action"
+          onClick={() => invokeVoiceAgentRepeatLast()}
+          disabled={!ui.canRepeat}
+          title={ui.canRepeat ? 'Repeat last reply' : 'No completed reply to repeat yet'}
+          aria-label="Repeat last reply"
+        >
+          <RotateCcw size={13} />
+        </button>
+        <button
+          type="button"
+          className="voice-nav-dock-action"
+          onClick={() => invokeVoiceAgentStopResponse()}
+          disabled={phase !== 'thinking' && phase !== 'speaking'}
+          title={phase === 'thinking' || phase === 'speaking' ? 'Stop response' : 'No active response to stop'}
+          aria-label="Stop response"
+        >
+          <Square size={12} />
+        </button>
         <button
           type="button"
           className="voice-nav-dock-action"
