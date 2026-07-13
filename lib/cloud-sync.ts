@@ -1,4 +1,4 @@
-import { promises as fs } from 'fs';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import { dataDir } from './data-paths';
 import { setApiKey } from './grok-client';
@@ -22,6 +22,10 @@ import {
   writeBinaryFile,
 } from './workspace';
 
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs = builtinFs.promises;
+
 const SYNC_FILE = dataDir('cloud-sync.json');
 
 export interface CloudSyncEntry {
@@ -40,31 +44,59 @@ interface CloudSyncState {
   lastSyncAt?: string;
 }
 
-async function loadState(): Promise<CloudSyncState> {
+const cloudSyncLockGlobal = globalThis as typeof globalThis & {
+  __shibaCloudSyncChain?: Promise<unknown>;
+};
+
+function withStateLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = cloudSyncLockGlobal.__shibaCloudSyncChain ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  cloudSyncLockGlobal.__shibaCloudSyncChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function loadStateUnlocked(): Promise<CloudSyncState> {
   try {
     const raw = await fs.readFile(SYNC_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    return { files: Array.isArray(parsed.files) ? parsed.files : [], lastSyncAt: parsed.lastSyncAt };
-  } catch {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as CloudSyncState).files)) {
+      throw new Error('Invalid cloud sync store: expected an object with a files array');
+    }
+    const state = parsed as CloudSyncState;
+    return { files: state.files, lastSyncAt: state.lastSyncAt };
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     return { files: [] };
   }
 }
 
-async function saveState(state: CloudSyncState) {
+async function saveStateUnlocked(state: CloudSyncState): Promise<void> {
   await ensureDir(path.dirname(SYNC_FILE));
-  await fs.writeFile(SYNC_FILE, JSON.stringify(state, null, 2));
+  const tmp = `${SYNC_FILE}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    await fs.rename(tmp, SYNC_FILE);
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
+async function mutateState(mutate: (state: CloudSyncState) => void | Promise<void>): Promise<void> {
+  return withStateLock(async () => {
+    const state = await loadStateUnlocked();
+    await mutate(state);
+    await saveStateUnlocked(state);
+  });
 }
 
 export async function getCloudSyncEntries(): Promise<CloudSyncEntry[]> {
-  return (await loadState()).files;
+  return withStateLock(async () => (await loadStateUnlocked()).files);
 }
 
 export async function removeCloudSyncByLocalName(localName: string): Promise<void> {
-  const state = await loadState();
-  const next = state.files.filter((f) => f.localName !== localName);
-  if (next.length === state.files.length) return;
-  state.files = next;
-  await saveState(state);
+  await mutateState((state) => {
+    state.files = state.files.filter((f) => f.localName !== localName);
+  });
 }
 
 export async function syncUploadToCloud(): Promise<{
@@ -79,12 +111,13 @@ export async function syncUploadToCloud(): Promise<{
 
   const uploadsDir = await getGlobalUploadsDir();
   const localFiles = await listGlobalUploadFiles();
-  const state = await loadState();
+  const state = await withStateLock(loadStateUnlocked);
   const byName = new Map(state.files.map((f) => [f.localName, f]));
 
   const uploaded: string[] = [];
   const skipped: string[] = [];
   const errors: string[] = [];
+  const syncedEntries: CloudSyncEntry[] = [];
 
   for (const file of localFiles) {
     const existing = byName.get(file.name);
@@ -113,17 +146,21 @@ export async function syncUploadToCloud(): Promise<{
         publicUrl,
         cloudUrl,
       };
-      const idx = state.files.findIndex((f) => f.localName === file.name);
-      if (idx >= 0) state.files[idx] = entry;
-      else state.files.push(entry);
+      syncedEntries.push(entry);
       uploaded.push(file.name);
     } catch (e) {
       errors.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
-  state.lastSyncAt = new Date().toISOString();
-  await saveState(state);
+  await mutateState((current) => {
+    for (const entry of syncedEntries) {
+      const idx = current.files.findIndex((f) => f.localName === entry.localName);
+      if (idx >= 0) current.files[idx] = entry;
+      else current.files.push(entry);
+    }
+    current.lastSyncAt = new Date().toISOString();
+  });
   return { uploaded, skipped, errors };
 }
 
@@ -139,12 +176,13 @@ export async function syncDownloadFromCloud(): Promise<{
 
   const uploadsDir = await getGlobalUploadsDir();
   const cloudFiles = await listXaiFiles();
-  const state = await loadState();
+  const state = await withStateLock(loadStateUnlocked);
   const byId = new Map(state.files.map((f) => [f.xaiFileId, f]));
 
   const downloaded: string[] = [];
   const skipped: string[] = [];
   const errors: string[] = [];
+  const syncedEntries: CloudSyncEntry[] = [];
 
   for (const cloud of cloudFiles) {
     const name = sanitizeUploadName(cloud.filename || `file-${cloud.id}`);
@@ -186,17 +224,23 @@ export async function syncDownloadFromCloud(): Promise<{
         publicUrl: cloud.public_url || (cloudUrl.startsWith('http') ? cloudUrl : undefined),
         cloudUrl,
       };
-      const idx = state.files.findIndex((f) => f.xaiFileId === cloud.id || f.localName === name);
-      if (idx >= 0) state.files[idx] = entry;
-      else state.files.push(entry);
+      syncedEntries.push(entry);
       downloaded.push(name);
     } catch (e) {
       errors.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
-  state.lastSyncAt = new Date().toISOString();
-  await saveState(state);
+  await mutateState((current) => {
+    for (const entry of syncedEntries) {
+      const idx = current.files.findIndex(
+        (f) => f.xaiFileId === entry.xaiFileId || f.localName === entry.localName,
+      );
+      if (idx >= 0) current.files[idx] = entry;
+      else current.files.push(entry);
+    }
+    current.lastSyncAt = new Date().toISOString();
+  });
   return { downloaded, skipped, errors };
 }
 

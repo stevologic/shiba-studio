@@ -15,6 +15,8 @@ const CHAIN = [
   'verify-page-chrome.ts',
   'verify-runtime.ts',
   'verify-tool-dispatch.ts',
+  'verify-persistence-safety.ts',
+  'verify-memory-learning.ts',
   'verify-mdns.ts',
   'verify-voice-vad.ts',
   'verify-shell-state.ts',
@@ -46,13 +48,14 @@ async function main() {
   ];
 
   let exitCode = 0;
+  const tsxCli = path.join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   for (const script of CHAIN) {
     const started = Date.now();
-    const result = spawnSync('npx', ['tsx', path.join('scripts', script)], {
+    const result = spawnSync(process.execPath, [tsxCli, path.join('scripts', script)], {
       cwd: ROOT,
       env: { ...process.env, GROK_GOAL_SCRATCH: GOAL_SCRATCH },
       encoding: 'utf8',
-      shell: true,
+      shell: false,
     });
     const elapsedMs = Date.now() - started;
     // Node-on-Windows libuv can assert during process-exit teardown
@@ -67,6 +70,7 @@ async function main() {
     lines.push(`=== ${script} exit=${effectiveStatus} elapsedMs=${elapsedMs}${teardownCrash ? ' (libuv teardown crash ignored — all tests passed)' : ''} ===`);
     if (result.stdout) lines.push(result.stdout.trimEnd());
     if (result.stderr) lines.push(result.stderr.trimEnd());
+    if (result.error) lines.push(result.error.stack || result.error.message);
     lines.push('');
     if (effectiveStatus !== 0) {
       exitCode = effectiveStatus;
@@ -75,6 +79,7 @@ async function main() {
       console.error(`\n===== FAILED: ${script} (exit ${effectiveStatus}) =====`);
       if (result.stdout) console.error(result.stdout.trimEnd());
       if (result.stderr) console.error(result.stderr.trimEnd());
+      if (result.error) console.error(result.error.stack || result.error.message);
       console.error(`===== end ${script} =====\n`);
       break;
     }

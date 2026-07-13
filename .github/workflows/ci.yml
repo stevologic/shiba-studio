@@ -60,6 +60,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      # Moderate advisories currently exist inside Next.js's own bundled deps
-      # (see SECURITY.md); gate CI on high/critical only.
+      # Production dependencies are currently clean; retain a high/critical
+      # gate so newly disclosed severe issues fail CI immediately.
       - run: npm audit --audit-level=high

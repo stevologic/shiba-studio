@@ -1,12 +1,13 @@
-// Global search across chats, runs, and the audit log. Runs and audit use
+// Global search across chats, memories, runs, and the audit log. Runs and audit use
 // SQLite FTS5 (see the v2 migration in db.ts); chats scan the JSON store via
 // the existing searchChatSessions.
 
 import { getDb } from './db';
 import { searchChatSessions } from './chat-sessions';
+import { listMemories } from './agent-memory';
 
 export interface SearchHit {
-  kind: 'chat' | 'run' | 'log';
+  kind: 'chat' | 'memory' | 'run' | 'log';
   id: string;
   title: string;
   snippet: string;
@@ -83,6 +84,18 @@ export async function globalSearch(raw: string, limitPerKind = 6): Promise<Searc
       snippet: (m?.content || '').slice(0, 160),
       ts: s.updatedAt,
       href: `/chat/${encodeURIComponent(s.id)}`,
+    });
+  }
+
+  const memories = listMemories({ query: q, limit: limitPerKind }).entries;
+  for (const memory of memories) {
+    hits.push({
+      kind: 'memory',
+      id: String(memory.id),
+      title: memory.key,
+      snippet: memory.content.slice(0, 160),
+      ts: memory.updatedAt,
+      href: `/memories?q=${encodeURIComponent(q)}`,
     });
   }
 

@@ -339,6 +339,8 @@ export default function StudioTerminal() {
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [maximized, setMaximized] = useState(false);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const dragHeightRef = useRef<number | null>(null);
+  const dragFrameRef = useRef<number | null>(null);
 
   // Subscribe to runtime status for UI chrome.
   useEffect(() => {
@@ -415,6 +417,7 @@ export default function StudioTerminal() {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    const timers: number[] = [];
     (async () => {
       if (!hostRef.current) return;
       await ensureXterm(hostRef.current);
@@ -424,13 +427,14 @@ export default function StudioTerminal() {
       } else {
         fitTerminal();
       }
-      setTimeout(fitTerminal, 50);
-      setTimeout(fitTerminal, 200);
+      timers.push(window.setTimeout(fitTerminal, 50));
+      timers.push(window.setTimeout(fitTerminal, 200));
     })();
     return () => {
       cancelled = true;
+      for (const timer of timers) window.clearTimeout(timer);
     };
-  }, [open, height, maximized]);
+  }, [open, maximized]);
 
   useEffect(() => {
     if (!open) return;
@@ -445,9 +449,19 @@ export default function StudioTerminal() {
       const delta = dragRef.current.startY - e.clientY;
       const maxH = Math.floor(window.innerHeight * MAX_HEIGHT_RATIO);
       const next = Math.min(maxH, Math.max(MIN_HEIGHT, dragRef.current.startH + delta));
-      persistHeight(next);
+      dragHeightRef.current = next;
+      if (dragFrameRef.current == null) {
+        dragFrameRef.current = window.requestAnimationFrame(() => {
+          dragFrameRef.current = null;
+          if (dragHeightRef.current != null) setHeight(dragHeightRef.current);
+        });
+      }
     };
     const onUp = () => {
+      if (dragFrameRef.current != null) window.cancelAnimationFrame(dragFrameRef.current);
+      dragFrameRef.current = null;
+      if (dragHeightRef.current != null) persistHeight(dragHeightRef.current);
+      dragHeightRef.current = null;
       dragRef.current = null;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
@@ -458,6 +472,7 @@ export default function StudioTerminal() {
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      if (dragFrameRef.current != null) window.cancelAnimationFrame(dragFrameRef.current);
     };
   }, [persistHeight]);
 

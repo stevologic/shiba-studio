@@ -1,9 +1,17 @@
-# Commercial license (summary)
+# Commercial licensing option
 
 **Copyright (c) 2025–2026 Stephen M Abbott (stevologic)**
 
-Shiba Studio is dual-licensed. This document describes the **commercial** option.
-It is **not** a substitute for a signed commercial agreement.
+Shiba Studio is offered under two licensing options:
+
+1. **GNU Affero General Public License v3.0 or later** — the open-source terms
+   in [LICENSE](LICENSE).
+2. A separately negotiated **commercial license** for use without AGPL
+   obligations.
+
+This document summarizes the commercial option. It is **not** a substitute for
+a signed commercial agreement. Until a commercial agreement is in force, the
+AGPL-3.0-or-later terms apply.
 
 ## When you need a commercial license
 
@@ -14,7 +22,8 @@ Use (or negotiate) a commercial license if you want to:
 - Redistribute binaries or hosted instances under proprietary terms
 - Avoid AGPL copyleft / network-source obligations for your deployment
 
-If none of that applies and you are fine with AGPL-3.0-or-later, use **LICENSE-AGPL-3.0** instead—no commercial agreement required.
+If none of that applies and you are fine with AGPL-3.0-or-later, use
+[LICENSE](LICENSE) instead—no commercial agreement is required.
 
 ## What a commercial license typically grants
 
@@ -38,4 +47,11 @@ To obtain a commercial license, contact the copyright holder (**stevologic** / S
 
 ## Relationship to AGPL
 
-Until a commercial agreement is executed, the software is available only under the **GNU Affero General Public License v3.0 or later** (see **LICENSE-AGPL-3.0** and **LICENSE**).
+Until a commercial agreement is executed, the software is available only under
+the **GNU Affero General Public License v3.0 or later** in [LICENSE](LICENSE).
+
+## Third-party code
+
+Dependencies and other third-party packages retain their own licenses. The
+AGPL/commercial choice described here applies to the Shiba Studio project
+source published by stevologic, not to third-party dependencies.

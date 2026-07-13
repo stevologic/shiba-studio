@@ -22,9 +22,9 @@ export function cloudFileViewUrl(fileId: string): string {
   return `/api/workspace/cloud-file?fileId=${encodeURIComponent(fileId)}`;
 }
 
-async function cloudFetch(url: string, init: RequestInit = {}): Promise<Response> {
+async function cloudFetch(url: string, init: RequestInit = {}, keyOverride?: string): Promise<Response> {
   const { fetchCloudWithAuth } = await import('./xai-oauth');
-  return fetchCloudWithAuth(url, init);
+  return fetchCloudWithAuth(url, init, { keyOverride });
 }
 
 export async function listXaiFiles(): Promise<XaiFileMeta[]> {
@@ -56,7 +56,7 @@ export async function listXaiFiles(): Promise<XaiFileMeta[]> {
   return all;
 }
 
-export async function uploadXaiFile(filename: string, content: Buffer): Promise<XaiFileMeta> {
+export async function uploadXaiFile(filename: string, content: Buffer, keyOverride?: string): Promise<XaiFileMeta> {
   const form = new FormData();
   form.append('purpose', 'assistants');
   form.append('file', new Blob([new Uint8Array(content)]), filename);
@@ -64,7 +64,7 @@ export async function uploadXaiFile(filename: string, content: Buffer): Promise<
   const res = await cloudFetch(`${XAI_BASE}/files`, {
     method: 'POST',
     body: form,
-  });
+  }, keyOverride);
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`xAI upload ${res.status}: ${txt}`);

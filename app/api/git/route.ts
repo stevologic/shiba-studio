@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
-import { gitCheckout, gitCommit, gitCreatePr, gitStatus } from '@/lib/git-actions';
+import { gitCheckout, gitCommit, gitCreatePr, gitDiff, gitLog, gitPull, gitPush, gitStatus } from '@/lib/git-actions';
 import { loadConfig } from '@/lib/persistence';
 import { resolveWorkspace } from '@/lib/workspace';
 
@@ -22,6 +22,10 @@ export async function POST(req: NextRequest) {
     const action = String(body.action || '');
     let result: string;
     if (action === 'status') result = await gitStatus(cwd);
+    else if (action === 'diff') result = await gitDiff(cwd, !!body.staged);
+    else if (action === 'log') result = await gitLog(cwd, Number(body.count));
+    else if (action === 'pull') result = await gitPull(cwd);
+    else if (action === 'push') result = await gitPush(cwd);
     else if (action === 'checkout') result = await gitCheckout(cwd, String(body.branch || ''));
     else if (action === 'commit') result = await gitCommit(cwd, String(body.message || ''));
     else if (action === 'pr') result = await gitCreatePr(cwd, String(body.title || ''), body.body ? String(body.body) : undefined);

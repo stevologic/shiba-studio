@@ -1,10 +1,14 @@
 // User-created skills — stored in data/custom-skills.json and merged with the
 // built-in SKILL_PRESETS everywhere skills are listed or injected into prompts.
 
-import { promises as fs } from 'fs';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import { dataDir } from './data-paths';
 import { SKILL_CATEGORIES, SKILL_PRESETS, type SkillPreset } from './skills-catalog';
+
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs = builtinFs.promises;
 
 export interface CustomSkill extends SkillPreset {
   custom: true;
@@ -14,29 +18,51 @@ export interface CustomSkill extends SkillPreset {
 
 const storeFile = () => path.join(dataDir(), 'custom-skills.json');
 
-async function loadStore(): Promise<CustomSkill[]> {
+const customSkillsLockGlobal = globalThis as typeof globalThis & {
+  __shibaCustomSkillsChain?: Promise<unknown>;
+};
+
+function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = customSkillsLockGlobal.__shibaCustomSkillsChain ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  customSkillsLockGlobal.__shibaCustomSkillsChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function loadStoreUnlocked(): Promise<CustomSkill[]> {
   try {
     const raw = await fs.readFile(storeFile(), 'utf8');
-    const list = JSON.parse(raw);
-    return Array.isArray(list) ? list : [];
-  } catch {
+    const list: unknown = JSON.parse(raw);
+    if (!Array.isArray(list)) throw new Error('Invalid custom skills store: expected a JSON array');
+    return list as CustomSkill[];
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     return [];
   }
 }
 
-async function saveStore(skills: CustomSkill[]): Promise<void> {
+async function saveStoreUnlocked(skills: CustomSkill[]): Promise<void> {
   await fs.mkdir(dataDir(), { recursive: true });
-  await fs.writeFile(storeFile(), JSON.stringify(skills, null, 2));
+  const target = storeFile();
+  const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(skills, null, 2)}\n`, 'utf8');
+    await fs.rename(tmp, target);
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
 }
 
 export async function listCustomSkills(): Promise<CustomSkill[]> {
-  return loadStore();
+  return withStoreLock(loadStoreUnlocked);
 }
 
 /** Built-in presets + user-created skills — the full catalog for prompts and pickers. */
 export async function getAllSkillPresets(): Promise<SkillPreset[]> {
-  const custom = await loadStore();
-  return [...SKILL_PRESETS, ...custom];
+  return withStoreLock(async () => {
+    const custom = await loadStoreUnlocked();
+    return [...SKILL_PRESETS, ...custom];
+  });
 }
 
 function slugify(name: string): string {
@@ -59,25 +85,27 @@ export async function createCustomSkill(input: {
 }): Promise<CustomSkill> {
   const err = validateFields(input);
   if (err) throw new Error(err);
-  const custom = await loadStore();
-  const taken = new Set([...SKILL_PRESETS.map((s) => s.id), ...custom.map((s) => s.id)]);
-  const base = slugify(input.name) || 'skill';
-  let id = base;
-  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
-  const now = new Date().toISOString();
-  const skill: CustomSkill = {
-    id,
-    name: input.name.trim(),
-    description: (input.description || '').trim(),
-    category: input.category,
-    promptHint: (input.promptHint || '').trim(),
-    custom: true,
-    createdAt: now,
-    updatedAt: now,
-  };
-  custom.push(skill);
-  await saveStore(custom);
-  return skill;
+  return withStoreLock(async () => {
+    const custom = await loadStoreUnlocked();
+    const taken = new Set([...SKILL_PRESETS.map((s) => s.id), ...custom.map((s) => s.id)]);
+    const base = slugify(input.name) || 'skill';
+    let id = base;
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+    const now = new Date().toISOString();
+    const skill: CustomSkill = {
+      id,
+      name: input.name.trim(),
+      description: (input.description || '').trim(),
+      category: input.category,
+      promptHint: (input.promptHint || '').trim(),
+      custom: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    custom.push(skill);
+    await saveStoreUnlocked(custom);
+    return skill;
+  });
 }
 
 export async function updateCustomSkill(
@@ -86,22 +114,26 @@ export async function updateCustomSkill(
 ): Promise<CustomSkill> {
   const err = validateFields(patch);
   if (err) throw new Error(err);
-  const custom = await loadStore();
-  const idx = custom.findIndex((s) => s.id === id);
-  if (idx < 0) throw new Error('Custom skill not found');
-  custom[idx] = {
-    ...custom[idx],
-    ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
-    ...(patch.description !== undefined ? { description: patch.description.trim() } : {}),
-    ...(patch.category !== undefined ? { category: patch.category } : {}),
-    ...(patch.promptHint !== undefined ? { promptHint: patch.promptHint.trim() } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  await saveStore(custom);
-  return custom[idx];
+  return withStoreLock(async () => {
+    const custom = await loadStoreUnlocked();
+    const idx = custom.findIndex((s) => s.id === id);
+    if (idx < 0) throw new Error('Custom skill not found');
+    custom[idx] = {
+      ...custom[idx],
+      ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+      ...(patch.description !== undefined ? { description: patch.description.trim() } : {}),
+      ...(patch.category !== undefined ? { category: patch.category } : {}),
+      ...(patch.promptHint !== undefined ? { promptHint: patch.promptHint.trim() } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveStoreUnlocked(custom);
+    return custom[idx];
+  });
 }
 
 export async function deleteCustomSkill(id: string): Promise<void> {
-  const custom = await loadStore();
-  await saveStore(custom.filter((s) => s.id !== id));
+  return withStoreLock(async () => {
+    const custom = await loadStoreUnlocked();
+    await saveStoreUnlocked(custom.filter((s) => s.id !== id));
+  });
 }

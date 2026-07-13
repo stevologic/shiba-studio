@@ -10,6 +10,7 @@ import { dataDir } from './data-paths';
 type DatabaseSync = DatabaseSyncType;
 
 let db: DatabaseSync | null = null;
+let maintenanceDepth = 0;
 
 /**
  * node:sqlite ships with Node 22.5+. Loaded via getBuiltinModule (works in
@@ -230,6 +231,7 @@ function runMigrations(database: DatabaseSync): void {
 }
 
 export function getDb(): DatabaseSync {
+  if (maintenanceDepth > 0) throw new Error('Database maintenance in progress; retry shortly');
   if (db) return db;
   const { DatabaseSync } = loadSqlite();
   db = new DatabaseSync(dbPath());
@@ -291,6 +293,33 @@ export function closeDb(): void {
   try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* best-effort */ }
   try { db.close(); } catch { /* already closed */ }
   db = null;
+}
+
+/** Prevent another request from reopening the shared handle while a validated
+ * backup is swapped into place. The release callback is idempotent. */
+export function beginDbMaintenance(): () => void {
+  if (maintenanceDepth > 0) throw new Error('Database maintenance is already in progress');
+  maintenanceDepth = 1;
+  closeDb();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    maintenanceDepth = 0;
+  };
+}
+
+/** Open a staged database separately and run SQLite's structural check before
+ * it is allowed anywhere near the live file. */
+export function validateDatabaseFile(file: string): void {
+  const { DatabaseSync } = loadSqlite();
+  const candidate = new DatabaseSync(file);
+  try {
+    const row = candidate.prepare('PRAGMA quick_check').get() as { quick_check?: string };
+    if (row?.quick_check !== 'ok') throw new Error(`SQLite quick_check failed: ${row?.quick_check || 'unknown error'}`);
+  } finally {
+    candidate.close();
+  }
 }
 
 /**

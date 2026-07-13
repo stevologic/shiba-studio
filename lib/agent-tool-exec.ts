@@ -1,5 +1,5 @@
 import path from 'path';
-import type { Agent, AgentRun } from './types';
+import type { Agent, AgentRun, IntegrationCreds } from './types';
 import { projectRoot } from './data-paths';
 import { listFiles, readFile, writeFile, shellExec } from './workspace';
 
@@ -22,7 +22,24 @@ import { detectGrokCli, runGrokCliPrompt } from './grok-cli';
 import { listEnabledMcpServers } from './mcp';
 import { invokeMcpTool } from './mcp-client';
 
-export async function executeAgentTool(
+export function executeAgentTool(
+  name: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced tool JSON; scoped worker validates each case
+  args: any,
+  agent: Agent,
+  run: Partial<AgentRun>,
+  workDir: string,
+  runIdForBrowser?: string,
+  integrationCreds?: IntegrationCreds,
+  signal?: AbortSignal,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tool results are heterogeneous and serialized to the model
+): Promise<{ result: any; sideEffect?: string; screenshot?: string }> {
+  return Ints.withIntegrationCreds(integrationCreds, () =>
+    executeAgentToolScoped(name, args, agent, run, workDir, runIdForBrowser, signal),
+  );
+}
+
+async function executeAgentToolScoped(
   name: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tool args arrive as model-produced JSON; each case coerces its own fields
   args: any,
@@ -30,8 +47,10 @@ export async function executeAgentTool(
   run: Partial<AgentRun>,
   workDir: string,
   runIdForBrowser?: string,
+  signal?: AbortSignal,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- results are tool-shaped JSON, serialized straight back to the model
 ): Promise<{ result: any; sideEffect?: string; screenshot?: string }> {
+  if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Tool execution aborted');
   // Global Capabilities → Tools toggle — never run a disabled tool even if the
   // model still tries (stale context, race after toggle, etc.).
   try {
@@ -64,13 +83,13 @@ export async function executeAgentTool(
         return { result: `wrote ${args.path} (${(args.content || '').length} chars)`, sideEffect: `wrote file ${args.path}` };
       }
       case 'shell_exec': {
-        const out = await shellExec(args.command, workDir, 45000);
+        const out = await shellExec(args.command, workDir, 45000, signal);
         return { result: { stdout: out.stdout.slice(0, 4000), stderr: out.stderr.slice(0, 1200), code: out.code }, sideEffect: `shell: ${args.command}` };
       }
       case 'terminal_exec': {
         const { runTerminalCommand } = await import('./terminal-server');
         const timeoutMs = args.timeoutMs != null ? Number(args.timeoutMs) : undefined;
-        const out = await runTerminalCommand(String(args.command || ''), { timeoutMs });
+        const out = await runTerminalCommand(String(args.command || ''), { timeoutMs, signal });
         return {
           result: {
             ok: out.ok,
@@ -136,6 +155,15 @@ export async function executeAgentTool(
         const { memoryRecall } = await import('./agent-power-tools');
         const entries = memoryRecall(agent.id, args.query ? String(args.query) : undefined);
         return { result: entries, sideEffect: `recalled ${entries.length} memories` };
+      }
+      case 'memory_forget': {
+        const { deleteMemoryByKey } = await import('./agent-memory');
+        const key = String(args.key || '').trim();
+        const removed = deleteMemoryByKey(agent.id, key);
+        return {
+          result: { removed, key },
+          sideEffect: removed ? `forgot "${key}"` : `memory "${key}" was not found`,
+        };
       }
       case 'board_list_tasks': {
         const { listBoardTasks } = await import('./board');
@@ -468,7 +496,7 @@ export async function executeAgentTool(
           };
         }
         const { connectMcpServer, disconnectMcpClient } = await import('./mcp-client');
-        const client = await connectMcpServer(server, 25_000);
+        const client = await connectMcpServer(server, 25_000, signal);
         try {
           const listed = await client.listTools();
           const tools = (listed.tools || []).map((t) => ({ name: t.name, description: t.description }));
@@ -484,7 +512,7 @@ export async function executeAgentTool(
         if (!server) {
           return { result: { error: 'MCP server not found' }, sideEffect: 'mcp_invoke failed' };
         }
-        const out = await invokeMcpTool(server, String(args.tool || ''), args.arguments || {});
+        const out = await invokeMcpTool(server, String(args.tool || ''), args.arguments || {}, signal);
         return {
           result: out.ok ? out.result : { error: out.error },
           sideEffect: `mcp_invoke ${args.tool} on ${server.name}`,
@@ -504,6 +532,7 @@ export async function executeAgentTool(
           check: !!args.check,
           bestOfN: args.best_of_n ? Number(args.best_of_n) : undefined,
           jsonSchema: args.json_schema ? String(args.json_schema) : undefined,
+          signal,
         });
         return {
           result: {

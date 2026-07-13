@@ -38,17 +38,29 @@ Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dism
 
 | Command | What it does |
 | --- | --- |
+| `/clear` | Clear the current conversation after confirmation |
+| `/agent <name\|grok\|all>` | Switch who answers the chat |
+| `/model <name>` | Switch the Grok session model; selected agents keep their configured model |
+| `/project <name\|off>` | Link or detach project context |
 | `/git status` | Branch, changed files, and recent commits of the workspace |
+| `/git diff [--staged]` | Show unstaged or staged changes |
+| `/git log [count]` | Show up to 50 recent commits |
 | `/git checkout <branch>` | Switch to a branch, or create it from HEAD |
 | `/git commit <message>` | Stage everything and commit |
+| `/git pull` | Fast-forward the current branch |
+| `/git push` | Push the current branch to origin |
 | `/git pr <title> \| <body>` | Push the branch and open a GitHub pull request |
 | `/annotate` | Open the annotation sub-browser (below) |
 | `/workspace` | Open the folder picker — bind this chat to a repo/folder (below) |
 | `/workspace <path>` | Bind directly to a path; `/workspace off` detaches |
 | `/search <query>` | Web search (DuckDuckGo, keyless) — results with links |
 | `/fetch <url>` | Read a page as clean text into the conversation |
-| `/remember <key> \| <content>` | Save a fact that persists across every chat |
-| `/recall [keyword]` | List saved memories |
+| `/task <title> \| <description>` | Create a card in the shared Board backlog |
+| `/board [status\|query]` | List or filter Board cards |
+| `/remember <key> \| <content>` | Save a fact for shared chat or the selected agent |
+| `/recall [keyword]` | List matching active memories |
+| `/forget <key>` | Delete one exact memory key |
+| `/memories` | Open the full memory manager |
 | `/note <path> \| <content>` | Create an Obsidian note in your vault |
 | `/x <text>` | Post to X through the configured integration (agents with the X scope can post too, via `x_post`) |
 | `/help` | The full reference, in chat |

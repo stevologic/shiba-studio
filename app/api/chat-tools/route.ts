@@ -1,8 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { memoryRecall, memorySave, webFetch, webSearch } from '@/lib/agent-power-tools';
+import { webFetch, webSearch } from '@/lib/agent-power-tools';
+import {
+  CHAT_MEMORY_SCOPE,
+  deleteMemoryByKey,
+  recallMemories,
+  saveMemory,
+} from '@/lib/agent-memory';
 
 /** Persistent chat memory shares the agent_memory table under a fixed scope. */
-const CHAT_MEMORY_SCOPE = '__chat__';
+class InvalidMemoryScopeError extends Error {}
+
+async function resolveMemoryScope(requested: unknown): Promise<string> {
+  const scope = requested === undefined || requested === null || String(requested).trim() === ''
+    ? CHAT_MEMORY_SCOPE
+    : String(requested).trim();
+  if (scope === CHAT_MEMORY_SCOPE) return scope;
+  const { loadAgents } = await import('@/lib/persistence');
+  if ((await loadAgents()).some((agent) => agent.id === scope)) return scope;
+  throw new InvalidMemoryScopeError(`Unknown memory scope "${scope}". Select an existing agent or shared chat memory.`);
+}
 
 /** Backs Grok Chat's research/memory slash commands (/fetch /search /remember /recall). */
 export async function POST(req: NextRequest) {
@@ -21,15 +37,28 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'remember') {
-      const entry = memorySave(CHAT_MEMORY_SCOPE, String(body.key || ''), String(body.content || ''));
+      const scope = await resolveMemoryScope(body.agentId);
+      const entry = saveMemory(scope, String(body.key || ''), String(body.content || ''), {
+        source: 'manual', confidence: 1, status: 'active',
+      }).entry;
       const { audit } = await import('@/lib/audit-log');
-      audit('chat', 'memory saved', entry.key);
+      audit('chat', 'memory saved', entry.key, { memoryId: entry.id, scope });
       return NextResponse.json({ ok: true, entry });
     }
 
     if (action === 'recall') {
-      const entries = memoryRecall(CHAT_MEMORY_SCOPE, body.query ? String(body.query) : undefined);
+      const scope = await resolveMemoryScope(body.agentId);
+      const entries = recallMemories(scope, body.query ? String(body.query) : undefined);
       return NextResponse.json({ ok: true, entries });
+    }
+
+    if (action === 'forget') {
+      const scope = await resolveMemoryScope(body.agentId);
+      const key = String(body.key || '').trim();
+      const removed = deleteMemoryByKey(scope, key);
+      const { audit } = await import('@/lib/audit-log');
+      if (removed) audit('chat', 'memory deleted', key, { scope });
+      return NextResponse.json({ ok: true, removed });
     }
 
     // Post to X through the configured integration (same path as the agents'
@@ -48,6 +77,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: false, error: `Unknown chat tool "${action}"` }, { status: 400 });
   } catch (e: unknown) {
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'chat tool failed' }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : 'chat tool failed' },
+      { status: e instanceof InvalidMemoryScopeError ? 400 : 500 },
+    );
   }
 }

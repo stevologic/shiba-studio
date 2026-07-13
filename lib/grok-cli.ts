@@ -2,6 +2,7 @@ import type { ChildProcess } from 'child_process';
 import type { ChatStreamEvent } from './chat-types';
 import { projectRoot } from './data-paths';
 import { parseModelRef } from './model-providers';
+import { terminateProcessTree } from './process-control';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 
@@ -53,6 +54,7 @@ async function spawnCli(
     env: process.env,
     shell: false,
     windowsHide: true,
+    detached: process.platform !== 'win32',
   });
 }
 
@@ -301,6 +303,9 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
   stderr: string;
   code: number;
 }> {
+  if (opts.signal?.aborted) {
+    return { ok: false, stdout: '', stderr: 'Aborted', code: -1 };
+  }
   const status = await detectGrokCli();
   if (!status.installed) {
     return {
@@ -323,18 +328,25 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let stopping = false;
+    let onAbort = () => {};
 
     const finish = (result: { ok: boolean; stdout: string; stderr: string; code: number }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      void cleanup();
-      resolve(result);
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+      void cleanup().finally(() => resolve(result));
+    };
+
+    const stop = (result: { ok: boolean; stdout: string; stderr: string; code: number }) => {
+      if (settled || stopping) return;
+      stopping = true;
+      void terminateProcessTree(child).finally(() => finish(result));
     };
 
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      finish({
+      stop({
         ok: false,
         stdout,
         stderr: `${stderr}\n(Grok CLI timed out after ${timeoutMs}ms)`.trim(),
@@ -345,9 +357,10 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
     child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
     child.on('error', (err) => {
-      finish({ ok: false, stdout, stderr: friendlySpawnError(err), code: 1 });
+      if (!stopping) finish({ ok: false, stdout, stderr: friendlySpawnError(err), code: 1 });
     });
     child.on('close', (code) => {
+      if (stopping) return;
       finish({
         ok: code === 0,
         stdout,
@@ -356,10 +369,11 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
       });
     });
 
-    opts.signal?.addEventListener('abort', () => {
-      child.kill('SIGTERM');
-      finish({ ok: false, stdout, stderr: 'Aborted', code: -1 });
-    }, { once: true });
+    onAbort = () => {
+      stop({ ok: false, stdout, stderr: 'Aborted', code: -1 });
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    if (opts.signal?.aborted) onAbort();
   });
 }
 
@@ -397,14 +411,25 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
     const buffer: string[] = [];
     let wake: (() => void) | null = null;
     let closed = false;
+    let stopping: Promise<void> | null = null;
 
     const wait = () => new Promise<void>((resolve) => {
       wake = resolve;
     });
 
+    const stopChild = () => {
+      if (!stopping) {
+        stopping = terminateProcessTree(child).finally(() => {
+          closed = true;
+          wake?.();
+        });
+      }
+      return stopping;
+    };
+
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
       stderr += `\n(Grok CLI timed out after ${timeoutMs}ms)`;
+      void stopChild();
     }, timeoutMs);
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -428,11 +453,13 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
       wake?.();
     });
 
-    opts.signal?.addEventListener('abort', () => {
-      child.kill('SIGTERM');
+    const onAbort = () => {
       closed = true;
       wake?.();
-    }, { once: true });
+      void stopChild();
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    if (opts.signal?.aborted) onAbort();
 
     try {
       while (!closed || buffer.length) {
@@ -446,6 +473,10 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
         }
       }
     } finally {
+      clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+      if (child.exitCode === null && child.signalCode === null) await stopChild();
+      else if (stopping) await stopping;
       await cleanup();
     }
 

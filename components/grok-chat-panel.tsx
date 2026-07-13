@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, FileText, FolderGit2, GitBranch, Mic, MicOff,
   Paperclip, Pencil, RefreshCw, RotateCcw, Send, Sparkles, Square, Terminal, Volume2, VolumeX, X, Zap,
@@ -53,28 +54,17 @@ import {
   type LiveChatUiMessage,
 } from '@/lib/chat-live-runs';
 import { getStickyChatTarget, setStickyChatTarget } from '@/lib/chat-target-store';
+import {
+  parseSlashCommand,
+  renderChatCommandHelp,
+  slashCommandMatches,
+  type ChatCommandDefinition,
+} from '@/lib/chat-commands';
 import { v4 as uuidv4 } from 'uuid';
 import { createPortal } from 'react-dom';
 
 const SubBrowser = dynamic(() => import('@/components/sub-browser'));
 const WorkspacePicker = dynamic(() => import('@/components/workspace-picker'));
-/** Slash-command catalog — drives the composer autocomplete and /help. */
-const SLASH_COMMANDS: Array<{ cmd: string; insert: string; desc: string }> = [
-  { cmd: '/git status', insert: '/git status', desc: 'Branch, changed files, recent commits' },
-  { cmd: '/git checkout <branch>', insert: '/git checkout ', desc: 'Switch to a branch, or create it' },
-  { cmd: '/git commit <message>', insert: '/git commit ', desc: 'Stage everything and commit' },
-  { cmd: '/git pr <title> | <body>', insert: '/git pr ', desc: 'Push branch and open a GitHub PR' },
-  { cmd: '/annotate', insert: '/annotate', desc: 'Sub-browser: highlight an element for refinement' },
-  { cmd: '/workspace <path>', insert: '/workspace ', desc: 'Bind this chat to a folder (blank opens the picker)' },
-  { cmd: '/search <query>', insert: '/search ', desc: 'Web search results into this chat' },
-  { cmd: '/fetch <url>', insert: '/fetch ', desc: 'Read a page as text into this chat' },
-  { cmd: '/remember <key> | <content>', insert: '/remember ', desc: 'Save a persistent memory' },
-  { cmd: '/recall <keyword>', insert: '/recall ', desc: 'List saved memories' },
-  { cmd: '/note <path> | <content>', insert: '/note ', desc: 'Create an Obsidian note' },
-  { cmd: '/x <text>', insert: '/x ', desc: 'Post to X through the configured integration' },
-  { cmd: '/help', insert: '/help', desc: 'Full command reference' },
-];
-
 export type ChatTarget = 'grok' | 'all' | string;
 
 type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' | 'cli'; reasoning?: boolean };
@@ -95,7 +85,7 @@ function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?:
 
 interface GrokChatPanelProps {
   chatModel: string;
-  onChatModelChange: (model: string) => void;
+  onChatModelChange: (model: string) => void | Promise<void>;
   availableModels: ModelOption[];
   modelsLoading: boolean;
   modelsError: string | null;
@@ -106,7 +96,7 @@ interface GrokChatPanelProps {
   session?: ChatSession | null;
   onSessionUpdated?: () => void;
   projects?: Project[];
-  onProjectLinkChange?: (projectId: string | null) => void;
+  onProjectLinkChange?: (projectId: string | null) => void | Promise<void>;
   /** Settings default workspace — picker opens here when chat has no binding. */
   defaultWorkspace?: string;
 }
@@ -312,6 +302,7 @@ export default function GrokChatPanel({
   onProjectLinkChange,
   defaultWorkspace = '',
 }: GrokChatPanelProps) {
+  const router = useRouter();
   const isSessionMode = !!session && !onProjectUpdated;
   // Sticky agent for session chats — survives remount when switching sessions.
   // Project/direct mode still uses local init only.
@@ -387,13 +378,11 @@ export default function GrokChatPanel({
   const [slashIdx, setSlashIdx] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const slashToken = input.trimStart();
-  const slashMatches = slashToken.startsWith('/') && !slashToken.includes('\n')
-    ? SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(slashToken.toLowerCase()))
-    : [];
+  const slashMatches = slashCommandMatches(slashToken);
   const slashMenuOpen = !streaming && !slashDismissed && slashMatches.length > 0;
   const slashSelected = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
 
-  function acceptSlash(c: { insert: string }) {
+  function acceptSlash(c: Pick<ChatCommandDefinition, 'insert'>) {
     setInput(c.insert);
     setSlashIdx(0);
     textareaRef.current?.focus();
@@ -2685,6 +2674,8 @@ export default function GrokChatPanel({
   async function runSlashCommand(text: string): Promise<boolean> {
     const trimmed = text.trim();
     if (!trimmed.startsWith('/')) return false;
+    const parsed = parseSlashCommand(trimmed);
+    if (!parsed) return false;
 
     const appendExchange = (result: string) => {
       const userMsg: UiMessage = { id: uuidv4(), role: 'user', content: trimmed };
@@ -2697,60 +2688,102 @@ export default function GrokChatPanel({
       });
     };
 
-    const HELP = [
-      '## Chat commands',
-      '',
-      '### 🌿 Git — act on your repository while you work',
-      '| Command | What it does |',
-      '| --- | --- |',
-      '| `/git status` | Branch, changed files, and recent commits |',
-      '| `/git checkout <branch>` | Switch to a branch, or create it from HEAD |',
-      '| `/git commit <message>` | Stage everything and commit |',
-      '| `/git pr <title> \\| <body>` | Push the branch and open a GitHub pull request |',
-      '',
-      '### 🔍 Research — pull the web into this conversation',
-      '| Command | What it does |',
-      '| --- | --- |',
-      '| `/search <query>` | Web search (DuckDuckGo, no API key) — top results with links |',
-      '| `/fetch <url>` | Read a page as clean text so we can discuss it |',
-      '',
-      '### 🎯 Annotation — refine code visually',
-      '| Command | What it does |',
-      '| --- | --- |',
-      '| `/annotate [url]` | Open the sub-browser: load your app, click an element, send it here for refinement |',
-      '',
-      '### 📁 Workspace — give this chat a folder',
-      '| Command | What it does |',
-      '| --- | --- |',
-      '| `/workspace` | Open the folder picker — bind this chat to a repo/folder |',
-      '| `/workspace <path>` | Bind directly to a path |',
-      '| `/workspace off` | Detach the folder from this chat |',
-      '',
-      '### 🧠 Memory & notes',
-      '| Command | What it does |',
-      '| --- | --- |',
-      '| `/remember <key> \\| <content>` | Save a fact that persists across every chat |',
-      '| `/recall [keyword]` | List saved memories (optionally filtered) |',
-      '| `/note <path> \\| <content>` | Create an Obsidian note in your vault |',
-      '| `/x <text>` | Post to X via the integration (agents can too, with the X scope) |',
-      '',
-      `_Git and file tools run against ${workspaceDir ? `the chat workspace \`${workspaceDir}\`` : project?.name ? `the "${project.name}" project workspace` : 'the default workspace'}; PRs use your GitHub token from Capabilities. Type \`/\` any time to see the command bar._`,
-    ].join('\n');
+    const generatedHelp = renderChatCommandHelp(
+      `Git and file tools run against ${workspaceDir ? `the chat workspace \`${workspaceDir}\`` : project?.name ? `the "${project.name}" project workspace` : 'the default workspace'}; memory commands use ${chatTarget !== 'grok' && chatTarget !== 'all' ? `the selected agent (${selectedAgent?.name || 'agent'})` : 'shared chat memory'}.`,
+    );
 
-    if (trimmed === '/help' || trimmed === '/' || trimmed === '/commands') {
-      appendExchange(HELP);
+    if (parsed.name === 'help') {
+      appendExchange(generatedHelp);
       setInput('');
       return true;
     }
 
-    if (trimmed.startsWith('/annotate')) {
+    if (parsed.name === 'clear') {
+      setInput('');
+      await clearChatContext();
+      return true;
+    }
+
+    if (parsed.name === 'memories') {
+      setInput('');
+      router.push('/memories');
+      return true;
+    }
+
+    if (parsed.name === 'agent') {
+      const requested = parsed.args.trim().toLowerCase();
+      setInput('');
+      if (!requested) {
+        appendExchange(['**Chat targets:**', '- `grok`', '- `all`', ...agents.map((agent) => `- \`${agent.name}\``)].join('\n'));
+        return true;
+      }
+      const next = requested === 'grok' || requested === 'all'
+        ? requested
+        : agents.find((agent) => agent.id.toLowerCase() === requested || agent.name.toLowerCase() === requested)?.id;
+      if (!next) {
+        appendExchange(`No agent named **${parsed.args}**. Run \`/agent\` to list targets.`);
+        return true;
+      }
+      updateChatTarget(next);
+      toast.success(next === 'grok' ? 'Now chatting with Grok' : next === 'all' ? 'Now chatting with all agents' : `Now chatting with ${agents.find((agent) => agent.id === next)?.name}`);
+      return true;
+    }
+
+    if (parsed.name === 'model') {
+      const requested = parsed.args.trim().toLowerCase();
+      setInput('');
+      if (selectedAgent) {
+        appendExchange(
+          `**${selectedAgent.name} owns its model configuration** (${modelDisplayName(selectedAgent.model)}). `
+          + '`/model` only changes the Grok session model. Run `/agent grok` first, or edit this agent on the [Agents page](/agents).',
+        );
+        return true;
+      }
+      if (!requested) {
+        appendExchange(['**Available models:**', ...availableModels.slice(0, 40).map((model) => `- \`${model.id}\` — ${model.label}`)].join('\n'));
+        return true;
+      }
+      const next = availableModels.find((model) => model.id.toLowerCase() === requested)
+        || availableModels.find((model) => model.label.toLowerCase() === requested)
+        || availableModels.find((model) => model.id.toLowerCase().includes(requested));
+      if (!next) {
+        appendExchange(`No model matching **${parsed.args}**. Run \`/model\` to list available models.`);
+        return true;
+      }
+      await onChatModelChange(next.id);
+      return true;
+    }
+
+    if (parsed.name === 'project') {
+      const requested = parsed.args.trim().toLowerCase();
+      setInput('');
+      if (!requested) {
+        appendExchange(projects.length
+          ? ['**Projects:**', ...projects.map((item) => `- \`${item.name}\`${project?.id === item.id ? ' (linked)' : ''}`)].join('\n')
+          : 'No projects yet. Create one on the Projects page.');
+        return true;
+      }
+      if (requested === 'off' || requested === 'none' || requested === 'clear') {
+        await onProjectLinkChange?.(null);
+        return true;
+      }
+      const next = projects.find((item) => item.id.toLowerCase() === requested || item.name.toLowerCase() === requested);
+      if (!next) {
+        appendExchange(`No project named **${parsed.args}**. Run \`/project\` to list projects.`);
+        return true;
+      }
+      await onProjectLinkChange?.(next.id);
+      return true;
+    }
+
+    if (parsed.name === 'annotate') {
       setInput('');
       setShowSubBrowser(true);
       return true;
     }
 
-    if (trimmed === '/workspace' || trimmed.startsWith('/workspace ')) {
-      const arg = trimmed.slice('/workspace'.length).trim();
+    if (parsed.name === 'workspace') {
+      const arg = parsed.args.trim();
       setInput('');
       if (!arg) {
         setShowWorkspacePicker(true);
@@ -2773,8 +2806,8 @@ export default function GrokChatPanel({
       return true;
     }
 
-    if (trimmed.startsWith('/search')) {
-      const query = trimmed.slice(7).trim();
+    if (parsed.name === 'search') {
+      const query = parsed.args.trim();
       setInput('');
       if (!query) { appendExchange('Usage: `/search <query>` — e.g. `/search css container queries`'); return true; }
       const res = await fetch('/api/chat-tools', {
@@ -2788,8 +2821,8 @@ export default function GrokChatPanel({
       return true;
     }
 
-    if (trimmed.startsWith('/fetch')) {
-      const url = trimmed.slice(6).trim();
+    if (parsed.name === 'fetch') {
+      const url = parsed.args.trim();
       setInput('');
       if (!url) { appendExchange('Usage: `/fetch <url>` — reads the page as text into this conversation.'); return true; }
       const res = await fetch('/api/chat-tools', {
@@ -2802,26 +2835,28 @@ export default function GrokChatPanel({
       return true;
     }
 
-    if (trimmed.startsWith('/remember')) {
-      const rest = trimmed.slice(9).trim();
+    const memoryAgentId = chatTarget !== 'grok' && chatTarget !== 'all' ? chatTarget : undefined;
+
+    if (parsed.name === 'remember') {
+      const rest = parsed.args.trim();
       const [key, ...contentParts] = rest.split('|');
       const content = contentParts.join('|').trim();
       setInput('');
       if (!key?.trim() || !content) { appendExchange('Usage: `/remember <key> | <content>` — e.g. `/remember deploy-cmd | npm run deploy:prod`'); return true; }
       const res = await fetch('/api/chat-tools', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'remember', key: key.trim(), content }),
+        body: JSON.stringify({ action: 'remember', key: key.trim(), content, agentId: memoryAgentId }),
       }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
       appendExchange(res.ok ? `🧠 Remembered \`${res.entry.key}\` — recall it any time with \`/recall\`.` : `⚠️ ${res.error || 'Save failed'}`);
       return true;
     }
 
-    if (trimmed.startsWith('/recall')) {
-      const query = trimmed.slice(7).trim();
+    if (parsed.name === 'recall') {
+      const query = parsed.args.trim();
       setInput('');
       const res = await fetch('/api/chat-tools', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'recall', query: query || undefined }),
+        body: JSON.stringify({ action: 'recall', query: query || undefined, agentId: memoryAgentId }),
       }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
       appendExchange(res.ok
         ? (res.entries.length
@@ -2831,8 +2866,62 @@ export default function GrokChatPanel({
       return true;
     }
 
-    if (trimmed === '/x' || trimmed.startsWith('/x ')) {
-      const text = trimmed.slice(2).trim();
+    if (parsed.name === 'forget') {
+      const key = parsed.args.trim();
+      setInput('');
+      if (!key) { appendExchange('Usage: `/forget <key>` — deletes one exact memory key.'); return true; }
+      const res = await fetch('/api/chat-tools', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'forget', key, agentId: memoryAgentId }),
+      }).then((response) => response.json()).catch((error) => ({ ok: false, error: String(error) }));
+      appendExchange(res.ok
+        ? (res.removed ? `🧠 Forgot \`${key}\`.` : `No memory named \`${key}\` in this scope.`)
+        : `⚠️ ${res.error || 'Delete failed'}`);
+      return true;
+    }
+
+    if (parsed.name === 'task') {
+      const [title, ...descriptionParts] = parsed.args.split('|');
+      const description = descriptionParts.join('|').trim();
+      setInput('');
+      if (!title?.trim()) { appendExchange('Usage: `/task <title> | <description>` — creates a card in Board backlog.'); return true; }
+      const res = await fetch('/api/board', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', title: title.trim(), description, status: 'backlog' }),
+      }).then((response) => response.json()).catch((error) => ({ ok: false, error: String(error) }));
+      appendExchange(res.ok
+        ? `📋 Created [${res.task.key}](/board): **${res.task.title}** in Backlog.`
+        : `⚠️ ${res.error || 'Could not create Board card'}`);
+      return true;
+    }
+
+    if (parsed.name === 'board') {
+      const filter = parsed.args.trim().toLowerCase().replace(/\s+/g, '_');
+      setInput('');
+      const res = await fetch('/api/board').then((response) => response.json()).catch((error) => ({ ok: false, error: String(error) }));
+      if (!res.ok) {
+        appendExchange(`⚠️ ${res.error || 'Could not load Board cards'}`);
+        return true;
+      }
+      const statuses = new Set(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled']);
+      const tasks = (res.tasks || []).filter((task: { status: string; key: string; title: string; labels?: string[] }) => {
+        if (!filter) return true;
+        if (statuses.has(filter)) return task.status === filter;
+        const haystack = [task.key, task.title, ...(task.labels || [])].join(' ').toLowerCase();
+        return haystack.includes(parsed.args.trim().toLowerCase());
+      }).slice(0, 30);
+      appendExchange(tasks.length
+        ? [
+            `📋 **Board cards${parsed.args ? ` matching "${parsed.args}"` : ''}:**`, '',
+            ...tasks.map((task: { key: string; title: string; status: string; priority?: number }) =>
+              `- [${task.key}](/board) · **${task.title}** · ${task.status.replace(/_/g, ' ')}${task.priority ? ` · P${task.priority}` : ''}`),
+          ].join('\n')
+        : `No Board cards${parsed.args ? ` matching "${parsed.args}"` : ''}. Create one with \`/task <title> | <description>\`.`);
+      return true;
+    }
+
+    if (parsed.name === 'x') {
+      const text = parsed.args.trim();
       setInput('');
       if (!text) { appendExchange('Usage: `/x <text>` — posts to X via the integration on the Capabilities page (max 280 chars).'); return true; }
       const res = await fetch('/api/chat-tools', {
@@ -2845,11 +2934,12 @@ export default function GrokChatPanel({
       return true;
     }
 
-    if (trimmed.startsWith('/note')) {
-      const rest = trimmed.slice(5).trim();
+    if (parsed.name === 'note') {
+      const rest = parsed.args.trim();
       const [path, ...contentParts] = rest.split('|');
       const content = contentParts.join('|').trim();
       setInput('');
+      if (!path?.trim() || !content) { appendExchange('Usage: `/note <path> | <content>`'); return true; }
       const res = await fetch('/api/obsidian', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2861,13 +2951,17 @@ export default function GrokChatPanel({
       return true;
     }
 
-    if (trimmed.startsWith('/git')) {
-      const rest = trimmed.slice(4).trim();
+    if (parsed.name === 'git') {
+      const rest = parsed.args.trim();
       const [sub, ...args] = rest.split(/\s+/);
       const argText = args.join(' ');
       const workspacePath = workspaceDir?.trim() || project?.workspacePath?.trim() || undefined;
-      let payload: Record<string, string | undefined> | null = null;
+      let payload: Record<string, unknown> | null = null;
       if (sub === 'status') payload = { action: 'status' };
+      else if (sub === 'diff') payload = { action: 'diff', staged: args.includes('--staged') || args.includes('--cached') };
+      else if (sub === 'log') payload = { action: 'log', count: Math.max(1, Math.min(50, Number(args[0]) || 10)) };
+      else if (sub === 'pull') payload = { action: 'pull' };
+      else if (sub === 'push') payload = { action: 'push' };
       else if (sub === 'checkout' && args[0]) payload = { action: 'checkout', branch: args[0] };
       else if (sub === 'commit' && argText) payload = { action: 'commit', message: argText };
       else if (sub === 'pr' && argText) {
@@ -2875,7 +2969,7 @@ export default function GrokChatPanel({
         payload = { action: 'pr', title: title.trim(), body: bodyParts.join('|').trim() || undefined };
       }
       if (!payload) {
-        appendExchange(HELP);
+        appendExchange(generatedHelp);
         setInput('');
         return true;
       }
@@ -3424,7 +3518,7 @@ export default function GrokChatPanel({
         <div className="chat-slash-menu" role="listbox" aria-label="Slash commands">
           {slashMatches.map((c, i) => (
             <button
-              key={c.cmd}
+              key={c.id}
               type="button"
               role="option"
               aria-selected={i === slashSelected}
@@ -3432,9 +3526,10 @@ export default function GrokChatPanel({
               onMouseDown={(e) => { e.preventDefault(); acceptSlash(c); }}
               onMouseEnter={() => setSlashIdx(i)}
             >
-              <GitBranch size={11} className="shrink-0 opacity-40" />
-              <code className="chat-slash-cmd">{c.cmd}</code>
-              <span className="chat-slash-desc">{c.desc}</span>
+              {c.category === 'Memory' ? <Brain size={11} className="shrink-0 opacity-50" /> : <GitBranch size={11} className="shrink-0 opacity-40" />}
+              <code className="chat-slash-cmd">{c.syntax}</code>
+              <span className="chat-slash-desc">{c.description}</span>
+              <span className="chat-slash-category">{c.category}</span>
             </button>
           ))}
           <div className="chat-slash-footer">↑↓ navigate · Tab or Enter to complete · Esc to dismiss</div>
@@ -3468,18 +3563,26 @@ export default function GrokChatPanel({
           onChange={(e) => {
             if (dictating) stopDictation();
             setInput(e.target.value);
+            setSlashIdx(0);
             setSlashDismissed(false);
           }}
           onKeyDown={(e) => {
-            if (slashMenuOpen) {
-              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashMatches.length); return; }
-              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashMatches.length) % slashMatches.length); return; }
+            // Read from the textarea for the key event rather than relying on a
+            // prior React render. This keeps paste-then-Enter command execution
+            // exact even when autocomplete state has not painted yet.
+            const liveSlashToken = e.currentTarget.value.trimStart();
+            const liveSlashMatches = slashCommandMatches(liveSlashToken);
+            const liveSlashMenuOpen = !streaming && !slashDismissed && liveSlashMatches.length > 0;
+            const liveSlashSelected = Math.min(slashIdx, Math.max(0, liveSlashMatches.length - 1));
+            if (liveSlashMenuOpen) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => (i + 1) % liveSlashMatches.length); return; }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => (i - 1 + liveSlashMatches.length) % liveSlashMatches.length); return; }
               if (e.key === 'Escape') { setSlashDismissed(true); return; }
-              const sel = slashMatches[slashSelected];
+              const sel = liveSlashMatches[liveSlashSelected];
               if (e.key === 'Tab' && sel) { e.preventDefault(); acceptSlash(sel); return; }
               if (e.key === 'Enter' && !e.shiftKey && sel
-                  && slashToken !== sel.insert.trimEnd()
-                  && !slashToken.startsWith(sel.insert)) {
+                  && liveSlashToken !== sel.insert.trimEnd()
+                  && !liveSlashToken.startsWith(sel.insert)) {
                 // Enter completes the command; a fully typed command sends as usual.
                 e.preventDefault();
                 acceptSlash(sel);

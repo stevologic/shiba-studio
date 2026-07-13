@@ -27,10 +27,13 @@ export async function POST(req: NextRequest) {
   if (!workspace || !agentId) {
     return NextResponse.json({ error: 'workspace and agentId required' }, { status: 400 });
   }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(agentId) || agentId === '.' || agentId === '..') {
+    return NextResponse.json({ error: 'Invalid agentId' }, { status: 400 });
+  }
 
   try {
     if (body.action === 'create') {
-      const wt = await ensureWorktree(workspace, agentId, body.branch || 'main');
+      const wt = await ensureWorktree(workspace, agentId, String(body.branch || 'main'));
       const listed = await listWorktrees(workspace, [agentId]);
       return NextResponse.json({ ok: true, worktree: wt, ...listed });
     }

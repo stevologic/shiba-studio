@@ -5,7 +5,7 @@
 import * as fs from 'fs/promises';
 import { clipForModel } from './prompt-hygiene';
 import path from 'path';
-import { getDb } from './db';
+import { recallMemories, saveMemory, type AgentMemoryEntry } from './agent-memory';
 
 const FETCH_TIMEOUT_MS = 15_000;
 const TEXT_CAP = 20_000;
@@ -141,44 +141,14 @@ export async function fsSearch(workDir: string, pattern: string, subDir?: string
 
 /* ── Persistent per-agent memory ──────────────────────────────────────── */
 
-function memoryDb() {
-  const db = getDb();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS agent_memory (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      agentId TEXT NOT NULL,
-      key TEXT NOT NULL,
-      content TEXT NOT NULL,
-      updatedAt TEXT NOT NULL,
-      UNIQUE(agentId, key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_memory_agent ON agent_memory(agentId, updatedAt DESC);
-  `);
-  return db;
-}
-
-export interface AgentMemoryEntry { key: string; content: string; updatedAt: string }
+export type { AgentMemoryEntry } from './agent-memory';
 
 export function memorySave(agentId: string, key: string, content: string): AgentMemoryEntry {
-  const k = String(key || '').trim().slice(0, 120);
-  if (!k) throw new Error('memory key is required');
-  const entry = { key: k, content: String(content || '').slice(0, 8000), updatedAt: new Date().toISOString() };
-  memoryDb()
-    .prepare(`
-      INSERT INTO agent_memory (agentId, key, content, updatedAt) VALUES (?, ?, ?, ?)
-      ON CONFLICT(agentId, key) DO UPDATE SET content = excluded.content, updatedAt = excluded.updatedAt
-    `)
-    .run(agentId, entry.key, entry.content, entry.updatedAt);
-  return entry;
+  return saveMemory(agentId, key, content, { source: 'tool' }).entry;
 }
 
 export function memoryRecall(agentId: string, query?: string): AgentMemoryEntry[] {
-  const rows = memoryDb()
-    .prepare('SELECT key, content, updatedAt FROM agent_memory WHERE agentId = ? ORDER BY updatedAt DESC LIMIT 50')
-    .all(agentId) as unknown as AgentMemoryEntry[];
-  const q = String(query || '').trim().toLowerCase();
-  if (!q) return rows;
-  return rows.filter((r) => r.key.toLowerCase().includes(q) || r.content.toLowerCase().includes(q));
+  return recallMemories(agentId, query);
 }
 
 /* ── xAI image generation ─────────────────────────────────────────────── */

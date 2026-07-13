@@ -5,6 +5,7 @@ import { loadAgents, loadConfig } from './persistence';
 import { listGlobalUploadFiles } from './workspace';
 import { getUsageSummary } from './usage';
 import type { IntegrationCreds } from './types';
+import { memoryStats } from './agent-memory';
 
 /** Default monthly quota (USD) when the user hasn't set one in Settings. */
 const DEFAULT_USAGE_BUDGET_USD = 25;
@@ -120,6 +121,7 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
     boardOpen: boardTasks.filter(
       (t) => t.status === 'backlog' || t.status === 'todo' || t.status === 'in_progress',
     ).length,
+    memories: memoryStats().total,
     workspaceFiles: uploads.length,
     automationsScheduled,
     integrationsConfigured: countConfiguredIntegrations(integrations) + mcpConfigured,

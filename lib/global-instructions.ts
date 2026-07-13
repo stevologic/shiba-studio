@@ -1,7 +1,10 @@
-import { promises as fs } from 'fs';
 import path from 'path';
 import type { AppConfig } from './types';
 import { projectRoot } from './data-paths';
+
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs = builtinFs.promises;
 
 const AGENTS_MD_PATH = path.join(projectRoot(), 'AGENTS.md');
 const AGENTS_MD_ALT = path.join(projectRoot(), 'agents.md');

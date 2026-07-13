@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FolderKanban, Pencil, Plus, Trash2, Upload, RefreshCw, FolderOpen, Save,
   MessageSquare, Bot, Globe, FileText, Layers, Sparkles,
@@ -20,6 +20,7 @@ interface GlobalUploadSummary {
 }
 
 interface ProjectsPanelProps {
+  initialProjectId?: string | null;
   agents: Agent[];
   defaultWorkspace: string;
   defaultChatModel: string;
@@ -36,6 +37,7 @@ interface ProjectsPanelProps {
 }
 
 export default function ProjectsPanel({
+  initialProjectId = null,
   agents,
   defaultWorkspace,
   defaultChatModel,
@@ -47,7 +49,7 @@ export default function ProjectsPanel({
   projectLiveTrace = [],
 }: ProjectsPanelProps) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialProjectId);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -61,6 +63,15 @@ export default function ProjectsPanel({
   const [setupDefaultAgent, setSetupDefaultAgent] = useState('');
 
   const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const selectedIdRef = useRef<string | null>(selectedId);
+  const projectRequestRef = useRef(0);
+  const selectProjectId = useCallback((id: string | null) => {
+    // Invalidate the previous request synchronously with the user/navigation
+    // choice, before React's next effects run.
+    selectedIdRef.current = id;
+    projectRequestRef.current += 1;
+    setSelectedId(id);
+  }, []);
 
   // Studio-wide context that is always injected into project chats / agent runs.
   const [globalInstructions, setGlobalInstructions] = useState('');
@@ -81,10 +92,14 @@ export default function ProjectsPanel({
   }, []);
 
   const loadProject = useCallback(async (id: string) => {
+    const requestId = ++projectRequestRef.current;
     try {
       const res = await fetch(`/api/projects?id=${encodeURIComponent(id)}`);
       const data = await res.json();
       if (data.ok && data.project) {
+        if (requestId !== projectRequestRef.current || selectedIdRef.current !== id) {
+          return data.project as Project;
+        }
         setSelectedProject(data.project);
         setProjects((prev) => prev.map((p) => (p.id === id ? data.project : p)));
         return data.project as Project;
@@ -128,9 +143,17 @@ export default function ProjectsPanel({
   }, [loadProjects, loadGlobalContext]);
 
   useEffect(() => {
+    selectProjectId(initialProjectId || null);
+  }, [initialProjectId, selectProjectId]);
+
+  useEffect(() => {
     onProjectSelect?.(selectedId);
     if (selectedId) void loadProject(selectedId);
-    else setSelectedProject(null);
+    else {
+      // Invalidate a request for the previous selection before clearing it.
+      projectRequestRef.current += 1;
+      setSelectedProject(null);
+    }
   }, [selectedId, loadProject, onProjectSelect]);
 
   useEffect(() => {
@@ -162,7 +185,7 @@ export default function ProjectsPanel({
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       await loadProjects();
-      setSelectedId(data.project.id);
+      selectProjectId(data.project.id);
       toast.success(`Project "${data.project.name}" created`);
       onStatsChange?.();
     } catch (e: unknown) {
@@ -279,7 +302,7 @@ export default function ProjectsPanel({
         body: JSON.stringify({ action: 'delete', id }),
       });
       if (selectedId === id) {
-        setSelectedId(null);
+        selectProjectId(null);
         setSelectedProject(null);
       }
       await loadProjects();
@@ -367,11 +390,11 @@ export default function ProjectsPanel({
               key={p.id}
               role="button"
               tabIndex={0}
-              onClick={() => setSelectedId(p.id)}
+              onClick={() => selectProjectId(p.id)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  setSelectedId(p.id);
+                  selectProjectId(p.id);
                 }
               }}
               className={`projects-list-item projects-list-item-row w-full text-left ${selectedId === p.id ? 'active' : ''}`}

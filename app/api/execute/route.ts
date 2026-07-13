@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
       scheduled: !!scheduled,
       scheduleId: scheduleId || undefined,
       scheduleInstructions: scheduleInstructions || undefined,
+      signal: req.signal,
     });
     return NextResponse.json({ run });
   } catch (e) {

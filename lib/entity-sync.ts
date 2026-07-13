@@ -3,7 +3,7 @@
 // Each entity kind is serialized as one JSON snapshot file so any Shiba Studio install
 // connected to the same xAI account can pull it down.
 
-import { loadAgents, saveAgents, loadConfig, saveConfig } from './persistence';
+import { loadAgents, mutateAgents, loadConfig, saveConfig } from './persistence';
 import { normalizeAgent, type Agent, type ScheduleEntry } from './types';
 import { listProjects, updateProject, createProject } from './projects';
 import { listChatSessions, createChatSession, updateChatSession, type ChatSession } from './chat-sessions';
@@ -168,25 +168,30 @@ export async function pullKind(kind: SyncKind): Promise<SyncKindResult> {
     if (kind === 'agents') {
       const cloud = await pullSnapshot<Agent[]>(kind);
       if (!cloud) return { kind, ok: true, detail: 'No cloud snapshot yet — push first' };
-      const local = await loadAgents();
-      const { merged, added, updated } = mergeAgents(local, cloud);
-      await saveAgents(merged);
+      let added = 0;
+      let updated = 0;
+      await mutateAgents((local) => {
+        const merged = mergeAgents(local, cloud);
+        added = merged.added;
+        updated = merged.updated;
+        local.splice(0, local.length, ...merged.merged);
+      });
       return { kind, ok: true, detail: `${added} added, ${updated} updated from cloud` };
     }
 
     if (kind === 'automations') {
       const cloud = await pullSnapshot<Array<{ agentId: string; schedules: ScheduleEntry[] }>>(kind);
       if (!cloud) return { kind, ok: true, detail: 'No cloud snapshot yet — push first' };
-      const agents = await loadAgents();
       let applied = 0;
-      for (const entry of cloud) {
-        const agent = agents.find((a) => a.id === entry.agentId);
-        if (agent && Array.isArray(entry.schedules)) {
-          agent.schedules = entry.schedules;
-          applied++;
+      await mutateAgents((agents) => {
+        for (const entry of cloud) {
+          const agent = agents.find((a) => a.id === entry.agentId);
+          if (agent && Array.isArray(entry.schedules)) {
+            agent.schedules = entry.schedules;
+            applied++;
+          }
         }
-      }
-      await saveAgents(agents);
+      });
       return { kind, ok: true, detail: `Schedules applied to ${applied} agent(s)` };
     }
 

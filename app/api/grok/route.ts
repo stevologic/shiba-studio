@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { grokChat, setApiKey, validateApiKey } from '@/lib/grok-client';
+import { grokChat, validateApiKey } from '@/lib/grok-client';
 import { parseModelRef } from '@/lib/model-providers';
 import { loadConfig, saveConfig } from '@/lib/persistence';
 import { resolveCloudBearer } from '@/lib/xai-oauth';
@@ -18,11 +18,10 @@ export async function POST(req: NextRequest) {
 
   if (action === 'chat') {
     const cfg = await loadConfig();
-    const auth = await resolveCloudBearer(cfg);
-    if (auth.token) setApiKey(auth.token);
-    if (body.key) setApiKey(body.key);
     const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
-    const model = parseModelRef(rawModel).encoded;
+    const parsed = parseModelRef(rawModel);
+    const model = parsed.encoded;
+    const auth = await resolveCloudBearer(cfg, parsed.authSource);
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
     if (body.system) messages.push({ role: 'system', content: String(body.system) });
     if (Array.isArray(body.messages) && body.messages.length > 0) {
@@ -41,6 +40,8 @@ export async function POST(req: NextRequest) {
     try {
       const resp = await grokChat({
         model,
+        cloudKey: body.key || auth.token || undefined,
+        signal: req.signal,
         messages,
         temperature: 0.7,
         usageContext: { source: 'chat' },
@@ -54,11 +55,13 @@ export async function POST(req: NextRequest) {
 
   if (action === 'tool-chat') {
     const cfg = await loadConfig();
-    const auth = await resolveCloudBearer(cfg);
-    if (auth.token) setApiKey(auth.token);
+    const parsed = parseModelRef(body.model || cfg.defaultGrokModel || 'cloud:grok-4');
+    const auth = await resolveCloudBearer(cfg, parsed.authSource);
     try {
       const resp = await grokChat({
-        model: parseModelRef(body.model || cfg.defaultGrokModel || 'cloud:grok-4').encoded,
+        model: parsed.encoded,
+        cloudKey: body.key || auth.token || undefined,
+        signal: req.signal,
         messages: body.messages,
         tools: body.tools,
         usageContext: body.usageContext || { source: 'other' },

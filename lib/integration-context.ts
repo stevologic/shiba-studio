@@ -4,7 +4,8 @@
 // to a budget) so the model has the vault's knowledge, not just tools.
 // Everything is best-effort, time-boxed, and briefly cached.
 
-import type { IntegrationScope } from './types';
+import { createHash } from 'crypto';
+import type { IntegrationCreds, IntegrationScope } from './types';
 import {
   getIntegrationCreds,
   testGitHub,
@@ -17,6 +18,7 @@ import {
   vercelListProjects,
   testNetlify,
   netlifyListSites,
+  withIntegrationCreds,
 } from './integrations';
 import { obsidianListNotes, obsidianReadNote, getObsidianConfig } from './obsidian';
 
@@ -163,7 +165,17 @@ async function netlifyContext(): Promise<string> {
  * Live context for every enabled integration in the scope. Returns '' when
  * nothing is enabled or nothing is reachable — callers can append verbatim.
  */
-export async function buildIntegrationContext(
+export function buildIntegrationContext(
+  scope: IntegrationScope,
+  driveFolders?: Array<{ id: string; name: string }>,
+  integrationCreds?: IntegrationCreds,
+): Promise<string> {
+  return withIntegrationCreds(integrationCreds, () =>
+    buildIntegrationContextScoped(scope, driveFolders),
+  );
+}
+
+async function buildIntegrationContextScoped(
   scope: IntegrationScope,
   driveFolders?: Array<{ id: string; name: string }>,
 ): Promise<string> {
@@ -173,7 +185,11 @@ export async function buildIntegrationContext(
   // Folder scope is part of the cache identity — a differently-scoped agent
   // must not read another's cached Drive context.
   const folderKey = (driveFolders || []).map((f) => f.id).sort().join('|');
-  const key = enabled.sort().join(',') + (folderKey ? `#drive:${folderKey}` : '');
+  const credentialKey = createHash('sha256')
+    .update(JSON.stringify(getIntegrationCreds()))
+    .digest('hex')
+    .slice(0, 20);
+  const key = `${enabled.sort().join(',')}#creds:${credentialKey}${folderKey ? `#drive:${folderKey}` : ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
 

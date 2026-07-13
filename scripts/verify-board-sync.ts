@@ -4,6 +4,7 @@
  * Provider traffic is intercepted at global fetch, and persistence is rooted
  * in a fresh SHIBA_DATA_DIR so this script cannot touch a live studio board.
  */
+import './verify-isolate'; // MUST be first: sandbox the data dir on direct runs
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { GOAL_SCRATCH as SCRATCH } from '../lib/verify-scratch';

@@ -6,6 +6,9 @@ const DEFAULT_LOCAL_GROK_BASE = 'http://127.0.0.1:1234/v1';
 
 export interface GrokChatStreamParams {
   model: string;
+  /** Request-scoped cloud bearer selected for this model. */
+  cloudKey?: string;
+  signal?: AbortSignal;
   messages: ChatMessagePayload[];
   temperature?: number;
   max_tokens?: number;
@@ -181,12 +184,15 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
   }
 
   const doFetch = async (): Promise<Response> => {
+    const signal = params.signal
+      ? AbortSignal.any([params.signal, AbortSignal.timeout(3600_000)])
+      : AbortSignal.timeout(3600_000);
     if (ref.provider === 'local') {
       return fetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(3600_000),
+        signal,
       });
     }
     const { fetchCloudWithAuth } = await import('./xai-oauth');
@@ -194,8 +200,8 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(3600_000),
-    });
+      signal,
+    }, { keyOverride: params.cloudKey });
   };
 
   // Nothing has streamed yet, so a transient network failure (dead keep-alive

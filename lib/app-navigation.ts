@@ -4,6 +4,7 @@ export const APP_TABS = [
   'projects',
   'board',
   'agents',
+  'memories',
   'workspace',
   'files',
   'automations',

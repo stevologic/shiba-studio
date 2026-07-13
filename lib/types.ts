@@ -43,6 +43,17 @@ export interface ScheduleEntry {
   description?: string;
 }
 
+export type AgentLearningMode = 'off' | 'review' | 'auto';
+
+export interface AgentLearningConfig {
+  /** off = no extraction, review = pending candidates, auto = immediately active. */
+  mode: AgentLearningMode;
+  /** Inject relevant active memories before each autonomous run. */
+  autoRecall: boolean;
+  /** Retention cap for unpinned learned memories. Manual memories are never pruned. */
+  maxMemories: number;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -77,6 +88,8 @@ export interface Agent {
    * Empty/undefined → fall back to the app-wide voice picker.
    */
   voiceId?: string;
+  /** Local, per-agent learning and recall policy. */
+  learning?: AgentLearningConfig;
   // New multi-schedule support: each entry can have its own instructions
   schedules: ScheduleEntry[];
   // Legacy single schedule for backward compatibility (will be normalized in loads)
@@ -358,6 +371,12 @@ export function normalizeAgent(agent: any): Agent {
   delete base.origin;
   if (!base.skills) base.skills = [];
   if (base.chatSkill === undefined || base.chatSkill === null) base.chatSkill = '';
+  const rawLearning = base.learning && typeof base.learning === 'object' ? base.learning : {};
+  base.learning = {
+    mode: rawLearning.mode === 'auto' || rawLearning.mode === 'review' ? rawLearning.mode : 'off',
+    autoRecall: rawLearning.autoRecall !== false,
+    maxMemories: Math.max(10, Math.min(500, Number(rawLearning.maxMemories) || 100)),
+  };
   // Optional Grok TTS voice — keep only non-empty string ids ('' clears on save).
   if (typeof base.voiceId === 'string') {
     base.voiceId = base.voiceId.trim().toLowerCase();

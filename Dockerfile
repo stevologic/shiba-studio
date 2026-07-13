@@ -5,7 +5,8 @@
 #
 # Publish the port on 127.0.0.1 (as above) to keep the studio loopback-only,
 # matching the app's security model. The /data volume holds ALL state —
-# config, encrypted credentials, the encryption key, runs, chats.
+# config, encrypted credentials, the encryption key, runs, chats, and the
+# official xurl bridge's per-app X OAuth cache under /data/x-mcp/*/.xurl.
 # Browser-automation tools are disabled in the image (no Chromium) — run from
 # source if you need the sub-browser/annotation features.
 
@@ -25,6 +26,9 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PUPPETEER_SKIP_DOWNLOAD=1 \
     SHIBA_DATA_DIR=/data \
+    SHIBA_SECRET_KEY_FILE=/data/shiba-studio.key \
+    SHIBA_PROJECT_ROOT=/app \
+    HOME=/data/home \
     PORT=3000
 COPY --from=build /app ./
 EXPOSE 3000

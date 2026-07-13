@@ -26,7 +26,7 @@ export interface RuntimeVersion {
 
 let cache: { at: number; value: RuntimeVersion } | null = null;
 /** Short TTL so UI stays fresh after local commits without hammering git. */
-const CACHE_MS = 5_000;
+const CACHE_MS = 60_000;
 
 function runGit(args: string, cwd: string): string | null {
   try {

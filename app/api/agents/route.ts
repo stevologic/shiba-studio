@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadAgents, saveAgents, loadConfig } from '@/lib/persistence';
+import { loadAgents, mutateAgents, loadConfig } from '@/lib/persistence';
 import { Agent, normalizeAgent, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { defaultAvatarIdForAgent, isValidAvatarId } from '@/lib/agent-avatars';
 import { v4 as uuidv4 } from 'uuid';
@@ -14,32 +14,39 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const agents = await loadAgents();
 
   if (body.action === 'delete') {
-    const removed = agents.find(a => a.id === body.id);
-    const filtered = agents.filter(a => a.id !== body.id);
-    await saveAgents(filtered);
+    const removed = await mutateAgents((agents) => {
+      const idx = agents.findIndex((agent) => agent.id === body.id);
+      if (idx < 0) return null;
+      return agents.splice(idx, 1)[0];
+    });
+    if (!removed) return NextResponse.json({ error: 'agent not found' }, { status: 404 });
+    const { clearMemories } = await import('@/lib/agent-memory');
+    clearMemories({ agentId: removed.id });
     // The agent's sandbox container goes with it — fire-and-forget so a slow
     // (or absent) Docker daemon never delays the delete response.
     import('@/lib/agent-sandbox')
-      .then(({ removeSandbox }) => removeSandbox(String(body.id)))
+      .then(({ removeSandbox }) => removeSandbox(removed.id))
       .catch(() => {});
     await loadAndScheduleAll().catch(() => {});
-    audit('agent', 'agent deleted', removed?.name || String(body.id), { agentId: body.id });
+    audit('agent', 'agent deleted', removed.name, { agentId: removed.id });
     return NextResponse.json({ ok: true });
   }
 
   if (body.action === 'update') {
-    const idx = agents.findIndex(a => a.id === body.agent.id);
-    if (idx === -1) return NextResponse.json({ error: 'not found' }, { status: 404 });
-    const merged = { ...agents[idx], ...body.agent, updatedAt: new Date().toISOString() };
-    if (merged.avatar && !isValidAvatarId(merged.avatar)) delete merged.avatar;
-    agents[idx] = normalizeAgent(merged);
-    await saveAgents(agents);
+    const updated = await mutateAgents((agents) => {
+      const idx = agents.findIndex(a => a.id === body.agent.id);
+      if (idx === -1) return null;
+      const merged = { ...agents[idx], ...body.agent, updatedAt: new Date().toISOString() };
+      if (merged.avatar && !isValidAvatarId(merged.avatar)) delete merged.avatar;
+      agents[idx] = normalizeAgent(merged);
+      return agents[idx];
+    });
+    if (!updated) return NextResponse.json({ error: 'not found' }, { status: 404 });
     await loadAndScheduleAll().catch(() => {});
-    audit('agent', 'agent updated', agents[idx].name, { agentId: agents[idx].id });
-    return NextResponse.json({ agent: agents[idx] });
+    audit('agent', 'agent updated', updated.name, { agentId: updated.id });
+    return NextResponse.json({ agent: updated });
   }
 
   // create (support skills[] and schedules[] or legacy schedule)
@@ -80,13 +87,19 @@ export async function POST(req: NextRequest) {
     voiceId: typeof body.voiceId === 'string' && body.voiceId.trim()
       ? body.voiceId.trim().toLowerCase()
       : undefined,
+    learning: {
+      mode: body.learning?.mode === 'auto' || body.learning?.mode === 'review' ? body.learning.mode : 'off',
+      autoRecall: body.learning?.autoRecall !== false,
+      maxMemories: Math.max(10, Math.min(500, Number(body.learning?.maxMemories) || 100)),
+    },
     schedules: initSchedules,
     schedule: body.schedule, // legacy
     createdAt: now,
     updatedAt: now,
   };
-  agents.push(newAgent);
-  await saveAgents(agents);
+  await mutateAgents((agents) => {
+    agents.push(newAgent);
+  });
   await loadAndScheduleAll().catch(() => {});
   audit('agent', 'agent created', newAgent.name, { agentId: newAgent.id, model: newAgent.model });
   return NextResponse.json({ agent: normalizeAgent(newAgent) });

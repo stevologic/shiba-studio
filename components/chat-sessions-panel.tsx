@@ -30,12 +30,14 @@ const sessionCache: {
   active: ChatSession | null;
   loadedId: string | null;
   listInflight: Promise<ChatSession[] | undefined> | null;
+  listInflightKey: string | null;
 } = {
   listKey: null,
   sessions: [],
   active: null,
   loadedId: null,
   listInflight: null,
+  listInflightKey: null,
 };
 
 interface ChatSessionsPanelProps {
@@ -67,6 +69,7 @@ export default function ChatSessionsPanel({
   const [sessions, setSessions] = useState<ChatSession[]>(() => sessionCache.sessions);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(() => sessionCache.active);
   const [linkedProject, setLinkedProject] = useState<Project | null>(null);
+  const linkedProjectRequestRef = useRef(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [bootstrapping, setBootstrapping] = useState(() => {
     // Warm start from module cache after a `/chat` → `/chat/:id` remount.
@@ -77,6 +80,7 @@ export default function ChatSessionsPanel({
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const listRequestRef = useRef(0);
   // Session rail collapse — SSR default open; restore preference after mount.
   const [railOpen, setRailOpen] = useState(true);
   useEffect(() => {
@@ -222,11 +226,15 @@ export default function ChatSessionsPanel({
     if (cached) {
       commitActive(cached);
       // Project link is rare; only fetch when this session actually has one.
-      if (cached.projectId) void loadLinkedProject(cached.projectId);
-      else setLinkedProject(null);
+      void loadLinkedProject(cached.projectId, cached.id);
     } else {
       sessionCache.loadedId = id;
-      void loadSession(id);
+      void loadLinkedProject(null, id);
+      void loadSession(id).then((session) => {
+        if (session && preferredSessionIdRef.current === id) {
+          void loadLinkedProject(session.projectId, id);
+        }
+      });
     }
     // URL sync only — must not trigger loadNavStats / loadAll.
     onSessionChange(id);
@@ -240,10 +248,14 @@ export default function ChatSessionsPanel({
   }
 
   const loadSessions = useCallback(async (query?: string) => {
+    const filter = showArchived ? 'archived' : 'active';
+    const normalizedQuery = query?.trim() || '';
+    const requestKey = normalizedQuery ? `${filter}:${normalizedQuery}` : filter;
     // Dedupe concurrent list fetches (Strict Mode / remount races).
-    if (!query?.trim() && sessionCache.listInflight) {
+    if (!query?.trim() && sessionCache.listInflight && sessionCache.listInflightKey === requestKey) {
       return sessionCache.listInflight;
     }
+    const requestId = ++listRequestRef.current;
     const run = (async () => {
       try {
         const params = new URLSearchParams();
@@ -254,6 +266,8 @@ export default function ChatSessionsPanel({
         const data = await res.json();
         if (data.ok) {
           const list = (data.sessions || []) as ChatSession[];
+          if (requestId !== listRequestRef.current) return list;
+          sessionCache.listKey = requestKey;
           commitSessions(list);
           return list;
         }
@@ -264,10 +278,14 @@ export default function ChatSessionsPanel({
     })();
     if (!query?.trim()) {
       sessionCache.listInflight = run;
+      sessionCache.listInflightKey = requestKey;
       try {
         return await run;
       } finally {
-        if (sessionCache.listInflight === run) sessionCache.listInflight = null;
+        if (sessionCache.listInflight === run) {
+          sessionCache.listInflight = null;
+          sessionCache.listInflightKey = null;
+        }
       }
     }
     return run;
@@ -279,17 +297,24 @@ export default function ChatSessionsPanel({
       const data = await res.json();
       if (data.ok && data.session) {
         const session = data.session as ChatSession;
-        if (!mayApplySession(id)) return session;
-        // Only swap the active panel when this id is still preferred.
-        if (preferredSessionIdRef.current === id || sessionCache.active?.id === id) {
+        // Always refresh the rail/cache row, including for a background chat
+        // that finished after the user switched elsewhere. Only the active
+        // panel swap is guarded; otherwise a stale `running: true` row can
+        // survive forever after its live-run entry disappears.
+        if (
+          mayApplySession(id)
+          && (preferredSessionIdRef.current === id || sessionCache.active?.id === id)
+        ) {
           commitActive(session);
         }
-        // Patch this row in the list (label freezes unless chatTarget changed).
-        commitSessions(
-          sessionsRef.current.some((s) => s.id === id)
-            ? sessionsRef.current.map((s) => (s.id === id ? session : s))
-            : [session, ...sessionsRef.current],
-        );
+        // Patch a visible row. Only prepend into the canonical unfiltered
+        // active rail; an absent background session must not contaminate an
+        // archived/search result that intentionally excluded it.
+        if (sessionsRef.current.some((s) => s.id === id)) {
+          commitSessions(sessionsRef.current.map((s) => (s.id === id ? session : s)));
+        } else if (sessionCache.listKey === 'active' && !session.archived) {
+          commitSessions([session, ...sessionsRef.current]);
+        }
         return session;
       }
     } catch {
@@ -323,17 +348,27 @@ export default function ChatSessionsPanel({
     }
   }, []);
 
-  const loadLinkedProject = useCallback(async (projectId: string | null) => {
+  const loadLinkedProject = useCallback(async (projectId: string | null, forSessionId?: string) => {
+    const requestId = ++linkedProjectRequestRef.current;
+    // Never render session A's context while session B's project is loading.
+    setLinkedProject(null);
     if (!projectId) {
-      setLinkedProject(null);
       return;
     }
     try {
       const res = await fetch(`/api/projects?id=${encodeURIComponent(projectId)}`);
       const data = await res.json();
+      if (
+        requestId !== linkedProjectRequestRef.current
+        || (forSessionId && sessionCache.active?.id !== forSessionId)
+      ) return;
       if (data.ok && data.project) setLinkedProject(data.project);
       else setLinkedProject(null);
     } catch {
+      if (
+        requestId !== linkedProjectRequestRef.current
+        || (forSessionId && sessionCache.active?.id !== forSessionId)
+      ) return;
       setLinkedProject(null);
     }
   }, []);
@@ -371,6 +406,7 @@ export default function ChatSessionsPanel({
         if (sessionsRef.current.length === 0) {
           setSessions(sessionCache.sessions);
         }
+        await loadLinkedProject(sessionCache.active.projectId, effectSessionId);
         if (!cancelled) setBootstrapping(false);
         return;
       }
@@ -440,7 +476,7 @@ export default function ChatSessionsPanel({
 
         preferredSessionIdRef.current = chosen.id;
         commitActive(chosen);
-        await loadLinkedProject(chosen.projectId);
+        await loadLinkedProject(chosen.projectId, chosen.id);
         if (cancelled) return;
         setBootstrapping(false);
         // Navigate last — remount reuses sessionCache (no second fetch).
@@ -461,6 +497,7 @@ export default function ChatSessionsPanel({
           setSessions(sessionCache.sessions);
         }
         setActiveSession(sessionCache.active);
+        await loadLinkedProject(sessionCache.active.projectId, effectSessionId);
         if (!cancelled) setBootstrapping(false);
         return;
       }
@@ -476,14 +513,14 @@ export default function ChatSessionsPanel({
           return;
         }
         commitActive(cached);
-        await loadLinkedProject(cached.projectId);
+        await loadLinkedProject(cached.projectId, cached.id);
         if (!cancelled) setBootstrapping(false);
         return;
       }
 
       const session = await loadSession(effectSessionId);
       if (cancelled) return;
-      if (session && mayApplySession(session.id)) await loadLinkedProject(session.projectId);
+      if (session && mayApplySession(session.id)) await loadLinkedProject(session.projectId, session.id);
       if (!cancelled) setBootstrapping(false);
     })();
 
@@ -504,9 +541,10 @@ export default function ChatSessionsPanel({
       if (data.error) throw new Error(data.error);
       const created = data.session as ChatSession;
       commitSessions([created, ...sessionsRef.current.filter((s) => s.id !== created.id)]);
+      preferredSessionIdRef.current = created.id;
       endVoiceIfSessionChanges(created.id);
       commitActive(created);
-      setLinkedProject(null);
+      await loadLinkedProject(null, created.id);
       onStatsChange?.();
       onSessionChange(created.id);
       toast.success('New chat session');
@@ -600,14 +638,18 @@ export default function ChatSessionsPanel({
       onStatsChange?.();
       if (sessionId === id) {
         if (remaining.length > 0) {
+          preferredSessionIdRef.current = remaining[0].id;
           commitActive(remaining[0]);
+          await loadLinkedProject(remaining[0].projectId, remaining[0].id);
           onSessionChange(remaining[0].id);
         } else {
           commitActive(null);
+          await loadLinkedProject(null);
           await createSession();
         }
       } else if (activeSession?.id === id) {
         commitActive(null);
+        await loadLinkedProject(null);
       }
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to close session');
@@ -626,21 +668,26 @@ export default function ChatSessionsPanel({
 
   async function onProjectLinkChange(projectId: string | null) {
     if (!activeSession) return;
+    const targetSessionId = activeSession.id;
     try {
       const res = await fetch('/api/chat-sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'update',
-          id: activeSession.id,
+          id: targetSessionId,
           patch: { projectId },
         }),
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      commitActive(data.session);
-      await loadLinkedProject(projectId);
-      await loadSessions();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to link project');
+      const updated = data.session as ChatSession;
+      commitSessions(sessionsRef.current.map((item) => item.id === targetSessionId ? updated : item));
+      if (sessionCache.active?.id === targetSessionId && preferredSessionIdRef.current === targetSessionId) {
+        commitActive(updated);
+        await loadLinkedProject(projectId, targetSessionId);
+      }
+      toast.success(projectId ? 'Project context linked' : 'Project context detached');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to link project');
     }
@@ -836,9 +883,7 @@ export default function ChatSessionsPanel({
       <div className="chat-sessions-main flex flex-col flex-1 min-w-0">
       {activeSession && (
         <GrokChatPanel
-          // No key={session.id}: remounting the whole panel on every rail click
-          // re-fetched config/tts/cli and felt like a full app reload. Session
-          // switches hydrate messages via props + sessionSync instead.
+          key={activeSession.id}
           session={activeSession}
           onSessionUpdated={onSessionUpdated}
           project={linkedProject}
@@ -846,21 +891,28 @@ export default function ChatSessionsPanel({
           onProjectLinkChange={onProjectLinkChange}
           chatModel={activeSession.chatModel}
           onChatModelChange={async (model) => {
+            const targetSessionId = activeSession.id;
             try {
-              await fetch('/api/chat-sessions', {
+              const res = await fetch('/api/chat-sessions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   action: 'update',
-                  id: activeSession.id,
+                  id: targetSessionId,
                   patch: { chatModel: model },
                 }),
               });
-              if (sessionCache.active) {
+              const data = await res.json();
+              if (!res.ok || !data.ok) throw new Error(data.error || 'Could not change model');
+              if (sessionCache.active?.id === targetSessionId) {
                 commitActive({ ...sessionCache.active, chatModel: model });
               }
-            } catch {
-              /* ignore */
+              commitSessions(sessionsRef.current.map((item) =>
+                item.id === targetSessionId ? { ...item, chatModel: model } : item,
+              ));
+              toast.success('Chat model updated');
+            } catch (error: unknown) {
+              toast.error(error instanceof Error ? error.message : 'Could not change model');
             }
           }}
           availableModels={availableModels}

@@ -72,7 +72,7 @@ type TerminalServerState = {
     marker: string;
     startedAt: number;
     buf: string;
-    resolve: (r: { output: string; code: number | null; timedOut: boolean }) => void;
+    resolve: (r: { output: string; code: number | null; timedOut: boolean; aborted?: boolean }) => void;
     timer: ReturnType<typeof setTimeout>;
   }>;
 };
@@ -322,7 +322,7 @@ export function writeTerminal(data: string): { ok: boolean; error?: string } {
  */
 export async function runTerminalCommand(
   command: string,
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<{
   ok: boolean;
   output: string;
@@ -335,6 +335,9 @@ export async function runTerminalCommand(
   const cmd = String(command || '').trim();
   if (!cmd) {
     return { ok: false, output: '', code: null, timedOut: false, error: 'Empty command' };
+  }
+  if (opts?.signal?.aborted) {
+    return { ok: false, output: '', code: null, timedOut: false, error: 'Aborted' };
   }
   // Reject interactive/suspend that would hang the tool wait.
   if (/\b(vim|nvim|nano|less|more|top|htop|watch)\b/i.test(cmd) && !/\|/.test(cmd)) {
@@ -359,18 +362,34 @@ export async function runTerminalCommand(
     const marker = `__SHIBA_DONE_${token}__`;
     const st = state();
 
-    const resultPromise = new Promise<{ output: string; code: number | null; timedOut: boolean }>((resolve) => {
-      const waiter = {
+    const resultPromise = new Promise<{ output: string; code: number | null; timedOut: boolean; aborted?: boolean }>((resolve) => {
+      let settled = false;
+      const finish = (result: { output: string; code: number | null; timedOut: boolean; aborted?: boolean }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(waiter.timer);
+        st.commandWaiters = st.commandWaiters.filter((x) => x !== waiter);
+        opts?.signal?.removeEventListener('abort', onAbort);
+        resolve(result);
+      };
+      const onAbort = () => {
+        // This command owns the current terminal waiter; Ctrl+C stops the
+        // foreground process while preserving the shared shell session.
+        session.proc.write('\x03');
+        finish({ output: waiter.buf, code: null, timedOut: false, aborted: true });
+      };
+      const waiter: TerminalServerState['commandWaiters'][number] = {
         marker,
         startedAt: Date.now(),
         buf: '',
-        resolve,
+        resolve: finish,
         timer: setTimeout(() => {
-          st.commandWaiters = st.commandWaiters.filter((x) => x !== waiter);
-          resolve({ output: waiter.buf, code: null, timedOut: true });
+          finish({ output: waiter.buf, code: null, timedOut: true });
         }, timeoutMs),
       };
       st.commandWaiters.push(waiter);
+      opts?.signal?.addEventListener('abort', onAbort, { once: true });
+      if (opts?.signal?.aborted) onAbort();
     });
 
     // Run the command, then emit a unique marker + exit code the waiter can match.
@@ -401,12 +420,13 @@ export async function runTerminalCommand(
     const cleaned = plain.replace(/^\s*\[shiba · terminal_exec\][^\n]*\n?/, '');
 
     return {
-      ok: !result.timedOut,
+      ok: !result.timedOut && !result.aborted,
       output: cleaned.slice(-12_000),
       code: result.code,
       timedOut: result.timedOut,
       pid: session.proc.pid,
       shell: session.shell.label,
+      ...(result.aborted ? { error: 'Aborted' } : {}),
     };
   } catch (e) {
     return {

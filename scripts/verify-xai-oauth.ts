@@ -117,6 +117,7 @@ async function runUnitTests() {
       refreshCalls++;
       const body = String((init as RequestInit).body || '');
       assert(body.includes('grant_type=refresh_token'), 'refresh grant used');
+      await new Promise((resolve) => setTimeout(resolve, 20));
       return new Response(JSON.stringify({
         access_token: 'refreshed-token',
         refresh_token: 'rt-live',
@@ -129,8 +130,13 @@ async function runUnitTests() {
       expiresAt: new Date(Date.now() - 5_000).toISOString(),
     });
 
-    const refreshed = await getValidAccessToken();
-    assert(refreshed === 'refreshed-token' && refreshCalls === 1, 'expired token refreshed and persisted');
+    const refreshedTogether = await Promise.all(
+      Array.from({ length: 12 }, () => getValidAccessToken()),
+    );
+    assert(
+      refreshedTogether.every((token) => token === 'refreshed-token') && refreshCalls === 1,
+      'concurrent expiry checks share one refresh and persist its token',
+    );
 
     const stored = await getValidAccessToken();
     assert(stored === 'refreshed-token', 'refreshed token persisted');

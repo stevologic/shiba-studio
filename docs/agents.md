@@ -32,4 +32,12 @@ Small local models (llama.cpp/Ollama) that print a tool call as text instead of 
 
 ## Memory
 
-Agents remember across runs: `memory_save(key, content)` persists facts in SQLite, `memory_recall(query?)` retrieves them at the start of later runs. Memory is per-agent; chat has its own shared scope via `/remember` and `/recall`.
+Agents remember across runs in local SQLite. Relevant active and pinned memories are ranked against the current task and injected at the start as inert reference context, so an agent benefits from prior knowledge without first deciding to call a tool. Agents can also use `memory_save(key, content)`, `memory_recall(query?)`, and `memory_forget(key)` explicitly.
+
+Each agent has a **Learning & memory** policy:
+
+- **Off** — no post-run extraction; automatic recall can remain enabled.
+- **Review** — after a successful run, up to three durable candidates enter the Memories review queue.
+- **Automatic** — safe candidates become active immediately.
+
+Automatic learning looks only at the user task, final outcome, and confirmed side-effect summaries. It rejects credential-like content, low-confidence candidates, and attempts to overwrite manual or pinned memories. Configure the policy and retention cap in the agent editor, then inspect everything on the [Memories](memories.md) page.

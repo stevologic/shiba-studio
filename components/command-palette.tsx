@@ -15,7 +15,7 @@ export interface CommandPaletteItem {
 
 /** Mirror of lib/global-search's SearchHit — that module is server-only. */
 interface GlobalSearchHit {
-  kind: 'chat' | 'run' | 'log';
+  kind: 'chat' | 'memory' | 'run' | 'log';
   id: string;
   title: string;
   snippet: string;
@@ -25,6 +25,7 @@ interface GlobalSearchHit {
 
 const HIT_GROUP: Record<GlobalSearchHit['kind'], string> = {
   chat: 'Chats',
+  memory: 'Memories',
   run: 'Agent runs',
   log: 'Audit log',
 };
@@ -148,7 +149,7 @@ export default function CommandPalette({ open, onClose, commands, onOpenHref }: 
                 ref={inputRef}
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); setActiveIdx(0); }}
-                placeholder="Search commands, chats, runs, logs…"
+                placeholder="Search commands, chats, memories, runs, logs…"
                 className="command-palette-input"
                 aria-label="Command palette search"
               />

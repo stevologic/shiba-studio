@@ -31,8 +31,9 @@ interface McpPanelProps {
   externalAllowedPath?: string | null;
   /** OAuth 2.0 app creds from the X integration — pre-fill the X MCP preset. */
   xClientId?: string;
-  xClientSecret?: string;
 }
+
+const X_MCP_REDIRECT_URI = 'http://localhost:8080/callback';
 
 function ExternalDocsLink({
   href,
@@ -61,7 +62,7 @@ function ExternalDocsLink({
   );
 }
 
-export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, externalAllowedPath, xClientId, xClientSecret }: McpPanelProps) {
+export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, externalAllowedPath, xClientId }: McpPanelProps) {
   const [presets, setPresets] = useState<McpPreset[]>([]);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(false);
@@ -113,8 +114,6 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
         values[field.key] = defaultWorkspace;
       } else if (field.key === 'CLIENT_ID' && xClientId) {
         values[field.key] = xClientId;
-      } else if (field.key === 'CLIENT_SECRET' && xClientSecret) {
-        values[field.key] = xClientSecret;
       }
     }
     setShowCustom(false);
@@ -132,10 +131,12 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      toast.success(`${data.server?.name || 'MCP server'} added`);
+      const addedServer = data.server as McpServer | undefined;
+      toast.success(`${addedServer?.name || 'MCP server'} added`);
       setAddingPreset(null);
       setPresetFields({});
       await loadMcp();
+      if (addingPreset === 'x' && addedServer?.id) await testServer(addedServer.id, true);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to add MCP server');
     }
@@ -174,12 +175,18 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
   }
 
   async function toggleServer(id: string, enabled: boolean) {
-    await fetch('/api/mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'toggle', id, enabled }),
-    });
-    await loadMcp();
+    try {
+      const res = await fetch('/api/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'toggle', id, enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Could not update MCP server');
+      await loadMcp();
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Could not update MCP server');
+    }
   }
 
   async function deleteServer(id: string, name: string) {
@@ -190,23 +197,29 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       danger: true,
     });
     if (!ok) return;
-    await fetch('/api/mcp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete', id }),
-    });
-    toast.success('MCP server removed');
-    if (expandedServerId === id) setExpandedServerId(null);
-    await loadMcp();
+    try {
+      const res = await fetch('/api/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Could not remove MCP server');
+      toast.success('MCP server removed');
+      if (expandedServerId === id) setExpandedServerId(null);
+      await loadMcp();
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Could not remove MCP server');
+    }
   }
 
-  async function testServer(id: string) {
+  async function testServer(id: string, connectX = false) {
     setTestingId(id);
     try {
       const res = await fetch('/api/mcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'test', id }),
+        body: JSON.stringify({ action: connectX ? 'connect' : 'test', id }),
       });
       const data = await res.json();
       setTests((t) => ({ ...t, [id]: data }));
@@ -410,6 +423,21 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
             </div>
           ) : (
             <div className="space-y-3 mb-3">
+              {activePreset.id === 'x' && (
+                <div className="cap-card-desc p-2 rounded border border-default bg-elev">
+                  Register this exact OAuth 2.0 callback in your X app, then save its Client ID and Secret under the X integration. Shiba opens X in your browser and reuses the cached login automatically.
+                  <div className="flex gap-2 mt-2">
+                    <code className="grok-input flex-1 min-w-0 text-[11px] font-mono py-1.5 truncate" title={X_MCP_REDIRECT_URI}>{X_MCP_REDIRECT_URI}</code>
+                    <button
+                      type="button"
+                      className="grok-btn grok-btn-ghost text-xs shrink-0"
+                      onClick={() => navigator.clipboard.writeText(X_MCP_REDIRECT_URI).then(() => toast.success('X callback URI copied'))}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              )}
               {activePreset.envFields.map((field) => (
                 <div key={field.key}>
                   <div className="grok-label">
@@ -438,7 +466,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
           )}
           <div className="flex gap-2">
             <button type="button" onClick={confirmAddPreset} className="grok-btn grok-btn-primary text-xs">
-              <Plus size={13} /> Add server
+              <Plus size={13} /> {activePreset.id === 'x' ? 'Add & sign in with X' : 'Add server'}
             </button>
             <button type="button" onClick={() => setAddingPreset(null)} className="grok-btn grok-btn-secondary text-xs">
               Cancel
@@ -550,11 +578,13 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
                   </label>
                   <button
                     type="button"
-                    onClick={() => testServer(server.id)}
+                    onClick={() => testServer(server.id, server.presetId === 'x')}
                     disabled={testingId === server.id}
                     className="grok-btn grok-btn-secondary text-xs"
                   >
-                    {testingId === server.id ? 'Testing…' : 'Test'}
+                    {testingId === server.id
+                      ? (server.presetId === 'x' ? 'Waiting for X authorization…' : 'Testing…')
+                      : (server.presetId === 'x' ? 'Connect X' : 'Test')}
                   </button>
                   <button
                     type="button"

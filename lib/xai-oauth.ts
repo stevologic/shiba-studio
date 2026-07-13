@@ -372,9 +372,14 @@ export async function applyOAuthOnlyCloudAuthMode(): Promise<void> {
   }
 }
 
-export async function forceRefreshOAuthAccessToken(): Promise<string | null> {
+export async function forceRefreshOAuthAccessToken(expectedAccessToken?: string): Promise<string | null> {
   const session = await loadOAuthSession();
   if (!session?.refreshToken) return null;
+  // Another request may already have refreshed the token that received the
+  // 401. Reuse that newer token instead of rotating the refresh token again.
+  if (expectedAccessToken && session.accessToken !== expectedAccessToken && !isSessionExpired(session)) {
+    return session.accessToken;
+  }
   try {
     const refreshed = await refreshOAuthSession(session);
     return refreshed.accessToken;
@@ -383,7 +388,11 @@ export async function forceRefreshOAuthAccessToken(): Promise<string | null> {
   }
 }
 
-export async function refreshOAuthSession(
+const oauthRefreshGlobal = globalThis as typeof globalThis & {
+  __shibaOAuthRefresh?: Promise<XaiOAuthSession>;
+};
+
+async function performOAuthRefresh(
   session: XaiOAuthSession,
 ): Promise<XaiOAuthSession> {
   if (!session.refreshToken) throw new Error('No refresh token');
@@ -399,6 +408,21 @@ export async function refreshOAuthSession(
   if (!next.refreshToken) next.refreshToken = session.refreshToken;
   await saveOAuthSession(next);
   return next;
+}
+
+/** Coalesce concurrent expiry/401 refreshes. OAuth providers commonly rotate
+ * refresh tokens, so sending the same old refresh token twice can invalidate
+ * the otherwise-successful request. */
+export function refreshOAuthSession(session: XaiOAuthSession): Promise<XaiOAuthSession> {
+  const existing = oauthRefreshGlobal.__shibaOAuthRefresh;
+  if (existing) return existing;
+  const pending = performOAuthRefresh(session).finally(() => {
+    if (oauthRefreshGlobal.__shibaOAuthRefresh === pending) {
+      delete oauthRefreshGlobal.__shibaOAuthRefresh;
+    }
+  });
+  oauthRefreshGlobal.__shibaOAuthRefresh = pending;
+  return pending;
 }
 
 export async function getValidAccessToken(): Promise<string | null> {
@@ -516,8 +540,16 @@ export async function fetchCloudWithAuth(
   init: RequestInit = {},
   opts?: { keyOverride?: string; cfg?: AppConfig },
 ): Promise<Response> {
-  const auth = opts?.keyOverride?.trim()
-    ? { token: opts.keyOverride.trim(), source: 'api_key' as const, hasCloudAuth: true }
+  const override = opts?.keyOverride?.trim();
+  // Request-pinned keys preserve OAuth identity. Treating every override as an
+  // API key disabled the one-time 401 refresh path for OAuth-selected models.
+  const oauthSession = override ? await loadOAuthSession() : null;
+  const auth = override
+    ? {
+        token: override,
+        source: oauthSession?.accessToken === override ? 'oauth' as const : 'api_key' as const,
+        hasCloudAuth: true,
+      }
     : await resolveCloudBearer(opts?.cfg);
 
   if (!auth.token) {
@@ -535,7 +567,7 @@ export async function fetchCloudWithAuth(
   let res = await tokenFetcher(url, { ...init, headers });
 
   if (res.status === 401 && auth.source === 'oauth') {
-    const refreshed = await forceRefreshOAuthAccessToken();
+    const refreshed = await forceRefreshOAuthAccessToken(auth.token);
     if (refreshed) {
       setApiKey(refreshed);
       headers.set('Authorization', `Bearer ${refreshed}`);

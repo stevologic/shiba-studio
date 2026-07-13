@@ -30,6 +30,17 @@
   --radius-sm: 4px;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -1231,11 +1242,18 @@ body::before {
     z-index: 60;
     width: min(300px, 85vw);
     transform: translateX(-105%);
-    transition: transform 0.2s ease;
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 0.2s ease, visibility 0s linear 0.2s;
     box-shadow: 0 0 48px rgba(0, 0, 0, 0.65);
   }
 
-  .sidebar.sidebar-open { transform: translateX(0); }
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
 
   /* The mobile drawer ignores the desktop collapse preference */
   .sidebar.sidebar-collapsed { width: 16rem; }
@@ -6015,6 +6033,7 @@ body::before {
 }
 
 .chat-slash-desc {
+  flex: 1 1 auto;
   font-size: 11px;
   color: var(--text-dim);
   white-space: nowrap;
@@ -6061,6 +6080,87 @@ body::before {
   max-width: min(340px, 100%);
   max-height: 280px;
   object-fit: contain;
+}
+
+/* "Files created" chips under an agent response — open the in-chat viewer. */
+.chat-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 0.6rem;
+}
+
+.chat-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.chat-file-chip:hover {
+  color: var(--text);
+  border-color: var(--border-light);
+}
+
+/* In-chat file viewer — z-100 keeps it above the lightbox (80) and voice HUD (80). */
+.chat-file-view-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3vh 3vw;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.chat-file-view-modal {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 860px;
+  max-height: 88vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.chat-file-view-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-file-view-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-file-view-size {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.chat-file-view-body {
+  padding: 0.75rem 1rem;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .chat-lightbox {
@@ -6344,6 +6444,24 @@ body::before {
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 1.1rem;
+}
+
+.chat-slash-category {
+  margin-left: 0;
+  flex: 0 0 auto;
+  font-size: 9px;
+  line-height: 1;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.memory-card-pending {
+  border-color: color-mix(in srgb, var(--warning) 58%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warning) 70%, transparent);
 }
 
 .kb-head-actions {
@@ -7377,6 +7495,177 @@ input.input-icon-pad-sm { padding-left: 1.75rem; }
   color: var(--text-muted);
   font-family: var(--font-mono);
   word-break: break-all;
+}
+
+/* ── Memories table ──────────────────────────────────────────────────── */
+
+.memory-table-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0;
+}
+
+.memory-table {
+  min-width: 860px;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.memory-col-pin { width: 40px; text-align: center; }
+.memory-col-key { width: 190px; }
+.memory-col-kind { width: 92px; }
+.memory-col-scope { width: 140px; }
+.memory-col-status { width: 108px; }
+.memory-col-updated { width: 112px; }
+.memory-col-actions { width: 150px; }
+
+.memory-table td { vertical-align: top; }
+
+.memory-row { cursor: pointer; transition: background 0.12s ease; }
+.memory-row:hover { background: color-mix(in srgb, var(--bg-hover) 55%, transparent); }
+.memory-row-open { background: color-mix(in srgb, var(--bg-hover) 40%, transparent); }
+
+.memory-row-pending {
+  background: color-mix(in srgb, var(--warning) 5%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--warning) 55%, transparent);
+}
+
+.memory-key {
+  display: block;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-content-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.memory-expand-caret {
+  color: var(--text-dim);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Long memories never blow up the row: 2 lines, then ellipsis.
+   Expanding the row shows the full text in the detail strip below. */
+.memory-content-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.memory-dim-ellipsis,
+.memory-updated {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-updated {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.memory-icon-btn:hover { color: var(--text); background: var(--bg-hover); }
+.memory-icon-danger:hover { color: var(--error); }
+
+/* Status toggle chip. Two-class specificity beats .tool-chip's base color,
+   which would otherwise render "active" in the dim gray. */
+.memory-status-toggle { cursor: pointer; transition: filter 0.12s ease; }
+.memory-status-toggle:hover { filter: brightness(1.15); }
+
+.memory-status-toggle.memory-status-active {
+  color: var(--success);
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.memory-status-toggle.memory-status-inactive {
+  color: var(--text-dim);
+  border-color: var(--border);
+  background: transparent;
+}
+
+.memory-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  /* Approve stays visible (review queue); housekeeping icons appear on hover. */
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.memory-row:hover .memory-row-actions,
+.memory-row-actions:focus-within { opacity: 1; }
+
+.memory-row-actions .memory-approve-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-row-pending .memory-row-actions { opacity: 1; }
+
+.memory-detail-row td { border-bottom: 1px solid var(--border); }
+
+.memory-detail {
+  padding: 2px 4px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-detail-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  font-size: 13px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.memory-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+@media (hover: none) {
+  .memory-row-actions { opacity: 1; }
 }
 
 /* ── Responsive overrides — keep at end of file so they win the cascade ── */

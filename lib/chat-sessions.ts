@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
@@ -9,7 +10,6 @@ export { deriveSessionTitle } from './chat-session-types';
 
 const DATA_DIR = dataDir();
 const SESSIONS_FILE = path.join(DATA_DIR, 'chat-sessions.json');
-const SESSIONS_TMP = path.join(DATA_DIR, 'chat-sessions.json.tmp');
 
 interface ChatSessionStore {
   sessions: ChatSession[];
@@ -20,12 +20,13 @@ interface ChatSessionStore {
  * UI patches used to interleave writes and corrupt chat-sessions.json into
  * concatenated JSON — list then returned empty (parse failure).
  */
-let chain: Promise<unknown> = Promise.resolve();
+const chatStoreLockGlobal = globalThis as typeof globalThis & { __shibaChatStoreChain?: Promise<unknown> };
 
 function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = chain.then(fn, fn);
+  const previous = chatStoreLockGlobal.__shibaChatStoreChain ?? Promise.resolve();
+  const run = previous.then(fn, fn);
   // Keep the queue alive even if this op fails.
-  chain = run.then(
+  chatStoreLockGlobal.__shibaChatStoreChain = run.then(
     () => undefined,
     () => undefined,
   );
@@ -66,24 +67,13 @@ async function loadStore(): Promise<ChatSessionStore> {
   await ensureData();
   try {
     const raw = await fs.readFile(SESSIONS_FILE, 'utf8');
-    try {
-      const parsed = JSON.parse(raw);
-      return { sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [] };
-    } catch {
-      // Concurrent writers used to leave two JSON blobs concatenated.
-      const recovered = recoverFirstJsonObject(raw);
-      if (!recovered) return { sessions: [] };
-      try {
-        const parsed = JSON.parse(recovered);
-        const sessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
-        // Persist the repair so the next read is clean.
-        await saveStoreUnlocked(sessions);
-        return { sessions };
-      } catch {
-        return { sessions: [] };
-      }
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as ChatSessionStore).sessions)) {
+      throw new Error('Invalid chat session store: expected an object with a sessions array');
     }
-  } catch {
+    return { sessions: (parsed as ChatSessionStore).sessions };
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     return { sessions: [] };
   }
 }
@@ -92,8 +82,13 @@ async function loadStore(): Promise<ChatSessionStore> {
 async function saveStoreUnlocked(sessions: ChatSession[]) {
   await ensureData();
   const payload = `${JSON.stringify({ sessions }, null, 2)}\n`;
-  await fs.writeFile(SESSIONS_TMP, payload, 'utf8');
-  await fs.rename(SESSIONS_TMP, SESSIONS_FILE);
+  const tmp = `${SESSIONS_FILE}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tmp, payload, 'utf8');
+    await fs.rename(tmp, SESSIONS_FILE);
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
   // Live UI: session lists + nav badge refresh without a page reload.
   const { emitAppEvent } = await import('./app-events');
   emitAppEvent('chats');

@@ -6,6 +6,8 @@ import type { Agent } from './types';
 
 export interface MultiAgentChatParams {
   model: string;
+  cloudKey?: string;
+  signal?: AbortSignal;
   agents: Agent[];
   messages: ChatMessagePayload[];
   reasoningEffort?: ReasoningEffort;
@@ -26,7 +28,7 @@ function conversationContext(messages: ChatMessagePayload[], maxTurns = 6): Chat
 }
 
 export async function* multiAgentChatStream(params: MultiAgentChatParams): AsyncGenerator<ChatStreamEvent> {
-  const { agents, model, messages, reasoningEffort } = params;
+  const { agents, model, messages, reasoningEffort, cloudKey, signal } = params;
   if (!agents.length) {
     yield { type: 'error', message: 'No agents configured. Create agents first.' };
     return;
@@ -45,16 +47,27 @@ export async function* multiAgentChatStream(params: MultiAgentChatParams): Async
   };
 
   const perspectives: Array<{ agentId: string; name: string; content: string }> = [];
+  const { loadConfig } = await import('./persistence');
+  const cfg = await loadConfig();
 
   await Promise.all(
     agents.map(async (agent) => {
       try {
         // Each agent answers with live context from its own enabled integrations.
         const { buildIntegrationContext } = await import('./integration-context');
+        const { mergeAgentIntegrationCreds } = await import('./integrations');
+        const { parseModelRef } = await import('./model-providers');
+        const { resolveCloudBearer } = await import('./xai-oauth');
         const { asUntrustedContext } = await import('./prompt-hygiene');
-        const integrationContext = await buildIntegrationContext(agent.integrations, agent.driveFolders).catch(() => '');
+        const integrationCreds = mergeAgentIntegrationCreds(cfg.integrations || {}, agent.integrationOverrides);
+        const integrationContext = await buildIntegrationContext(agent.integrations, agent.driveFolders, integrationCreds).catch(() => '');
+        const agentModel = agent.model || model;
+        const agentRef = parseModelRef(agentModel);
+        const agentAuth = await resolveCloudBearer(cfg, agentRef.authSource);
         const resp = await grokChat({
-          model: agent.model || model,
+          model: agentModel,
+          cloudKey: cloudKey || agentAuth.token || undefined,
+          signal,
           messages: [
             {
               role: 'system',
@@ -101,8 +114,14 @@ export async function* multiAgentChatStream(params: MultiAgentChatParams): Async
     { role: 'user', content: userMessage },
   ];
 
+  const { parseModelRef } = await import('./model-providers');
+  const { resolveCloudBearer } = await import('./xai-oauth');
+  const synthesisAuth = await resolveCloudBearer(cfg, parseModelRef(model).authSource);
+
   for await (const event of grokChatStream({
     model,
+    cloudKey: cloudKey || synthesisAuth.token || undefined,
+    signal,
     messages: synthesisMessages,
     reasoningEffort,
     usageContext: { source: 'chat', sourceId: 'multi-agent' },

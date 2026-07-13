@@ -449,8 +449,8 @@ export default function UsageDashboard() {
         typeof data.authoritativeCostUsd === 'number' ? data.authoritativeCostUsd : null,
       );
       setUsageBadge((data.usageBadge as UsageBadge) || null);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to load usage');
     }
     setLoading(false);
   }
@@ -466,7 +466,14 @@ export default function UsageDashboard() {
   }
 
   if (error && !summary) {
-    return <div className="text-error text-sm py-8">Error: {error}</div>;
+    return (
+      <div className="py-8 text-sm">
+        <div className="text-error mb-3">Error: {error}</div>
+        <button type="button" className="grok-btn grok-btn-secondary text-xs" onClick={() => void load(true)}>
+          <RefreshCw size={14} /> Retry
+        </button>
+      </div>
+    );
   }
 
   if (!summary) return null;
@@ -492,6 +499,22 @@ export default function UsageDashboard() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div className="grok-card p-3 mb-4 flex flex-wrap items-center gap-3 text-sm text-warning" role="alert">
+          <span className="flex-1 min-w-[14rem]">
+            Refresh failed: {error}. Showing the last successfully loaded usage data.
+          </span>
+          <button
+            type="button"
+            className="grok-btn grok-btn-secondary text-xs"
+            onClick={() => void load(true)}
+            disabled={loading}
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Retry
+          </button>
+        </div>
+      )}
 
       {usageBadge && (
         <UsageBadgeExplainer badge={usageBadge} studioEstimateUsd={summary.estimatedCostUsd} />

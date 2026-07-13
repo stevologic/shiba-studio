@@ -102,11 +102,20 @@ export async function getPage(): Promise<Page> {
   return getPageForRun('__default__');
 }
 
-export async function browserNavigate(url: string, runId?: string): Promise<{ ok: boolean; url: string; title?: string }> {
+export async function browserNavigate(url: string, runId?: string): Promise<{ ok: boolean; url: string; title?: string; error?: string }> {
   const page = runId ? await getPageForRun(runId) : await getPage();
-  await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-  const title = await page.title().catch(() => '');
-  return { ok: true, url: page.url(), title };
+  try {
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    const title = await page.title().catch(() => '');
+    return { ok: true, url: page.url(), title };
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      url: page.url(),
+      title: await page.title().catch(() => ''),
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 export async function browserClick(selector: string, runId?: string): Promise<{ ok: boolean; selector: string; error?: string }> {
@@ -120,23 +129,31 @@ export async function browserClick(selector: string, runId?: string): Promise<{ 
   }
 }
 
-export async function browserType(selector: string, text: string, submit = false, runId?: string): Promise<{ ok: boolean; selector: string; text: string }> {
+export async function browserType(selector: string, text: string, submit = false, runId?: string): Promise<{ ok: boolean; selector: string; text: string; error?: string }> {
   const page = runId ? await getPageForRun(runId) : await getPage();
   try {
     await page.waitForSelector(selector, { timeout: 8000 });
-    await page.type(selector, text, { delay: 20 });
+    const applied = await page.evaluate((sel, val) => {
+      const el = document.querySelector(sel);
+      if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) return false;
+      const prototype = el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+      if (!setter) return false;
+      setter.call(el, val);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.focus();
+      return el.value === val;
+    }, selector, text);
+    if (!applied) throw new Error(`Selector is not a writable input: ${selector}`);
     if (submit) {
       await page.keyboard.press('Enter');
     }
     return { ok: true, selector, text };
-  } catch {
-    // fallback direct
-    await page.evaluate((sel, val) => {
-      const el = document.querySelector(sel) as HTMLInputElement | null;
-      if (el) el.value = val;
-    }, selector, text);
-    if (submit) await page.keyboard.press('Enter');
-    return { ok: true, selector, text };
+  } catch (error: unknown) {
+    return { ok: false, selector, text, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

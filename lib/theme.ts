@@ -77,6 +77,7 @@ export const PRIMARY_PAGE_SURFACES = [
   'projects',
   'board',
   'agents',
+  'memories',
   'workspace',
   'automations',
   'integrations',

@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, CopyPlus
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -34,6 +34,7 @@ const WorkspaceDiffPanel = dynamic(() => import('@/components/workspace-diff-pan
 const WorkspacePage = dynamic(() => import('@/components/workspace-page'), { loading: panelLoading });
 const KanbanBoard = dynamic(() => import('@/components/kanban-board'), { loading: panelLoading });
 const FilesPanel = dynamic(() => import('@/components/files-panel'), { loading: panelLoading });
+const MemoriesPanel = dynamic(() => import('@/components/memories-panel'), { loading: panelLoading });
 const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
 const ToolsCatalog = dynamic(() => import('@/components/tools-catalog'), { loading: panelLoading });
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
@@ -125,12 +126,73 @@ type RunSummaryLite = {
 // One source of truth for tab display names (nav, top bar, document titles).
 const TAB_LABELS: Record<string, string> = {
   dashboard: 'Dashboard', chat: 'Grok Chat', projects: 'Projects', board: 'Board', agents: 'Agents',
-  workspace: 'Workspace', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
+  memories: 'Memories', workspace: 'Workspace', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
   usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
 
 /** Survives React remounts so chat session URL changes never re-bootstrap the shell. */
 let studioBootstrapped = false;
+
+const DIALOG_FOCUSABLE_SELECTOR = [
+  '[autofocus]',
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+/**
+ * Minimal focus scope for the app shell's hand-built modal stack. It moves
+ * focus inside on open, wraps Tab/Shift+Tab, and restores the opener on close.
+ */
+function useDialogFocusScope<T extends HTMLElement>(open: boolean) {
+  const dialogRef = useRef<T>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const returnTarget = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const first = dialog.querySelector<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR);
+      (first || dialog).focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR),
+      ).filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', onKeyDown);
+      if (returnTarget?.isConnected) returnTarget.focus();
+    };
+  }, [open]);
+
+  return dialogRef;
+}
 
 function ModelProviderBadge({ modelId, size = 'sm' }: { modelId?: string; size?: 'sm' | 'xs' }) {
   const ref = parseModelRef(modelId || '');
@@ -503,7 +565,8 @@ export default function ShibaStudio() {
   const [agentForm, setAgentForm] = useState<any>({
     name: 'Builder Agent', avatar: 'alien-01', model: 'grok-4', workspace: { path: '', useWorktree: true },
     integrations: { ...EMPTY_INTEGRATION_SCOPE },
-    peers: [], skills: [], chatSkill: '', voiceId: '', schedules: [defaultScheduleEntry()], driveFolders: []
+    peers: [], skills: [], chatSkill: '', voiceId: '', schedules: [defaultScheduleEntry()], driveFolders: [],
+    learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
   });
   // TTS voice catalog for agent editor (live xAI list when signed in).
   type AgentVoiceOpt = { id: string; name: string; description?: string };
@@ -755,6 +818,7 @@ export default function ShibaStudio() {
           chatSessions: data.chatSessions ?? 0,
           projects: data.projects ?? 0,
           boardOpen: data.boardOpen ?? 0,
+          memories: data.memories ?? 0,
           workspaceFiles: data.workspaceFiles ?? 0,
           automationsScheduled: data.automationsScheduled ?? 0,
           integrationsConfigured: data.integrationsConfigured ?? 0,
@@ -1104,10 +1168,6 @@ export default function ShibaStudio() {
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    if (tab === 'workspace') loadUploads();
-  }, [tab]);
-
   // Model catalog: load once when cloud/local becomes available (not every poll tick).
   // If remount restored models from providers cache, skip a redundant fetch.
   const modelsBootstrappedRef = useRef(!!(getProvidersUiSnapshot()?.availableModels?.length));
@@ -1222,14 +1282,16 @@ export default function ShibaStudio() {
     }
     if (!runId) { toast.error('No running run to cancel.'); return; }
     try {
-      await fetch('/api/execute/cancel', {
+      const res = await fetch('/api/execute/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runId }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Could not cancel the run');
       toast('Stopping the run — it ends at the next step.');
-    } catch {
-      toast.error('Could not cancel the run');
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Could not cancel the run');
     }
   }
 
@@ -1397,6 +1459,17 @@ export default function ShibaStudio() {
   const [newAutomation, setNewAutomation] = useState<NewAutomationForm>(emptyNewAutomation);
   const [savingAutomation, setSavingAutomation] = useState(false);
 
+  const mobileNavDialogRef = useDialogFocusScope<HTMLDivElement>(mobileNavOpen);
+  const automationDialogRef = useDialogFocusScope<HTMLDivElement>(showNewAutomation);
+  const runDialogRef = useDialogFocusScope<HTMLDivElement>(showRunModal && !!runModalAgent);
+  const runLogVisible = !!historyAgent && !(runDetail || runDetailLoading) && !showTraceModal && !answerRun;
+  const runLogDialogRef = useDialogFocusScope<HTMLDivElement>(runLogVisible);
+  const traceDialogRef = useDialogFocusScope<HTMLDivElement>(showTraceModal);
+  const answerDialogRef = useDialogFocusScope<HTMLDivElement>(!!answerRun);
+  const runDetailVisible = !!(runDetail || runDetailLoading) && !showTraceModal;
+  const runDetailDialogRef = useDialogFocusScope<HTMLDivElement>(runDetailVisible);
+  const agentDialogRef = useDialogFocusScope<HTMLDivElement>(showAgentModal);
+
   function openNewAutomationModal(preselectAgentId?: string) {
     const preferred = preselectAgentId || agents[0]?.id || '';
     setNewAutomation({
@@ -1510,6 +1583,7 @@ export default function ShibaStudio() {
       skills: [],
       chatSkill: '',
       voiceId: '',
+      learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
       schedules: [enrichScheduleForForm({ ...defaultScheduleEntry(), instructions: 'Perform the scheduled task using your skills.' })],
     });
     setShowAgentModal(true);
@@ -1532,6 +1606,7 @@ export default function ShibaStudio() {
       skills: [],
       chatSkill: skill.slice(0, 4000),
       voiceId: '',
+      learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
       schedules: [enrichScheduleForForm({
         ...defaultScheduleEntry(),
         enabled: false,
@@ -2842,7 +2917,9 @@ export default function ShibaStudio() {
   // Light poll: runs list only (not full loadAll agents/config/integrations).
   // Full loadAll was a major nav jank source every 22s; runs need fresher data.
   useEffect(() => {
-    const t = setInterval(() => { void refreshRuns(); }, 30_000);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshRuns();
+    }, 120_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable helper, interval armed once
   }, []);
@@ -2877,7 +2954,9 @@ export default function ShibaStudio() {
   // Keep sidebar/footer commit SHA in sync with the tree Node is actually serving.
   useEffect(() => {
     void refreshRuntimeVersion();
-    const t = setInterval(() => { void refreshRuntimeVersion(); }, 15_000);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshRuntimeVersion();
+    }, 60_000);
     return () => clearInterval(t);
   }, []);
 
@@ -2890,6 +2969,7 @@ export default function ShibaStudio() {
       { id: 'projects', label: 'Projects' },
       { id: 'board', label: 'Board' },
       { id: 'agents', label: 'Agents' },
+      { id: 'memories', label: 'Memories' },
       { id: 'workspace', label: 'Workspace' },
       { id: 'automations', label: 'Automations' },
       { id: 'integrations', label: 'Capabilities' },
@@ -3023,7 +3103,13 @@ export default function ShibaStudio() {
         <div className="sidebar-backdrop" onClick={() => setMobileNavOpen(false)} aria-hidden />
       )}
       <div
+        ref={mobileNavDialogRef}
+        id="studio-sidebar-navigation"
         className={`sidebar w-64 flex-shrink-0 flex flex-col ${mobileNavOpen ? 'sidebar-open' : ''} ${navCollapsed ? 'sidebar-collapsed' : ''}`}
+        role={mobileNavOpen ? 'dialog' : undefined}
+        aria-modal={mobileNavOpen ? true : undefined}
+        aria-label={mobileNavOpen ? 'Site navigation' : undefined}
+        tabIndex={mobileNavOpen ? -1 : undefined}
         onClickCapture={(e) => {
           const el = e.target as HTMLElement;
           if (el.closest('a, .multitask-item, .multitask-section-head')) setMobileNavOpen(false);
@@ -3084,6 +3170,7 @@ export default function ShibaStudio() {
             // Open = backlog + todo + in progress: the work still ahead of review.
             { id: 'board', label: 'Board', icon: KanbanSquare, stat: navStats.boardOpen > 0 ? String(navStats.boardOpen) : null },
             { id: 'agents', label: 'Agents', icon: Users, stat: agents.length > 0 ? String(agents.length) : null },
+            { id: 'memories', label: 'Memories', icon: Brain, stat: navStats.memories > 0 ? String(navStats.memories) : null },
             { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
             { id: 'files', label: 'Files', icon: FileText, stat: null as string | null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
@@ -3110,6 +3197,7 @@ export default function ShibaStudio() {
                 href={linkHref}
                 prefetch={false}
                 onClick={(e) => {
+                  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                   // Client navigate without re-bootstrapping badges/catalog.
                   e.preventDefault();
                   navigateToTab(item.id as AppTab);
@@ -3117,6 +3205,7 @@ export default function ShibaStudio() {
                 className={`nav-item ${active ? 'active' : ''} ${navCollapsed ? 'nav-item-collapsed' : ''}`}
                 title={item.label}
                 aria-label={item.label}
+                aria-current={active ? 'page' : undefined}
               >
                 <Icon size={16} strokeWidth={1.75} className="nav-item-icon" aria-hidden />
                 <span className="nav-item-label">{item.label}</span>
@@ -3127,6 +3216,7 @@ export default function ShibaStudio() {
                   <span className={`nav-stat-badge nav-item-meta ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
                     item.id === 'chat' ? `${item.stat} open session(s)`
                     : item.id === 'projects' ? `${item.stat} project(s)`
+                    : item.id === 'memories' ? `${item.stat} stored memory item(s)`
                     : item.id === 'workspace' ? `${item.stat} file(s) in workspace`
                     : item.id === 'automations' ? `${item.stat} scheduled automation(s)`
                     : item.id === 'integrations' ? `${item.stat} configured integration(s)`
@@ -3151,8 +3241,9 @@ export default function ShibaStudio() {
           <MultitaskSidebar
             agents={agents}
             onNavigate={(next, extra) => {
-              navigateToTab(next);
               if (extra?.sessionId) navigateToChatSession(extra.sessionId);
+              else if (extra?.projectId) router.push(`/projects?project=${encodeURIComponent(extra.projectId)}`);
+              else navigateToTab(next);
             }}
             onDataChanged={() => { void refreshAgents(); void loadNavStats(); }}
           />
@@ -3271,7 +3362,11 @@ export default function ShibaStudio() {
       </div>
 
       {/* Main */}
-      <div className="flex-1 flex flex-col overflow-hidden relative">
+      <div
+        className="flex-1 flex flex-col overflow-hidden relative"
+        inert={mobileNavOpen ? true : undefined}
+        aria-hidden={mobileNavOpen ? true : undefined}
+      >
         {/* Animated deep-space scene — behind every page, pure CSS, honors reduced-motion */}
         <div className="space-scene space-scene-app" aria-hidden>
           <div className="space-stars space-stars-far" />
@@ -3290,6 +3385,8 @@ export default function ShibaStudio() {
               onClick={() => setMobileNavOpen(true)}
               title="Open navigation"
               aria-label="Open navigation"
+              aria-expanded={mobileNavOpen}
+              aria-controls="studio-sidebar-navigation"
             >
               <Menu size={18} />
             </button>
@@ -3585,6 +3682,7 @@ export default function ShibaStudio() {
 
           {tab === 'projects' && (
             <ProjectsPanel
+              initialProjectId={searchParams.get('project')}
               agents={agents}
               defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''}
               defaultChatModel={chatModel}
@@ -3750,6 +3848,9 @@ export default function ShibaStudio() {
 
           {/* FILES — every deliverable agents have written, across all runs */}
           {tab === 'files' && <FilesPanel />}
+
+          {/* MEMORIES — cross-run knowledge, review queue, and CRUD */}
+          {tab === 'memories' && <MemoriesPanel onDataChanged={() => { void loadNavStats(); }} />}
 
           {/* AUTOMATIONS — schedules & orchestration */}
           {tab === 'automations' && (
@@ -3941,11 +4042,13 @@ export default function ShibaStudio() {
                   onClick={() => !savingAutomation && setShowNewAutomation(false)}
                 >
                   <div
+                    ref={automationDialogRef}
                     className="modal modal-pop w-full max-w-md p-5 max-h-[90vh] overflow-y-auto"
                     onClick={(e) => e.stopPropagation()}
                     role="dialog"
                     aria-modal="true"
                     aria-label="New automation"
+                    tabIndex={-1}
                   >
                     <div className="flex items-start justify-between gap-2 mb-1">
                       <div className="text-lg font-semibold flex items-center gap-2">
@@ -4086,6 +4189,8 @@ export default function ShibaStudio() {
                 </div>
               )}
 
+              {/* Execution Trace — top of the stack. Closing returns to run
+                  details (if any) or the page; never leaves run log visible under it. */}
             </div>
           )}
 
@@ -4337,13 +4442,13 @@ export default function ShibaStudio() {
                     {integration.id === 'x' && (
                       <>
                         <input className="grok-input mb-2" placeholder="API Key (Consumer Key)" value={intCreds.x?.apiKey || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), apiKey: e.target.value}}))} />
-                        <input className="grok-input mb-2" placeholder="API Secret (Consumer Secret)" value={intCreds.x?.apiSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), apiSecret: e.target.value}}))} />
-                        <input className="grok-input mb-2" placeholder="Access Token" value={intCreds.x?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessToken: e.target.value}}))} />
-                        <input className="grok-input" placeholder="Access Token Secret" value={intCreds.x?.accessTokenSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessTokenSecret: e.target.value}}))} />
+                        <input className="grok-input mb-2" type="password" autoComplete="off" placeholder="API Secret (Consumer Secret)" value={intCreds.x?.apiSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), apiSecret: e.target.value}}))} />
+                        <input className="grok-input mb-2" type="password" autoComplete="off" placeholder="Access Token" value={intCreds.x?.accessToken || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessToken: e.target.value}}))} />
+                        <input className="grok-input" type="password" autoComplete="off" placeholder="Access Token Secret" value={intCreds.x?.accessTokenSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), accessTokenSecret: e.target.value}}))} />
                         <div className="mt-2 text-xs text-dim">The four keys above (OAuth 1.0a) power the built-in <span className="font-mono">x_post</span> / <span className="font-mono">x_read</span> tools. Create an app at developer.x.com with Read and Write permissions, then generate user access tokens.</div>
                         <div className="mt-3 mb-1 text-xs font-medium">OAuth 2.0 (for the X MCP server)</div>
                         <input className="grok-input mb-2" placeholder="OAuth 2.0 Client ID" value={intCreds.x?.clientId || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), clientId: e.target.value}}))} />
-                        <input className="grok-input" placeholder="OAuth 2.0 Client Secret" value={intCreds.x?.clientSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), clientSecret: e.target.value}}))} />
+                        <input className="grok-input" type="password" autoComplete="off" placeholder="OAuth 2.0 Client Secret" value={intCreds.x?.clientSecret || ''} onChange={e => setIntCreds((c:any)=>({...c, x: {...(c.x||{}), clientSecret: e.target.value}}))} />
                         <div className="mt-2 text-xs text-dim">Set these once and the X MCP server (Capabilities → MCP) auto-fills them — no re-entry. Find them at developer.x.com → your app → User authentication settings → OAuth 2.0.</div>
                       </>
                     )}
@@ -4752,7 +4857,6 @@ export default function ShibaStudio() {
                 externalAllowedPath={mcpBrowsePath}
                 onBrowsePath={() => setFolderBrowseFor('mcp')}
                 xClientId={intCreds.x?.clientId}
-                xClientSecret={intCreds.x?.clientSecret}
               />
 
               <ToolsCatalog />
@@ -5360,7 +5464,7 @@ export default function ShibaStudio() {
                     >
                       <option value="auto">Auto — xAI account billing when available, else studio metering</option>
                       <option value="xai">xAI account billing only</option>
-                      <option value="local">Studio metering (this app's own token accounting)</option>
+                      <option value="local">Studio metering (this app&apos;s own token accounting)</option>
                     </select>
                   </label>
                   <button type="button" onClick={() => void saveCostSettings()} className="grok-btn grok-btn-primary text-sm">
@@ -5580,8 +5684,13 @@ export default function ShibaStudio() {
             onClick={() => { setShowRunModal(false); setRunModalAgent(null); }}
           >
             <div
+              ref={runDialogRef}
               className="modal modal-pop w-full max-w-lg p-6"
               onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Run ${runModalAgent.name}`}
+              tabIndex={-1}
             >
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div>
@@ -5624,12 +5733,20 @@ export default function ShibaStudio() {
         )}
 
       {/* Run log — hidden while details or execution trace is open (stack). */}
-      {historyAgent && !(runDetail || runDetailLoading) && !showTraceModal && (
+      {historyAgent && runLogVisible && (
         <div
           className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
           onClick={() => { setHistoryAgent(null); setHistoryRuns(null); }}
         >
-          <div className="modal modal-pop w-full max-w-2xl p-6 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div
+            ref={runLogDialogRef}
+            className="modal modal-pop w-full max-w-2xl p-6 max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Run log for ${historyAgent.name}`}
+            tabIndex={-1}
+          >
             <div className="flex items-center gap-3 mb-1">
               <img src={resolveAgentAvatarPath(historyAgent)} alt="" className="agent-avatar-sm" width={28} height={28} />
               <div className="text-lg font-semibold truncate">Run log — {historyAgent.name}</div>
@@ -5702,7 +5819,15 @@ export default function ShibaStudio() {
           run details (if any) or the page. */}
       {showTraceModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={closeTraceModal}>
-          <div className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Execution trace">
+          <div
+            ref={traceDialogRef}
+            className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Execution trace"
+            tabIndex={-1}
+          >
             <div className="flex items-center gap-2 mb-3 shrink-0">
               <Terminal size={16}/>
               <div className="font-medium">Execution Trace</div>
@@ -5819,7 +5944,15 @@ export default function ShibaStudio() {
           className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4"
           onClick={() => setAnswerRun(null)}
         >
-          <div className="modal modal-pop w-full max-w-2xl p-6 max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div
+            ref={answerDialogRef}
+            className="modal modal-pop w-full max-w-2xl p-6 max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Answer from ${answerRun.agentName}`}
+            tabIndex={-1}
+          >
             <div className="flex items-start justify-between gap-3 mb-1">
               <div className="text-lg font-semibold truncate">Answer — {answerRun.agentName}</div>
               <span className={`run-status run-status-${answerRun.status} shrink-0`}>{answerRun.status}</span>
@@ -5869,7 +6002,15 @@ export default function ShibaStudio() {
           className="fixed inset-0 bg-black/70 flex items-center justify-center z-[65] p-4"
           onClick={closeRunDetail}
         >
-          <div className="modal modal-pop w-full max-w-3xl p-6 max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div
+            ref={runDetailDialogRef}
+            className="modal modal-pop w-full max-w-3xl p-6 max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Run details"
+            tabIndex={-1}
+          >
             {runDetailLoading || !runDetail ? (
               <div className="data-loading-row py-10 justify-center"><span className="data-spinner data-spinner-lg" /> Loading run…</div>
             ) : (() => {
@@ -6033,7 +6174,15 @@ export default function ShibaStudio() {
             /* No close-on-backdrop: agent setup is a long form and a stray
                click outside must not throw the work away. Close via ✕/Cancel. */
           >
-            <div className="modal modal-pop w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div
+              ref={agentDialogRef}
+              className="modal modal-pop w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-label={editingAgent ? `Edit agent ${editingAgent.name}` : 'Create new agent'}
+              tabIndex={-1}
+            >
               <div className="text-xl font-semibold mb-4">{editingAgent ? 'Edit Agent' : 'Create New Agent'}</div>
 
               <div className="grid grid-cols-1 gap-y-4">
@@ -6287,6 +6436,69 @@ export default function ShibaStudio() {
                     value={agentForm.chatSkill || ''}
                     onChange={(e) => setAgentForm({ ...agentForm, chatSkill: e.target.value })}
                   />
+                </div>
+
+                <div className="agent-form-section">
+                  <div className="agent-form-section-head">
+                    <div className="agent-form-section-title">
+                      <Brain size={15} className="opacity-70" />
+                      Learning &amp; memory
+                    </div>
+                    <div className="agent-form-section-sub">
+                      Extract durable lessons after successful runs, then reuse relevant memories automatically.
+                    </div>
+                  </div>
+                  <div className="sync-direction-grid grid-cols-3">
+                    {([
+                      { id: 'off', label: 'Off', hint: 'Recall only' },
+                      { id: 'review', label: 'Review', hint: 'Approve first' },
+                      { id: 'auto', label: 'Automatic', hint: 'Save directly' },
+                    ] as const).map((mode) => (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        className={`sync-direction-option ${(agentForm.learning?.mode || 'off') === mode.id ? 'sync-direction-active' : ''}`}
+                        onClick={() => setAgentForm({
+                          ...agentForm,
+                          learning: { ...(agentForm.learning || { autoRecall: true, maxMemories: 100 }), mode: mode.id },
+                        })}
+                      >
+                        <span>{mode.label}</span>
+                        <span className="text-[9px] opacity-60">{mode.hint}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[10px] text-dim mt-1.5">
+                    Review stores suggestions as pending on the Memories page. Automatic activates safe candidates immediately. Learning adds one small model call after a successful run and never stores credential-like text.
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={agentForm.learning?.autoRecall !== false}
+                        onChange={(event) => setAgentForm({
+                          ...agentForm,
+                          learning: { ...(agentForm.learning || { mode: 'off', maxMemories: 100 }), autoRecall: event.target.checked },
+                        })}
+                      />
+                      Recall relevant memories before runs
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-dim">
+                      Keep up to
+                      <input
+                        className="grok-input w-20 py-1 text-xs"
+                        type="number"
+                        min={10}
+                        max={500}
+                        value={agentForm.learning?.maxMemories || 100}
+                        onChange={(event) => setAgentForm({
+                          ...agentForm,
+                          learning: { ...(agentForm.learning || { mode: 'off', autoRecall: true }), maxMemories: Number(event.target.value) || 100 },
+                        })}
+                      />
+                      learned items
+                    </label>
+                  </div>
                 </div>
 
                 <div className="agent-form-section">

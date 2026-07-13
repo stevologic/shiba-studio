@@ -23,6 +23,8 @@ interface Endpoint {
   summary: string;
   /** true = changes data on the server; the explorer warns before sending. */
   mutating?: boolean;
+  /** true = response may expose secrets; confirmation text is distinct from writes. */
+  sensitive?: boolean;
   query?: Param[];
   /** Prefilled JSON body for POST endpoints. */
   body?: string;
@@ -31,7 +33,7 @@ interface Endpoint {
 const ENDPOINTS: Endpoint[] = [
   // --- Read / status ---
   { group: 'Status', method: 'GET', path: '/api/version', summary: 'Running commit, version, and (with checkUpdate=1) the latest GitHub release.', query: [{ name: 'checkUpdate', desc: 'Set to 1 to also probe GitHub releases', example: '1' }] },
-  { group: 'Status', method: 'GET', path: '/api/nav-stats', summary: 'Sidebar counts: chats, projects, workspace files, schedules, integrations, usage cost, cloud reachability.' },
+  { group: 'Status', method: 'GET', path: '/api/nav-stats', summary: 'Sidebar counts: chats, projects, memories, workspace files, schedules, integrations, usage cost, cloud reachability.' },
   { group: 'Status', method: 'GET', path: '/api/boot', summary: 'Boot ping — hydrates server config and arms schedules (idempotent).' },
   { group: 'Status', method: 'GET', path: '/api/models', summary: 'All selectable models (cloud + local) and cloud-auth flags.' },
   { group: 'Status', method: 'GET', path: '/api/tools', summary: 'The full built-in tool catalog with groups and scope requirements.' },
@@ -48,13 +50,15 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'Agents', method: 'GET', path: '/api/scheduler', summary: 'Armed cron schedules across all agents.' },
 
   // --- Search / logs / usage ---
-  { group: 'Observability', method: 'GET', path: '/api/search', summary: 'Global FTS5 search across chats, runs, and the audit log.', query: [{ name: 'q', desc: 'Query (min 2 chars)', example: 'shiba' }] },
+  { group: 'Observability', method: 'GET', path: '/api/search', summary: 'Global search across chats, memories, runs, and the audit log.', query: [{ name: 'q', desc: 'Query (min 2 chars)', example: 'shiba' }] },
   { group: 'Observability', method: 'GET', path: '/api/logs', summary: 'Audit log, paginated.', query: [{ name: 'q', desc: 'Substring filter', example: '' }, { name: 'category', desc: 'run|chat|agent|config|integration|skill|sync|workspace|auth|system' }, { name: 'limit', desc: 'Page size (max 500)', example: '25' }, { name: 'offset', desc: 'Row offset', example: '0' }] },
   { group: 'Observability', method: 'GET', path: '/api/usage', summary: 'Usage & cost summary (studio metering + optional xAI billing backport).' },
 
   // --- Content stores ---
   { group: 'Content', method: 'GET', path: '/api/chat-sessions', summary: 'All chat sessions (metadata + messages).' },
   { group: 'Content', method: 'GET', path: '/api/projects', summary: 'All projects.' },
+  { group: 'Content', method: 'GET', path: '/api/memories', summary: 'Search and filter shared-chat and per-agent memories.', query: [{ name: 'q', desc: 'Search keys and content' }, { name: 'agentId', desc: 'Scope id (__chat__ or agent id)' }, { name: 'status', desc: 'active|pending|archived' }, { name: 'source', desc: 'manual|tool|learned' }] },
+  { group: 'Content', method: 'POST', path: '/api/memories', summary: 'Create, update, approve, archive, pin, delete, or clear memories.', mutating: true, body: JSON.stringify({ action: 'create', agentId: '__chat__', key: 'preferred-package-manager', content: 'Use npm for this workspace.', kind: 'preference', pinned: false }, null, 2) },
   { group: 'Content', method: 'GET', path: '/api/skills', summary: 'Built-in + custom skills.' },
   { group: 'Content', method: 'GET', path: '/api/mcp', summary: 'Configured MCP servers.' },
   { group: 'Content', method: 'GET', path: '/api/workspace', summary: 'List files in a directory.', query: [{ name: 'dir', desc: 'Directory path (default cwd)', example: '' }] },
@@ -62,7 +66,7 @@ const ENDPOINTS: Endpoint[] = [
 
   // --- CLI & backup ---
   { group: 'CLI & Backup', method: 'GET', path: '/api/grok-cli/status', summary: 'Grok CLI detection: installed, version, path, models.', query: [{ name: 'checkUpdate', desc: '1 = also check for a newer CLI release' }] },
-  { group: 'CLI & Backup', method: 'GET', path: '/api/backup', summary: 'Download a full studio backup (JSON incl. encryption key).', query: [{ name: 'key', desc: 'Set to "omit" to exclude the encryption key' }] },
+  { group: 'CLI & Backup', method: 'GET', path: '/api/backup', summary: 'Download a full studio backup. Sensitive: the encryption key is included unless omitted.', sensitive: true, query: [{ name: 'key', desc: 'Use "omit" unless you explicitly need a portable secret-bearing backup', example: 'omit' }] },
 ];
 
 const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Observability', 'Content', 'CLI & Backup'];
@@ -99,8 +103,36 @@ export default function ApiDocsPage() {
     return selected.path + (s ? `?${s}` : '');
   }
 
+  async function readCapped(response: Response, maxBytes: number): Promise<{ raw: string; truncated: boolean }> {
+    if (!response.body) return { raw: '', truncated: false };
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let raw = '';
+    let bytes = 0;
+    let truncated = false;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const remaining = maxBytes - bytes;
+        if (value.byteLength > remaining) {
+          raw += decoder.decode(value.subarray(0, Math.max(0, remaining)), { stream: true });
+          truncated = true;
+          await reader.cancel();
+          break;
+        }
+        bytes += value.byteLength;
+        raw += decoder.decode(value, { stream: true });
+      }
+      raw += decoder.decode();
+      return { raw, truncated };
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   async function send() {
-    if (selected.mutating && !confirmMutation) { setConfirmMutation(true); return; }
+    if ((selected.mutating || selected.sensitive) && !confirmMutation) { setConfirmMutation(true); return; }
     setSending(true);
     setResp(null);
     const started = performance.now();
@@ -112,13 +144,13 @@ export default function ApiDocsPage() {
       }
       const r = await fetch(buildUrl(), init);
       const ct = r.headers.get('content-type') || '';
-      let text: string;
-      if (ct.includes('application/json')) {
-        text = JSON.stringify(await r.json(), null, 2);
-      } else {
-        const raw = await r.text();
-        text = raw.length > 4000 ? raw.slice(0, 4000) + '\n… (truncated)' : raw;
+      const isJson = ct.includes('application/json');
+      const capped = await readCapped(r, isJson ? 100_000 : 4_000);
+      let text = capped.raw;
+      if (isJson && !capped.truncated) {
+        try { text = JSON.stringify(JSON.parse(capped.raw), null, 2); } catch { /* show raw invalid JSON */ }
       }
+      if (capped.truncated) text += `\n… (truncated at ${isJson ? '100 KB' : '4 KB'})`;
       setResp({ status: r.status, ms: Math.round(performance.now() - started), text });
     } catch (e) {
       setResp({ status: 0, ms: Math.round(performance.now() - started), text: `Request failed: ${e instanceof Error ? e.message : String(e)}` });
@@ -135,8 +167,8 @@ export default function ApiDocsPage() {
           <Link href="/" className="apidocs-back">← Shiba Studio</Link>
           <h1>API Explorer</h1>
           <p className="apidocs-note">
-            Live, same-origin calls against your running instance. GET requests are safe;
-            <strong> POST requests can modify your data</strong>. Full reference:{' '}
+            Live, same-origin calls against your running instance. Review every endpoint before sending;
+            <strong> POST requests can modify data and some GET responses contain sensitive exports</strong>. Full reference:{' '}
             <a href="https://github.com/stevologic/shiba-studio/blob/main/docs/api.md" target="_blank" rel="noreferrer">docs/api.md</a>.
           </p>
         </div>
@@ -201,12 +233,19 @@ export default function ApiDocsPage() {
         {selected.mutating && (
           <div className="apidocs-warn">⚠ This is a write endpoint — sending it changes data in your live studio.</div>
         )}
+        {selected.sensitive && (
+          <div className="apidocs-warn">Sensitive export: the response can contain private workspace data or encryption material.</div>
+        )}
 
         <div className="apidocs-actions">
           <button type="button" className="grok-btn grok-btn-primary" onClick={() => void send()} disabled={sending}>
             {sending ? 'Sending…' : confirmMutation ? 'Click again to confirm' : 'Send request'}
           </button>
-          {confirmMutation && <span className="apidocs-confirm-hint">This will modify data. Click again to proceed.</span>}
+          {confirmMutation && (
+            <span className="apidocs-confirm-hint">
+              {selected.mutating ? 'This will modify data.' : 'This may expose sensitive data.'} Click again to proceed.
+            </span>
+          )}
         </div>
 
         {resp && (

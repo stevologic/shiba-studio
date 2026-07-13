@@ -10,12 +10,12 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 - [x] **Terminal bridge origin check** — the node-pty WebSocket on `127.0.0.1:3911` rejected nothing (WebSockets bypass CORS — drive-by shell); now closes foreign origins with 1008. Verified with real WS clients.
 - [x] **Default tool-approval mode** — fresh installs default to `ask`; YOLO is an explicit opt-in. Saved configs keep their choice.
 - [x] **Path-traversal audit** — Obsidian vault listing `..` escape fixed; `/api/fs/*` and `/api/workspace/*` are machine-wide by design (boundary = origin guard + loopback binding, documented in SECURITY.md).
-- [x] **Dependency audit** — only 2 moderate advisories, both in postcss bundled *inside* Next.js (auto-fix would downgrade Next to 9 — nonsense); tracked in SECURITY.md. CI runs `npm audit --audit-level=high` + lockfile-exact `npm ci`.
+- [x] **Dependency audit** — zero production advisories after pinning Next.js's bundled PostCSS to the patched release; CI runs `npm audit --audit-level=high` with lockfile-exact `npm ci`.
 - [x] **SECURITY.md** — threat model, boundaries, non-goals, private reporting channel.
 
 ## 2. Legal & branding (ship-blockers)
 
-- [x] **LICENSE** — dual-licensed AGPL-3.0-or-later / commercial ([LICENSE](LICENSE), [LICENSE.md](LICENSE.md)); `package.json` carries `SEE LICENSE IN LICENSE`.
+- [x] **LICENSE** — canonical AGPL-3.0 text in [LICENSE](LICENSE), with the separately negotiated [commercial option](COMMERCIAL.md); package metadata carries `AGPL-3.0-or-later`.
 - [x] **Naming review** — rebranded to "Shiba Studio"; legacy GrokDesk data migrates automatically.
 - [ ] **Asset licensing.** Confirm the shiba logo, alien avatars, and integration icons are original/licensed for redistribution. *(Needs the author's confirmation of provenance — not automatable.)*
 - [ ] **xAI API ToS check** — automated agent traffic, scheduled runs, and multi-agent fan-out must comply with rate/usage terms. *(Needs a human read of current xAI terms.)*
@@ -48,8 +48,8 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 - [x] README, docs pages, CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, PRIVACY, issue/PR templates — all present and refreshed for the dual-license + hardening changes.
 - [x] **Full docs-accuracy pass (post-merge)** — every doc cross-checked against the merged code: added Netlify wherever integrations were listed (agents, architecture, PRIVACY); corrected tool count (30+→40+; actual 48) and API-route count (~30→50+); fixed a factual error in PRIVACY (cloud sync goes to **xAI** file storage, not Google Drive); documented `PUPPETEER_SKIP_DOWNLOAD`, `SHIBA_TEST_DATA_DIR`, `terminal_exec`, the onboarding checklist, overlap/cost guardrails, `npm run test:e2e`, and the new `lib/` modules; verified no stale MIT/YOLO-default claims remain.
-- [x] **Interactive API docs** — [docs/api.md](api.md) documents every `/api/*` endpoint with curl examples, plus an **in-app explorer at `/api-docs`** that sends real same-origin test requests (GET safe; POST endpoints warn + require a confirm click). Linked from the footer ("API") and the README docs index.
-- [x] **Grok CLI docs** — [docs/cli.md](cli.md): install/detection, routing chat through the CLI, and the `grok_cli` agent tool (effort / self-verify / best-of-N / JSON-schema). CLI support itself was already complete.
+- [x] **Interactive API docs** — [docs/api.md](docs/api.md) documents every `/api/*` endpoint with curl examples, plus an **in-app explorer at `/api-docs`** that sends real same-origin test requests (GET safe; POST endpoints warn + require a confirm click). Linked from the footer ("API") and the README docs index.
+- [x] **Grok CLI docs** — [docs/cli.md](docs/cli.md): install/detection, routing chat through the CLI, and the `grok_cli` agent tool (effort / self-verify / best-of-N / JSON-schema). CLI support itself was already complete.
 - [x] **Report-a-bug link** — footer now has both "Request a feature" and "Report a bug", each routed to its GitHub issue template.
 
 ## 7. Product polish
@@ -62,9 +62,9 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 ---
 
-## State of the tree (2026-07-10)
+## State of the tree (2026-07-12)
 
-`origin/main` (Netlify/Vercel integrations, dual license, page-chrome refresh) is **merged and pushed** — `origin/main` and local `main` are in sync. The tree carries both that line and this session's work (guardrails, backup, search, onboarding, security hardening, tool-dispatch fixes). Verified: `tsc` clean · `next build` clean · **full `npm test` suite green (10/10 scripts, exit 0)** on the merged tree · app booted with both feature sets live and zero console errors · agent tool-use proven end-to-end · all docs cross-checked against code. Playwright E2E scaffold present (`npm run test:e2e`), not yet in CI.
+The combined release candidate includes integrations, dual licensing, memories and learning, guardrails, backup, search, onboarding, security hardening, and tool-dispatch fixes. Verified: `tsc` clean · `next build` clean · **full `npm test` suite green (15/15 scripts, exit 0)** · **Playwright 17/17 green** · app booted with the feature set live and zero console errors · agent tool-use proven end-to-end · all docs cross-checked against code. Playwright E2E is not yet wired into CI.
 
 ### Bugs fixed in the final product-quality pass
 

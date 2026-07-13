@@ -42,6 +42,9 @@ export interface GrokUsageContext {
 
 export interface GrokChatParams {
   model: string;
+  /** Request-scoped cloud bearer selected for this model; never read from global mutable state. */
+  cloudKey?: string;
+  signal?: AbortSignal;
   messages: GrokMessage[];
   tools?: GrokTool[];
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
@@ -326,6 +329,9 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
 
   let base = XAI_BASE;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, AbortSignal.timeout(300_000)])
+    : AbortSignal.timeout(300_000);
 
   if (ref.provider === 'local') {
     const { loadConfig } = await import('./persistence');
@@ -341,6 +347,7 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
         method: 'POST',
         headers,
         body: JSON.stringify(body),
+        signal,
       })
     : await (async () => {
         const { fetchCloudWithAuth } = await import('./xai-oauth');
@@ -348,7 +355,8 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
           method: 'POST',
           headers,
           body: JSON.stringify(body),
-        }, { keyOverride: keyOverride || undefined });
+          signal,
+        }, { keyOverride: params.cloudKey || keyOverride || undefined });
       })();
 
   if (!res.ok) {

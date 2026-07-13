@@ -2,7 +2,7 @@
   "name": "shiba-studio",
   "version": "0.2.0",
   "private": true,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "AGPL-3.0-or-later",
   "bin": {
     "shiba-studio": "bin/shiba-studio.mjs"
   },
@@ -32,7 +32,7 @@
     "googleapis": "^173.0.0",
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.22.0",
-    "next": "16.2.9",
+    "next": "16.2.10",
     "node-cron": "^4.5.0",
     "node-pty": "^1.1.0",
     "octokit": "^5.0.5",
@@ -55,10 +55,15 @@
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",
     "eslint": "^9",
-    "eslint-config-next": "16.2.9",
+    "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.18"
+    }
   },
   "engines": {
     "node": ">=22.5.0"

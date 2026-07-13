@@ -6,9 +6,10 @@
 
 import { promises as fs } from 'fs';
 import { dataDir } from './data-paths';
-import { closeDb, databasePath, getDb } from './db';
+import { beginDbMaintenance, databasePath, getDb, validateDatabaseFile } from './db';
 import { exportSecretKeyHex, importSecretKeyHex } from './secure-store';
 import { audit } from './audit-log';
+import { randomUUID } from 'crypto';
 
 export const BACKUP_FORMAT = 'shiba-studio-backup';
 export const BACKUP_VERSION = 1;
@@ -103,7 +104,14 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
   if (raw.secretKeyHex) {
     const keyRes = importSecretKeyHex(raw.secretKeyHex);
     if (keyRes.ok) restored.push('encryption key');
-    else warnings.push(keyRes.reason || 'Encryption key not installed');
+    else {
+      return {
+        ok: false,
+        restored: [],
+        warnings: [],
+        error: keyRes.reason || 'Encryption key not installed; nothing was restored',
+      };
+    }
   } else {
     warnings.push('Backup contains no encryption key — restored credentials open only if this machine already has the original key');
   }
@@ -126,18 +134,68 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
   // 3. SQLite database (runs + audit log). Close the shared handle, swap the
   //    file, reopen lazily on next access (migrations re-run automatically).
   if (raw.sqliteBase64) {
+    const dbFile = databasePath();
+    const previousFile = `${dbFile}.pre-restore`;
+    const stagedFile = `${dbFile}.${randomUUID()}.restore`;
+    let hadPrevious = false;
+    let liveSwapStarted = false;
+    let releaseMaintenance: (() => void) | undefined;
     try {
-      const dbFile = databasePath();
-      closeDb();
-      try { await fs.copyFile(dbFile, `${dbFile}.pre-restore`); } catch { /* fresh install */ }
+      await fs.writeFile(stagedFile, Buffer.from(raw.sqliteBase64, 'base64'));
+      validateDatabaseFile(stagedFile);
+      releaseMaintenance = beginDbMaintenance();
+      liveSwapStarted = true;
+      try {
+        await fs.copyFile(dbFile, previousFile);
+        hadPrevious = true;
+      } catch { /* fresh install */ }
       for (const ext of ['-wal', '-shm']) {
         try { await fs.rm(dbFile + ext, { force: true }); } catch { /* fine */ }
       }
-      await fs.writeFile(dbFile, Buffer.from(raw.sqliteBase64, 'base64'));
+      await fs.rm(dbFile, { force: true });
+      await fs.rename(stagedFile, dbFile);
+      releaseMaintenance();
+      releaseMaintenance = undefined;
       getDb(); // reopen + validate immediately so a corrupt import fails loudly here
       restored.push('shiba-studio.db (runs, audit log, memory)');
     } catch (e) {
-      warnings.push(`SQLite restore failed: ${e instanceof Error ? e.message : String(e)} — previous database kept at .pre-restore`);
+      const restoreError = e instanceof Error ? e.message : String(e);
+      let rollbackError = '';
+      if (liveSwapStarted) {
+        releaseMaintenance ??= beginDbMaintenance();
+        try { await fs.rm(dbFile, { force: true }); } catch { /* fine */ }
+        for (const ext of ['-wal', '-shm']) {
+          try { await fs.rm(dbFile + ext, { force: true }); } catch { /* fine */ }
+        }
+        if (hadPrevious) {
+          try {
+            await fs.copyFile(previousFile, dbFile);
+          } catch (rollbackCopyError) {
+            rollbackError = `could not restore the previous database: ${rollbackCopyError instanceof Error ? rollbackCopyError.message : String(rollbackCopyError)}`;
+          }
+        }
+        releaseMaintenance();
+        releaseMaintenance = undefined;
+        try {
+          getDb();
+        } catch (reopenError) {
+          const detail = `database could not be reopened: ${reopenError instanceof Error ? reopenError.message : String(reopenError)}`;
+          rollbackError = rollbackError ? `${rollbackError}; ${detail}` : detail;
+        }
+      }
+      if (liveSwapStarted) {
+        const recovery = rollbackError
+          ? `rollback incomplete (${rollbackError})`
+          : hadPrevious
+            ? 'previous database restored and reopened'
+            : 'no previous database existed; a fresh database was opened';
+        warnings.push(`SQLite restore failed: ${restoreError} — ${recovery}`);
+      } else {
+        warnings.push(`SQLite restore rejected before swap: ${restoreError} — live database left unchanged`);
+      }
+    } finally {
+      releaseMaintenance?.();
+      await fs.rm(stagedFile, { force: true }).catch(() => {});
     }
   }
 

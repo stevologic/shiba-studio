@@ -42,9 +42,8 @@ that power.
 
 ## Known accepted risks
 
-- `npm audit` currently reports moderate advisories in `postcss` as bundled
-  *inside* Next.js itself; the only automated "fix" is a major downgrade of
-  Next. This is tracked upstream and re-checked on every Next.js upgrade.
+- Production dependency overrides pin Next.js's bundled PostCSS to a patched
+  release; `npm audit --omit=dev` is expected to remain at zero advisories.
 - Local model servers (LM Studio/Ollama) and the Obsidian Local REST API are
   contacted over localhost HTTP(S); the Obsidian REST client accepts its
   self-signed certificate by design.

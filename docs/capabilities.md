@@ -21,7 +21,7 @@ Provide credentials once. Most integrations become tools and context for agents 
 | **Linear** | [Personal API key](https://linear.app/settings/api) from Linear's Security & access settings; *Test Connection* loads accessible teams | **Board → Sync**: pull a team's issues, push Shiba cards, or mirror both ways |
 | **Jira Cloud** | Site URL + Atlassian email + [API token](https://id.atlassian.com/manage-profile/security/api-tokens); scoped tokens also need the Cloud ID. *Test Connection* loads projects and Jira Software Kanban boards; issue type and extra JQL are optional | **Board → Sync**: pull/push/two-way sync against a project or Kanban board |
 
-Every credential is AES-256-GCM encrypted at rest. *Test Connection* verifies each one; *Remove* deletes stored credentials.
+Every credential managed by Shiba is AES-256-GCM encrypted at rest. *Test Connection* verifies each one; *Remove* deletes stored credentials. External CLIs can maintain separate caches; the X MCP exception is described below.
 
 ### Linear and Jira Board sync
 
@@ -39,7 +39,7 @@ Reusable prompt capabilities you assign to agents — presets plus your own cust
 
 ## MCP servers
 
-One-click presets or any custom stdio MCP server (command, args, env). Enabled servers give agents `mcp_list_tools` and `mcp_invoke` to discover and call their tools.
+One-click presets or any custom stdio MCP server (command, args, env). Enabled servers give agents `mcp_list_tools` and `mcp_invoke` to discover and call their tools. The X preset uses the official `xurl` bridge: register `http://localhost:8080/callback`, save the X app's OAuth 2.0 Client ID/Secret in the X integration, then click **Add & sign in with X**. On a desktop source install, the first connection opens browser consent; later connections reuse and refresh the isolated cached login automatically. The slim Docker image requires pre-authentication because it has no browser.
 
 ## Built-in tool catalog
 
@@ -51,7 +51,7 @@ Filterable, grouped, and annotated with what unlocks each tool (local agents onl
 | **Sandbox** | `sandbox_exec`, `sandbox_write_file` — every agent owns a private **Alpine Linux container** (`shiba-sandbox-<agentId>`, created lazily via Docker) with root, network, and `apk` package installs. State persists in `/work` across runs; fully isolated from the host with memory/CPU/pid limits (memory and CPUs adjustable in Settings → Cost & safety guardrails; running containers pick the change up on next use), and removed when the agent is deleted. Needs Docker running; tools explain that if it isn't |
 | **Web & Research** | `web_search` (keyless DuckDuckGo), `web_fetch` (page → clean text) |
 | **Browser Automation** | `browser_navigate`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_extract` |
-| **Memory** | `memory_save`, `memory_recall` — facts persist across runs per agent |
+| **Memory** | `memory_save`, `memory_recall`, `memory_forget` — scoped facts persist across runs; relevant memories are recalled automatically and optional post-run learning feeds the Memories review queue |
 | **AI Generation** | `generate_image` — xAI image generation; saves to the workspace and shows in the trace |
 | **Integrations** | the agent-scoped service tools above; Linear and Jira sync through Board rather than direct agent tools |
 | **Orchestration** | `schedule_task`, `send_to_peer`, `grok_cli` (headless Grok CLI delegation with effort levels, self-verification `check`, best-of-N, and JSON-schema structured output) |

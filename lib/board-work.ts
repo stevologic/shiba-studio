@@ -4,10 +4,13 @@
 // UI can link straight to them.
 
 import path from 'path';
-import { promises as fs } from 'fs';
 import { getBoardTask } from './board';
 import { getRun, loadRuns } from './agent-runs-store';
 import type { AgentRun, TraceStep } from './types';
+
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs = builtinFs.promises;
 
 export interface WorkFile {
   /** Basename, for display. */

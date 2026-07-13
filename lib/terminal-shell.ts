@@ -3,10 +3,13 @@
  * Prefer a Linux/POSIX shell (WSL bash → Git Bash → $SHELL / bash)
  * so the UX is consistent across Windows, macOS, and Linux.
  */
-import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
+
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs: typeof import('fs') = builtinFs;
 
 export type TerminalShell = {
   file: string;

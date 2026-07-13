@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
           projectContext: resolvedProjectContext,
           workspacePathOverride: resolvedWorkspace,
           projectId: projectId ? String(projectId) : undefined,
+          signal: req.signal,
         })) {
           controller.enqueue(encoder.encode(encodeAgentSseEvent(event)));
         }

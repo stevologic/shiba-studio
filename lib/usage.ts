@@ -6,7 +6,16 @@ import { parseModelRef } from './model-providers';
 
 const DATA_DIR = dataDir();
 const USAGE_FILE = path.join(DATA_DIR, 'usage.json');
+const USAGE_TMP = path.join(DATA_DIR, 'usage.json.tmp');
 const MAX_RECORDS = 10_000;
+const usageLockGlobal = globalThis as typeof globalThis & { __shibaUsageWriteChain?: Promise<unknown> };
+
+function withUsageWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = usageLockGlobal.__shibaUsageWriteChain ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  usageLockGlobal.__shibaUsageWriteChain = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 export type UsageSource = 'chat' | 'agent' | 'other';
 
@@ -105,8 +114,9 @@ export async function loadUsageRecords(): Promise<UsageRecord[]> {
     const raw = await fs.readFile(USAGE_FILE, 'utf8');
     const list = JSON.parse(raw);
     return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+    throw error;
   }
 }
 
@@ -143,11 +153,14 @@ export async function recordUsage(input: {
     estimatedCostUsd,
   };
 
-  const records = await loadUsageRecords();
-  records.push(record);
-  const trimmed = records.slice(-MAX_RECORDS);
-  await fs.writeFile(USAGE_FILE, JSON.stringify(trimmed, null, 2));
-  return record;
+  return withUsageWriteLock(async () => {
+    const records = await loadUsageRecords();
+    records.push(record);
+    const trimmed = records.slice(-MAX_RECORDS);
+    await fs.writeFile(USAGE_TMP, JSON.stringify(trimmed, null, 2));
+    await fs.rename(USAGE_TMP, USAGE_FILE);
+    return record;
+  });
 }
 
 export interface ModelUsageRow {

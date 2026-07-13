@@ -3,6 +3,7 @@ export interface NavStats {
   projects: number;
   /** Open board cards: backlog + todo + in_progress combined. */
   boardOpen: number;
+  memories: number;
   workspaceFiles: number;
   automationsScheduled: number;
   integrationsConfigured: number;

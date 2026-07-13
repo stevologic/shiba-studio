@@ -62,6 +62,8 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | --- | --- | --- |
 | GET | `/api/agents` | All agents (models, workspaces, scopes, skills, schedules). |
 | POST | `/api/agents` | `{ action: 'create'\|'update'\|'delete', … }` — manage agents. |
+| GET | `/api/memories` | Search/filter memories by `q`, `agentId`, `status`, or `source`; returns stats and scope labels. |
+| POST | `/api/memories` | `{ action: 'create'|'update'|'delete'|'clear', … }` — manage, approve, pin, archive, move, or remove memories. |
 | GET | `/api/runs` | Run summaries. Filters: `?agentId`, `?scheduleId`, `?scheduledOnly=1`, `?limit`. `?id=<runId>` returns one run **with its full trace**. |
 | GET | `/api/scheduler` | Armed cron schedules. |
 | POST | `/api/scheduler` | Update an agent's schedule (`{ agentId, cron, enabled }`). |
@@ -87,7 +89,7 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | POST | `/api/grok/multi-agent-stream` | "All agents" group chat with synthesis (SSE). |
 | POST | `/api/grok-cli/stream` | Stream a chat turn routed through the local **Grok CLI** (SSE). See [CLI](cli.md). |
 | GET | `/api/grok-cli/status` | Grok CLI detection: installed, version, path, models. `?checkUpdate=1` checks for a newer CLI. |
-| POST | `/api/chat-tools` | Run a chat slash-command tool (`/git`, `/search`, `/note`, …). |
+| POST | `/api/chat-tools` | Run chat research, memory, and X actions (`search`, `fetch`, `remember`, `recall`, `forget`, `post_x`). Git, Board, and Obsidian commands use their dedicated endpoints. |
 | POST | `/api/chat/upload` | Attach files/images to a chat. |
 | POST | `/api/tts` | Text-to-speech (xAI voices). |
 

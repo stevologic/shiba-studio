@@ -20,6 +20,38 @@ async function loadSdk() {
   return { Client: ClientClass!, StdioClientTransport: StdioTransportClass! };
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error(`${label} aborted`);
+  }
+  try {
+    const candidates: Promise<T>[] = [
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+        timeoutId.unref?.();
+      }),
+    ];
+    if (signal) {
+      candidates.push(new Promise<never>((_, reject) => {
+        onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new Error(`${label} aborted`));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }));
+    }
+    return await Promise.race(candidates);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 /** True for servers that do a one-time interactive OAuth sign-in on first run
  *  (e.g. the X MCP via xurl, which opens a browser and holds the MCP handshake
  *  open until you finish signing in). These need a much longer connect budget. */
@@ -31,6 +63,7 @@ function needsInteractiveOAuth(server: McpServerRecord): boolean {
 export async function connectMcpServer(
   server: McpServerRecord,
   timeoutMs = 30_000,
+  signal?: AbortSignal,
 ): Promise<McpClientHandle & { _client: InstanceType<typeof import('@modelcontextprotocol/sdk/client/index.js').Client> }> {
   const { Client, StdioClientTransport } = await loadSdk();
 
@@ -44,13 +77,13 @@ export async function connectMcpServer(
 
   // A first-run OAuth login (browser sign-in) can take a couple of minutes; the
   // MCP handshake is held until it completes, so don't cut it off at 30s.
-  const effectiveTimeout = needsInteractiveOAuth(server) ? Math.max(timeoutMs, 180_000) : timeoutMs;
-  const connectPromise = client.connect(transport);
-  const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`MCP connection timed out after ${effectiveTimeout}ms`)), effectiveTimeout);
-  });
-
-  await Promise.race([connectPromise, timeout]);
+  const effectiveTimeout = needsInteractiveOAuth(server) ? Math.max(timeoutMs, 300_000) : timeoutMs;
+  try {
+    await withTimeout(client.connect(transport), effectiveTimeout, 'MCP connection', signal);
+  } catch (error) {
+    await withTimeout(client.close(), 10_000, 'MCP cleanup').catch(() => {});
+    throw error;
+  }
 
   let serverVersion = '';
   try {
@@ -64,7 +97,7 @@ export async function connectMcpServer(
     _client: client,
     getServerVersion: () => serverVersion,
     async listTools() {
-      const result = await client.listTools();
+      const result = await withTimeout(client.listTools(), 45_000, 'MCP tool listing', signal);
       return { tools: result.tools || [] };
     },
     async callTool(name: string, args: Record<string, unknown>) {
@@ -79,7 +112,7 @@ export async function connectMcpServer(
 
 export async function disconnectMcpClient(handle: McpClientHandle): Promise<void> {
   try {
-    await handle.close();
+    await withTimeout(handle.close(), 10_000, 'MCP disconnect');
   } catch {
     /* ignore */
   }
@@ -89,11 +122,17 @@ export async function invokeMcpTool(
   server: McpServerRecord,
   toolName: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean; result?: unknown; error?: string }> {
   let client: McpClientHandle | null = null;
   try {
-    client = await connectMcpServer(server, 45_000);
-    const result = await client.callTool(toolName, args);
+    client = await connectMcpServer(server, 45_000, signal);
+    const result = await withTimeout(
+      client.callTool(toolName, args),
+      120_000,
+      `MCP tool "${toolName}"`,
+      signal,
+    );
     return { ok: true, result };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : 'MCP invoke failed' };

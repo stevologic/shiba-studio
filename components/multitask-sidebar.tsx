@@ -104,7 +104,9 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
 
   useEffect(() => {
     const initial = window.setTimeout(() => void load(false), 0);
-    const t = setInterval(() => void load(true), 30000);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') void load(true);
+    }, 120_000);
     return () => {
       window.clearTimeout(initial);
       clearInterval(t);

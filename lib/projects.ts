@@ -1,4 +1,3 @@
-import { promises as fs } from 'fs';
 import path from 'path';
 import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
@@ -21,10 +20,23 @@ export {
 
 import { readFileSmart, sanitizeUploadName, sha256Checksum, recordUploadMeta, removeUploadMeta } from './workspace';
 
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs = builtinFs.promises;
+
 const DATA_DIR = dataDir();
 const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
+const PROJECTS_TMP = path.join(DATA_DIR, 'projects.json.tmp');
 const PROJECT_FILES_ROOT = path.join(DATA_DIR, 'project-files');
 const MAX_UPLOAD_BYTES = 48 * 1024 * 1024;
+const projectsLockGlobal = globalThis as typeof globalThis & { __shibaProjectsWriteChain?: Promise<unknown> };
+
+function withProjectsWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = projectsLockGlobal.__shibaProjectsWriteChain ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  projectsLockGlobal.__shibaProjectsWriteChain = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 async function ensureData() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -32,7 +44,34 @@ async function ensureData() {
 }
 
 export function projectFilesDir(projectId: string): string {
-  return path.join(PROJECT_FILES_ROOT, projectId, 'files');
+  const id = projectId.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) || id === '.' || id === '..') {
+    throw new Error('Invalid project id');
+  }
+  const root = path.resolve(PROJECT_FILES_ROOT);
+  const projectRoot = path.resolve(root, id);
+  if (path.dirname(projectRoot) !== root) throw new Error('Project path escapes its data directory');
+  return path.join(projectRoot, 'files');
+}
+
+function projectStoredFilePath(projectId: string, storedName: string): string {
+  const name = String(storedName || '');
+  const windowsReserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+  if (
+    !name
+    || name !== path.basename(name)
+    || name === '.'
+    || name === '..'
+    || name.endsWith('.')
+    || name.endsWith(' ')
+    || windowsReserved.test(name)
+  ) {
+    throw new Error('Invalid stored project filename');
+  }
+  const root = path.resolve(projectFilesDir(projectId));
+  const target = path.resolve(root, name);
+  if (path.dirname(target) !== root) throw new Error('Project file path escapes its data directory');
+  return target;
 }
 
 async function loadStore(): Promise<Project[]> {
@@ -42,14 +81,16 @@ async function loadStore(): Promise<Project[]> {
     const parsed = JSON.parse(raw);
     const list = Array.isArray(parsed.projects) ? parsed.projects : [];
     return list.map((p: Project) => normalizeProject(p));
-  } catch {
-    return [];
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+    throw error;
   }
 }
 
 async function saveStore(projects: Project[]) {
   await ensureData();
-  await fs.writeFile(PROJECTS_FILE, JSON.stringify({ projects }, null, 2));
+  await fs.writeFile(PROJECTS_TMP, JSON.stringify({ projects }, null, 2));
+  await fs.rename(PROJECTS_TMP, PROJECTS_FILE);
 }
 
 export async function listProjects(): Promise<Project[]> {
@@ -63,6 +104,7 @@ export async function getProject(id: string): Promise<Project | null> {
 }
 
 export async function createProject(name: string, description = ''): Promise<Project> {
+  return withProjectsWriteLock(async () => {
   const now = new Date().toISOString();
   const project: Project = normalizeProject({
     id: uuidv4(),
@@ -81,12 +123,14 @@ export async function createProject(name: string, description = ''): Promise<Pro
   projects.push(project);
   await saveStore(projects);
   return project;
+  });
 }
 
 export async function updateProject(
   id: string,
   patch: Partial<Pick<Project, 'name' | 'description' | 'instructions' | 'workspacePath' | 'defaultAgentId'>>,
 ): Promise<Project> {
+  return withProjectsWriteLock(async () => {
   const projects = await loadStore();
   const idx = projects.findIndex((p) => p.id === id);
   if (idx < 0) throw new Error('Project not found');
@@ -97,15 +141,22 @@ export async function updateProject(
   };
   await saveStore(projects);
   return projects[idx];
+  });
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  const projects = await loadStore();
-  await saveStore(projects.filter((p) => p.id !== id));
-  await fs.rm(path.join(PROJECT_FILES_ROOT, id), { recursive: true, force: true }).catch(() => {});
+  await withProjectsWriteLock(async () => {
+    const projects = await loadStore();
+    const project = projects.find((item) => item.id === id);
+    if (!project) throw new Error('Project not found');
+    const filesDir = projectFilesDir(project.id);
+    await saveStore(projects.filter((item) => item.id !== project.id));
+    await fs.rm(path.dirname(filesDir), { recursive: true, force: true }).catch(() => {});
+  });
 }
 
 export async function saveProjectMessages(id: string, messages: ProjectChatMessage[]): Promise<Project> {
+  return withProjectsWriteLock(async () => {
   const projects = await loadStore();
   const idx = projects.findIndex((p) => p.id === id);
   if (idx < 0) throw new Error('Project not found');
@@ -113,6 +164,7 @@ export async function saveProjectMessages(id: string, messages: ProjectChatMessa
   projects[idx].updatedAt = new Date().toISOString();
   await saveStore(projects);
   return projects[idx];
+  });
 }
 
 export async function addProjectFile(
@@ -121,6 +173,7 @@ export async function addProjectFile(
   content: Buffer,
   mimeType?: string,
 ): Promise<ProjectFileMeta> {
+  return withProjectsWriteLock(async () => {
   if (content.length > MAX_UPLOAD_BYTES) {
     throw new Error(`File exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB limit`);
   }
@@ -131,7 +184,7 @@ export async function addProjectFile(
   const dir = projectFilesDir(projectId);
   await fs.mkdir(dir, { recursive: true });
   const storedName = sanitizeUploadName(filename);
-  const dest = path.join(dir, storedName);
+  const dest = projectStoredFilePath(projectId, storedName);
   await fs.writeFile(dest, content);
 
   const checksum = sha256Checksum(content);
@@ -156,9 +209,11 @@ export async function addProjectFile(
   projects[idx].updatedAt = uploadedAt;
   await saveStore(projects);
   return fileMeta;
+  });
 }
 
 export async function deleteProjectFile(projectId: string, fileId: string): Promise<Project> {
+  return withProjectsWriteLock(async () => {
   const projects = await loadStore();
   const idx = projects.findIndex((p) => p.id === projectId);
   if (idx < 0) throw new Error('Project not found');
@@ -167,7 +222,7 @@ export async function deleteProjectFile(projectId: string, fileId: string): Prom
   if (fileIdx < 0) throw new Error('File not found');
 
   const file = projects[idx].files[fileIdx];
-  const filePath = path.join(projectFilesDir(projectId), file.storedName);
+  const filePath = projectStoredFilePath(projectId, file.storedName);
   await fs.rm(filePath, { force: true }).catch(() => {});
   await removeUploadMeta(`project:${projectId}:${file.storedName}`);
 
@@ -175,10 +230,11 @@ export async function deleteProjectFile(projectId: string, fileId: string): Prom
   projects[idx].updatedAt = new Date().toISOString();
   await saveStore(projects);
   return projects[idx];
+  });
 }
 
 export async function readProjectFileText(projectId: string, storedName: string): Promise<string> {
-  const filePath = path.join(projectFilesDir(projectId), storedName);
+  const filePath = projectStoredFilePath(projectId, storedName);
   const result = await readFileSmart(filePath);
   return result.content;
 }

@@ -6,9 +6,15 @@
 // key file, e.g. for headless or containerized deployments.
 
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
-import * as fsSync from 'fs';
 import path from 'path';
 import { shibaHome } from './data-paths';
+
+// Runtime-only credential paths are intentionally outside the project. A
+// static fs import makes Next's file tracer conservatively copy the entire
+// repository because the key-file path is user-configurable.
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fsSync: typeof import('fs') = builtinFs;
 
 const PREFIX = 'enc:v1:';
 const ALGO = 'aes-256-gcm';
@@ -18,13 +24,15 @@ const TAG_LEN = 16;
 let cachedKey: Buffer | null = null;
 
 function keyFilePath(): string {
-  const file = path.join(shibaHome(), 'shiba-studio.key');
+  const configured = process.env.SHIBA_SECRET_KEY_FILE?.trim();
+  if (configured) return path.resolve(/* turbopackIgnore: true */ configured);
+  const file = path.join(/* turbopackIgnore: true */ shibaHome(), 'shiba-studio.key');
   // Pre-rebrand installs named the key grokdesk.key — carry it over so
   // credentials sealed under the old name stay readable.
-  const legacy = path.join(shibaHome(), 'grokdesk.key');
-  if (!fsSync.existsSync(file) && fsSync.existsSync(legacy)) {
+  const legacy = path.join(/* turbopackIgnore: true */ shibaHome(), 'grokdesk.key');
+  if (!fsSync.existsSync(/* turbopackIgnore: true */ file) && fsSync.existsSync(/* turbopackIgnore: true */ legacy)) {
     try {
-      fsSync.renameSync(legacy, file);
+      fsSync.renameSync(/* turbopackIgnore: true */ legacy, file);
     } catch {
       return legacy;
     }
@@ -43,7 +51,7 @@ function loadOrCreateKeySync(): Buffer {
 
   const file = keyFilePath();
   try {
-    const raw = fsSync.readFileSync(file, 'utf8').trim();
+    const raw = fsSync.readFileSync(/* turbopackIgnore: true */ file, 'utf8').trim();
     if (/^[0-9a-f]{64}$/i.test(raw)) {
       cachedKey = Buffer.from(raw, 'hex');
       return cachedKey;
@@ -53,10 +61,10 @@ function loadOrCreateKeySync(): Buffer {
   }
 
   const key = randomBytes(32);
-  fsSync.mkdirSync(path.dirname(file), { recursive: true });
+  fsSync.mkdirSync(/* turbopackIgnore: true */ path.dirname(file), { recursive: true });
   // mode 0o600 restricts the key to the current user on POSIX; on Windows the
   // file inherits the user-profile ACL, which is equivalently user-private.
-  fsSync.writeFileSync(file, key.toString('hex'), { mode: 0o600 });
+  fsSync.writeFileSync(/* turbopackIgnore: true */ file, key.toString('hex'), { mode: 0o600 });
   cachedKey = key;
   return key;
 }
@@ -128,8 +136,8 @@ export function importSecretKeyHex(hex: string): { ok: boolean; reason?: string 
   }
 
   const file = keyFilePath();
-  if (fsSync.existsSync(file)) {
-    const raw = fsSync.readFileSync(file, 'utf8').trim().toLowerCase();
+  if (fsSync.existsSync(/* turbopackIgnore: true */ file)) {
+    const raw = fsSync.readFileSync(/* turbopackIgnore: true */ file, 'utf8').trim().toLowerCase();
     if (raw === clean) return { ok: true };
     return {
       ok: false,
@@ -139,8 +147,8 @@ export function importSecretKeyHex(hex: string): { ok: boolean; reason?: string 
   }
 
   // Fresh machine — install the backup's key so restored secrets open.
-  fsSync.mkdirSync(path.dirname(file), { recursive: true });
-  fsSync.writeFileSync(file, clean, { mode: 0o600 });
+  fsSync.mkdirSync(/* turbopackIgnore: true */ path.dirname(file), { recursive: true });
+  fsSync.writeFileSync(/* turbopackIgnore: true */ file, clean, { mode: 0o600 });
   cachedKey = Buffer.from(clean, 'hex');
   return { ok: true };
 }

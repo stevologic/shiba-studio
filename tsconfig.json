@@ -30,5 +30,10 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "vercel-aws-bridge"]
+  "exclude": [
+    "node_modules",
+    "vercel-aws-bridge",
+    "pocs/**",
+    ".tmp-*"
+  ]
 }

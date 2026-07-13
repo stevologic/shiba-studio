@@ -1,0 +1,21 @@
+{
+  "name": "boxyhq-patterns-lab",
+  "version": "1.0.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "description": "Original SHIB-14 POC: BoxyHQ SaaS Starter enterprise patterns reimplemented for evaluation (not a fork).",
+  "type": "module",
+  "scripts": {
+    "test": "node --import tsx --test src/policy/rbac.test.ts src/config/feature-flags.test.ts src/security/login-lockout.test.ts src/security/team-api-keys.test.ts src/tenancy/invitations.test.ts src/policy/authorize.test.ts src/app/team-console.test.ts src/observability/outbox.test.ts",
+    "demo": "node --import tsx src/demo.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

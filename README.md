@@ -8,8 +8,8 @@
 
 Build, orchestrate, and schedule AI agents with full computer use — chat, code, browse, annotate, and automate, all from a beautiful space-themed cockpit that never leaves your machine.
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-white.svg?style=flat-square&labelColor=000)](LICENSE-AGPL-3.0)
-[![Commercial available](https://img.shields.io/badge/Commercial-available-white.svg?style=flat-square&labelColor=000)](LICENSE-COMMERCIAL.md)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-white.svg?style=flat-square&labelColor=000)](LICENSE)
+[![Commercial available](https://img.shields.io/badge/Commercial-available-white.svg?style=flat-square&labelColor=000)](COMMERCIAL.md)
 [![Node ≥ 22.5](https://img.shields.io/badge/Node-%E2%89%A5%2022.5-white.svg?style=flat-square&labelColor=000)](docs/getting-started.md)
 [![Platforms](https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-supported-white.svg?style=flat-square&labelColor=000)](docs/getting-started.md)
 [![Website](https://img.shields.io/badge/site-shiba--studio.io-white.svg?style=flat-square&labelColor=000)](http://shiba-studio.io)
@@ -32,11 +32,12 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 
 - **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Bind any chat to a **workspace folder** (a cloned repo, say) and Grok reads, writes, and searches its files directly.
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, peers, and schedules. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
+- **Learning & Memories** — agents automatically recall relevant local knowledge before runs and can extract durable facts, decisions, procedures, preferences, and lessons afterward in **Review** or **Automatic** mode. The Memories page provides search, approval, editing, pinning, archiving, scope moves, provenance, and deletion.
 - **Automations** — cron-scheduled agent runs with live execution traces, per-schedule run logs, and headless operation (schedules fire as long as the server is up — no browser required).
 - **Board** — a shared Kanban where people and agents work the same cards, with optional pull, push, or two-way sync to Linear teams and Jira projects/Kanban boards.
 - **Annotation sub-browser** — load the web app *you're* building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot straight into chat for code refinement.
 - **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, and Netlify agent integrations; Linear/Jira Board sync; custom skills; MCP servers; and a live catalog of 40+ built-in agent tools (web search, workspace grep, persistent memory, image generation, PRs, deploys, …).
-- **Everything local** — credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, one-file backup & restore, and zero telemetry.
+- **Everything local** — Shiba-managed credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, one-file backup & restore, and zero telemetry. External CLIs can maintain their own permission-restricted caches (the X MCP bridge is documented below).
 
 All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAuth 2.0 with X, the local Grok CLI, or any OpenAI-compatible local model server (LM Studio, Ollama, llama.cpp).
 
@@ -94,6 +95,7 @@ The top bar shows a readiness badge for each source.
 | [Grok Chat](docs/chat.md) | Sessions, models & reasoning, attachments, slash commands, the annotation sub-browser, quotas |
 | [Board](docs/board.md) | Shared Kanban, agent-run cards, and pull/push/two-way Linear or Jira sync |
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
+| [Memories](docs/memories.md) | Automatic learning modes, relevance recall, review queue, scopes, safety, and management |
 | [Automations](docs/automations.md) | Cron schedules, execution traces, run logs, headless operation |
 | [Capabilities](docs/capabilities.md) | Integrations, skills, MCP servers, and the full built-in tool catalog |
 | [Grok CLI](docs/cli.md) | Routing chat through the local `grok` CLI, the `grok_cli` agent tool, effort/check/best-of-N/structured output |
@@ -105,15 +107,15 @@ The top bar shows a readiness badge for each source.
 
 ## Highlights
 
-- **Slash commands with autocomplete** — type `/` in chat: `/git status|checkout|commit|pr`, `/annotate`, `/workspace`, `/search`, `/fetch`, `/remember`, `/recall`, `/note`, `/x`, `/help`.
+- **Slash commands with grouped autocomplete** — type `/` in chat for session targeting (`/agent`, `/model`, `/project`, `/clear`), Board work (`/task`, `/board`), Git (`/git status|diff|log|checkout|commit|pull|push|pr`), research, memory lifecycle (`/remember`, `/recall`, `/forget`, `/memories`), publishing, and `/help`.
 - **Chat workspaces** — point a chat at any folder with `/workspace` (or the topbar folder button); file reads/writes/searches and `/git` commands run inside it, so "fix the failing test in this repo" just works.
 - **Auto-titled chats** — a low-end model summarizes each new conversation into a title after the first exchange.
 - **Run provenance everywhere** — dashboard runs, agent history, and the audit log all deep-link to full execution traces; deleted agents show a 🛸 and their automations retire themselves.
 - **Cost & safety guardrails** — monthly *and* daily spend limits with an optional hard stop, a global concurrent-run cap, per-run token caps, and overlap-suppressed schedules (Settings → Cost & safety).
-- **Global search** — Ctrl+K searches your chats, agent runs, and audit log (SQLite FTS5) alongside commands, deep-linking straight to the result.
+- **Global search** — Ctrl+K searches chats, memories, agent runs, and the audit log alongside commands, deep-linking straight to the result.
 - **Backup & restore** — export your entire studio (settings, agents, chats, projects, runs, audit log) to one file and restore it on another machine.
 - **Bounded Board sync** — mirror task fields and optional workflow status with Linear or Jira while keeping stable `SHIB-#` keys; ordering, assignees, activity, runs, sprints, and deletions stay out of sync.
-- **Cross-session agent memory** — agents (and chat, via `/remember`) persist facts in SQLite and recall them in later runs.
+- **Cross-session agent learning** — scoped SQLite memories are relevance-ranked and injected automatically; successful runs can propose or activate safe learned memories with provenance and manual-review controls.
 - **Grok CLI deep integration** — route chats through the local CLI, and give agents `grok_cli` with effort levels, self-verification, best-of-N, and structured JSON output.
 
 ## Security
@@ -121,7 +123,7 @@ The top bar shows a readiness badge for each source.
 - **Localhost only, by default** — the server binds `127.0.0.1`; a same-origin guard (`proxy.ts`) blocks any other website in your browser from reaching the API, and the terminal bridge rejects foreign WebSocket origins. `npm run dev:lan` / `start:lan` opt into LAN exposure.
 - **Ask-before-act** — sensitive tools (shell, file writes, posting) require per-call approval by default; YOLO mode is an explicit opt-in.
 - **Spend limits** — optional monthly/daily budgets with a hard stop pause cloud runs and chats before you overspend; local models are always free.
-- **Credentials at rest** — all secrets (xAI API key, OAuth tokens, integration secrets) are **encrypted with AES-256-GCM** before touching disk; the machine key lives outside the project at `~/.shiba-studio/shiba-studio.key` (or supply `SHIBA_SECRET_KEY` as 64 hex chars for headless deployments). Plaintext stores migrate to encrypted form automatically on first load.
+- **Credentials at rest** — Shiba-managed secrets (xAI API key, Shiba OAuth tokens, integration secrets) are **encrypted with AES-256-GCM** before touching Shiba's stores; the machine key lives outside the project at `~/.shiba-studio/shiba-studio.key` (or supply `SHIBA_SECRET_KEY` as 64 hex chars for headless deployments). Plaintext Shiba stores migrate to encrypted form automatically on first load. External tools can have separate storage policies; notably, official `xurl` keeps the X MCP token cache in a permission-restricted plaintext YAML file inside Shiba's isolated data directory.
 
 Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Privacy: [PRIVACY.md](PRIVACY.md) · Settings reference: [Configuration](docs/configuration.md).
 
@@ -149,7 +151,7 @@ Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Pri
 
 **Dual licensed:**
 
-- **[AGPL-3.0-or-later](LICENSE-AGPL-3.0)** — open source; if you run a modified version as a network service, you must offer source to users.
-- **[Commercial](LICENSE-COMMERCIAL.md)** — for closed-source / SaaS use without AGPL obligations (contact the copyright holder).
+- **[AGPL-3.0-or-later](LICENSE)** — open source; if you run a modified version as a network service, you must offer source to users.
+- **[Commercial](COMMERCIAL.md)** — for closed-source / SaaS use without AGPL obligations (contact the copyright holder).
 
-See [LICENSE](LICENSE) for the dual-license notice.
+The public repository is distributed under AGPL-3.0-or-later unless a separate commercial agreement is in force.

@@ -38,6 +38,47 @@ export async function gitStatus(cwd: string): Promise<string> {
   ].filter(Boolean).join('\n\n');
 }
 
+export async function gitDiff(cwd: string, staged = false): Promise<string> {
+  await ensureRepo(cwd);
+  const flag = staged ? '--cached' : '';
+  const [stat, diff] = await Promise.all([
+    git(cwd, `diff ${flag} --stat`),
+    git(cwd, `diff ${flag} --no-color`),
+  ]);
+  if (diff.code !== 0) throw new Error((diff.stderr || diff.stdout).trim() || 'git diff failed');
+  if (!diff.stdout.trim()) return staged ? 'No staged changes.' : 'No unstaged changes.';
+  return [
+    stat.stdout.trim() ? `**Summary**\n\`\`\`\n${stat.stdout.trim().slice(0, 2000)}\n\`\`\`` : '',
+    `**Diff${staged ? ' (staged)' : ''}**\n\`\`\`diff\n${diff.stdout.trim().slice(0, 8000)}\n\`\`\``,
+  ].filter(Boolean).join('\n\n');
+}
+
+export async function gitLog(cwd: string, requested = 10): Promise<string> {
+  await ensureRepo(cwd);
+  const count = Math.max(1, Math.min(50, Number(requested) || 10));
+  const result = await git(cwd, `log --date=short --pretty=format:"%h  %ad  %s  (%an)" -${count}`);
+  if (result.code !== 0) throw new Error((result.stderr || result.stdout).trim() || 'git log failed');
+  return result.stdout.trim()
+    ? `**Recent commits**\n\`\`\`\n${result.stdout.trim().slice(0, 8000)}\n\`\`\``
+    : 'No commits yet.';
+}
+
+export async function gitPull(cwd: string): Promise<string> {
+  await ensureRepo(cwd);
+  const result = await git(cwd, 'pull --ff-only');
+  if (result.code !== 0) throw new Error((result.stderr || result.stdout).trim().slice(0, 800) || 'git pull failed');
+  return `Pulled with fast-forward only.\n\`\`\`\n${(result.stdout || result.stderr).trim().slice(0, 1200)}\n\`\`\``;
+}
+
+export async function gitPush(cwd: string): Promise<string> {
+  await ensureRepo(cwd);
+  const branch = (await git(cwd, 'branch --show-current')).stdout.trim();
+  if (!branch) throw new Error('Detached HEAD — checkout a branch first');
+  const result = await git(cwd, `push -u origin ${safeBranch(branch)}`);
+  if (result.code !== 0) throw new Error((result.stderr || result.stdout).trim().slice(0, 800) || 'git push failed');
+  return `Pushed \`${branch}\` to \`origin\`.`;
+}
+
 export async function gitCheckout(cwd: string, branchName: string): Promise<string> {
   await ensureRepo(cwd);
   const branch = safeBranch(branchName);

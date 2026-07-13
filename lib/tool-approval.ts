@@ -20,6 +20,7 @@ export const APPROVAL_GATED_TOOLS = new Set([
   'netlify_set_env',
   'grok_cli',
   'mcp_invoke',
+  'memory_forget',
 ]);
 
 export function toolNeedsApproval(toolName: string, mode: ToolApprovalMode | undefined): boolean {

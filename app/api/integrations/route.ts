@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
     const effectiveCreds = body.creds
       ? restoreMaskedCreds(body.creds, cfg.integrations || {})
       : (cfg.integrations || {});
-    Ints.setIntegrationCreds(effectiveCreds);
+    return Ints.withIntegrationCreds(effectiveCreds, async () => {
     const which = body.which;
     if (which === 'github') {
       const r = await Ints.testGitHub();
@@ -139,6 +139,8 @@ export async function POST(req: NextRequest) {
       const r = await Ints.testJira(effectiveCreds);
       return NextResponse.json(r);
     }
+    return NextResponse.json({ error: 'Unknown integration' }, { status: 400 });
+    });
   }
   return NextResponse.json({ error: 'bad action' }, { status: 400 });
 }

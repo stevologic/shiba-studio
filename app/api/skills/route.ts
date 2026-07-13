@@ -60,16 +60,22 @@ export async function POST(req: NextRequest) {
 
       const { loadConfig } = await import('@/lib/persistence');
       const { resolveCloudBearer } = await import('@/lib/xai-oauth');
-      const { grokChat, setApiKey } = await import('@/lib/grok-client');
+      const { grokChat } = await import('@/lib/grok-client');
       const { parseModelRef } = await import('@/lib/model-providers');
       const cfg = await loadConfig();
-      const auth = await resolveCloudBearer(cfg);
-      if (!auth.token) return NextResponse.json({ ok: false, error: 'Cloud credentials required to generate — connect an xAI key or OAuth' }, { status: 400 });
-      setApiKey(auth.token);
-      const model = parseModelRef(cfg.defaultGrokModel || 'cloud:grok-4').encoded;
+      const modelRef = parseModelRef(cfg.defaultGrokModel || 'cloud:grok-4');
+      const auth = modelRef.provider === 'cloud'
+        ? await resolveCloudBearer(cfg, modelRef.authSource)
+        : { token: null };
+      if (modelRef.provider === 'cloud' && !auth.token) {
+        return NextResponse.json({ ok: false, error: 'Cloud credentials required to generate — connect an xAI key or OAuth' }, { status: 400 });
+      }
+      const model = modelRef.encoded;
 
       const resp = await grokChat({
         model,
+        cloudKey: auth.token || undefined,
+        signal: req.signal,
         messages: [
           {
             role: 'system',

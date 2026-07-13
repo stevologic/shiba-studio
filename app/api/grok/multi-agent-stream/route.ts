@@ -1,20 +1,14 @@
 import { NextRequest } from 'next/server';
-import { setApiKey } from '@/lib/grok-client';
 import { encodeSseEvent, multiAgentChatStream } from '@/lib/multi-agent-chat';
 import { parseModelRef } from '@/lib/model-providers';
 import type { ChatMessagePayload } from '@/lib/chat-types';
 import { loadAgents, loadConfig } from '@/lib/persistence';
 import { buildGlobalUploadsChatContext } from '@/lib/workspace';
 import { normalizeAgent } from '@/lib/types';
-import { resolveCloudBearer } from '@/lib/xai-oauth';
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const cfg = await loadConfig();
-  const auth = await resolveCloudBearer(cfg);
-  if (auth.token) setApiKey(auth.token);
-  if (body.key) setApiKey(body.key);
-
   const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
   const model = parseModelRef(rawModel).encoded;
 
@@ -53,6 +47,8 @@ export async function POST(req: NextRequest) {
       try {
         for await (const event of multiAgentChatStream({
           model,
+          cloudKey: body.key || undefined,
+          signal: req.signal,
           agents,
           messages,
           reasoningEffort: body.reasoningEffort,

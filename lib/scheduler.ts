@@ -3,7 +3,7 @@
 
 import * as cron from 'node-cron';
 import { Agent, normalizeAgent, ScheduleEntry } from './types';
-import { loadAgents, saveAgents } from './persistence';
+import { loadAgents, mutateAgents } from './persistence';
 
 async function runScheduledAgent(
   agent: Agent,
@@ -160,18 +160,20 @@ export function scheduleAgentNow(agent: Agent, scheduleId?: string) {
 
 export async function updateAgentSchedule(agentId: string, cronExpr: string, enabled: boolean) {
   // Legacy support: add/update a schedule entry (use first or create)
-  let agents = await loadAgents();
-  agents = agents.map(normalizeAgent);
-  const idx = agents.findIndex(a => a.id === agentId);
-  if (idx === -1) return;
-  const ag = agents[idx];
-  if (ag.schedules.length === 0) {
-    ag.schedules.push({ id: 'sch-legacy', enabled, cron: cronExpr, instructions: ag.description || 'Scheduled task', description: '' });
-  } else {
-    // update first
-    ag.schedules[0] = { ...ag.schedules[0], enabled, cron: cronExpr };
-  }
-  await saveAgents(agents);
+  const updated = await mutateAgents((agents) => {
+    const idx = agents.findIndex(a => a.id === agentId);
+    if (idx === -1) return false;
+    const ag = normalizeAgent(agents[idx]);
+    agents[idx] = ag;
+    if (ag.schedules.length === 0) {
+      ag.schedules.push({ id: 'sch-legacy', enabled, cron: cronExpr, instructions: ag.description || 'Scheduled task', description: '' });
+    } else {
+      // update first
+      ag.schedules[0] = { ...ag.schedules[0], enabled, cron: cronExpr };
+    }
+    return true;
+  });
+  if (!updated) return;
 
   // resync all
   await loadAndScheduleAll();
@@ -209,7 +211,6 @@ export async function scheduleFromAgentTool(agentId: string, when: string, promp
   if (mMin) {
     const delay = parseInt(mMin[1], 10) * 60 * 1000;
     // timeout one-off, do not pollute; but pass scheduleInstructions for metadata (AC3)
-    await saveAgents(agents);
     setTimeout(async () => {
       try { await runScheduledAgent(ag, instructions, { scheduled: true, scheduleInstructions: instructions }); } catch (e) { console.error(e); }
     }, Math.max(1000, delay));
@@ -217,7 +218,6 @@ export async function scheduleFromAgentTool(agentId: string, when: string, promp
   }
   if (mSec) {
     const delay = parseInt(mSec[1], 10) * 1000;
-    await saveAgents(agents);
     setTimeout(async () => {
       try { await runScheduledAgent(ag, instructions, { scheduled: true, scheduleInstructions: instructions }); } catch (e) { console.error(e); }
     }, Math.max(500, delay));
@@ -227,8 +227,15 @@ export async function scheduleFromAgentTool(agentId: string, when: string, promp
   // Treat as cron string: add as enabled schedule entry
   if (when && (when.includes('*') || when.includes('/'))) {
     const entry: ScheduleEntry = { id: 'sch-tool-' + Date.now(), enabled: true, cron: when, instructions, description: (prompt || '').slice(0, 80) };
-    ag.schedules.push(entry);
-    await saveAgents(agents);
+    const scheduled = await mutateAgents((current) => {
+      const idx = current.findIndex((agent) => agent.id === agentId);
+      if (idx < 0) return false;
+      const live = normalizeAgent(current[idx]);
+      live.schedules.push(entry);
+      current[idx] = live;
+      return true;
+    });
+    if (!scheduled) return { ok: false, error: 'agent not found' };
     await loadAndScheduleAll();
     return { ok: true, type: 'cron', cron: when };
   }

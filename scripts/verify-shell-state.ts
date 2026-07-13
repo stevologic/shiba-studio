@@ -131,6 +131,7 @@ async function main() {
     chatSessions: 2,
     projects: 1,
     boardOpen: 3,
+    memories: 4,
     workspaceFiles: 3,
     automationsScheduled: 0,
     integrationsConfigured: 1,

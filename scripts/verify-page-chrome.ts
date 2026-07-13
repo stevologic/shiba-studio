@@ -31,6 +31,7 @@ const SURFACE_SOURCES: Record<(typeof PRIMARY_PAGE_SURFACES)[number], string[]> 
   projects: ['components/projects-panel.tsx'],
   board: ['components/kanban-board.tsx'],
   agents: ['components/shiba-studio.tsx'],
+  memories: ['components/memories-panel.tsx'],
   workspace: ['components/workspace-page.tsx'],
   automations: ['components/shiba-studio.tsx'],
   integrations: ['components/shiba-studio.tsx'],

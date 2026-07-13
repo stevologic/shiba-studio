@@ -25,6 +25,8 @@ Settings is a card grid; each card maps to a concern:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SHIBA_DATA_DIR` | `~/.shiba-studio/data` | Where all runtime data lives (config, SQLite, uploads, screenshots) |
+| `SHIBA_PROJECT_ROOT` | npm/shell working directory | Source/workspace root for launchers that start the process from another directory |
+| `SHIBA_SECRET_KEY_FILE` | `~/.shiba-studio/shiba-studio.key` | Overrides the machine key-file path; the Docker image sets this to `/data/shiba-studio.key` so secrets survive container replacement |
 | `SHIBA_SECRET_KEY` | `~/.shiba-studio/shiba-studio.key` file | 64-hex-char AES key for headless deployments (overrides the key file) |
 | `SHIBA_GIT_COMMIT` | resolved via `git rev-parse` | Overrides the commit shown in the sidebar/footer for non-git installs |
 | `PUPPETEER_SKIP_DOWNLOAD` | unset | Set to `1` before `npm install` to skip the ~150 MB Chromium download (slim install). Browser tools then explain how to fetch it on first use |
@@ -35,6 +37,14 @@ Settings is a card grid; each card maps to a concern:
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | unset | A bundled Google OAuth client for Drive. When both are set, Capabilities → Google Drive becomes zero-setup — users just click **Sign in with Google**. Unset = each user adds their own client under the card's Advanced section. See [Capabilities](capabilities.md) |
 
 Put these in a `.env.local` file in the project root (gitignored) or your shell environment; see `.env.example`.
+
+## X MCP browser sign-in
+
+The X MCP preset uses X's official `xurl` bridge. Register the exact OAuth 2.0 callback `http://localhost:8080/callback` in your X developer app, then save that app's Client ID and Client Secret under the X integration. Choosing **Add & sign in with X** opens X's authorization page in the system browser. After consent, `xurl` caches and refreshes the token, so later MCP connections sign in automatically while the X session remains valid.
+
+These OAuth 2.0 app credentials are separate from the OAuth 1.0a keys used by Shiba's built-in X tools and from xAI/SuperGrok sign-in. Shiba encrypts its saved client secret and gives each Client ID a private xurl home under the Shiba data directory, so an existing global `~/.xurl` account cannot be reused accidentally. The official bridge stores its own app credentials and access/refresh tokens as a permission-restricted plaintext YAML file inside that private home; it follows `xurl`'s storage lifecycle and is not removed when the Shiba MCP entry is deleted.
+
+Automatic browser consent is available when Shiba runs directly on a desktop. The slim Docker image has no browser and cannot complete xurl's first-time callback from inside the container; authenticate that isolated xurl profile before containerizing it, or run Shiba from source for the first consent. Once cached in the persistent `/data/x-mcp` volume, token reuse and refresh are automatic.
 
 The pre-rebrand names `GROKDESK_DATA_DIR` / `GROKDESK_SECRET_KEY` are still honored as fallbacks so older deployments keep working.
 

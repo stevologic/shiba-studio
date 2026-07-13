@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   ExternalLink, FileCode, FileText, Image as ImageIcon, Loader2, RefreshCw, Search, X,
 } from 'lucide-react';
-import { toast } from '@/lib/toast';
+import { subscribeLiveEvents } from '@/lib/live-events';
 
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
 
@@ -57,6 +57,35 @@ export default function FilesPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
   const [fileView, setFileView] = useState<FileView | null>(null);
+  const fileModalRef = useRef<HTMLDivElement>(null);
+  const fileCloseRef = useRef<HTMLButtonElement>(null);
+  const fileReturnFocusRef = useRef<HTMLElement | null>(null);
+  const fileViewOpen = fileView !== null;
+
+  useEffect(() => {
+    if (!fileViewOpen) return;
+    fileReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    requestAnimationFrame(() => fileCloseRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setFileView(null);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = fileModalRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      fileReturnFocusRef.current?.focus();
+    };
+  }, [fileViewOpen]);
 
   async function loadFiles() {
     setRefreshing(true);
@@ -78,11 +107,7 @@ export default function FilesPanel() {
 
   // Live-refresh when a run finishes (agents may have written new files).
   useEffect(() => {
-    const es = new EventSource('/api/events');
-    const onRuns = () => { void loadFiles(); };
-    es.addEventListener('runs', onRuns);
-    es.addEventListener('board', onRuns);
-    return () => { es.close(); };
+    return subscribeLiveEvents(['runs', 'board'], () => { void loadFiles(); });
   }, []);
 
   async function openFileView(file: CreatedFile) {
@@ -185,8 +210,10 @@ export default function FilesPanel() {
       {fileView && (
         <div className="kb-work-overlay kb-file-view-overlay" onClick={() => setFileView(null)} role="presentation">
           <div
+            ref={fileModalRef}
             className="kb-work-modal kb-file-view-modal"
             role="dialog"
+            aria-modal="true"
             aria-label={`File ${fileView.file.relPath}`}
             onClick={(e) => e.stopPropagation()}
           >
@@ -206,7 +233,7 @@ export default function FilesPanel() {
               >
                 <ExternalLink size={13} />
               </a>
-              <button type="button" className="kb-icon-btn" title="Close" aria-label="Close" onClick={() => setFileView(null)}>
+              <button ref={fileCloseRef} type="button" className="kb-icon-btn" title="Close" aria-label="Close" onClick={() => setFileView(null)}>
                 <X size={15} />
               </button>
             </div>

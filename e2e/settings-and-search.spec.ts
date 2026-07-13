@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('Cost & safety settings save round-trip', async ({ page }) => {
-  await page.goto('/settings', { waitUntil: 'networkidle' });
+  await page.goto('/settings', { waitUntil: 'domcontentloaded' });
   const card = page.locator('.settings-card', { hasText: 'Cost & safety' });
   await expect(card).toBeVisible();
 
@@ -13,8 +13,10 @@ test('Cost & safety settings save round-trip', async ({ page }) => {
 });
 
 test('command palette searches runs/chats/logs', async ({ page }) => {
-  await page.goto('/', { waitUntil: 'networkidle' });
-  await page.keyboard.press('Control+k');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  // Use the visible trigger so this test targets search behavior rather than
+  // racing React hydration of the global keyboard listener.
+  await page.getByRole('button', { name: 'Ctrl+K' }).click();
   const input = page.getByLabel('Command palette search');
   await expect(input).toBeVisible();
   await input.fill('agents');
@@ -23,6 +25,6 @@ test('command palette searches runs/chats/logs', async ({ page }) => {
 });
 
 test('logs page seeds search from ?q=', async ({ page }) => {
-  await page.goto('/logs?q=system', { waitUntil: 'networkidle' });
+  await page.goto('/logs?q=system', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('input[placeholder*="Search"]').first()).toHaveValue('system');
 });

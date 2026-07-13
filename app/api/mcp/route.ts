@@ -11,13 +11,13 @@ import {
   updateMcpServer,
 } from '@/lib/mcp';
 
-/** Env values under secret-looking keys go to the browser as fingerprints only. */
+/** MCP env can contain arbitrary credentials, so every non-empty value is fingerprinted. */
 async function maskServerEnv<T extends { env?: Record<string, string> }>(server: T): Promise<T> {
   if (!server?.env) return server;
-  const { isSecretFieldName, maskSecret } = await import('@/lib/secret-mask');
+  const { maskSecret } = await import('@/lib/secret-mask');
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(server.env)) {
-    env[k] = typeof v === 'string' && v && isSecretFieldName(k) ? maskSecret(v) : v;
+    env[k] = typeof v === 'string' && v ? maskSecret(v) : v;
   }
   return { ...server, env };
 }
@@ -61,6 +61,15 @@ async function sanitizeIncomingEnv(
 }
 
 export async function POST(req: NextRequest) {
+  try {
+    return await handlePost(req);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'MCP request failed';
+    return NextResponse.json({ ok: false, error: message }, { status: 400 });
+  }
+}
+
+async function handlePost(req: NextRequest) {
   const body = await req.json();
 
   if (body.action === 'addPreset') {
@@ -75,6 +84,8 @@ export async function POST(req: NextRequest) {
     const server = await addMcpServerFromPreset(body.presetId, fieldValues, {
       workspacePath: cfg.defaultWorkspace,
       githubToken: cfg.integrations?.github?.token,
+      xClientId: cfg.integrations?.x?.clientId,
+      xClientSecret: cfg.integrations?.x?.clientSecret,
     });
     return NextResponse.json({ ok: true, server: await maskServerEnv(server) });
   }
@@ -115,9 +126,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  if (body.action === 'test') {
+  if (body.action === 'test' || body.action === 'connect') {
     const server = await getMcpServer(body.id);
     if (!server) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    if (body.action === 'connect' && server.presetId !== 'x') {
+      return NextResponse.json({ error: 'Browser sign-in is only available for the X MCP preset' }, { status: 400 });
+    }
     const result = await testMcpServer(server);
     return NextResponse.json(result);
   }

@@ -7,8 +7,9 @@ services:
       # design (single user). Change to "3000:3000" only behind your own auth.
       - "127.0.0.1:3000:3000"
     volumes:
-      # Everything lives here: config, ENCRYPTED credentials + machine key,
-      # runs/audit SQLite, chats. Back this volume up.
+      # Everything lives here: config, Shiba-encrypted credentials + machine
+      # key, xurl's permission-restricted cache, runs/audit SQLite, chats.
+      # Back this volume up and protect it like a password.
       - shiba-data:/data
     restart: unless-stopped
 

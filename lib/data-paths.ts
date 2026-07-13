@@ -1,10 +1,20 @@
 import path from 'path';
-import * as fs from 'fs';
 import os from 'os';
+
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs: typeof import('fs') = builtinFs;
 
 /** Project root — scoped for Next.js file tracing (avoids whole-repo NFT warnings). */
 export function projectRoot(): string {
-  return /* turbopackIgnore: true */ process.cwd();
+  // INIT_CWD is set by npm and PWD by POSIX shells. Avoid a bare process.cwd()
+  // here: Next's file tracer interprets it as "bundle the entire repository".
+  return path.resolve(/* turbopackIgnore: true */
+    process.env.SHIBA_PROJECT_ROOT?.trim()
+    || process.env.INIT_CWD?.trim()
+    || process.env.PWD?.trim()
+    || '.',
+  );
 }
 
 let resolvedHome: string | null = null;
@@ -43,13 +53,13 @@ export function shibaHome(): string {
  */
 function defaultDataRoot(): string {
   const env = (process.env.SHIBA_DATA_DIR || process.env.GROKDESK_DATA_DIR)?.trim();
-  if (env) return path.resolve(env);
+  if (env) return path.resolve(/* turbopackIgnore: true */ env);
   return path.join(shibaHome(), 'data');
 }
 
 function migrateLegacyData(target: string): void {
   try {
-    const legacy = path.join(/* turbopackIgnore: true */ process.cwd(), 'data');
+    const legacy = path.join(projectRoot(), 'data');
     if (path.resolve(legacy) === path.resolve(target)) return;
     if (!fs.existsSync(legacy)) return;
     const targetPopulated = fs.existsSync(target) && fs.readdirSync(target).length > 0;
@@ -78,5 +88,5 @@ export function dataDir(...segments: string[]): string {
     }
     resolvedDataDir = target;
   }
-  return path.join(resolvedDataDir, ...segments);
+  return path.join(/* turbopackIgnore: true */ resolvedDataDir, ...segments);
 }

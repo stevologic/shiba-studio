@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import * as fs from 'fs';
-import { setApiKey } from '@/lib/grok-client';
 import { encodeSseEvent, grokChatStream } from '@/lib/grok-chat-stream';
 import { parseModelRef } from '@/lib/model-providers';
 import type { ChatMessagePayload } from '@/lib/chat-types';
@@ -13,13 +12,12 @@ import { clipForModel, environmentFacts } from '@/lib/prompt-hygiene';
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const cfg = await loadConfig();
+  let integrationCreds = cfg.integrations || {};
   const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
   const parsedModel = parseModelRef(rawModel);
   const model = parsedModel.encoded;
   // Honor the model's pinned credential source (OAuth-tagged vs Token-tagged).
   const auth = await resolveCloudBearer(cfg, parsedModel.authSource);
-  if (auth.token) setApiKey(auth.token);
-  if (body.key) setApiKey(body.key);
 
   const messages: ChatMessagePayload[] = [];
   const systemParts: string[] = [];
@@ -80,15 +78,32 @@ export async function POST(req: NextRequest) {
         agentName = agent.name;
         // Scope this chat's integration tools to the agent's own credential
         // overrides (its own token/account) before building context or running.
-        const { setIntegrationCreds, mergeAgentIntegrationCreds } = await import('@/lib/integrations');
-        setIntegrationCreds(mergeAgentIntegrationCreds(cfg.integrations || {}, agent.integrationOverrides));
+        const { mergeAgentIntegrationCreds } = await import('@/lib/integrations');
+        integrationCreds = mergeAgentIntegrationCreds(cfg.integrations || {}, agent.integrationOverrides);
         const { buildIntegrationContext } = await import('@/lib/integration-context');
-        const integrationContext = await buildIntegrationContext(agent.integrations, agent.driveFolders);
+        const integrationContext = await buildIntegrationContext(agent.integrations, agent.driveFolders, integrationCreds);
         if (integrationContext) systemParts.push(asBackgroundContext('agent integrations', integrationContext));
       }
     } catch {
       /* integration context is best-effort */
     }
+  }
+  // Relevant memories are injected deterministically so the model benefits
+  // from prior learning without first remembering to call memory_recall. Plain
+  // Grok uses shared-chat memory; chatting as an agent uses that agent's scope.
+  try {
+    const latestText = Array.isArray(body.messages)
+      ? [...body.messages].reverse().find((message) => message?.role === 'user')?.content
+      : body.prompt;
+    const shouldRecall = !chatAgent || chatAgent.learning?.autoRecall !== false;
+    if (shouldRecall && latestText) {
+      const { CHAT_MEMORY_SCOPE, buildMemoryContext, recallRelevantMemories } = await import('@/lib/agent-memory');
+      const recalled = recallRelevantMemories(chatAgent?.id || CHAT_MEMORY_SCOPE, String(latestText), 8);
+      const memoryContext = buildMemoryContext(recalled);
+      if (memoryContext) systemParts.push(memoryContext);
+    }
+  } catch {
+    /* memory recall is helpful context, never a reason to fail chat */
   }
   // Chat workspace: a folder the user bound this chat to (usually a cloned
   // repo). Validated here; fs tools + the system prompt are rooted in it.
@@ -287,6 +302,7 @@ export async function POST(req: NextRequest) {
               'web_search', 'web_fetch', 'memory_save', 'memory_recall', 'generate_image',
               'terminal_exec',
             ]);
+            const MEMORY_TOOL_NAMES = new Set(['memory_save', 'memory_recall']);
             const toolLabel = (name: string, args: Record<string, unknown>): string => {
               const short = (v: unknown, n = 80) =>
                 String(v ?? '').replace(/\s+/g, ' ').slice(0, n);
@@ -440,6 +456,8 @@ export async function POST(req: NextRequest) {
               try {
                 resp = await grokChat({
                   model,
+                  cloudKey: body.key || auth.token || undefined,
+                  signal: req.signal,
                   messages: msgs,
                   tools: allowTools ? tools : undefined,
                   tool_choice: allowTools ? 'auto' : undefined,
@@ -459,6 +477,8 @@ export async function POST(req: NextRequest) {
                 });
                 resp = await grokChat({
                   model,
+                  cloudKey: body.key || auth.token || undefined,
+                  signal: req.signal,
                   messages: msgs,
                   temperature: body.temperature,
                   max_tokens: body.max_tokens ?? 4096,
@@ -573,10 +593,12 @@ export async function POST(req: NextRequest) {
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   let args: any = {};
                   try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
-                  const execAgent = !agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
-                    ? workspaceAgent
-                    : agent;
-                  const res = await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID)
+                  const execAgent = agent && MEMORY_TOOL_NAMES.has(fn.name)
+                    ? agent
+                    : (!agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
+                      ? workspaceAgent
+                      : agent);
+                  const res = await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID, integrationCreds, req.signal)
                     .catch((e: unknown) => ({ result: { error: e instanceof Error ? e.message : String(e) }, sideEffect: '' }));
                   preExecuted.set(tc.id, res as { result: unknown; sideEffect?: string; screenshot?: string });
                 }));
@@ -627,11 +649,13 @@ export async function POST(req: NextRequest) {
                   });
                   continue;
                 }
-                const execAgent = !agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
-                  ? workspaceAgent
-                  : agent;
+                const execAgent = agent && MEMORY_TOOL_NAMES.has(fn.name)
+                  ? agent
+                  : (!agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
+                    ? workspaceAgent
+                    : agent);
                 const out = preExecuted.get(tc.id)
-                  ?? await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID);
+                  ?? await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID, integrationCreds, req.signal);
                 toolsUsed.push(fn.name);
                 // Files written this turn get linked under the response so the
                 // user can open them in the in-chat viewer.
@@ -665,6 +689,8 @@ export async function POST(req: NextRequest) {
                 });
                 const finalResp = await grokChat({
                   model,
+                  cloudKey: body.key || auth.token || undefined,
+                  signal: req.signal,
                   messages: msgs,
                   temperature: body.temperature,
                   max_tokens: body.max_tokens ?? 4096,
@@ -707,6 +733,8 @@ export async function POST(req: NextRequest) {
       try {
         for await (const event of grokChatStream({
           model,
+          cloudKey: body.key || auth.token || undefined,
+          signal: req.signal,
           messages,
           temperature: body.temperature,
           max_tokens: body.max_tokens,

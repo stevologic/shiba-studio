@@ -36,7 +36,7 @@ const GROUP_BLURBS: Record<string, string> = {
   Sandbox: 'Each agent\'s own Alpine Linux container — install packages and experiment in isolation.',
   'Web & Research': 'Search the web and read pages — no API keys required.',
   'Browser Automation': 'Drive the controlled Chrome browser — navigate, click, extract.',
-  Memory: 'Facts persist across runs — agents remember and recall on their own.',
+  Memory: 'Save, recall, and forget durable knowledge. Relevant active memories load before runs; optional learning proposes or activates new ones afterward.',
   'AI Generation': 'Create images from prompts with xAI; results appear in the run trace.',
   Integrations: 'Act on connected services; each tool unlocks with its integration scope.',
   Orchestration: 'Agents coordinating agents — peer messages and self-scheduling.',

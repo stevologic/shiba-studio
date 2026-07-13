@@ -52,6 +52,7 @@ export interface XaiAccountUsage {
 
 type CacheEntry = { at: number; data: XaiAccountUsage };
 let cache: CacheEntry | null = null;
+let inFlightUsage: Promise<XaiAccountUsage> | null = null;
 const CACHE_MS = 10 * 60_000;
 
 function centsToUsd(val: unknown): number {
@@ -497,7 +498,19 @@ export async function validateManagementKey(opts?: {
  * Pull authoritative usage from xAI billing. Cached ~10 minutes.
  * Requires cloud auth; management key (Settings) is preferred when set.
  */
-export async function fetchXaiAccountUsage(opts?: {
+export function fetchXaiAccountUsage(opts?: {
+  force?: boolean;
+  days?: number;
+}): Promise<XaiAccountUsage> {
+  if (inFlightUsage) return inFlightUsage;
+  const pending = fetchXaiAccountUsageOnce(opts).finally(() => {
+    if (inFlightUsage === pending) inFlightUsage = null;
+  });
+  inFlightUsage = pending;
+  return pending;
+}
+
+async function fetchXaiAccountUsageOnce(opts?: {
   force?: boolean;
   days?: number;
 }): Promise<XaiAccountUsage> {

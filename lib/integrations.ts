@@ -4,16 +4,30 @@
 // Lazy imports to avoid heavy top-level cjs/esm issues in tests.
 
 import crypto from 'crypto';
+import { AsyncLocalStorage } from 'async_hooks';
 import type { Block, KnownBlock } from '@slack/web-api';
 import { IntegrationCreds } from './types';
 
-let creds: IntegrationCreds = {};
+let defaultCreds: IntegrationCreds = {};
+const scopedCreds = new AsyncLocalStorage<IntegrationCreds>();
+const creds = new Proxy({} as IntegrationCreds, {
+  get(_target, property: string | symbol) {
+    return Reflect.get(scopedCreds.getStore() || defaultCreds, property);
+  },
+});
 
 export function setIntegrationCreds(c: IntegrationCreds) {
-  creds = c || {};
+  defaultCreds = c || {};
 }
 
-export function getIntegrationCreds() { return creds; }
+export function getIntegrationCreds() { return scopedCreds.getStore() || defaultCreds; }
+
+export function withIntegrationCreds<T>(
+  value: IntegrationCreds | undefined,
+  fn: () => T,
+): T {
+  return value ? scopedCreds.run(value, fn) : fn();
+}
 
 /**
  * Overlay an agent's per-integration credential overrides on top of the global
@@ -106,9 +120,30 @@ export async function slackPostMessage(channel: string, text: string, blocks?: (
 
 /** Build a Drive auth client, preferring the popup-OAuth token (auto-refreshed)
  *  then a service-account JSON, then a manually-pasted access token. */
-async function driveAuth(): Promise<unknown> {
+export async function driveAuth(): Promise<unknown> {
   const { google } = await import('googleapis');
-  if (creds.googledrive?.clientId || creds.googledrive?.refreshToken) {
+  const drive = creds.googledrive;
+  const globalDrive = defaultCreds.googledrive;
+
+  // A request-scoped agent credential must win before the global popup-OAuth
+  // session. Previously the merged object still contained the global
+  // refresh/client fields, so getValidDriveToken() silently selected the
+  // global Drive account and ignored the agent's access token/service account.
+  const scopedServiceAccount = drive?.serviceAccountJson
+    && drive.serviceAccountJson !== globalDrive?.serviceAccountJson;
+  if (scopedServiceAccount) {
+    const sa = JSON.parse(drive.serviceAccountJson!);
+    return new google.auth.GoogleAuth({ credentials: sa, scopes: ['https://www.googleapis.com/auth/drive'] });
+  }
+  const scopedAccessToken = drive?.accessToken
+    && drive.accessToken !== globalDrive?.accessToken;
+  if (scopedAccessToken) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: drive.accessToken });
+    return auth;
+  }
+
+  if (drive?.clientId || drive?.refreshToken) {
     const { getValidDriveToken } = await import('./google-oauth');
     const token = await getValidDriveToken();
     if (token) {
@@ -117,13 +152,13 @@ async function driveAuth(): Promise<unknown> {
       return auth;
     }
   }
-  if (creds.googledrive?.serviceAccountJson) {
-    const sa = JSON.parse(creds.googledrive.serviceAccountJson);
+  if (drive?.serviceAccountJson) {
+    const sa = JSON.parse(drive.serviceAccountJson);
     return new google.auth.GoogleAuth({ credentials: sa, scopes: ['https://www.googleapis.com/auth/drive'] });
   }
-  if (creds.googledrive?.accessToken) {
+  if (drive?.accessToken) {
     const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: creds.googledrive.accessToken });
+    auth.setCredentials({ access_token: drive.accessToken });
     return auth;
   }
   return null;

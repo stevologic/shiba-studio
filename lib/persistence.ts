@@ -1,9 +1,13 @@
-import { promises as fs } from 'fs';
 import path from 'path';
 import { Agent, AppConfig, type IntegrationCreds, normalizeAgent } from './types';
 import { setIntegrationCreds } from './integrations';
 import { dataDir, projectRoot } from './data-paths';
 import { decryptSecret, encryptSecret, isEncryptedSecret } from './secure-store';
+import { randomUUID } from 'crypto';
+
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs = builtinFs.promises;
 
 /**
  * Credential fields sealed with AES-256-GCM before touching disk. The machine
@@ -25,6 +29,7 @@ const SENSITIVE_CONFIG_PATHS = [
   'integrations.x.apiSecret',
   'integrations.x.accessToken',
   'integrations.x.accessTokenSecret',
+  'integrations.x.clientSecret',
   'integrations.obsidian.restApiKey',
   'integrations.vercel.token',
   'integrations.netlify.token',
@@ -100,7 +105,7 @@ async function ensureData() {
 // SENSITIVE_CONFIG_PATHS but scoped per agent).
 const AGENT_OVERRIDE_SECRET_FIELDS: Record<string, string[]> = {
   github: ['token'],
-  slack: ['token'],
+  slack: ['token', 'appToken'],
   discord: ['token'],
   x: ['apiKey', 'apiSecret', 'accessToken', 'accessTokenSecret'],
   obsidian: ['restApiKey'],
@@ -125,24 +130,65 @@ function transformAgentOverrideSecrets(agent: Agent, fn: (v: string) => string):
   return { ...agent, integrationOverrides: nextOv } as Agent;
 }
 
-export async function loadAgents(): Promise<Agent[]> {
+const persistenceLockGlobal = globalThis as typeof globalThis & {
+  __shibaAgentsChain?: Promise<unknown>;
+  __shibaConfigChain?: Promise<unknown>;
+};
+
+function withAgentsLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = persistenceLockGlobal.__shibaAgentsChain ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  persistenceLockGlobal.__shibaAgentsChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function loadAgentsUnlocked(): Promise<Agent[]> {
   await ensureData();
   try {
     const raw = await fs.readFile(agentsFile(), 'utf8');
     const list = JSON.parse(raw) as unknown[];
     return list.map(normalizeAgent).map((a) => transformAgentOverrideSecrets(a, decryptSecret));
-  } catch {
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     return [];
   }
 }
 
-export async function saveAgents(agents: Agent[]) {
+async function saveAgentsUnlocked(agents: Agent[]): Promise<void> {
   await ensureData();
   const sealed = agents.map((a) => transformAgentOverrideSecrets(a, encryptSecret));
-  await fs.writeFile(agentsFile(), JSON.stringify(sealed, null, 2));
+  const target = agentsFile();
+  const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(sealed, null, 2)}\n`, 'utf8');
+    await fs.rename(tmp, target);
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
   // Live UI: agent lists/pickers refresh without a page reload.
   const { emitAppEvent } = await import('./app-events');
   emitAppEvent('agents');
+}
+
+export async function loadAgents(): Promise<Agent[]> {
+  return withAgentsLock(loadAgentsUnlocked);
+}
+
+export async function saveAgents(agents: Agent[]): Promise<void> {
+  return withAgentsLock(() => saveAgentsUnlocked(agents));
+}
+
+/**
+ * Serialize an agent read-modify-write as one operation. The callback may
+ * mutate the supplied array in place and returns the caller's result.
+ */
+export async function mutateAgents<T>(mutate: (agents: Agent[]) => T | Promise<T>): Promise<T> {
+  return withAgentsLock(async () => {
+    const agents = await loadAgentsUnlocked();
+    const result = await mutate(agents);
+    await saveAgentsUnlocked(agents);
+    return result;
+  });
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -171,11 +217,21 @@ async function syncCloudAuthCache(cfg: AppConfig): Promise<void> {
   await ensureCloudAuth(cfg);
 }
 
-let configChain: Promise<unknown> = Promise.resolve();
+async function writeConfigFileAtomic(content: string): Promise<void> {
+  const target = configFile();
+  const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tmp, content);
+    await fs.rename(tmp, target);
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
+}
 
 function withConfigLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = configChain.then(fn, fn);
-  configChain = run.then(() => undefined, () => undefined);
+  const previous = persistenceLockGlobal.__shibaConfigChain ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  persistenceLockGlobal.__shibaConfigChain = run.then(() => undefined, () => undefined);
   return run;
 }
 
@@ -188,12 +244,13 @@ async function loadConfigUnlocked(): Promise<AppConfig> {
     if (hadPlaintext) {
       // One-time migration: re-write any legacy plaintext secrets sealed.
       const { sealed } = sealConfigSecrets(opened);
-      await fs.writeFile(configFile(), JSON.stringify(sealed, null, 2));
+      await writeConfigFileAtomic(JSON.stringify(sealed, null, 2));
     }
     setIntegrationCreds(opened.integrations || {});
     await syncCloudAuthCache(opened);
     return opened;
-  } catch {
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     const fallback = { ...DEFAULT_CONFIG };
     setIntegrationCreds(fallback.integrations || {});
     await syncCloudAuthCache(fallback);
@@ -203,7 +260,7 @@ async function loadConfigUnlocked(): Promise<AppConfig> {
 
 async function writeConfigUnlocked(next: AppConfig): Promise<AppConfig> {
   const { sealed } = sealConfigSecrets(next);
-  await fs.writeFile(configFile(), JSON.stringify(sealed, null, 2));
+  await writeConfigFileAtomic(JSON.stringify(sealed, null, 2));
   setIntegrationCreds(next.integrations);
   await syncCloudAuthCache(next);
   return next;

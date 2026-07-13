@@ -40,7 +40,7 @@ function killServerTree(child: ChildProcess): void {
   if (!child.pid) return;
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', String(child.pid), '/f', '/t'], { shell: true });
+      spawn('taskkill', ['/pid', String(child.pid), '/f', '/t'], { shell: false });
     } else {
       child.kill('SIGTERM');
     }
@@ -91,10 +91,11 @@ async function waitForServer(url: string, timeoutMs = 30000): Promise<void> {
 }
 
 function startProdServer(): ChildProcess {
-  return spawn('npx', ['next', 'start', '--port', String(PORT)], {
+  const nextCli = path.join(process.cwd(), 'node_modules', 'next', 'dist', 'bin', 'next');
+  return spawn(process.execPath, [nextCli, 'start', '--port', String(PORT)], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
+    shell: false,
   });
 }
 

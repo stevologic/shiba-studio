@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { setApiKey, grokChat } from '@/lib/grok-client';
+import { grokChat } from '@/lib/grok-client';
 import { parseModelRef } from '@/lib/model-providers';
 import { loadAgents, loadConfig } from '@/lib/persistence';
 import { normalizeAgent } from '@/lib/types';
@@ -22,10 +22,6 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const cfg = await loadConfig();
-    const auth = await resolveCloudBearer(cfg);
-    if (auth.token) setApiKey(auth.token);
-    if (body.key) setApiKey(body.key);
-
     const agentId = String(body.agentId || '').trim();
     if (!agentId) {
       return NextResponse.json({ ok: false, error: 'agentId required' }, { status: 400 });
@@ -57,7 +53,9 @@ export async function POST(req: NextRequest) {
       || agent.model
       || cfg.defaultGrokModel
       || 'cloud:grok-4';
-    const model = parseModelRef(rawModel).encoded;
+    const modelRef = parseModelRef(rawModel);
+    const model = modelRef.encoded;
+    const auth = await resolveCloudBearer(cfg, modelRef.authSource);
 
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       {
@@ -77,6 +75,8 @@ export async function POST(req: NextRequest) {
 
     const resp = await grokChat({
       model,
+      cloudKey: body.key || auth.token || undefined,
+      signal: req.signal,
       messages,
       max_tokens: 280,
       temperature: 0.85,

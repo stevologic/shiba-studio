@@ -1,14 +1,13 @@
 import { NextResponse } from 'next/server';
 import { loadConfig } from '@/lib/persistence';
-import { driveListFolders, setIntegrationCreds } from '@/lib/integrations';
+import { driveListFolders, withIntegrationCreds } from '@/lib/integrations';
 
 /** Lists the connected Google Drive's folders — powers the per-agent folder
  *  isolation picker in the agent editor. */
 export async function GET() {
   try {
     const cfg = await loadConfig();
-    setIntegrationCreds(cfg.integrations || {});
-    const folders = await driveListFolders(200);
+    const folders = await withIntegrationCreds(cfg.integrations || {}, () => driveListFolders(200));
     return NextResponse.json({ ok: true, folders });
   } catch (e: unknown) {
     return NextResponse.json(

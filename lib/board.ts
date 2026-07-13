@@ -3,6 +3,7 @@
 // read-modify-write is serialized, writes go through temp-file + rename.
 
 import { promises as fs } from 'fs';
+import { randomUUID } from 'crypto';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { dataDir } from './data-paths';
@@ -30,16 +31,16 @@ export type {
 
 const DATA_DIR = dataDir();
 const BOARD_FILE = path.join(DATA_DIR, 'board.json');
-const BOARD_TMP = path.join(DATA_DIR, 'board.json.tmp');
 
 /** Key prefix for card identifiers (SHIB-1, SHIB-2, …). */
 const KEY_PREFIX = 'SHIB';
 
-let chain: Promise<unknown> = Promise.resolve();
+const boardLockGlobal = globalThis as typeof globalThis & { __shibaBoardStoreChain?: Promise<unknown> };
 
 function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = chain.then(fn, fn);
-  chain = run.then(() => undefined, () => undefined);
+  const previous = boardLockGlobal.__shibaBoardStoreChain ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  boardLockGlobal.__shibaBoardStoreChain = run.then(() => undefined, () => undefined);
   return run;
 }
 
@@ -47,7 +48,10 @@ async function loadStore(): Promise<BoardStore> {
   try {
     const raw = await fs.readFile(BOARD_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.tasks)) {
+      throw new Error('Invalid board store: expected an object with a tasks array');
+    }
+    const tasks = parsed.tasks;
     return {
       nextNumber: Number.isInteger(parsed.nextNumber) && parsed.nextNumber > 0 ? parsed.nextNumber : 1,
       tasks: tasks.map((task: BoardTask) => ({
@@ -58,15 +62,21 @@ async function loadStore(): Promise<BoardStore> {
       })),
       syncState: parsed.syncState && typeof parsed.syncState === 'object' ? parsed.syncState : {},
     };
-  } catch {
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     return { nextNumber: 1, tasks: [], syncState: {} };
   }
 }
 
 async function saveStore(store: BoardStore): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(BOARD_TMP, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
-  await fs.rename(BOARD_TMP, BOARD_FILE);
+  const tmp = `${BOARD_FILE}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
+    await fs.rename(tmp, BOARD_FILE);
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
   // Live UI: every open board (and the nav open-count badge) hears the change.
   const { emitAppEvent } = await import('./app-events');
   emitAppEvent('board');

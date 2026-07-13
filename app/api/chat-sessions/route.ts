@@ -59,12 +59,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, session, skipped: 'not enough messages' });
       }
 
-      const { grokChat, setApiKey } = await import('@/lib/grok-client');
+      const { grokChat } = await import('@/lib/grok-client');
       const { loadConfig } = await import('@/lib/persistence');
       const { resolveCloudBearer } = await import('@/lib/xai-oauth');
+      const { parseModelRef } = await import('@/lib/model-providers');
       const cfg = await loadConfig();
-      const auth = await resolveCloudBearer(cfg);
-      if (auth.token) setApiKey(auth.token);
 
       const prompt = [
         'Summarize this conversation as a title of 3 to 6 words. Reply with ONLY the title — no quotes, no punctuation at the end.',
@@ -72,14 +71,29 @@ export async function POST(req: NextRequest) {
         `Assistant: ${String(firstAssistant.content || '').slice(0, 600)}`,
       ].join('\n\n');
 
+      const titleWithModel = async (rawModel: string) => {
+        const ref = parseModelRef(rawModel);
+        const auth = ref.provider === 'cloud'
+          ? await resolveCloudBearer(cfg, ref.authSource)
+          : { token: null };
+        return grokChat({
+          model: ref.encoded,
+          cloudKey: auth.token || undefined,
+          signal: req.signal,
+          messages: [{ role: 'user' as const, content: prompt }],
+          max_tokens: 24,
+          temperature: 0.2,
+        });
+      };
+
       const cheapModel = 'grok-code-fast-1';
       let title = '';
       try {
-        const res = await grokChat({ model: cheapModel, messages: [{ role: 'user', content: prompt }], max_tokens: 24, temperature: 0.2 });
+        const res = await titleWithModel(cheapModel);
         title = res.choices?.[0]?.message?.content?.trim() || '';
       } catch {
         // Cheap model unavailable — fall back to the configured default.
-        const res = await grokChat({ model: cfg.defaultGrokModel || 'grok-4.3-latest', messages: [{ role: 'user', content: prompt }], max_tokens: 24, temperature: 0.2 });
+        const res = await titleWithModel(cfg.defaultGrokModel || 'grok-4.3-latest');
         title = res.choices?.[0]?.message?.content?.trim() || '';
       }
       title = title.replace(/^["'`]+|["'`.]+$/g, '').slice(0, 60);
