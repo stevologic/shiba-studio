@@ -40,10 +40,6 @@ async function main() {
   check((artifactPreview.match(/visualVerificationEligible: false/g) || []).length === 2, 'PPTX and XLSX previews are structural-only');
   check(artifactStudio.includes('renderReport.visualVerificationEligible === false'), 'structural previews cannot enable passed visual evidence');
 
-  const meetings = await source('components/meeting-capture-panel.tsx');
-  check(/await persistReview\(\);[\s\S]*\/outputs/.test(meetings), 'review is persisted before downstream meeting outputs');
-  check(meetings.includes('nextBytes > MAX_AUDIO_BYTES') && meetings.includes('recordingCapReachedRef.current = true'), 'microphone capture enforces the byte cap while recording');
-
   registerBrowserEphemeralSession('created-here');
   check(listBrowserEphemeralSessions().includes('created-here'), 'browser-created ephemeral sessions are registered');
   unregisterBrowserEphemeralSession('created-here');
@@ -67,11 +63,47 @@ async function main() {
   const packs = await source('components/capability-packs-panel.tsx');
   check(packs.includes("archived: false") && packs.includes('ArchiveRestore'), 'archived capability packs have a restore path');
 
-  const doctor = await source('components/doctor-page.tsx');
-  check(doctor.includes('role="alertdialog"') && doctor.includes('inert={preview ? true : undefined}') && doctor.includes("event.key !== 'Tab'"), 'Doctor repair preview has a modal focus boundary');
+  const studio = await source('components/shiba-studio.tsx');
+  const primaryNav = studio.match(/\/\* Main menu[\s\S]*?\]\s+as const\)\.map\(item => \{/)?.[0] || '';
+  check(
+    primaryNav.includes("label: 'Dashboard'")
+      && primaryNav.includes("label: 'Automations'")
+      && !primaryNav.includes("label: 'Dispatch'")
+      && !primaryNav.includes("label: 'Routines'")
+      && !primaryNav.includes("label: 'Meetings'")
+      && !primaryNav.includes("label: 'Doctor'"),
+    'primary navigation exposes Dashboard and Automations without retired surfaces',
+  );
+  const navigation = await source('lib/app-navigation.ts');
+  const appTabs = navigation.match(/export const APP_TABS = \[[\s\S]*?\] as const;/)?.[0] || '';
+  check(
+    navigation.includes("return tab === 'dashboard' ? '/' : `/${tab}`;")
+      && !navigation.includes("if (tab === 'automations') return '/routines'"),
+    'Automations uses its canonical /automations path',
+  );
+  check(
+    !appTabs.includes("'meetings'") && !appTabs.includes("'doctor'"),
+    'retired Meetings and Doctor routes are absent from the app route contract',
+  );
+  check(
+    !studio.includes('MeetingCapturePanel') && !studio.includes('DoctorPage'),
+    'retired Meetings and Doctor panels are not mounted by the app shell',
+  );
 
-  const nativeNodes = await source('components/native-nodes-panel.tsx');
-  check(nativeNodes.includes('const confirmed = await confirmDialog') && nativeNodes.includes("confirmLabel: kind === 'node' ? 'Revoke node' : 'Revoke grant'"), 'native node and grant revocation require confirmation');
+  const filesPanel = await source('components/files-panel.tsx');
+  const servedFiles = await source('lib/serve-file.ts');
+  check(
+    filesPanel.includes('aria-label="File breadcrumb"')
+      && filesPanel.includes('aria-label="Files explorer"')
+      && filesPanel.includes('aria-label="File preview"'),
+    'Files page exposes stable explorer, breadcrumb, and preview regions',
+  );
+  check(
+    servedFiles.includes("'.svg': 'text/plain; charset=utf-8'")
+      && !filesPanel.includes('role="tree"')
+      && !filesPanel.includes('role="treeitem"'),
+    'Files treats agent-authored SVG as source text and uses native list navigation semantics',
+  );
 
   const voiceOverlay = await source('components/voice-agent-overlay.tsx');
   const voiceStore = await source('lib/voice-agent-ui-store.ts');

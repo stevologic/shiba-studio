@@ -37,8 +37,8 @@ function elapsedLabel(seconds: number): string {
 
 function requestStatus(request: CompanionVoiceRequestSummary): string {
   if (request.status === 'failed') return 'Failed';
-  if (request.result.status === 'dispatched') return 'Dispatched';
-  if (request.result.status === 'dispatching') return 'Dispatching';
+  if (request.result.status === 'dispatched') return 'Started';
+  if (request.result.status === 'dispatching') return 'Starting';
   if (request.result.status === 'transcribing') return 'Transcribing';
   if (request.result.status === 'uploading') return 'Uploading';
   return request.status === 'pending' ? 'Processing' : 'Completed';
@@ -185,7 +185,7 @@ export function CompanionVoiceRequest({ deviceKey, secureContext, requests, onAc
         <span className={styles.badge}>1-day local audio</span>
       </div>
       <article className={styles.card}>
-        <p className={styles.muted}>Record a request, review it, then send it to the host for transcription and durable task dispatch. Raw audio stays on the host and is removed after one day.</p>
+        <p className={styles.muted}>Record a request, review it, then send it to the host for transcription and durable task creation. Raw audio stays on the host and is removed after one day.</p>
         {secureContext === false ? <p className={styles.voiceNotice}>Microphone recording requires HTTPS, such as Tailscale Serve. It is unavailable on an insecure LAN page.</p> : null}
         <label className={styles.field}>Optional request title
           <input className={styles.input} value={title} maxLength={160} placeholder="Follow up with the launch team" onChange={(event) => setTitle(event.target.value)} />

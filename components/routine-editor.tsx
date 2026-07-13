@@ -267,7 +267,7 @@ export function RoutineEditor({ agents, initial, title, saving, onCancel, onSave
       if (!draft.triggers.length) throw new Error('Add at least one trigger.');
       await onSave({ ...draft, parameters: parameters as Record<string, unknown>, concurrencyKey: draft.concurrencyKey || `routine:${draft.id || draft.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'work'}` });
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Could not save the routine.');
+      setError(submitError instanceof Error ? submitError.message : 'Could not save the automation.');
     }
   }
 
@@ -276,7 +276,7 @@ export function RoutineEditor({ agents, initial, title, saving, onCancel, onSave
       <form ref={dialogRef} className="modal modal-pop w-full max-w-5xl mx-auto p-5 sm:p-6 space-y-6" onSubmit={submit} aria-labelledby={`${prefix}-title`} role="dialog" aria-modal="true">
         <header className="flex items-start justify-between gap-3">
           <div><h2 id={`${prefix}-title`} className="text-xl font-semibold">{title}</h2><p className="text-xs text-dim mt-1">The saved definition is durable, versioned, and executed through the universal task ledger.</p></div>
-          <button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={onCancel} disabled={saving} aria-label="Close routine editor"><X size={16} /></button>
+          <button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={onCancel} disabled={saving} aria-label="Close automation editor"><X size={16} /></button>
         </header>
 
         <fieldset className="grok-card p-4 grid gap-4 sm:grid-cols-2">
@@ -345,8 +345,8 @@ export function RoutineEditor({ agents, initial, title, saving, onCancel, onSave
           <label className="text-xs" htmlFor={`${prefix}-base-delay`}>Base backoff (ms)<input id={`${prefix}-base-delay`} type="number" min={100} className="grok-input text-xs mt-1 w-full" value={draft.retryPolicy?.baseDelayMs || 1_000} onChange={(event) => setDraft((current) => ({ ...current, retryPolicy: { ...current.retryPolicy, baseDelayMs: Number(event.target.value) } }))} /></label>
           <label className="text-xs" htmlFor={`${prefix}-multiplier`}>Backoff multiplier<input id={`${prefix}-multiplier`} type="number" min={1} max={10} step={0.1} className="grok-input text-xs mt-1 w-full" value={draft.retryPolicy?.multiplier || 2} onChange={(event) => setDraft((current) => ({ ...current, retryPolicy: { ...current.retryPolicy, multiplier: Number(event.target.value) } }))} /></label>
           <label className="text-xs" htmlFor={`${prefix}-max-delay`}>Max backoff (ms)<input id={`${prefix}-max-delay`} type="number" min={100} className="grok-input text-xs mt-1 w-full" value={draft.retryPolicy?.maxDelayMs || 60_000} onChange={(event) => setDraft((current) => ({ ...current, retryPolicy: { ...current.retryPolicy, maxDelayMs: Number(event.target.value) } }))} /></label>
-          <label className="text-xs" htmlFor={`${prefix}-timeout`}>Routine timeout (seconds)<input id={`${prefix}-timeout`} type="number" min={1} className="grok-input text-xs mt-1 w-full" value={Math.round((draft.timeoutMs || 900_000) / 1_000)} onChange={(event) => setDraft((current) => ({ ...current, timeoutMs: Number(event.target.value) * 1_000 }))} /></label>
-          <label className="text-xs lg:col-span-2" htmlFor={`${prefix}-concurrency`}>Concurrency key<input id={`${prefix}-concurrency`} className="grok-input font-mono text-xs mt-1 w-full" value={draft.concurrencyKey || ''} onChange={(event) => setDraft((current) => ({ ...current, concurrencyKey: event.target.value }))} placeholder="routine:daily-report or team:{{teamId}}" /></label>
+          <label className="text-xs" htmlFor={`${prefix}-timeout`}>Automation timeout (seconds)<input id={`${prefix}-timeout`} type="number" min={1} className="grok-input text-xs mt-1 w-full" value={Math.round((draft.timeoutMs || 900_000) / 1_000)} onChange={(event) => setDraft((current) => ({ ...current, timeoutMs: Number(event.target.value) * 1_000 }))} /></label>
+          <label className="text-xs lg:col-span-2" htmlFor={`${prefix}-concurrency`}>Concurrency key<input id={`${prefix}-concurrency`} className="grok-input font-mono text-xs mt-1 w-full" value={draft.concurrencyKey || ''} onChange={(event) => setDraft((current) => ({ ...current, concurrencyKey: event.target.value }))} placeholder="automation:daily-report or team:{{teamId}}" /></label>
           <label className="text-xs" htmlFor={`${prefix}-catch-up`}>Missed trigger policy<select id={`${prefix}-catch-up`} className="grok-select text-xs mt-1 w-full" value={draft.catchUpPolicy || 'run_once'} onChange={(event) => setDraft((current) => ({ ...current, catchUpPolicy: event.target.value as 'run_once' | 'skip' }))}><option value="run_once">Run once</option><option value="skip">Skip</option></select></label>
           <label className="text-xs" htmlFor={`${prefix}-threshold`}>Breaker failures<input id={`${prefix}-threshold`} type="number" min={1} max={100} className="grok-input text-xs mt-1 w-full" value={draft.circuitBreaker?.failureThreshold || 3} onChange={(event) => setDraft((current) => ({ ...current, circuitBreaker: { ...current.circuitBreaker, failureThreshold: Number(event.target.value) } }))} /></label>
           <label className="text-xs" htmlFor={`${prefix}-cooldown`}>Breaker cooldown (seconds)<input id={`${prefix}-cooldown`} type="number" min={5} className="grok-input text-xs mt-1 w-full" value={draft.circuitBreaker?.cooldownSeconds || 900} onChange={(event) => setDraft((current) => ({ ...current, circuitBreaker: { ...current.circuitBreaker, cooldownSeconds: Number(event.target.value) } }))} /></label>
@@ -375,12 +375,12 @@ export function RoutineEditor({ agents, initial, title, saving, onCancel, onSave
         </fieldset>
 
         {error && <div className="grok-card p-3 text-sm text-error" role="alert">{error}</div>}
-        {agents.length === 0 && <div className="grok-card p-3 text-sm text-warning" role="alert">Create an agent before saving a routine.</div>}
+        {agents.length === 0 && <div className="grok-card p-3 text-sm text-warning" role="alert">Create an agent before saving an automation.</div>}
         <footer className="flex flex-wrap justify-end gap-2 sticky bottom-0 bg-[var(--bg)] py-3 border-t border-default">
           <button type="button" className="grok-btn grok-btn-secondary" onClick={onCancel} disabled={saving}>Cancel</button>
           <button type="submit" className="grok-btn grok-btn-primary" disabled={saving || agents.length === 0}>
             {saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
-            {saving ? 'Saving…' : 'Save routine'}
+            {saving ? 'Saving…' : 'Save automation'}
           </button>
         </footer>
       </form>

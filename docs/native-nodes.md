@@ -11,11 +11,11 @@ An agent may request `native_node_action` only after evaluating these stages in 
 3. a user-signed-in browser session;
 4. native node.
 
-The native tool requires concrete `unavailable`, `failed`, or `not_applicable` evidence for the first three stages. It is always approval-gated, including when the global tool mode is permissive, and it is unavailable to routines, schedules, board automation, and other autonomous runs.
+The native tool requires concrete `unavailable`, `failed`, or `not_applicable` evidence for the first three stages. It is always approval-gated, including when the global tool mode is permissive, and it is unavailable to automations, schedules, board automation, and other autonomous runs.
 
 ## Pairing and release integrity
 
-Open **Doctor → Native companion nodes** on localhost, create a five-minute pairing, then run the displayed PowerShell command on the Windows desktop. The command downloads five small files and starts the launcher. The launcher:
+The former Doctor administration page has been removed from Studio. Existing paired helpers continue to work through the signed compatibility protocol and localhost-only `/api/native-nodes/*` endpoints, but new pairing is no longer exposed as a primary Studio workflow. The Windows launcher:
 
 - pins the SHA-256 fingerprint of a 3072-bit RSA public key;
 - verifies the detached RSA-SHA256 signature over `release-manifest.json`;
@@ -54,4 +54,4 @@ While the helper is running, **Ctrl+Shift+Space** opens a small quick-entry wind
 
 ## Operations
 
-Revoke an app grant when work is complete and revoke the node if the desktop is lost or reimaged. The Doctor panel shows the release, last-seen time, current capture state, active grants, recent jobs, and inventory returned by the helper. Re-pair after a helper release changes; older or tampered manifests are rejected.
+Revoke an app grant when work is complete and revoke the node if the desktop is lost or reimaged. Existing automation using the localhost-only administration API can inspect release, last-seen time, current capture state, active grants, recent jobs, and helper inventory. Re-pair after a helper release changes; older or tampered manifests are rejected.

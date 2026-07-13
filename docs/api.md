@@ -75,7 +75,7 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | POST | `/api/execute/stream` | Run an agent with a live **SSE** trace (`{ agentId, prompt, … }`). |
 | POST | `/api/execute/approve` | Approve/deny a pending tool call (`{ approvalId, approved }`). |
 
-### Dispatch, evidence, and Attention
+### Tasks, evidence, and Attention
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -94,7 +94,9 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | GET | `/api/attention` | List the shared questions, exact approvals, failures, and completions inbox. |
 | PATCH | `/api/attention/:id` | Resolve/dismiss an eligible Attention item. Exact approvals use task commands. |
 
-### Routines
+### Automations (Routine API)
+
+The primary Studio surface calls these **Automations**. Stable endpoint paths, payloads, and persisted types retain **Routine** terminology for compatibility.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -134,9 +136,13 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | GET | `/api/logs` | Audit log, paginated (`?q`, `?category`, `?limit`, `?offset`). |
 | GET | `/api/usage` | Usage & cost summary (studio metering + optional xAI billing backport). |
 | GET | `/api/doctor` | Machine-readable, secret-free, read-only model/auth, static MCP launch readiness, isolated browser launch health, task/storage, worktree/Git-origin, firewall/LAN-origin boundary, and pack/native-helper compatibility diagnostics. Arbitrary MCP processes start only through their separate explicit Test action. |
-| GET/POST | `/api/doctor/repairs` | Preview or apply one exact-confirmed, audited repair. |
+| GET/POST | `/api/doctor/repairs` | Compatibility endpoint to preview or apply one exact-confirmed, audited repair. |
 
-### Context and meetings
+The former Doctor page has been removed. These endpoints remain for diagnostics automation and backwards compatibility.
+
+### Context and Companion voice storage
+
+There is no standalone Meetings page. The meeting-named endpoints remain as the storage and transcription layer for consent-confirmed Companion voice requests; durable plain-text transcript citations remain available after retained audio is deleted.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -146,8 +152,9 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | GET/POST | `/api/meetings` | List meetings or stream a consent-confirmed local microphone/upload recording. |
 | GET/PATCH/DELETE | `/api/meetings/:id` | Read/update reviewed transcript metadata, delete retained audio, or delete the meeting. |
 | GET | `/api/meetings/:id/audio` | Range-capable local audio playback without exposing a filesystem path. |
+| GET | `/api/meetings/:id/citation` | Stable read-only plain-text transcript citation that remains available after audio retention cleanup. |
 | POST | `/api/meetings/:id/transcribe` | Start xAI STT diarization with word timestamps. |
-| POST | `/api/meetings/:id/outputs` | After exact confirmation, create selected idempotent Board cards/Routines and ledger evidence. |
+| POST | `/api/meetings/:id/outputs` | Compatibility endpoint that creates selected idempotent Board cards/Automations and ledger evidence after exact confirmation. |
 
 ### Workspace, projects & files
 

@@ -328,7 +328,7 @@ export async function saveMeetingAudio(input: {
     maxRetries: 1,
     contract: {
       outcome: 'The recording has a timestamped transcript and reviewable meeting notes.',
-      constraints: ['No Board card or Routine is created without explicit confirmation.'],
+      constraints: ['No Board card or Automation is created without explicit confirmation.'],
       requiredArtifacts: [],
       requirements: [
         { id: 'transcript', label: 'Speaker-aware transcript recorded', required: true, acceptedKinds: ['integration'], scope: `meeting:${id}` },
@@ -493,9 +493,9 @@ export function updateMeetingReview(id: string, input: {
 }
 
 export function meetingCitationUrl(meetingId: string, start: number, end?: number): string {
-  const query = new URLSearchParams({ meeting: meetingId, t: Math.max(0, start).toFixed(2) });
+  const query = new URLSearchParams({ t: Math.max(0, start).toFixed(2) });
   if (Number.isFinite(end)) query.set('end', Math.max(start, Number(end)).toFixed(2));
-  return `/meetings?${query.toString()}`;
+  return `/api/meetings/${encodeURIComponent(meetingId)}/citation?${query.toString()}`;
 }
 
 function normalizeWord(raw: unknown, index: number): MeetingWord | null {
@@ -653,7 +653,7 @@ function freshMeetingTask(meeting: MeetingRecord): string {
     maxRetries: 1,
     contract: {
       outcome: 'The recording has a timestamped transcript and reviewable meeting notes.',
-      constraints: ['No Board card or Routine is created without explicit confirmation.'],
+      constraints: ['No Board card or Automation is created without explicit confirmation.'],
       requiredArtifacts: [],
       requirements: [
         { id: 'transcript', label: 'Speaker-aware transcript recorded', required: true, acceptedKinds: ['integration'], scope: `meeting:${meeting.id}` },
@@ -790,12 +790,12 @@ export async function createMeetingOutputs(input: {
   routineAgentId?: string;
 }): Promise<MeetingOutput[]> {
   if (input.confirmed !== true) throw new Error('Explicit output confirmation is required');
-  if (!input.createBoardCards && !input.createRoutines) throw new Error('Choose Board cards, Routines, or both');
+  if (!input.createBoardCards && !input.createRoutines) throw new Error('Choose Board cards, Automations, or both');
   const meeting = getMeeting(input.meetingId);
   if (!meeting || meeting.status !== 'ready') throw new Error('Meeting review is not ready');
   const selected = [...new Set(input.actionItemIds)].slice(0, 50).map((id) => meeting.actionItems.find((item) => item.id === id)).filter((item): item is MeetingActionItem => Boolean(item));
   if (!selected.length) throw new Error('Select at least one action item');
-  if (input.createRoutines && !cleanText(input.routineAgentId, 160)) throw new Error('Choose an agent for Routine outputs');
+  if (input.createRoutines && !cleanText(input.routineAgentId, 160)) throw new Error('Choose an agent for Automation outputs');
   for (const item of selected) {
     for (const type of [input.createBoardCards ? 'board_card' : null, input.createRoutines ? 'routine' : null].filter((value): value is MeetingOutput['type'] => Boolean(value))) {
       const outputKey = createHash('sha256').update(`${meeting.id}\0${item.id}\0${type}`).digest('hex').slice(0, 32);
@@ -838,9 +838,9 @@ export async function createMeetingOutputs(input: {
           taskId: meeting.taskId,
           kind: 'artifact',
           status: 'passed',
-          label: type === 'board_card' ? 'Confirmed Board card created' : 'Confirmed Routine created',
+          label: type === 'board_card' ? 'Confirmed Board card created' : 'Confirmed Automation created',
           summary: item.text,
-          uri: type === 'board_card' ? `/board?card=${encodeURIComponent(externalId)}` : `/routines?routine=${encodeURIComponent(externalId)}`,
+          uri: type === 'board_card' ? `/board?card=${encodeURIComponent(externalId)}` : `/automations?routine=${encodeURIComponent(externalId)}`,
           scope: `meeting:${meeting.id}`,
           metadata: { meetingId: meeting.id, actionItemId: item.id, outputType: type, externalId, confirmed: true },
         });

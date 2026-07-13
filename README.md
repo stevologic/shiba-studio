@@ -30,8 +30,8 @@ Build, orchestrate, and schedule AI agents with full computer use — chat, code
 
 Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok into a hands-on engineering copilot:
 
-- **Dispatch & Attention** — every substantial chat, code job, Routine, Board run, external harness, and specialist worker becomes one durable task with a heartbeat, retries, pause/resume/steering, completion contract, typed evidence, exact-once delivery, and one shared decision inbox.
-- **Artifact Studio & Meetings** — checkpoint-backed HTML/PDF/Office previews with anchored review and revocable publishing, plus consent-first local recording/upload, diarized timestamp citations, summaries, and confirmed Board/Routine follow-ups.
+- **Dashboard & Attention** — a focused operational home for readiness and recent runs, plus one shared decision inbox for durable work that needs review, approval, or recovery.
+- **Artifact Studio** — checkpoint-backed HTML/PDF/Office previews with anchored review, visual verification, rollback, and revocable publishing.
 - **Remote and native companions** — a paired, scoped, encrypted-offline PWA for Attention and voice requests, and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
 
 - **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Bind any chat to a **workspace folder** (a cloned repo, say) and Grok reads, writes, and searches its files directly.
@@ -107,8 +107,7 @@ The top bar shows a readiness badge for each source.
 | [Context Engine](docs/context-engine.md) | Bounded replay, deterministic compaction, citations, pinning, search, forks, and ephemeral chats |
 | [Capability Packs](docs/capability-packs.md) | Governed learn → review → activate workflow packs, permissions, versions, rollback, and uninstall |
 | [Artifact Studio](docs/artifact-studio.md) | Immutable previews, visual evidence, annotations, live refresh, rollback, and publishing |
-| [Meetings](docs/meetings.md) | Consent, local audio retention, speaker-aware transcripts, citations, and confirmed follow-ups |
-| [Native Nodes](docs/native-nodes.md) | Optional signed Windows helper, per-app grants, escalation policy, capture, and quick entry |
+| [Native Nodes](docs/native-nodes.md) | Signed Windows-helper protocol and compatibility API for existing paired nodes |
 | [Grok CLI](docs/cli.md) | Routing chat through the local `grok` CLI, the `grok_cli` agent tool, effort/check/best-of-N/structured output |
 | [API Reference](docs/api.md) | Every `/api/*` endpoint, curl examples, and the in-app interactive explorer at `/api-docs` |
 | [Cloud Sync](docs/sync.md) | What sync does, where snapshots live, push/pull semantics |

@@ -46,10 +46,10 @@ export interface CardWork {
   files: WorkFile[];
 }
 
-const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico']);
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico']);
 const TEXT_EXT = new Set([
   '.md', '.txt', '.json', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.css', '.html', '.htm',
-  '.py', '.sh', '.ps1', '.yml', '.yaml', '.toml', '.xml', '.csv', '.log', '.env', '.sql',
+  '.py', '.sh', '.ps1', '.yml', '.yaml', '.toml', '.xml', '.svg', '.csv', '.log', '.env', '.sql',
 ]);
 
 function fileKind(p: string): WorkFile['kind'] {
@@ -239,6 +239,8 @@ export async function resolveCardDeliverable(idOrKey: string, absPath: string): 
 export interface CreatedFile extends WorkFile {
   agentName: string;
   createdAt: string | null;
+  /** Workspace root captured for the producing run, used only to group the Files explorer. */
+  workspaceRoot: string;
 }
 
 /**
@@ -278,6 +280,7 @@ export async function collectAllCreatedFiles(): Promise<CreatedFile[]> {
         runId: run.id,
         agentName: run.agentName,
         createdAt: run.completedAt || run.startedAt || null,
+        workspaceRoot: workDir,
       });
     }
   }

@@ -647,11 +647,11 @@ export function getToolDefinitions(
     type: 'function',
     function: {
       name: 'meeting_search',
-      description: 'Search reviewed meeting transcripts. Returns exact speaker turns, start/end timestamps, and stable citation links that open the recording at the cited moment.',
+      description: 'Search reviewed voice-request transcripts. Returns exact speaker turns, start/end timestamps, and stable read-only transcript citation links.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Words or phrase to find in meeting transcripts' },
+          query: { type: 'string', description: 'Words or phrase to find in voice-request transcripts' },
           limit: { type: 'number', description: 'Maximum results, 1-20 (default 8)' },
         },
         required: ['query'],

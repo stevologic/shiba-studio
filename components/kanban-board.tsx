@@ -852,7 +852,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                 type="button"
                 className="grok-btn grok-btn-primary text-sm inline-flex items-center gap-1.5"
                 disabled={!selected.assigneeAgentId || !!selected.working}
-                title={!selected.assigneeAgentId ? 'Assign an agent first' : 'Dispatch the assigned agent on this card'}
+                title={!selected.assigneeAgentId ? 'Assign an agent first' : 'Start the assigned agent on this card'}
                 onClick={() => void startWork(selected)}
               >
                 {selected.working
@@ -920,7 +920,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                   className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
                   disabled={reviewBusy || !reviewFeedback.trim() || !selected.assigneeAgentId}
                   title={!selected.assigneeAgentId
-                    ? 'Assign an agent first — refinement re-dispatches the assignee'
+                    ? 'Assign an agent first — refinement restarts the assignee'
                     : 'Send the card back: the agent reruns with your feedback'}
                   onClick={() => void refineCard(selected)}
                 >

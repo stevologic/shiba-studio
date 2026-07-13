@@ -84,7 +84,8 @@ async function main() {
     assert.equal(ready.segments.length, 2);
     assert.deepEqual(ready.segments.map((segment) => segment.speakerId), ['speaker-0', 'speaker-1']);
     assert.equal(ready.segments[1].start, 2.2);
-    assert.match(ready.segments[1].citationUrl, new RegExp(`meeting=${ready.id}.*t=2.20`));
+    const expectedCitation = `/api/meetings/${encodeURIComponent(ready.id)}/citation?t=2.20&end=5.20`;
+    assert.equal(ready.segments[1].citationUrl, expectedCitation);
     assert.equal(ready.actionItems[0].owner, 'Alex');
     assert.equal(ready.actionItems[0].due, 'Friday');
     ready = meetings.updateMeetingReview(ready.id, {
@@ -92,7 +93,7 @@ async function main() {
       actionItems: [{ ...ready.actionItems[0], start: 999, end: 1_000, citationUrl: 'https://invalid.example/citation' }],
     });
     assert.equal(ready.actionItems[0].start, 2.2, 'review writes retain canonical transcript timing');
-    assert.match(ready.actionItems[0].citationUrl || '', /^\/meetings\?/, 'review writes cannot inject citation URLs');
+    assert.equal(ready.actionItems[0].citationUrl, expectedCitation, 'review writes cannot inject citation URLs');
     assert.equal(ledger.getTask(ready.taskId)?.status, 'succeeded');
     const taskDetail = ledger.getTaskDetails(ready.taskId);
     assert(taskDetail?.evidence.some((item) => item.requirementId === 'transcript' && item.status === 'passed'));
@@ -101,7 +102,7 @@ async function main() {
     const search = meetings.searchMeetingTranscripts('release notes', 5);
     assert.equal(search.length, 1);
     assert.equal(search[0].start, 2.2);
-    assert.match(search[0].citationUrl, /^\/meetings\?/);
+    assert.equal(search[0].citationUrl, expectedCitation);
 
     await assert.rejects(() => meetings.createMeetingOutputs({ meetingId: ready.id, confirmed: false, actionItemIds: [ready.actionItems[0].id], createBoardCards: true }), /confirmation/i);
     const outputs = await meetings.createMeetingOutputs({ meetingId: ready.id, confirmed: true, actionItemIds: [ready.actionItems[0].id], createBoardCards: true, createRoutines: true, routineAgentId: 'agent-verifier' });
@@ -117,6 +118,13 @@ async function main() {
     assert.equal(retained.audioAvailable, false);
     assert(retained.transcriptText.includes('release notes'), 'retention deletes only local audio');
     assert.equal(meetings.getMeetingAudioDescriptor(ready.id), null);
+    const citationRoute = await import('../app/api/meetings/[id]/citation/route');
+    const citationResponse = await citationRoute.GET(
+      new Request(`http://localhost${expectedCitation}`),
+      { params: Promise.resolve({ id: ready.id }) },
+    );
+    assert.equal(citationResponse.status, 200, 'transcript citation survives audio retention cleanup');
+    assert.match(await citationResponse.text(), /release notes/i);
 
     await meetings.deleteMeeting(ready.id);
     assert.equal(meetings.getMeeting(ready.id), null);

@@ -95,12 +95,12 @@ export function CapabilityPacksPanel() {
 
   async function instantiateRoutine(pack: CapabilityPackRecord, templateId: string) {
     const agentId = await promptDialog({
-      title: 'Create Routine from reviewed template',
-      message: 'Enter the agent ID that should own this Routine. Creation is explicit and does not broaden the pack permissions.',
-      placeholder: 'Agent ID', confirmLabel: 'Create Routine',
+      title: 'Create Automation from reviewed template',
+      message: 'Enter the agent ID that should own this Automation. Creation is explicit and does not broaden the pack permissions.',
+      placeholder: 'Agent ID', confirmLabel: 'Create Automation',
     });
     if (agentId?.trim()) {
-      await mutate({ action: 'instantiate_routine', packId: pack.id, templateId, agentId: agentId.trim() }, 'Routine created from pack template');
+      await mutate({ action: 'instantiate_routine', packId: pack.id, templateId, agentId: agentId.trim() }, 'Automation created from pack template');
     }
   }
 
@@ -206,7 +206,7 @@ export function CapabilityPacksPanel() {
             <div className="flex items-center gap-2"><strong>{pack.name}</strong><code>{pack.activeVersion || pack.previousVersion}</code><span className="text-dim">{pack.status}</span></div>
             <p className="mt-1 text-dim">{pack.description || 'No description'}</p>
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-dim">
-              <span>{pack.manifest?.skills.length || 0} skills</span><span>{pack.manifest?.routineTemplates.length || 0} routines</span>
+              <span>{pack.manifest?.skills.length || 0} skills</span><span>{pack.manifest?.routineTemplates.length || 0} automations</span>
               <span>{pack.grantedPermissionKeys.length} grants</span><span>{pack.usageCount} uses</span>
               <span>source {pack.sourceHash.slice(0, 10)}</span>
             </div>
@@ -223,7 +223,7 @@ export function CapabilityPacksPanel() {
             </div>
             {pack.status === 'active' && (pack.manifest?.routineTemplates.length || 0) > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-[var(--border)] pt-2">
-                <span className="text-[10px] text-dim">Routine templates:</span>
+                <span className="text-[10px] text-dim">Automation templates:</span>
                 {pack.manifest!.routineTemplates.map((template) => (
                   <button key={template.id} type="button" className="grok-btn grok-btn-ghost text-[10px] py-1" disabled={safeMode} onClick={() => void instantiateRoutine(pack, template.id)}>
                     {template.name}

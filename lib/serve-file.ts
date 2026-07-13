@@ -12,7 +12,9 @@ const INLINE_TYPES: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
+  // SVG is agent-authored active content. Serve it as source text so opening
+  // a raw deliverable cannot execute same-origin script against Studio APIs.
+  '.svg': 'text/plain; charset=utf-8',
   '.bmp': 'image/bmp',
   '.pdf': 'application/pdf',
   '.txt': 'text/plain; charset=utf-8',

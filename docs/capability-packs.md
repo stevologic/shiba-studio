@@ -1,6 +1,6 @@
 # Capability Packs and Skill Workshop
 
-Capability Packs are portable, immutable workflow bundles. The current runtime activates skills, slash-command definitions, MCP requirements, integration requirements, Routine templates, action-level permissions, supported surfaces, setup checks, and tests.
+Capability Packs are portable, immutable workflow bundles. The current runtime activates skills, slash-command definitions, MCP requirements, integration requirements, Automation templates, action-level permissions, supported surfaces, setup checks, and tests.
 
 Agent templates, event hooks, and migration sections are reserved manifest fields. Proposals may preserve them for review and export, but activation and rollback fail closed while those sections are nonempty; Shiba never pretends an inert section is live. MCP entries are declarative requirements only: activation requires an exact enabled server (including any declared preset, command, arguments, and environment-key presence), but a pack never installs, starts, or invokes an MCP process. Use the separate MCP **Test** action to approve startup and tool discovery.
 
@@ -30,7 +30,7 @@ Approved manifests are written to the local Git-ready registry under:
 
 Versions are immutable. **Roll back** restores the selected version and the exact grants approved with it. **Uninstall** disables every active skill/template while preserving version history. Export downloads a portable manifest.
 
-Pack skills use namespaced IDs (`pack:<pack-id>:<skill-id>`) and appear in the existing agent skill catalog only while the pack is active and safe mode is off. Components whose permission references are not granted stay disabled. Routine templates require a separate explicit instantiation action.
+Pack skills use namespaced IDs (`pack:<pack-id>:<skill-id>`) and appear in the existing agent skill catalog only while the pack is active and safe mode is off. Components whose permission references are not granted stay disabled. Automation templates require a separate explicit instantiation action; exported manifests retain the stable `routineTemplates` schema field for compatibility.
 
 ## Safe sources
 

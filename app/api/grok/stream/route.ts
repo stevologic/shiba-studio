@@ -367,13 +367,13 @@ export async function POST(req: NextRequest) {
                 case 'terminal_exec': return `Terminal \`${short(args.command, 120)}\``;
                 case 'web_search': return `Searching the web for “${short(args.query, 80)}”`;
                 case 'web_fetch': return `Fetching ${short(args.url, 100)}`;
-                case 'meeting_search': return `Searching meeting transcripts for â€œ${short(args.query, 80)}â€`;
+                case 'meeting_search': return `Searching voice transcripts for â€œ${short(args.query, 80)}â€`;
                 case 'browser_navigate': return `Opening ${short(args.url, 100)}`;
                 case 'browser_click': return `Clicking ${short(args.selector, 60)}`;
                 case 'browser_type': return `Typing into ${short(args.selector, 60)}`;
                 case 'browser_screenshot': return 'Taking screenshot';
                 case 'browser_extract': return 'Extracting page text';
-                case 'background_task': return `Dispatching background task: “${short(args.prompt, 100)}”`;
+                case 'background_task': return `Starting background task: “${short(args.prompt, 100)}”`;
                 case 'background_status': return args.task_id ? `Checking background task ${short(args.task_id, 12)}` : 'Listing background tasks';
                 default: return `${name}(${short(JSON.stringify(args), 100)})`;
               }

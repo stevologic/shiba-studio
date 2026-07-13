@@ -69,6 +69,10 @@ function statusTone(status: TaskStatus): string {
   return 'text-muted';
 }
 
+function taskKindLabel(kind: string): string {
+  return kind === 'routine' ? 'automation' : kind.replaceAll('_', ' ');
+}
+
 function evaluationTone(status: RequirementEvaluation['status']): string {
   if (status === 'proven') return 'text-success';
   if (status === 'failed') return 'text-error';
@@ -205,10 +209,10 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
     try {
       const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/dispatch`, { method: 'POST' });
       const data = await response.json() as { ok?: boolean; error?: string };
-      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not dispatch the task');
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not start the task');
       await loadTask();
     } catch (dispatchError) {
-      setError(dispatchError instanceof Error ? dispatchError.message : 'Could not dispatch the task');
+      setError(dispatchError instanceof Error ? dispatchError.message : 'Could not start the task');
     } finally {
       setDispatchPending(false);
     }
@@ -292,7 +296,7 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
   if (!task) {
     return (
       <section className="space-y-4">
-        <button type="button" className="grok-btn grok-btn-ghost" onClick={back}><ArrowLeft size={14} aria-hidden="true" /> Back to Dispatch</button>
+        <button type="button" className="grok-btn grok-btn-ghost" onClick={back}><ArrowLeft size={14} aria-hidden="true" /> Back to Dashboard</button>
         <div className="grok-card p-8 text-center">
           <XCircle size={28} className="mx-auto text-error mb-3" aria-hidden="true" />
           <h1 className="font-semibold">Task unavailable</h1>
@@ -314,13 +318,13 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
     <article className="task-detail-page space-y-5" aria-labelledby="task-title">
       <header>
         <button type="button" className="grok-btn grok-btn-ghost mb-3" onClick={back}>
-          <ArrowLeft size={14} aria-hidden="true" /> Back to Dispatch
+          <ArrowLeft size={14} aria-hidden="true" /> Back to Dashboard
         </button>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-2">
               <TaskStatusBadge status={task.status} />
-              <span className="status-pill text-dim">{task.kind}</span>
+              <span className="status-pill text-dim">{taskKindLabel(task.kind)}</span>
               <span className="text-[11px] text-dim font-mono">{task.id}</span>
             </div>
             <h1 id="task-title" className="text-2xl font-semibold break-words">{task.title}</h1>
@@ -339,7 +343,7 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
                   : `/automations?routineTask=${encodeURIComponent(task.id)}`)}
               >
                 <CalendarClock size={14} aria-hidden="true" />
-                {linkedRoutineId ? 'Open configured routine' : 'Configure routine'}
+                {linkedRoutineId ? 'Open configured automation' : 'Configure automation'}
               </button>
             )}
             {canRetry && (
@@ -351,7 +355,7 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
             {task.status === 'queued' && task.kind !== 'routine' && (
               <button type="button" className="grok-btn grok-btn-primary" disabled={dispatchPending} onClick={() => void dispatchQueuedTask()}>
                 {dispatchPending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
-                Dispatch task
+                Start task
               </button>
             )}
             {canPause && (
@@ -569,7 +573,7 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
           <div className="divide-y divide-default">
             {task.children.map((child: TaskRecord) => (
               <button key={child.id} type="button" className="w-full p-4 text-left flex items-center gap-3 hover:bg-[var(--bg-hover)]" onClick={() => router.push(`/tasks/${encodeURIComponent(child.id)}`)}>
-                <span className="min-w-0 flex-1"><span className="block text-sm font-medium truncate">{child.title}</span><span className="block text-[11px] text-dim mt-0.5">{child.kind}</span></span>
+                <span className="min-w-0 flex-1"><span className="block text-sm font-medium truncate">{child.title}</span><span className="block text-[11px] text-dim mt-0.5">{taskKindLabel(child.kind)}</span></span>
                 <TaskStatusBadge status={child.status} />
                 <ChevronRight size={14} className="text-dim" aria-hidden="true" />
               </button>

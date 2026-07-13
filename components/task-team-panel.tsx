@@ -190,7 +190,7 @@ export function TaskTeamPanel({ task }: { task: TaskRecord }) {
           ))}
           <div className="flex flex-wrap gap-2">
             <button type="button" className="grok-btn grok-btn-ghost" disabled={workers.length >= 12} onClick={() => setWorkers((current) => [...current, emptyWorker(current.length + 1, task, agents[0]?.id || '')])}><Plus size={12} /> Add specialist</button>
-            <button type="button" className="grok-btn grok-btn-primary" disabled={pending} onClick={() => void createTeam()}>{pending ? <Loader2 size={13} className="animate-spin" /> : <Users size={13} />} Create and dispatch</button>
+            <button type="button" className="grok-btn grok-btn-primary" disabled={pending} onClick={() => void createTeam()}>{pending ? <Loader2 size={13} className="animate-spin" /> : <Users size={13} />} Create and start</button>
             <button type="button" className="grok-btn grok-btn-ghost" disabled={pending} onClick={() => setEditing(false)}>Cancel</button>
           </div>
         </div>

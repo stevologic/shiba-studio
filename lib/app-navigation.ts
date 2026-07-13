@@ -9,11 +9,9 @@ export const APP_TABS = [
   'workspace',
   'files',
   'automations',
-  'meetings',
   'integrations',
   'usage',
   'logs',
-  'doctor',
   'settings',
 ] as const;
 
@@ -34,7 +32,6 @@ const PATH_ALIASES: Record<string, AppTab> = {
 };
 
 export function tabToPath(tab: AppTab): string {
-  if (tab === 'automations') return '/routines';
   return tab === 'dashboard' ? '/' : `/${tab}`;
 }
 

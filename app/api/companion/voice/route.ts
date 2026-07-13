@@ -136,7 +136,7 @@ async function processVoiceRequest(input: {
     });
   } catch (error) {
     const internalMessage = error instanceof Error ? error.message : String(error);
-    const publicMessage = 'Voice request could not be transcribed or dispatched. Open Meetings on the host for details.';
+    const publicMessage = 'Voice request could not be transcribed or started. Review the host logs for details.';
     try { finishCompanionAction(input.receiptId, { ok: false, status: 'failed', error: publicMessage, meetingId: input.meetingId }, false); } catch { /* receipt already terminal */ }
     audit('auth', 'companion voice rejected', internalMessage.slice(0, 500), {
       deviceId: input.deviceId,

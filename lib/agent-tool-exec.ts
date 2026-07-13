@@ -257,7 +257,7 @@ async function executeAgentToolScoped(
         const results = searchMeetingTranscripts(query, limit);
         return {
           result: results,
-          sideEffect: `searched meeting transcripts for "${query.slice(0, 80)}" (${results.length} results)`,
+          sideEffect: `searched voice transcripts for "${query.slice(0, 80)}" (${results.length} results)`,
         };
       }
       case 'session_search': {

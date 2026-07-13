@@ -365,11 +365,11 @@ export function CompanionApp() {
 
               <section className={styles.section} aria-labelledby="routines-title">
                 <div className={`${styles.sectionHeader} ${styles.between}`}>
-                  <h2 className={styles.sectionTitle} id="routines-title">Saved routines</h2>
+                  <h2 className={styles.sectionTitle} id="routines-title">Saved automations</h2>
                   <span className={styles.badge}>{data?.routines.length || 0}</span>
                 </div>
                 <div className={styles.list}>
-                  {!data?.routines.length ? <p className={styles.empty}>No routines available to this device.</p> : data.routines.map((routine) => (
+                  {!data?.routines.length ? <p className={styles.empty}>No automations available to this device.</p> : data.routines.map((routine) => (
                     <article className={styles.card} key={routine.routineId}>
                       <h3 className={styles.cardTitle}>{routine.name}</h3>
                       <p className={styles.muted}>{routine.enabled ? 'Enabled' : 'Disabled'} · circuit {routine.circuitState}</p>

@@ -134,13 +134,13 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
     try {
       const response = await fetch('/api/routines?limit=500', { cache: 'no-store', signal });
       const data = await response.json() as { ok?: boolean; routines?: RoutineDefinition[]; error?: string };
-      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load routines');
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load automations');
       setRoutines(data.routines || []);
       setError(null);
     } catch (loadError) {
       if (loadError instanceof DOMException && loadError.name === 'AbortError') return;
       setRoutines([]);
-      setError(loadError instanceof Error ? loadError.message : 'Could not load routines');
+      setError(loadError instanceof Error ? loadError.message : 'Could not load automations');
     }
   }, []);
 
@@ -150,7 +150,7 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
     try {
       const response = await fetch(`/api/routines/${encodeURIComponent(routineId)}`, { cache: 'no-store', signal });
       const data = await response.json() as RoutineDetailResponse;
-      if (!response.ok || !data.ok || !data.routine) throw new Error(data.error || 'Could not load routine details');
+      if (!response.ok || !data.ok || !data.routine) throw new Error(data.error || 'Could not load automation details');
       if (requestId !== detailRequest.current) return;
       setSelectedId(routineId);
       setSelected(data.routine);
@@ -159,7 +159,7 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
     } catch (loadError) {
       if (loadError instanceof DOMException && loadError.name === 'AbortError') return;
       if (requestId !== detailRequest.current) return;
-      setError(loadError instanceof Error ? loadError.message : 'Could not load routine details');
+      setError(loadError instanceof Error ? loadError.message : 'Could not load automation details');
     } finally {
       if (!signal?.aborted && requestId === detailRequest.current) setDetailLoading(false);
     }
@@ -192,7 +192,7 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
       try {
         const response = await fetch(`/api/tasks/${encodeURIComponent(routineTaskId)}`, { cache: 'no-store', signal: controller.signal });
         const data = await response.json() as { ok?: boolean; task?: TaskDetails; error?: string };
-        if (!response.ok || !data.ok || !data.task) throw new Error(data.error || 'Could not load the routine draft');
+        if (!response.ok || !data.ok || !data.task) throw new Error(data.error || 'Could not load the automation draft');
         const linkedRoutine = typeof data.task.metadata.routineId === 'string' ? data.task.metadata.routineId : '';
         if (linkedRoutine) {
           router.replace(`/automations?routine=${encodeURIComponent(linkedRoutine)}`);
@@ -204,12 +204,12 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
           sourceTaskId: data.task.id,
           initial: {
             ...emptyRoutineInput(data.task.agentId || agents[0]?.id || '', { name: data.task.title, prompt: data.task.description }),
-            description: `Configured from Dispatch task ${data.task.id}`,
+            description: `Configured from task ${data.task.id}`,
           },
         });
       } catch (draftError) {
         if (draftError instanceof DOMException && draftError.name === 'AbortError') return;
-        setError(draftError instanceof Error ? draftError.message : 'Could not load the routine draft');
+        setError(draftError instanceof Error ? draftError.message : 'Could not load the automation draft');
       }
     }, 0);
     return () => { window.clearTimeout(timer); controller.abort(); };
@@ -226,20 +226,20 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
   async function linkSourceTask(taskId: string, routineId: string) {
     const currentResponse = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { cache: 'no-store' });
     const currentData = await currentResponse.json() as { ok?: boolean; task?: TaskDetails; error?: string };
-    if (!currentResponse.ok || !currentData.ok || !currentData.task) throw new Error(currentData.error || 'Routine was saved, but its source task could not be loaded');
+    if (!currentResponse.ok || !currentData.ok || !currentData.task) throw new Error(currentData.error || 'Automation was saved, but its source task could not be loaded');
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         expectedVersion: currentData.task.version,
         status: currentData.task.status,
-        currentStep: 'Routine configured',
+        currentStep: 'Automation configured',
         nextAction: 'Waiting for a configured trigger or manual run',
         metadata: { routineId, routineConfiguredAt: new Date().toISOString(), routineUrl: `/automations?routine=${encodeURIComponent(routineId)}` },
       }),
     });
     const data = await response.json() as { ok?: boolean; error?: string };
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Routine was saved, but the source task could not be linked');
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Automation was saved, but the source task could not be linked');
   }
 
   async function saveRoutine(input: CreateRoutineInput) {
@@ -254,16 +254,16 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
         body: JSON.stringify(editing ? { ...input, expectedVersion: editing.version } : input),
       });
       const data = await response.json() as { ok?: boolean; routine?: RoutineDefinition; error?: string };
-      if (!response.ok || !data.ok || !data.routine) throw new Error(data.error || 'Could not save the routine');
+      if (!response.ok || !data.ok || !data.routine) throw new Error(data.error || 'Could not save the automation');
       if (editor.sourceTaskId) {
         try { await linkSourceTask(editor.sourceTaskId, data.routine.id); }
-        catch (linkError) { toast.warning(linkError instanceof Error ? linkError.message : 'Routine saved, but the source task was not linked'); }
+        catch (linkError) { toast.warning(linkError instanceof Error ? linkError.message : 'Automation saved, but the source task was not linked'); }
       }
       setEditor(null);
       await loadRoutines();
       await loadDetail(data.routine.id);
       router.replace(`/automations?routine=${encodeURIComponent(data.routine.id)}`);
-      toast.success(editing ? 'Routine updated' : 'Routine created');
+      toast.success(editing ? 'Automation updated' : 'Automation created');
     } finally {
       setSaving(false);
     }
@@ -274,12 +274,12 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
     try {
       const response = await fetch(`/api/routines/${encodeURIComponent(routine.id)}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       const data = await response.json() as { ok?: boolean; invocation?: RoutineInvocation; error?: string };
-      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not queue the routine');
-      if (data.invocation?.status === 'skipped') toast.warning(data.invocation.error || 'Routine run was skipped');
-      else toast.success('Routine queued');
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not queue the automation');
+      if (data.invocation?.status === 'skipped') toast.warning(data.invocation.error || 'Automation run was skipped');
+      else toast.success('Automation queued');
       await loadDetail(routine.id);
     } catch (runError) {
-      setError(runError instanceof Error ? runError.message : 'Could not queue the routine');
+      setError(runError instanceof Error ? runError.message : 'Could not queue the automation');
     } finally {
       setAction(null);
     }
@@ -305,7 +305,7 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
   }
 
   async function deleteRoutine(routine: RoutineDefinition) {
-    const confirmed = await confirmDialog({ title: `Delete ${routine.name}?`, message: 'The definition is disabled and removed. Invocation history remains durable.', confirmLabel: 'Delete routine', danger: true });
+    const confirmed = await confirmDialog({ title: `Delete ${routine.name}?`, message: 'The definition is disabled and removed. Invocation history remains durable.', confirmLabel: 'Delete automation', danger: true });
     if (!confirmed) return;
     setAction(`delete:${routine.id}`);
     try {
@@ -313,42 +313,42 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
         method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedVersion: routine.version }),
       });
       const data = await response.json() as { ok?: boolean; error?: string };
-      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not delete the routine');
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not delete the automation');
       setSelected(null);
       setSelectedId(null);
       setInvocations([]);
       await loadRoutines();
       router.replace('/automations');
-      toast.success('Routine deleted');
+      toast.success('Automation deleted');
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : 'Could not delete the routine');
+      setError(deleteError instanceof Error ? deleteError.message : 'Could not delete the automation');
     } finally {
       setAction(null);
     }
   }
 
   return (
-    <section className="space-y-5" aria-labelledby="durable-routines-heading">
+    <section className="space-y-5" aria-labelledby="durable-automations-heading">
       <header className="page-head-row mb-0">
         <div className="min-w-0">
           <div className="text-[11px] uppercase tracking-[0.16em] text-dim mb-1">Event-driven automation</div>
-          <h1 id="durable-routines-heading" className="page-title">Durable Routines</h1>
+          <h1 id="durable-automations-heading" className="page-title">Automations</h1>
           <p className="page-subtitle">Run the same governed workflow manually, on a schedule, from a signed webhook, or when local and connected systems change.</p>
         </div>
-        <button type="button" className="grok-btn grok-btn-primary shrink-0" onClick={newRoutine}><Plus size={14} /> New routine</button>
+        <button type="button" className="grok-btn grok-btn-primary shrink-0" onClick={newRoutine}><Plus size={14} /> New automation</button>
       </header>
 
       {error && <div className="grok-card p-3 text-sm text-error" role="alert">{error}</div>}
 
       {routines === null ? (
-        <div className="grok-card p-8 text-center text-sm text-dim" aria-busy="true"><Loader2 size={18} className="animate-spin mx-auto mb-2" /> Loading routines…</div>
+        <div className="grok-card p-8 text-center text-sm text-dim" aria-busy="true"><Loader2 size={18} className="animate-spin mx-auto mb-2" /> Loading automations…</div>
       ) : routines.length === 0 ? (
         <div className="grok-card p-10 text-center">
           <Workflow size={30} className="mx-auto text-muted mb-3" aria-hidden="true" />
-          <div className="font-medium">Create your first durable routine</div>
+          <div className="font-medium">Create your first automation</div>
           <p className="text-sm text-dim mt-1 max-w-lg mx-auto">Triggers are deduplicated, retries survive restarts, and repeated failures open one visible circuit breaker.</p>
-          <button type="button" className="grok-btn grok-btn-primary mt-4" onClick={newRoutine} disabled={agents.length === 0}><Plus size={14} /> New routine</button>
-          {agents.length === 0 && <p className="text-xs text-warning mt-3">Create an agent first so the routine has an execution owner.</p>}
+          <button type="button" className="grok-btn grok-btn-primary mt-4" onClick={newRoutine} disabled={agents.length === 0}><Plus size={14} /> New automation</button>
+          {agents.length === 0 && <p className="text-xs text-warning mt-3">Create an agent first so the automation has an execution owner.</p>}
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.5fr)] items-start">
@@ -359,9 +359,9 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
           </div>
           <div className="grok-card p-5 min-h-64 lg:sticky lg:top-4">
             {detailLoading && !selected ? (
-              <div className="text-sm text-dim flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading routine…</div>
+              <div className="text-sm text-dim flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading automation…</div>
             ) : !selected ? (
-              <div className="text-center text-sm text-dim py-12"><CircleDashed size={24} className="mx-auto mb-3 opacity-50" />Select a routine to inspect its contract and invocation state.</div>
+              <div className="text-center text-sm text-dim py-12"><CircleDashed size={24} className="mx-auto mb-3 opacity-50" />Select an automation to inspect its contract and invocation state.</div>
             ) : (
               <div className="space-y-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -425,7 +425,7 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
         <div className="mt-3 space-y-1 font-mono"><div>x-shiba-timestamp: Unix seconds</div><div>x-shiba-signature: sha256=HMAC(secret, timestamp + &quot;.&quot; + rawBody)</div><div>x-shiba-delivery: stable provider delivery ID</div><div>x-shiba-trigger: trigger ID (optional when there is one webhook)</div></div>
       </details>
 
-      {editor && <RoutineEditor key={editor.key} agents={agents} initial={editor.initial} title={editor.routine ? `Edit ${editor.routine.name}` : editor.sourceTaskId ? 'Configure routine draft' : 'New routine'} saving={saving} onCancel={() => !saving && setEditor(null)} onSave={saveRoutine} />}
+      {editor && <RoutineEditor key={editor.key} agents={agents} initial={editor.initial} title={editor.routine ? `Edit ${editor.routine.name}` : editor.sourceTaskId ? 'Configure automation draft' : 'New automation'} saving={saving} onCancel={() => !saving && setEditor(null)} onSave={saveRoutine} />}
     </section>
   );
 }
