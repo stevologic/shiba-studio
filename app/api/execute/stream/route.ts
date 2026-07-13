@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server';
+import { randomUUID } from 'crypto';
 import { loadAgents } from '@/lib/persistence';
-import { runAgentStream } from '@/lib/agent-runtime';
+import { discardRunStartReservation, reserveRunStart, runAgentStream } from '@/lib/agent-runtime';
 import { encodeAgentSseEvent } from '@/lib/agent-stream-types';
+import { isAutomationMaintenanceActive } from '@/lib/automation-maintenance';
 import { resolveProjectRunScope } from '@/lib/project-run';
 
 export async function POST(req: NextRequest) {
@@ -16,6 +18,11 @@ export async function POST(req: NextRequest) {
   } = await req.json();
   if (!agentId || !prompt) {
     return new Response(JSON.stringify({ error: 'agentId + prompt required' }), { status: 400 });
+  }
+  if (isAutomationMaintenanceActive()) {
+    return new Response(JSON.stringify({
+      error: 'Agent runs are temporarily paused for maintenance. Retry after maintenance finishes.',
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } });
   }
 
   const agents = await loadAgents();
@@ -36,12 +43,16 @@ export async function POST(req: NextRequest) {
       effectivePrompt = scope.effectivePrompt;
     }
   }
+  const runId = randomUUID();
+  reserveRunStart(runId);
 
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
       try {
+        controller.enqueue(encoder.encode(encodeAgentSseEvent({ type: 'run_started', runId })));
         for await (const event of runAgentStream(agent, effectivePrompt, {
+          runId,
           scheduled: !!scheduled,
           scheduleId: scheduleId || undefined,
           scheduleInstructions: scheduleInstructions || undefined,
@@ -56,6 +67,7 @@ export async function POST(req: NextRequest) {
         const msg = e instanceof Error ? e.message : 'Stream failed';
         controller.enqueue(encoder.encode(encodeAgentSseEvent({ type: 'error', message: msg })));
       } finally {
+        discardRunStartReservation(runId);
         controller.close();
       }
     },

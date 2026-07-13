@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { uploadXaiFile } from '@/lib/xai-files';
+import { uploadOwnedXaiChatFile } from '@/lib/external-resource-integrity';
 import { loadConfig } from '@/lib/persistence';
 import { resolveCloudBearer } from '@/lib/xai-oauth';
 import { parseModelRef } from '@/lib/model-providers';
@@ -76,7 +76,15 @@ export async function POST(req: NextRequest) {
     if (!auth.token) {
       return NextResponse.json({ error: 'Cloud credentials required to upload files (API key or OAuth with X)' }, { status: 400 });
     }
-    const uploaded = await uploadXaiFile(file.name, buf, auth.token);
+    // Persist ownership before crossing the provider boundary. If the process
+    // stops after xAI accepts the bytes but before this response is returned,
+    // the integrity coordinator can recover the exact UUID-named remote file.
+    const uploaded = await uploadOwnedXaiChatFile({
+      originalFilename: file.name,
+      content: buf,
+      authToken: auth.token,
+      authSource: auth.source,
+    });
     return NextResponse.json({
       ok: true,
       attachment: {

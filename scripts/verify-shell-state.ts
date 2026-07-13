@@ -53,7 +53,7 @@ async function main() {
         description: 'temp',
         workspace: { path: '.', useWorktree: false },
         integrations: {
-          github: false, slack: false, googledrive: false, discord: false, x: false, obsidian: false, vercel: false, netlify: false,
+          github: false, slack: false, googledrive: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false,
         },
         peers: [],
         skills: [],
@@ -167,6 +167,10 @@ async function main() {
   assert(shellSrc.includes('void refreshRuns()'), 'remount path refreshes runs immediately');
   assert(shellSrc.includes('applyConfigToForms(snap.config)'), 'remount path restores config-derived forms');
   assert(shellSrc.includes('Promise.allSettled'), 'loadAll applies each endpoint independently');
+  const loadAllBlock = shellSrc.slice(shellSrc.indexOf('async function loadAll'), shellSrc.indexOf('async function ensureServerBooted'));
+  assert(!loadAllBlock.includes("'/api/boot'"), 'ordinary data refreshes never rerun server boot');
+  assert(loadAllBlock.includes("slices ?? ['agents', 'runs', 'config']"), 'cold shell load does not duplicate integrations already returned by config');
+  assert(shellSrc.includes("loadClientJson<any>('/api/tts'"), 'voice consumers share one cached catalog request');
 
   // --- 6) structural: layout hosts ShibaStudio (remount prevention) ---
   const layoutPath = path.resolve(__dirname, '../app/[[...section]]/layout.tsx');

@@ -36,6 +36,7 @@ function testAgent(): Agent {
       googledrive: false,
       discord: false,
       x: true,
+      reddit: false,
       obsidian: false,
       vercel: false,
       netlify: false,

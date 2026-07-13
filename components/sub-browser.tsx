@@ -54,6 +54,7 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
   // Default Interact — feels like a real browser; Annotate freezes to a shot.
   const [mode, setMode] = useState<'interact' | 'annotate'>('interact');
   const [liveConnected, setLiveConnected] = useState(false);
+  const [liveEpoch, setLiveEpoch] = useState(0);
 
   const imgRef = useRef<HTMLImageElement | null>(null);
   const liveRef = useRef<HTMLDivElement | null>(null);
@@ -95,10 +96,10 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
   }, []);
 
   const startLiveStream = useCallback(() => {
-    stopLiveStream();
     const es = new EventSource('/api/subbrowser/stream');
     esRef.current = es;
     es.onmessage = (ev) => {
+      if (esRef.current !== es) return;
       try {
         const data = JSON.parse(ev.data);
         if (data.type === 'frame' && data.dataUrl) {
@@ -126,18 +127,15 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
       } catch { /* ignore parse errors */ }
     };
     es.onerror = () => {
+      if (esRef.current !== es) return;
       setLiveConnected(false);
       // EventSource auto-reconnects; no toast spam.
     };
-  }, [stopLiveStream]);
+  }, []);
 
   // Open/close lifecycle — attach to the shared agent page if one is already open.
   useEffect(() => {
-    if (!open) {
-      stopLiveStream();
-      void call({ action: 'stop_live' }).catch(() => {});
-      return;
-    }
+    if (!open) return;
     let cancelled = false;
     (async () => {
       try {
@@ -154,21 +152,19 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
     })();
     return () => {
       cancelled = true;
-      stopLiveStream();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, call]);
 
-  // Keep live screencast running whenever Interact mode has a page.
+  // This effect is the sole owner of the live EventSource. The stream route
+  // starts the CDP screencast and stops it when the last subscriber leaves.
   useEffect(() => {
     if (!open || mode !== 'interact' || !hasPage) return;
-    startLiveStream();
-    void call({ action: 'start_live' }).catch(() => {});
+    const start = window.setTimeout(startLiveStream, 0);
     return () => {
+      window.clearTimeout(start);
       stopLiveStream();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, mode, hasPage]);
+  }, [open, mode, hasPage, liveEpoch, startLiveStream, stopLiveStream]);
 
   async function navigate() {
     let url = urlInput.trim();
@@ -186,7 +182,6 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
       setUrlInput(data.url || url);
       setPageTitle(data.title || '');
       if (live) {
-        if (!esRef.current) startLiveStream();
         viewportRef.current = { width: data.width || 1280, height: data.height || 800 };
       } else if (data.dataUrl) {
         setAnnotateShot(data as PageShot);
@@ -205,7 +200,6 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
 
     if (next === 'annotate') {
       // Freeze: stop live stream, capture full-page screenshot for picking.
-      stopLiveStream();
       setBusy('Capturing page for annotation…');
       try {
         const data = await call({ action: 'annotate_shot' });
@@ -222,25 +216,12 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
 
     // Back to Interact — live remote browser again.
     setAnnotateShot(null);
-    setBusy('Resuming live browser…');
-    try {
-      await call({ action: 'start_live' });
-      startLiveStream();
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'Could not start live view');
-    }
-    setBusy(null);
   }
 
   async function refreshView() {
     if (!hasPage) return;
     if (mode === 'interact') {
-      setBusy('Refreshing…');
-      try {
-        await call({ action: 'start_live' });
-        if (!esRef.current) startLiveStream();
-      } catch { /* keep view */ }
-      setBusy(null);
+      setLiveEpoch((epoch) => epoch + 1);
       return;
     }
     setBusy('Refreshing…');
@@ -261,7 +242,6 @@ export default function SubBrowser({ open, onClose, onAnnotate, initialUrl }: Su
     const vh = viewportRef.current.height || liveFrame?.height || 800;
     const scale = Math.min(rect.width / vw, rect.height / vh);
     const dispW = vw * scale;
-    const dispH = vh * scale;
     const offsetX = (rect.width - dispW) / 2;
     const offsetY = 0; // top-aligned
     const x = (e.clientX - rect.left - offsetX) / scale;

@@ -1,10 +1,10 @@
-import { listChatSessions } from './chat-sessions';
-import { listMcpServers } from './mcp';
-import { listProjects } from './projects';
+import { countChatSessions } from './chat-sessions';
+import { listMcpServersReadOnly } from './mcp';
+import { countProjects } from './projects';
 import { loadAgents, loadConfig } from './persistence';
-import { listGlobalUploadFiles } from './workspace';
+import { countGlobalUploadFiles } from './workspace';
 import { getUsageSummary } from './usage';
-import type { IntegrationCreds } from './types';
+import type { AppConfig, IntegrationCreds } from './types';
 import { memoryStats } from './agent-memory';
 
 /** Default monthly quota (USD) when the user hasn't set one in Settings. */
@@ -17,6 +17,7 @@ function countConfiguredIntegrations(creds: IntegrationCreds): number {
   if (creds.googledrive?.accessToken?.trim() || creds.googledrive?.serviceAccountJson?.trim()) n++;
   if (creds.discord?.token?.trim()) n++;
   if (creds.x?.accessToken?.trim() && creds.x?.apiKey?.trim()) n++;
+  if (creds.reddit?.refreshToken?.trim() || creds.reddit?.accessToken?.trim()) n++;
   if (creds.obsidian?.vaultPath?.trim() || (creds.obsidian?.restApiUrl?.trim() && creds.obsidian?.restApiKey?.trim())) n++;
   if (creds.vercel?.token?.trim()) n++;
   if (creds.netlify?.token?.trim()) n++;
@@ -40,12 +41,12 @@ export function clearNavUsageCostCache() {
   usageCostCache = null;
 }
 
-async function getCachedUsageCost(): Promise<{ costUsd: number; source: 'xai' | 'local' }> {
+async function getCachedUsageCost(cfg?: AppConfig): Promise<{ costUsd: number; source: 'xai' | 'local' }> {
   if (usageCostCache && Date.now() - usageCostCache.at < USAGE_CACHE_MS) {
     return { costUsd: usageCostCache.costUsd, source: usageCostCache.source };
   }
   // Settings → Usage source: auto prefers xAI billing, or the user pins one.
-  const pref = (await loadConfig()).usageCostSource || 'auto';
+  const pref = (cfg ?? await loadConfig()).usageCostSource || 'auto';
   // Prefer authoritative month-to-date from xAI billing; fall back to local estimate.
   if (pref !== 'local') {
     try {
@@ -83,22 +84,22 @@ export async function getNavUsageBadge(): Promise<{
   source: 'xai' | 'local';
   pref: 'auto' | 'xai' | 'local';
 }> {
-  const pref = ((await loadConfig()).usageCostSource || 'auto') as 'auto' | 'xai' | 'local';
-  const { costUsd, source } = await getCachedUsageCost();
+  const cfg = await loadConfig();
+  const pref = (cfg.usageCostSource || 'auto') as 'auto' | 'xai' | 'local';
+  const { costUsd, source } = await getCachedUsageCost(cfg);
   return { costUsd, source, pref };
 }
 
-export async function getNavStats(integrations: IntegrationCreds): Promise<NavStats> {
+export async function getNavStats(cfg: AppConfig): Promise<NavStats> {
   const { cloudReachable } = await import('./run-guards');
   const { listBoardTasks } = await import('./board');
-  const [sessions, projects, uploads, agents, mcpServers, usage, cfg, reach, boardTasks] = await Promise.all([
-    listChatSessions(),
-    listProjects(),
-    listGlobalUploadFiles(),
+  const [sessionCount, projectCount, uploadCount, agents, mcpServers, usage, reach, boardTasks] = await Promise.all([
+    countChatSessions(),
+    countProjects(),
+    countGlobalUploadFiles(cfg.defaultWorkspace),
     loadAgents(),
-    listMcpServers(),
-    getCachedUsageCost(),
-    loadConfig(),
+    listMcpServersReadOnly(),
+    getCachedUsageCost(cfg),
     cloudReachable(),
     listBoardTasks().catch(() => []),
   ]);
@@ -112,6 +113,13 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
         : [];
     automationsScheduled += scheds.filter((s) => s.enabled).length;
   }
+  try {
+    const { listRoutines } = await import('./routines');
+    automationsScheduled += listRoutines({ enabled: true, limit: 1 }).total;
+  } catch {
+    // Keep navigation usable while the durable automation schema is being
+    // initialized or repaired; legacy schedules above remain accurate.
+  }
 
   const mcpConfigured = mcpServers.filter((s) => s.enabled).length;
   const { listAttention, listTasks } = await import('./task-ledger');
@@ -124,15 +132,15 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
   return {
     tasksActive,
     attentionOpen,
-    chatSessions: sessions.length,
-    projects: projects.length,
+    chatSessions: sessionCount,
+    projects: projectCount,
     boardOpen: boardTasks.filter(
       (t) => t.status === 'backlog' || t.status === 'todo' || t.status === 'in_progress',
     ).length,
     memories: memoryStats().total,
-    workspaceFiles: uploads.length,
+    workspaceFiles: uploadCount,
     automationsScheduled,
-    integrationsConfigured: countConfiguredIntegrations(integrations) + mcpConfigured,
+    integrationsConfigured: countConfiguredIntegrations(cfg.integrations || {}) + mcpConfigured,
     usageCostUsd: usage.costUsd,
     usageCostSource: usage.source,
     usageBudgetUsd: cfg.usageBudgetUsd ?? DEFAULT_USAGE_BUDGET_USD,

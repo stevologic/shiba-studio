@@ -12,6 +12,7 @@ async function main() {
   const packs = await import('../lib/capability-packs');
   const customSkills = await import('../lib/custom-skills');
   const persistence = await import('../lib/persistence');
+  const types = await import('../lib/types');
   const memory = await import('../lib/agent-memory');
 
   const manifest = (version: string, access: 'read' | 'write' = 'read') => ({
@@ -69,8 +70,64 @@ async function main() {
     assert.equal(active.grantedPermissionKeys.length, 1);
     assert((await customSkills.getAllSkillPresets()).some((skill) => skill.id === 'pack:release-workflow:release'));
 
+    // Legacy/manual custom JSON must never create a second owner for a pack
+    // skill id. Preserve the bad record in lost+found, and keep agent refs
+    // attached to the still-active pack owner.
+    const packSkillId = 'pack:release-workflow:release';
+    const now = new Date().toISOString();
+    const customStore = path.join(process.env.SHIBA_DATA_DIR!, 'custom-skills.json');
+    await fs.mkdir(path.dirname(customStore), { recursive: true });
+    await fs.writeFile(customStore, `${JSON.stringify([{
+      id: packSkillId,
+      name: 'Ambiguous legacy custom skill',
+      description: 'Must not shadow a pack skill.',
+      category: 'automation',
+      promptHint: 'Legacy record.',
+      custom: true,
+      createdAt: now,
+      updatedAt: now,
+    }], null, 2)}\n`);
+    await persistence.saveAgents([types.normalizeAgent({
+      id: 'pack-skill-owner',
+      name: 'Pack skill owner',
+      model: 'local:test',
+      workspace: { path: root, useWorktree: false },
+      integrations: {},
+      peers: [],
+      skills: [packSkillId],
+      schedules: [],
+      createdAt: now,
+      updatedAt: now,
+    })]);
+    assert.equal((await customSkills.listCustomSkills()).length, 0,
+      'a custom record colliding with a pack id is removed from the live catalog');
+    const lostFound = path.join(process.env.SHIBA_DATA_DIR!, 'lost+found', 'managed-storage');
+    const issueDirectories = await fs.readdir(lostFound);
+    const issueManifests = await Promise.all(issueDirectories.map((entry) =>
+      fs.readFile(path.join(lostFound, entry, 'manifest.json'), 'utf8').then(JSON.parse)));
+    assert(issueManifests.some((manifest) =>
+      manifest.reason === 'ambiguous_custom_skill_owner'
+      && manifest.details?.record?.id === packSkillId),
+    'the complete ambiguous custom record is retained in lost+found');
+    await customSkills.deleteCustomSkill(packSkillId);
+    assert((await persistence.loadAgents())[0].skills?.includes(packSkillId),
+      'deleting an ambiguous custom owner leaves the active pack assignment attached');
+
     const registry = path.join(process.env.SHIBA_DATA_DIR!, 'capability-packs', 'registry', 'release-workflow', '1.0.0', 'pack.json');
     assert(JSON.parse(await fs.readFile(registry, 'utf8')).approvedPermissionKeys.length === 1);
+    await fs.rm(registry);
+    let registryRepair = await packs.reconcileCapabilityPackRegistry({ minOrphanAgeMs: 0 });
+    assert.equal(registryRepair.missingFilesRebuilt, 1, 'missing derived registry file is rebuilt from its DB owner');
+    await fs.writeFile(registry, '{"corrupt":true}\n');
+    registryRepair = await packs.reconcileCapabilityPackRegistry({ minOrphanAgeMs: 0 });
+    assert.equal(registryRepair.corruptFilesRebuilt, 1, 'corrupt derived registry file is quarantined and rebuilt');
+    assert.equal(JSON.parse(await fs.readFile(registry, 'utf8')).manifest.id, 'release-workflow');
+    const orphanRegistry = path.join(process.env.SHIBA_DATA_DIR!, 'capability-packs', 'registry', 'orphan', '9.9.9', 'pack.json');
+    await fs.mkdir(path.dirname(orphanRegistry), { recursive: true });
+    await fs.writeFile(orphanRegistry, '{}');
+    registryRepair = await packs.reconcileCapabilityPackRegistry({ minOrphanAgeMs: 0 });
+    assert.equal(registryRepair.unownedFilesQuarantined, 1, 'unowned app registry bytes are quarantined');
+    await assert.rejects(() => fs.stat(orphanRegistry), /ENOENT/);
     assert.equal(packs.exportCapabilityPack('release-workflow').version, '1.0.0');
 
     const routine = await packs.instantiateCapabilityPackRoutine('release-workflow', 'release-routine', 'agent-1');
@@ -174,6 +231,9 @@ async function main() {
       /Activate or roll back/,
     );
     assert(!(await customSkills.getAllSkillPresets()).some((skill) => skill.id === 'pack:release-workflow:release'));
+    const detachedPackSkill = await customSkills.reconcileAgentSkillReferences();
+    assert.equal(detachedPackSkill.referencesDetached, 1,
+      'the assignment is detached once its final pack owner is uninstalled');
 
     const safeProposal = await packs.proposeCapabilityPackManifest({ ...manifest('1.2.0'), id: 'safe-pack', name: 'Safe Pack' });
     await persistence.saveConfig({ safeMode: true });

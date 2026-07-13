@@ -1,4 +1,4 @@
-import { verifyAndEnqueueRoutineWebhook } from '@/lib/routines';
+import { RoutineMaintenanceError, verifyAndEnqueueRoutineWebhook } from '@/lib/routines';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +20,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ ok: true, accepted: result.inserted, invocationId: result.invocation.id }, { status: result.inserted ? 202 : 200 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Webhook rejected';
+    if (error instanceof RoutineMaintenanceError) {
+      return Response.json({ ok: false, error: message, retryable: true }, {
+        status: 503,
+        headers: { 'Retry-After': '5' },
+      });
+    }
     const status = /not found/i.test(message) ? 404 : /signature|timestamp|replay/i.test(message) ? 401 : 400;
     return Response.json({ ok: false, error: message }, { status });
   }

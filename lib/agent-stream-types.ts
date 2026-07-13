@@ -1,6 +1,7 @@
 import type { AgentRun, TraceStep } from './types';
 
 export type AgentStreamEvent =
+  | { type: 'run_started'; runId: string }
   | { type: 'trace'; step: TraceStep }
   | { type: 'approval_required'; approvalId: string; toolName: string; args: Record<string, unknown> }
   | { type: 'run'; run: AgentRun }

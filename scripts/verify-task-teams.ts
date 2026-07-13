@@ -13,6 +13,8 @@ async function main() {
   const { EMPTY_INTEGRATION_SCOPE } = await import('../lib/types');
   const ledger = await import('../lib/task-ledger');
   const teams = await import('../lib/task-teams');
+  const background = await import('../lib/background-tasks');
+  const runGuards = await import('../lib/run-guards');
   const policy = await import('../lib/task-workspace-policy');
   const { executeAgentTool } = await import('../lib/agent-tool-exec');
   const { closeDb, getDb } = await import('../lib/db');
@@ -152,6 +154,148 @@ async function main() {
       { key: 'b', title: 'B', instructions: 'B', agentId: 'worker-agent', workspaceRootIds: ['repo'], dependsOn: ['a'] },
     ]), /cycle/);
 
+    const atomicTeamParent = ledger.createTask({
+      id: 'atomic-team-parent', kind: 'code', title: 'Atomic team creation', status: 'queued',
+      workspaceRoots: [{ id: 'repo', path: workspace, permission: 'write' }],
+    });
+    await assert.rejects(teams.createTaskTeam(atomicTeamParent.id, [
+      { key: 'valid-first', title: 'Valid first', instructions: 'Would otherwise persist.', agentId: 'worker-agent', workspaceRootIds: ['repo'] },
+      { key: 'invalid-later', title: 'Invalid later', instructions: 'Invalid grant.', agentId: 'missing-agent', workspaceRootIds: ['repo'] },
+    ]), /agent not found/);
+    assert.equal(ledger.getTaskDetails(atomicTeamParent.id)?.children.length, 0,
+      'a later invalid worker grant must not leave earlier child tasks behind');
+    await assert.rejects(teams.createTaskTeam(atomicTeamParent.id, [
+      { key: 'valid-root-first', title: 'Valid root first', instructions: 'Would otherwise persist.', agentId: 'worker-agent', workspaceRootIds: ['repo'] },
+      { key: 'invalid-root-later', title: 'Invalid root later', instructions: 'Invalid root grant.', agentId: 'worker-agent', workspaceRootIds: ['missing-root'] },
+    ]), /unknown workspace root/);
+    assert.equal(ledger.getTaskDetails(atomicTeamParent.id)?.children.length, 0,
+      'a later invalid workspace grant must not leave earlier child tasks behind');
+    getDb().exec(`
+      CREATE TRIGGER fail_second_team_child BEFORE INSERT ON tasks
+      WHEN NEW.parentId = 'atomic-team-parent' AND NEW.title = 'Fail second insert'
+      BEGIN SELECT RAISE(ABORT, 'forced team insert failure'); END
+    `);
+    try {
+      await assert.rejects(teams.createTaskTeam(atomicTeamParent.id, [
+        { key: 'first-insert', title: 'First insert', instructions: 'Must roll back.', agentId: 'worker-agent', workspaceRootIds: ['repo'] },
+        { key: 'second-insert', title: 'Fail second insert', instructions: 'Force rollback.', agentId: 'worker-agent', workspaceRootIds: ['repo'] },
+      ]), /forced team insert failure/);
+    } finally {
+      getDb().exec('DROP TRIGGER fail_second_team_child');
+    }
+    assert.equal(ledger.getTaskDetails(atomicTeamParent.id)?.children.length, 0,
+      'unexpected database failures must roll back the complete team');
+    assert.equal(ledger.getTask(atomicTeamParent.id)?.status, 'queued',
+      'the parent transition must share the atomic team transaction');
+
+    const pauseBudgetTask = ledger.createTask({
+      id: 'pause-budget-worker', kind: 'work', title: 'Pause-aware budget', status: 'running',
+    });
+    const budgetController = new AbortController();
+    const stopBudget = teams.startPauseAwareWorkerBudget(pauseBudgetTask.id, budgetController, 120, 10);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const pausedBudgetTask = ledger.transitionTask({
+      taskId: pauseBudgetTask.id,
+      status: 'paused',
+      expectedVersion: ledger.getTask(pauseBudgetTask.id)!.version,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    assert.equal(budgetController.signal.aborted, false, 'cooperative pause time must not consume the worker budget');
+    ledger.transitionTask({ taskId: pausedBudgetTask.id, status: 'running', expectedVersion: pausedBudgetTask.version });
+    const budgetDeadline = Date.now() + 300;
+    while (!budgetController.signal.aborted && Date.now() < budgetDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    stopBudget();
+    assert.equal(budgetController.signal.aborted, true, 'the remaining active-time budget still expires after resume');
+    ledger.transitionTask({ taskId: pauseBudgetTask.id, status: 'cancelled' });
+
+    const leaseHeartbeatController = new AbortController();
+    assert.doesNotThrow(() => teams.teamWorkerRuntimeTestHooks.runTeamLeaseHeartbeatTick(
+      leaseHeartbeatController,
+      () => { throw new Error('simulated sqlite heartbeat failure'); },
+    ), 'a heartbeat callback exception must stay inside the interval boundary');
+    assert.equal(leaseHeartbeatController.signal.aborted, true,
+      'a worker must fail closed when lease ownership cannot be proven');
+    assert.match(String((leaseHeartbeatController.signal.reason as Error).message), /heartbeat.*simulated sqlite/i);
+    const lostLeaseController = new AbortController();
+    teams.teamWorkerRuntimeTestHooks.runTeamLeaseHeartbeatTick(lostLeaseController, () => false);
+    assert.match(String((lostLeaseController.signal.reason as Error).message), /ownership was lost/i);
+
+    const retryTeamParent = ledger.createTask({
+      id: 'retry-team-parent', kind: 'code', title: 'Retry team dependency', status: 'queued',
+      workspaceRoots: [{ id: 'repo', path: workspace, permission: 'write' }],
+    });
+    const retryGraph = await teams.createTaskTeam(retryTeamParent.id, [
+      {
+        key: 'retry-source', title: 'Retry source', instructions: 'Produce the source result.',
+        agentId: 'worker-agent', workspaceRootIds: ['repo'], readOnly: true,
+        integrationScopes: ['github'], allowedTools: ['fs_read'],
+      },
+      {
+        key: 'retry-dependent', title: 'Retry dependent', instructions: 'Use the source result.',
+        agentId: 'worker-agent', workspaceRootIds: ['repo'], dependsOn: ['retry-source'],
+      },
+    ]);
+    const retrySource = retryGraph.find((node) => node.key === 'retry-source')!.task;
+    const retryDependent = retryGraph.find((node) => node.key === 'retry-dependent')!.task;
+    const retrySourceRunning = ledger.transitionTask({ taskId: retrySource.id, status: 'running' });
+    const retrySourceFailed = ledger.transitionTask({
+      taskId: retrySource.id,
+      status: 'failed',
+      expectedVersion: retrySourceRunning.version,
+      error: 'Transient source failure.',
+    });
+    await teams.dispatchReadyTeamWorkers(retryTeamParent.id);
+    assert.equal(ledger.getTask(retryDependent.id)?.status, 'blocked');
+    assert.equal(ledger.getTask(retryTeamParent.id)?.status, 'blocked');
+    const retryCommand = ledger.enqueueTaskCommand({
+      taskId: retrySource.id,
+      kind: 'retry',
+      idempotencyKey: 'retry-team-source',
+      expectedVersion: retrySourceFailed.version,
+    });
+    ledger.applyTaskCommand(retryCommand.id);
+    const retryCapacityIds = Array.from(
+      { length: runGuards.maxConcurrentRuns(await persistence.loadConfig()) },
+      (_, index) => `team-retry-capacity-${index}`,
+    );
+    for (const runId of retryCapacityIds) runGuards.registerActiveRun(runId, 'capacity-test', 'Capacity test');
+    try {
+      assert.equal(await background.processQueuedTaskRetries(), 1,
+        'periodic retry recovery must discover a command whose post-commit dispatch was interrupted');
+      const recoveredSource = ledger.getTask(retrySource.id)!;
+      assert.equal(recoveredSource.status, 'queued');
+      assert.equal(recoveredSource.runId, undefined, 'team retry must not use the generic unscoped launcher');
+      assert.deepEqual(recoveredSource.metadata.allowedTools, ['fs_read']);
+      assert.equal(ledger.getTask(retryTeamParent.id)?.status, 'running',
+        'retrying a worker must return its blocked parent to coordination');
+      assert.equal(ledger.listAttention({ taskId: retryTeamParent.id, status: 'open' }).total, 0,
+        'retry recovery must resolve the stale blocked-team alert');
+
+      const recoveredRunning = ledger.transitionTask({ taskId: retrySource.id, status: 'running' });
+      ledger.recordTaskEvidence({
+        taskId: retrySource.id,
+        kind: 'assertion',
+        status: 'passed',
+        label: 'Recovered source result',
+        summary: 'The retried dependency completed.',
+      });
+      ledger.transitionTask({
+        taskId: retrySource.id,
+        status: 'succeeded',
+        expectedVersion: recoveredRunning.version + 1,
+        result: 'Recovered.',
+      });
+      await teams.dispatchReadyTeamWorkers(retryTeamParent.id);
+      assert.equal(ledger.getTask(retryDependent.id)?.status, 'queued',
+        'a dependent blocked by the old failure must become dispatchable after retry succeeds');
+    } finally {
+      for (const runId of retryCapacityIds) runGuards.releaseActiveRun(runId);
+    }
+    ledger.transitionTask({ taskId: retryDependent.id, status: 'cancelled' });
+    ledger.transitionTask({ taskId: retryTeamParent.id, status: 'cancelled' });
+
     const orphan = ledger.createTask({ id: 'orphan-worker', kind: 'work', title: 'Orphan', status: 'running' });
     getDb().prepare(`
       INSERT INTO task_worker_claims (taskId, ownerId, status, leaseUntil, heartbeatAt, attempt, createdAt)
@@ -159,12 +303,105 @@ async function main() {
     `).run(orphan.id, new Date(Date.now() - 2_000).toISOString(), new Date(Date.now() - 3_000).toISOString(), new Date(Date.now() - 3_000).toISOString());
     assert.equal(teams.reconcileTeamWorkerClaims(), 1);
     assert.equal(ledger.getTask(orphan.id)?.status, 'lost');
+    const interrupted = ledger.createTask({ id: 'interrupted-worker', kind: 'work', title: 'Interrupted', status: 'running' });
+    ledger.transitionTask({ taskId: interrupted.id, status: 'lost', error: 'Worker process stopped.' });
+    getDb().prepare(`
+      INSERT INTO task_worker_claims (taskId, ownerId, status, leaseUntil, heartbeatAt, attempt, createdAt)
+      VALUES (?, 'previous-instance', 'active', ?, ?, 1, ?)
+    `).run(
+      interrupted.id,
+      new Date(Date.now() + 120_000).toISOString(),
+      new Date().toISOString(),
+      new Date().toISOString(),
+    );
+    assert.equal(teams.reconcileTeamWorkerClaims(), 1, 'terminal tasks release old-process claims without waiting for their future lease');
+    assert.equal(
+      (getDb().prepare('SELECT status FROM task_worker_claims WHERE taskId = ?').get(interrupted.id) as { status: string }).status,
+      'released',
+    );
+
+    const isolatedBad = ledger.createTask({ id: 'isolated-bad-claim', kind: 'work', title: 'Bad claim', status: 'running' });
+    const isolatedGood = ledger.createTask({ id: 'isolated-good-claim', kind: 'work', title: 'Good claim', status: 'running' });
+    const expiredAt = new Date(Date.now() - 2_000).toISOString();
+    const insertExpiredClaim = getDb().prepare(`
+      INSERT INTO task_worker_claims (taskId, ownerId, status, leaseUntil, heartbeatAt, attempt, createdAt)
+      VALUES (?, ?, 'active', ?, ?, 1, ?)
+    `);
+    insertExpiredClaim.run(isolatedBad.id, 'bad-claim-owner', expiredAt, expiredAt, expiredAt);
+    insertExpiredClaim.run(isolatedGood.id, 'good-claim-owner', expiredAt, expiredAt, expiredAt);
+    getDb().exec(`
+      CREATE TRIGGER fail_one_claim_release BEFORE UPDATE ON task_worker_claims
+      WHEN OLD.taskId = 'isolated-bad-claim' AND NEW.status = 'released'
+      BEGIN SELECT RAISE(ABORT, 'forced claim release failure'); END
+    `);
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    try {
+      assert.equal(teams.reconcileTeamWorkerClaims(), 1, 'one corrupt claim must not prevent later claims from reconciling');
+    } finally {
+      console.error = originalConsoleError;
+      getDb().exec('DROP TRIGGER fail_one_claim_release');
+    }
+    assert.equal(ledger.getTask(isolatedBad.id)?.status, 'running');
+    assert.equal(ledger.getTask(isolatedGood.id)?.status, 'lost');
+    assert.equal(
+      (getDb().prepare('SELECT status FROM task_worker_claims WHERE taskId = ?').get(isolatedGood.id) as { status: string }).status,
+      'released',
+    );
+    assert.equal(teams.reconcileTeamWorkerClaims(), 1, 'the isolated failed claim remains recoverable on the next pass');
+
+    const periodicParent = ledger.createTask({
+      id: 'periodic-reconcile-parent',
+      kind: 'code',
+      title: 'Periodic claim recovery',
+      status: 'running',
+      workspaceRoots: [{ id: 'repo', path: workspace, permission: 'write' }],
+    });
+    const periodicChild = ledger.createTask({
+      id: 'periodic-reconcile-child',
+      kind: 'work',
+      title: 'Queued after a quick restart',
+      parentId: periodicParent.id,
+      status: 'queued',
+      agentId: 'worker-agent',
+      workspaceRoots: [{ id: 'repo', path: workspace, permission: 'read' }],
+      metadata: { teamWorkerKey: 'periodic-recovery', readOnly: true },
+    });
+    const leaseUntil = new Date(Date.now() + 350).toISOString();
+    getDb().prepare(`
+      INSERT INTO task_worker_claims (taskId, ownerId, status, leaseUntil, heartbeatAt, attempt, createdAt)
+      VALUES (?, 'quick-restart-owner', 'active', ?, ?, 1, ?)
+    `).run(periodicChild.id, leaseUntil, new Date().toISOString(), new Date().toISOString());
+    const maxRuns = runGuards.maxConcurrentRuns(await persistence.loadConfig());
+    const capacityRunIds = Array.from({ length: maxRuns }, (_, index) => `reconcile-capacity-${index}`);
+    for (const runId of capacityRunIds) runGuards.registerActiveRun(runId, 'capacity-test', 'Capacity test');
+    teams.startTeamWorkerClaimReconciler(250);
+    try {
+      const deadline = Date.now() + 2_500;
+      while (Date.now() < deadline) {
+        const claim = getDb().prepare('SELECT status FROM task_worker_claims WHERE taskId = ?')
+          .get(periodicChild.id) as { status: string };
+        if (claim.status === 'released') break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(
+        (getDb().prepare('SELECT status FROM task_worker_claims WHERE taskId = ?').get(periodicChild.id) as { status: string }).status,
+        'released',
+        'periodic reconciliation must revisit a claim that was still live during startup',
+      );
+      assert.equal(ledger.getTask(periodicChild.id)?.status, 'queued', 'a claim-before-run crash must leave the child redispatchable');
+    } finally {
+      await teams.stopTeamWorkerClaimReconciler();
+      for (const runId of capacityRunIds) runGuards.releaseActiveRun(runId);
+    }
     const teamPanel = await fs.readFile(path.join(process.cwd(), 'components', 'task-team-panel.tsx'), 'utf8');
     for (const control of ["commandWorker(node, 'pause')", "commandWorker(node, 'resume')", "commandWorker(node, 'cancel')", "commandWorker(node, 'steer')", 'Inspect worker']) {
       assert(teamPanel.includes(control), `visible worker graph includes ${control}`);
     }
     console.log('Task team verification passed');
   } finally {
+    await teams.stopTeamWorkerClaimReconciler();
+    await background.stopQueuedRetryDispatcher();
     closeDb();
     await fs.rm(root, { recursive: true, force: true });
   }

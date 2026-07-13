@@ -5,7 +5,14 @@ import { updateAgentSchedule } from '@/lib/scheduler';
 export async function POST(req: NextRequest) {
   const { agentId, cron, enabled } = await req.json();
   if (!agentId) return NextResponse.json({ error: 'agentId required' }, { status: 400 });
-  await updateAgentSchedule(agentId, cron || '*/30 * * * *', !!enabled);
+  try {
+    await updateAgentSchedule(agentId, cron || '*/30 * * * *', !!enabled);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid automation schedule' },
+      { status: 400 },
+    );
+  }
   const agents = await loadAgents();
   return NextResponse.json({ ok: true, agent: agents.find(a => a.id === agentId) });
 }

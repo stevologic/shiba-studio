@@ -12,6 +12,7 @@ async function main() {
   const dbModule = await import('../lib/db');
   const chats = await import('../lib/chat-sessions');
   const context = await import('../lib/context-engine');
+  const liveChats = await import('../lib/chat-live-runs');
   const chatToolsApi = await import('../app/api/chat-tools/route');
   const chatSessionsApi = await import('../app/api/chat-sessions/route');
 
@@ -40,6 +41,35 @@ async function main() {
       id: 'assistant-2', role: 'assistant', content: 'Detached completion.', createdAt: now,
     });
     assert.equal((await chats.getChatSession(parent.id))?.unreadCount, 1, 'outbox append increments unread');
+
+    const originalFetch = globalThis.fetch;
+    const persistRequests: Array<{ body: Record<string, unknown>; resolve: (response: Response) => void }> = [];
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve) => {
+      persistRequests.push({
+        body: JSON.parse(String(init?.body || '{}')) as Record<string, unknown>,
+        resolve,
+      });
+    })) as typeof fetch;
+    try {
+      liveChats.beginLiveChatRun('persist-order', [{ id: 'live-user', role: 'user', content: 'hello' }]);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      assert.equal(persistRequests.length, 1, 'the initial running snapshot should begin immediately');
+      liveChats.abortLiveChatRun('persist-order');
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      assert.equal(persistRequests.length, 1, 'the terminal snapshot must wait behind an older in-flight write');
+      persistRequests[0].resolve(new Response('{}', { status: 200 }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      assert.equal(persistRequests.length, 2, 'the terminal snapshot should follow the older write');
+      assert.equal(
+        (persistRequests[1].body.patch as { running?: boolean }).running,
+        false,
+        'a stale running snapshot cannot overtake the terminal chat state',
+      );
+      persistRequests[1].resolve(new Response('{}', { status: 200 }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
     const parentBeforeFork = JSON.stringify(await chats.getChatSession(parent.id));
     const child = await chats.forkChatSession(parent.id, completedAssistant.id);

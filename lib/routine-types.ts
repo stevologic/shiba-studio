@@ -85,6 +85,23 @@ export interface RoutineRetryPolicy {
   maxDelayMs: number;
 }
 
+/**
+ * Immutable execution inputs captured when an invocation is queued. Trigger
+ * and circuit-breaker state intentionally remain live operational state.
+ */
+export interface RoutineExecutionSnapshot {
+  schema: 1;
+  definitionVersion: number;
+  name: string;
+  agentId: string;
+  prompt: string;
+  parameters: Record<string, unknown>;
+  retryPolicy: RoutineRetryPolicy;
+  timeoutMs: number;
+  concurrencyKey: string;
+  steps: RoutineStep[];
+}
+
 export interface RoutineCircuitBreaker {
   failureThreshold: number;
   cooldownSeconds: number;

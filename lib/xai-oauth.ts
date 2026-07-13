@@ -4,6 +4,7 @@ import path from 'path';
 import { dataDir } from './data-paths';
 import type { AppConfig } from './types';
 import type { CloudAuthMode, XaiOAuthPublicStatus } from './xai-oauth-types';
+import { advanceOAuthGeneration, currentOAuthGeneration } from './oauth-revocation';
 
 export const XAI_OAUTH_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
 export const XAI_OAUTH_ISSUER = 'https://auth.x.ai';
@@ -33,6 +34,26 @@ function pendingFile(): string {
 const EXPIRY_SKEW_MS = 60_000;
 const PENDING_TTL_MS = 10 * 60_000;
 
+type XaiOAuthPendingGlobals = typeof globalThis & {
+  __shibaXaiOAuthPendingChain?: Promise<unknown>;
+  __shibaXaiOAuthMutationChain?: Promise<unknown>;
+};
+const pendingGlobals = globalThis as XaiOAuthPendingGlobals;
+
+function withPendingLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = pendingGlobals.__shibaXaiOAuthPendingChain ?? Promise.resolve();
+  const run = previous.then(operation, operation);
+  pendingGlobals.__shibaXaiOAuthPendingChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function withOAuthMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = pendingGlobals.__shibaXaiOAuthMutationChain ?? Promise.resolve();
+  const run = previous.then(operation, operation);
+  pendingGlobals.__shibaXaiOAuthMutationChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
 export interface XaiOAuthSession {
   accessToken: string;
   refreshToken: string;
@@ -50,6 +71,7 @@ export interface OAuthPendingState {
   codeVerifier: string;
   redirectUri: string;
   createdAt: string;
+  generation?: number;
 }
 
 export interface PkcePair {
@@ -68,9 +90,17 @@ export interface TokenExchangeResult {
 export type TokenFetcher = (url: string, init: RequestInit) => Promise<Response>;
 
 let tokenFetcher: TokenFetcher = (url, init) => fetch(url, init);
+let beforeLegacyMigration: (() => Promise<void>) | null = null;
 
 export function setTokenFetcher(fetcher: TokenFetcher | null): void {
   tokenFetcher = fetcher || ((url, init) => fetch(url, init));
+}
+
+/** Deterministic crash/race verification hook; production never sets it. */
+export function setLegacyOAuthMigrationHookForTests(
+  hook: (() => Promise<void>) | null,
+): void {
+  beforeLegacyMigration = hook;
 }
 
 async function ensureData() {
@@ -203,7 +233,10 @@ export function maskEmail(email?: string): string | undefined {
 /** OAuth token fields sealed at rest via the machine key (see lib/secure-store.ts). */
 const OAUTH_SECRET_FIELDS = ['accessToken', 'refreshToken', 'idToken'] as const;
 
-export async function loadOAuthSession(): Promise<XaiOAuthSession | null> {
+async function readOAuthSessionFile(): Promise<{
+  session: XaiOAuthSession;
+  hadPlaintext: boolean;
+} | null> {
   await ensureData();
   try {
     const raw = await fs.readFile(sessionFile(), 'utf8');
@@ -219,14 +252,27 @@ export async function loadOAuthSession(): Promise<XaiOAuthSession | null> {
       }
     }
     if (!parsed.accessToken || !parsed.refreshToken) return null;
-    if (hadPlaintext) {
-      // One-time migration: re-write legacy plaintext tokens sealed.
-      await saveOAuthSession(parsed as XaiOAuthSession);
-    }
-    return parsed as XaiOAuthSession;
+    return { session: parsed as XaiOAuthSession, hadPlaintext };
   } catch {
     return null;
   }
+}
+
+async function loadOAuthSessionDuringMutation(): Promise<XaiOAuthSession | null> {
+  const current = await readOAuthSessionFile();
+  if (!current) return null;
+  if (current.hadPlaintext) await saveOAuthSession(current.session);
+  return current.session;
+}
+
+export async function loadOAuthSession(): Promise<XaiOAuthSession | null> {
+  const observed = await readOAuthSessionFile();
+  if (!observed?.hadPlaintext) return observed?.session || null;
+  // A legacy plaintext migration is a write. Re-read after acquiring the same
+  // lock as refresh/exchange/disconnect so an old observation cannot recreate
+  // a session that was disconnected or replaced in the meantime.
+  if (beforeLegacyMigration) await beforeLegacyMigration();
+  return withOAuthMutationLock(loadOAuthSessionDuringMutation);
 }
 
 export async function saveOAuthSession(session: XaiOAuthSession | null): Promise<void> {
@@ -234,8 +280,8 @@ export async function saveOAuthSession(session: XaiOAuthSession | null): Promise
   if (!session) {
     try {
       await fs.unlink(sessionFile());
-    } catch {
-      /* ignore */
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     }
     return;
   }
@@ -245,41 +291,89 @@ export async function saveOAuthSession(session: XaiOAuthSession | null): Promise
     const v = sealed[field];
     if (typeof v === 'string' && v) sealed[field] = encryptSecret(v);
   }
-  await fs.writeFile(sessionFile(), JSON.stringify(sealed, null, 2));
+  const target = sessionFile();
+  const temporary = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fs.writeFile(temporary, JSON.stringify(sealed, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await fs.rename(temporary, target);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
 }
 
 export async function clearOAuthSession(): Promise<void> {
-  await saveOAuthSession(null);
+  await disconnectOAuth();
 }
 
-export async function saveOAuthPending(pending: OAuthPendingState | null): Promise<void> {
+async function saveOAuthPendingUnlocked(pending: OAuthPendingState | null): Promise<void> {
   await ensureData();
   if (!pending) {
     try {
-      await fs.unlink(pendingFile());
-    } catch {
-      /* ignore */
+      await fs.rm(pendingFile(), { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     }
     return;
   }
-  await fs.writeFile(pendingFile(), JSON.stringify(pending, null, 2));
+  const target = pendingFile();
+  const temporary = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fs.writeFile(temporary, JSON.stringify(pending, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await fs.rename(temporary, target);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
 }
 
-export async function loadOAuthPending(): Promise<OAuthPendingState | null> {
+export function saveOAuthPending(pending: OAuthPendingState | null): Promise<void> {
+  return withPendingLock(() => saveOAuthPendingUnlocked(pending));
+}
+
+async function loadOAuthPendingUnlocked(nowMs = Date.now()): Promise<OAuthPendingState | null> {
   await ensureData();
   try {
     const raw = await fs.readFile(pendingFile(), 'utf8');
     const parsed = JSON.parse(raw) as OAuthPendingState;
-    if (!parsed?.state || !parsed?.codeVerifier) return null;
-    const age = Date.now() - Date.parse(parsed.createdAt);
-    if (!Number.isFinite(age) || age > PENDING_TTL_MS) {
-      await saveOAuthPending(null);
+    const createdAt = Date.parse(parsed?.createdAt);
+    const age = nowMs - createdAt;
+    if (
+      !parsed?.state
+      || !parsed?.codeVerifier
+      || !parsed?.redirectUri
+      || !Number.isFinite(age)
+      || age < 0
+      || age > PENDING_TTL_MS
+    ) {
+      await saveOAuthPendingUnlocked(null);
       return null;
     }
     return parsed;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      await saveOAuthPendingUnlocked(null);
+    }
     return null;
   }
+}
+
+export function loadOAuthPending(): Promise<OAuthPendingState | null> {
+  return withPendingLock(() => loadOAuthPendingUnlocked());
+}
+
+/** Remove an abandoned or malformed sign-in challenge without touching the
+ * independent live OAuth token session. Serialized writes prevent an old
+ * cleanup decision from unlinking a newly started flow. */
+export function pruneExpiredOAuthPending(nowMs = Date.now()): Promise<boolean> {
+  return withPendingLock(async () => {
+    try {
+      await fs.access(pendingFile());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
+      throw error;
+    }
+    const pending = await loadOAuthPendingUnlocked(nowMs);
+    return pending === null;
+  });
 }
 
 export async function startOAuthFlow(origin?: string): Promise<{
@@ -301,6 +395,7 @@ export async function startOAuthFlow(origin?: string): Promise<{
     codeVerifier: pkce.codeVerifier,
     redirectUri,
     createdAt: new Date().toISOString(),
+    generation: currentOAuthGeneration('xai'),
   });
   return {
     authorizeUrl: buildAuthorizeUrl({
@@ -333,7 +428,7 @@ async function postToken(body: URLSearchParams): Promise<TokenExchangeResult> {
   return data;
 }
 
-export async function exchangeOAuthCode(
+async function exchangeOAuthCodeUnlocked(
   code: string,
   state?: string,
 ): Promise<XaiOAuthSession> {
@@ -357,10 +452,26 @@ export async function exchangeOAuthCode(
     throw new Error('OAuth response missing refresh token');
   }
 
+  if (currentOAuthGeneration('xai') !== Number(pending.generation || 0)) {
+    throw new Error('OAuth sign-in was cancelled by a newer disconnect');
+  }
+
   await saveOAuthSession(session);
   await saveOAuthPending(null);
   await applyOAuthOnlyCloudAuthMode();
   return session;
+}
+
+export function exchangeOAuthCode(code: string, state?: string): Promise<XaiOAuthSession> {
+  return withOAuthMutationLock(() => exchangeOAuthCodeUnlocked(code, state));
+}
+
+export function disconnectOAuth(): Promise<void> {
+  return withOAuthMutationLock(async () => {
+    advanceOAuthGeneration('xai');
+    await saveOAuthPending(null);
+    await saveOAuthSession(null);
+  });
 }
 
 /** When OAuth is the only cloud credential, persist explicit oauth preference. */
@@ -396,6 +507,7 @@ async function performOAuthRefresh(
   session: XaiOAuthSession,
 ): Promise<XaiOAuthSession> {
   if (!session.refreshToken) throw new Error('No refresh token');
+  const generation = currentOAuthGeneration('xai');
 
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -404,10 +516,20 @@ async function performOAuthRefresh(
   });
 
   const tokens = await postToken(body);
-  const next = sessionFromTokenResponse(tokens, session);
-  if (!next.refreshToken) next.refreshToken = session.refreshToken;
-  await saveOAuthSession(next);
-  return next;
+  return withOAuthMutationLock(async () => {
+    if (currentOAuthGeneration('xai') !== generation) {
+      throw new Error('OAuth refresh was cancelled by a newer disconnect');
+    }
+    const current = await loadOAuthSessionDuringMutation();
+    if (!current?.refreshToken || current.refreshToken !== session.refreshToken) {
+      throw new Error('OAuth session changed while its access token was refreshing');
+    }
+    if (current.accessToken !== session.accessToken && !isSessionExpired(current)) return current;
+    const next = sessionFromTokenResponse(tokens, current);
+    if (!next.refreshToken) next.refreshToken = current.refreshToken;
+    await saveOAuthSession(next);
+    return next;
+  });
 }
 
 /** Coalesce concurrent expiry/401 refreshes. OAuth providers commonly rotate
@@ -488,40 +610,43 @@ export async function resolveCloudBearer(
   token: string | null;
   source: 'api_key' | 'oauth' | null;
   hasCloudAuth: boolean;
+  hasApiKey: boolean;
+  hasOAuth: boolean;
 }> {
   const { loadConfig } = await import('./persistence');
   const config = cfg || (await loadConfig());
   const hasKey = !!config.xaiApiKey?.trim();
   const session = await loadOAuthSession();
   const hasOAuth = !!(session?.accessToken && session?.refreshToken);
+  const availability = { hasApiKey: hasKey, hasOAuth };
 
   // A model-pinned source wins over the global preference — but still falls
   // back to the other credential if the pinned one is unavailable.
   if (preferSource === 'token' && hasKey) {
-    return { token: config.xaiApiKey.trim(), source: 'api_key', hasCloudAuth: true };
+    return { token: config.xaiApiKey.trim(), source: 'api_key', hasCloudAuth: true, ...availability };
   }
   if (preferSource === 'oauth' && hasOAuth) {
     const token = await getValidAccessToken();
-    if (token) return { token, source: 'oauth', hasCloudAuth: true };
+    if (token) return { token, source: 'oauth', hasCloudAuth: true, ...availability };
   }
 
   const mode: CloudAuthMode = config.cloudAuthMode || 'api_key';
 
   if (mode === 'oauth' && hasOAuth) {
     const token = await getValidAccessToken();
-    if (token) return { token, source: 'oauth', hasCloudAuth: true };
+    if (token) return { token, source: 'oauth', hasCloudAuth: true, ...availability };
   }
 
   if (hasKey) {
-    return { token: config.xaiApiKey.trim(), source: 'api_key', hasCloudAuth: true };
+    return { token: config.xaiApiKey.trim(), source: 'api_key', hasCloudAuth: true, ...availability };
   }
 
   if (hasOAuth) {
     const token = await getValidAccessToken();
-    if (token) return { token, source: 'oauth', hasCloudAuth: true };
+    if (token) return { token, source: 'oauth', hasCloudAuth: true, ...availability };
   }
 
-  return { token: null, source: null, hasCloudAuth: false };
+  return { token: null, source: null, hasCloudAuth: false, ...availability };
 }
 
 export async function ensureCloudAuth(cfg?: AppConfig): Promise<string | null> {
@@ -543,7 +668,7 @@ export async function fetchCloudWithAuth(
   const override = opts?.keyOverride?.trim();
   // Request-pinned keys preserve OAuth identity. Treating every override as an
   // API key disabled the one-time 401 refresh path for OAuth-selected models.
-  const oauthSession = override ? await loadOAuthSession() : null;
+  const oauthSession = override && !opts?.keySource ? await loadOAuthSession() : null;
   const auth = override
     ? {
         token: override,

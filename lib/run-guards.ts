@@ -36,9 +36,9 @@ export function releaseActiveRun(runId: string): void {
 }
 
 export function activeRunCount(): number {
-  // Defensive sweep: a crashed process section can't leak entries forever.
-  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
-  for (const [id, r] of activeRuns) if (r.startedAt < cutoff) activeRuns.delete(id);
+  // Entries are released by the generator's outer finally. Do not age them
+  // out: governed runs may legitimately last up to 24 hours, and forgetting a
+  // live long run would defeat both capacity and schedule-overlap protection.
   return activeRuns.size;
 }
 
@@ -72,6 +72,9 @@ export function tryAcquireRunSlot(
   agentName: string,
   scheduleKey?: string,
 ): string | null {
+  if (activeRuns.has(runId)) {
+    return `Run ${runId} is already active. Wait for it to finish before reusing its id.`;
+  }
   const limit = maxConcurrentRuns(cfg);
   const count = activeRunCount();
   if (count >= limit) {

@@ -23,6 +23,18 @@ const TAG_LEN = 16;
 
 let cachedKey: Buffer | null = null;
 
+function keyFromHex(raw: string, source: string): Buffer {
+  const clean = raw.trim();
+  if (!/^[0-9a-f]{64}$/i.test(clean)) {
+    throw new Error(`${source} is malformed; expected exactly 64 hexadecimal characters`);
+  }
+  return Buffer.from(clean, 'hex');
+}
+
+function isFsError(error: unknown, code: string): boolean {
+  return (error as NodeJS.ErrnoException)?.code === code;
+}
+
 function keyFilePath(): string {
   const configured = process.env.SHIBA_SECRET_KEY_FILE?.trim();
   if (configured) return path.resolve(/* turbopackIgnore: true */ configured);
@@ -43,20 +55,25 @@ function keyFilePath(): string {
 function loadOrCreateKeySync(): Buffer {
   if (cachedKey) return cachedKey;
 
-  const envKey = (process.env.SHIBA_SECRET_KEY || process.env.GROKDESK_SECRET_KEY)?.trim();
-  if (envKey && /^[0-9a-f]{64}$/i.test(envKey)) {
-    cachedKey = Buffer.from(envKey, 'hex');
+  const envName = process.env.SHIBA_SECRET_KEY !== undefined
+    ? 'SHIBA_SECRET_KEY'
+    : process.env.GROKDESK_SECRET_KEY !== undefined
+      ? 'GROKDESK_SECRET_KEY'
+      : null;
+  if (envName) {
+    cachedKey = keyFromHex(process.env[envName] || '', envName);
     return cachedKey;
   }
 
   const file = keyFilePath();
   try {
-    const raw = fsSync.readFileSync(/* turbopackIgnore: true */ file, 'utf8').trim();
-    if (/^[0-9a-f]{64}$/i.test(raw)) {
-      cachedKey = Buffer.from(raw, 'hex');
-      return cachedKey;
-    }
-  } catch {
+    const raw = fsSync.readFileSync(/* turbopackIgnore: true */ file, 'utf8');
+    cachedKey = keyFromHex(raw, `Secret key file ${file}`);
+    return cachedKey;
+  } catch (error) {
+    // Only a genuinely absent key may trigger generation. Replacing an
+    // unreadable or malformed key would orphan every encrypted credential.
+    if (!isFsError(error, 'ENOENT')) throw error;
     /* no key yet — generate below */
   }
 
@@ -64,9 +81,18 @@ function loadOrCreateKeySync(): Buffer {
   fsSync.mkdirSync(/* turbopackIgnore: true */ path.dirname(file), { recursive: true });
   // mode 0o600 restricts the key to the current user on POSIX; on Windows the
   // file inherits the user-profile ACL, which is equivalently user-private.
-  fsSync.writeFileSync(/* turbopackIgnore: true */ file, key.toString('hex'), { mode: 0o600 });
-  cachedKey = key;
-  return key;
+  try {
+    // Exclusive creation prevents two first-start processes from silently
+    // overwriting each other's newly generated keys.
+    fsSync.writeFileSync(/* turbopackIgnore: true */ file, key.toString('hex'), { mode: 0o600, flag: 'wx' });
+    cachedKey = key;
+    return key;
+  } catch (error) {
+    if (!isFsError(error, 'EEXIST')) throw error;
+    const raw = fsSync.readFileSync(/* turbopackIgnore: true */ file, 'utf8');
+    cachedKey = keyFromHex(raw, `Secret key file ${file}`);
+    return cachedKey;
+  }
 }
 
 export function isEncryptedSecret(value: unknown): value is string {
@@ -88,28 +114,29 @@ export function encryptSecret(plain: string): string {
 /**
  * Open a sealed secret. Plaintext values pass through unchanged so existing
  * unencrypted stores keep working and are migrated on their next save.
- * A sealed value that cannot be opened (e.g. the key file was deleted)
- * returns '' rather than corrupt data.
+ * A sealed value that cannot be opened fails closed. Returning an empty value
+ * could let a later save overwrite the only ciphertext with data loss.
  */
 export function decryptSecret(value: string): string {
   if (!value || !isEncryptedSecret(value)) return value;
   try {
     const buf = Buffer.from(value.slice(PREFIX.length), 'base64');
+    if (buf.length < IV_LEN + TAG_LEN) throw new Error('Encrypted secret payload is truncated');
     const iv = buf.subarray(0, IV_LEN);
     const tag = buf.subarray(IV_LEN, IV_LEN + TAG_LEN);
     const ciphertext = buf.subarray(IV_LEN + TAG_LEN);
     const decipher = createDecipheriv(ALGO, loadOrCreateKeySync(), iv);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
-  } catch {
-    return '';
+  } catch (error) {
+    throw new Error('Encrypted secret could not be decrypted; the ciphertext and key were left unchanged', { cause: error });
   }
 }
 
 /** Where the machine key lives — surfaced in Settings so users know what to back up. */
 export function secretKeyLocation(): string {
-  if (process.env.SHIBA_SECRET_KEY) return 'SHIBA_SECRET_KEY environment variable';
-  if (process.env.GROKDESK_SECRET_KEY) return 'GROKDESK_SECRET_KEY environment variable (legacy name — prefer SHIBA_SECRET_KEY)';
+  if (process.env.SHIBA_SECRET_KEY !== undefined) return 'SHIBA_SECRET_KEY environment variable';
+  if (process.env.GROKDESK_SECRET_KEY !== undefined) return 'GROKDESK_SECRET_KEY environment variable (legacy name — prefer SHIBA_SECRET_KEY)';
   return keyFilePath();
 }
 
@@ -129,8 +156,16 @@ export function importSecretKeyHex(hex: string): { ok: boolean; reason?: string 
   const clean = hex.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(clean)) return { ok: false, reason: 'Backup key is malformed (expected 64 hex chars)' };
 
-  const envKey = (process.env.SHIBA_SECRET_KEY || process.env.GROKDESK_SECRET_KEY)?.trim().toLowerCase();
-  if (envKey) {
+  const envName = process.env.SHIBA_SECRET_KEY !== undefined
+    ? 'SHIBA_SECRET_KEY'
+    : process.env.GROKDESK_SECRET_KEY !== undefined
+      ? 'GROKDESK_SECRET_KEY'
+      : null;
+  if (envName) {
+    const envKey = (process.env[envName] || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(envKey)) {
+      return { ok: false, reason: `${envName} is malformed (expected exactly 64 hex characters)` };
+    }
     if (envKey === clean) return { ok: true };
     return { ok: false, reason: 'This machine uses SHIBA_SECRET_KEY; set it to the backup’s key to read restored credentials' };
   }
@@ -138,6 +173,9 @@ export function importSecretKeyHex(hex: string): { ok: boolean; reason?: string 
   const file = keyFilePath();
   if (fsSync.existsSync(/* turbopackIgnore: true */ file)) {
     const raw = fsSync.readFileSync(/* turbopackIgnore: true */ file, 'utf8').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(raw)) {
+      return { ok: false, reason: 'This machine encryption key file is malformed and was left unchanged' };
+    }
     if (raw === clean) return { ok: true };
     return {
       ok: false,
@@ -148,7 +186,15 @@ export function importSecretKeyHex(hex: string): { ok: boolean; reason?: string 
 
   // Fresh machine — install the backup's key so restored secrets open.
   fsSync.mkdirSync(/* turbopackIgnore: true */ path.dirname(file), { recursive: true });
-  fsSync.writeFileSync(/* turbopackIgnore: true */ file, clean, { mode: 0o600 });
+  try {
+    fsSync.writeFileSync(/* turbopackIgnore: true */ file, clean, { mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    if (!isFsError(error, 'EEXIST')) throw error;
+    const raced = fsSync.readFileSync(/* turbopackIgnore: true */ file, 'utf8').trim().toLowerCase();
+    if (raced !== clean) {
+      return { ok: false, reason: 'A different machine encryption key was installed concurrently; it was left unchanged' };
+    }
+  }
   cachedKey = Buffer.from(clean, 'hex');
   return { ok: true };
 }

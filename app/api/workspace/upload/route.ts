@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { removeCloudSyncByLocalName } from '@/lib/cloud-sync';
-import { deleteGlobalUploadFile, sanitizeUploadName, saveUploadFromBuffer } from '@/lib/workspace';
+import { deleteUploadEverywhere } from '@/lib/cloud-sync';
+import { sanitizeUploadName, saveUploadFromBuffer } from '@/lib/workspace';
 
 const MAX_FILE_BYTES = 48 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 96 * 1024 * 1024;
@@ -58,8 +58,7 @@ export async function DELETE(req: NextRequest) {
   }
   try {
     const safe = sanitizeUploadName(name);
-    await deleteGlobalUploadFile(safe);
-    await removeCloudSyncByLocalName(safe);
+    await deleteUploadEverywhere(safe);
     return NextResponse.json({ ok: true, name: safe });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Delete failed';

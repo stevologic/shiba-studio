@@ -9,8 +9,19 @@ import { dataDir } from './data-paths';
 
 type DatabaseSync = DatabaseSyncType;
 
-let db: DatabaseSync | null = null;
-let maintenanceDepth = 0;
+interface DbGlobalState {
+  handle: DatabaseSync | null;
+  maintenanceToken: symbol | null;
+}
+
+const dbGlobals = globalThis as typeof globalThis & {
+  __shibaDbState?: DbGlobalState;
+};
+// Next route chunks can instantiate this module more than once. The handle and
+// restore fence must still be process-wide or another graph could reopen the
+// database while a validated backup is being swapped into place.
+const dbState = dbGlobals.__shibaDbState
+  ?? (dbGlobals.__shibaDbState = { handle: null, maintenanceToken: null });
 
 /**
  * node:sqlite ships with Node 22.5+. Loaded via getBuiltinModule (works in
@@ -33,14 +44,12 @@ function loadSqlite(): { DatabaseSync: new (path: string) => DatabaseSync } {
 
 function migrateRunsFromJson(database: DatabaseSync): void {
   try {
-    const count = (database.prepare('SELECT COUNT(*) AS n FROM runs').get() as { n: number }).n;
-    if (count > 0) return;
     const runsDir = dataDir('runs');
     if (!fs.existsSync(runsDir)) return;
     const files = fs.readdirSync(runsDir).filter((f) => f.endsWith('.json'));
     if (!files.length) return;
     const insert = database.prepare(`
-      INSERT OR REPLACE INTO runs
+      INSERT OR IGNORE INTO runs
         (id, agentId, agentName, model, status, prompt, startedAt, completedAt,
          finalOutput, projectId, scheduleId, scheduleInstructions, sideEffects, trace)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -94,7 +103,7 @@ function dbPath(): string {
  * Migrations run in order inside a transaction on next open, so an existing
  * ~/.shiba-studio/data/shiba-studio.db always upgrades safely.
  */
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 12;
 
 /** MIGRATIONS[n] upgrades a database at user_version n to n+1. */
 const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
@@ -207,7 +216,75 @@ const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
   // file rows also retain the sealed post-mutation state used to reject an
   // unsafe rewind when another actor changed an owned path afterward.
   7: createTaskCheckpoints,
+  // v8 → v9: durable ownership leases for in-flight agent runs. A second
+  // server process must not mistake another process's live work for a restart
+  // orphan, while genuinely abandoned rows still need eventual reconciliation.
+  8: addRunLeaseColumns,
+  // v9 → v10: task heartbeats and progress updates are frequent but do not
+  // change searchable content. Restrict FTS maintenance to indexed columns.
+  9: narrowTaskFtsUpdateTrigger,
+  // v10 → v11: keep recurring recovery/receipt maintenance off full-table
+  // scans as durable task history grows.
+  10: addBackgroundMaintenanceIndexes,
+  // v11 -> v12: retain the pre-rewind chat snapshot while a checkpoint
+  // restore is in progress so startup can compensate an interrupted restore.
+  11: (d) => {
+    const columns = new Set(
+      (d.prepare('PRAGMA table_info(task_checkpoint_restores)').all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has('conversationSnapshot')) {
+      d.exec('ALTER TABLE task_checkpoint_restores ADD COLUMN conversationSnapshot TEXT');
+    }
+  },
 };
+
+function addBackgroundMaintenanceIndexes(d: DatabaseSync): void {
+  d.exec(`
+    CREATE INDEX IF NOT EXISTS idx_task_outbox_delivered
+      ON task_outbox(status, deliveredAt);
+    CREATE INDEX IF NOT EXISTS idx_task_commands_recovery
+      ON task_commands(status, appliedAt, createdAt);
+    CREATE INDEX IF NOT EXISTS idx_tasks_queued_retry
+      ON tasks(updatedAt ASC, createdAt ASC)
+      WHERE status = 'queued';
+  `);
+}
+
+function narrowTaskFtsUpdateTrigger(d: DatabaseSync): void {
+  d.exec(`
+    DROP TRIGGER IF EXISTS tasks_fts_au;
+    CREATE TRIGGER tasks_fts_au
+    AFTER UPDATE OF title, description, result, error ON tasks BEGIN
+      INSERT INTO tasks_fts(tasks_fts, rowid, title, description, result, error)
+      VALUES ('delete', old.rowid, old.title, old.description, old.result, old.error);
+      INSERT INTO tasks_fts(rowid, title, description, result, error)
+      VALUES (new.rowid, new.title, new.description, new.result, new.error);
+    END;
+  `);
+}
+
+function addRunLeaseColumns(d: DatabaseSync): void {
+  const columns = new Set(
+    (d.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>).map((row) => row.name),
+  );
+  if (!columns.has('ownerId')) d.exec('ALTER TABLE runs ADD COLUMN ownerId TEXT');
+  if (!columns.has('heartbeatAt')) d.exec('ALTER TABLE runs ADD COLUMN heartbeatAt TEXT');
+  d.exec(`
+    CREATE INDEX IF NOT EXISTS idx_runs_active_lease
+      ON runs(status, heartbeatAt);
+
+    -- Trace/heartbeat writes are frequent while a run is live. The old broad
+    -- UPDATE trigger rebuilt the FTS row for every one even though none of the
+    -- indexed fields changed.
+    DROP TRIGGER IF EXISTS runs_fts_au;
+    CREATE TRIGGER runs_fts_au AFTER UPDATE OF prompt, finalOutput, agentName ON runs BEGIN
+      INSERT INTO runs_fts(runs_fts, rowid, prompt, finalOutput, agentName)
+      VALUES ('delete', old.rowid, old.prompt, old.finalOutput, old.agentName);
+      INSERT INTO runs_fts(rowid, prompt, finalOutput, agentName)
+      VALUES (new.rowid, new.prompt, new.finalOutput, new.agentName);
+    END;
+  `);
+}
 
 function createTaskCheckpoints(d: DatabaseSync): void {
   d.exec(`
@@ -432,6 +509,11 @@ function schemaVersion(database: DatabaseSync): number {
 
 function runMigrations(database: DatabaseSync): void {
   let v = schemaVersion(database);
+  if (v > SCHEMA_VERSION) {
+    throw new Error(
+      `Database schema v${v} is newer than this Shiba Studio build (supports v${SCHEMA_VERSION}).`,
+    );
+  }
   if (v >= SCHEMA_VERSION) return;
   while (v < SCHEMA_VERSION) {
     const migrate = MIGRATIONS[v];
@@ -452,12 +534,32 @@ function runMigrations(database: DatabaseSync): void {
 }
 
 export function getDb(): DatabaseSync {
-  if (maintenanceDepth > 0) throw new Error('Database maintenance in progress; retry shortly');
-  if (db) return db;
+  if (dbState.maintenanceToken) throw new Error('Database maintenance in progress; retry shortly');
+  if (dbState.handle) return dbState.handle;
   const { DatabaseSync } = loadSqlite();
-  db = new DatabaseSync(dbPath());
-  db.exec('PRAGMA journal_mode = WAL');
-  db.exec(`
+  const candidate = new DatabaseSync(dbPath());
+  try {
+    // SQLite foreign keys are a per-connection setting. Enable them before
+    // migrations or lazy extension schemas can write a single row so an
+    // alternate module graph cannot create ownership drift before the
+    // periodic integrity pass gets a chance to run.
+    candidate.exec('PRAGMA foreign_keys = ON');
+    const foreignKeys = candidate.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number | bigint };
+    if (Number(foreignKeys.foreign_keys) !== 1) {
+      throw new Error('SQLite foreign-key enforcement could not be enabled');
+    }
+    candidate.exec('PRAGMA journal_mode = WAL');
+    // A second server graph/process can briefly hold SQLite's write lock while
+    // claiming an automation tick or task lease. Let those normal short writes
+    // serialize instead of surfacing SQLITE_BUSY as a missed automation.
+    candidate.exec('PRAGMA busy_timeout = 5000');
+    const existingVersion = schemaVersion(candidate);
+    if (existingVersion > SCHEMA_VERSION) {
+      throw new Error(
+        `Database schema v${existingVersion} is newer than this Shiba Studio build (supports v${SCHEMA_VERSION}).`,
+      );
+    }
+    candidate.exec(`
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
       agentId TEXT NOT NULL,
@@ -495,9 +597,16 @@ export function getDb(): DatabaseSync {
       PRIMARY KEY (scheduleKey, tick)
     );
   `);
-  runMigrations(db);
-  migrateRunsFromJson(db);
-  return db;
+    runMigrations(candidate);
+    migrateRunsFromJson(candidate);
+    dbState.handle = candidate;
+    return candidate;
+  } catch (error) {
+    // Never expose a partially migrated/opened handle to another module graph.
+    try { candidate.close(); } catch { /* best-effort cleanup */ }
+    if (dbState.handle === candidate) dbState.handle = null;
+    throw error;
+  }
 }
 
 /** Absolute path of the SQLite file (for backup/restore). */
@@ -510,34 +619,86 @@ export function databasePath(): string {
  * The next getDb() reopens and re-runs migrations.
  */
 export function closeDb(): void {
-  if (!db) return;
-  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* best-effort */ }
-  try { db.close(); } catch { /* already closed */ }
-  db = null;
+  const handle = dbState.handle;
+  if (!handle) return;
+  // Unpublish first so a stale graph cannot retrieve a handle while it closes.
+  dbState.handle = null;
+  try { handle.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* best-effort */ }
+  try { handle.close(); } catch { /* already closed */ }
 }
 
 /** Prevent another request from reopening the shared handle while a validated
  * backup is swapped into place. The release callback is idempotent. */
 export function beginDbMaintenance(): () => void {
-  if (maintenanceDepth > 0) throw new Error('Database maintenance is already in progress');
-  maintenanceDepth = 1;
+  if (dbState.maintenanceToken) throw new Error('Database maintenance is already in progress');
+  const token = Symbol('shiba-db-maintenance');
+  dbState.maintenanceToken = token;
   closeDb();
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    maintenanceDepth = 0;
+    if (dbState.maintenanceToken === token) dbState.maintenanceToken = null;
   };
 }
 
-/** Open a staged database separately and run SQLite's structural check before
- * it is allowed anywhere near the live file. */
+/** Open and fully validate a staged Shiba database before a restore swap. */
 export function validateDatabaseFile(file: string): void {
   const { DatabaseSync } = loadSqlite();
   const candidate = new DatabaseSync(file);
   try {
+    candidate.exec('PRAGMA foreign_keys = ON');
+    const foreignKeys = candidate.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number | bigint };
+    if (Number(foreignKeys.foreign_keys) !== 1) {
+      throw new Error('SQLite foreign-key enforcement could not be enabled for the backup');
+    }
     const row = candidate.prepare('PRAGMA quick_check').get() as { quick_check?: string };
     if (row?.quick_check !== 'ok') throw new Error(`SQLite quick_check failed: ${row?.quick_check || 'unknown error'}`);
+    const originalVersion = schemaVersion(candidate);
+    if (originalVersion > SCHEMA_VERSION) {
+      throw new Error(
+        `Backup database schema v${originalVersion} is newer than this Shiba Studio build (supports v${SCHEMA_VERSION}).`,
+      );
+    }
+    const originalTables = new Set(
+      (candidate.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>)
+        .map((entry) => entry.name),
+    );
+    // v0 is a supported legacy starting point only when it is recognizably a
+    // Shiba database. This rejects empty/arbitrary quick_check-clean SQLite.
+    for (const required of ['runs', 'audit_log', 'schedule_ticks']) {
+      if (!originalTables.has(required)) {
+        throw new Error(`Backup is not a Shiba Studio database (missing ${required}).`);
+      }
+    }
+    runMigrations(candidate);
+    const migratedVersion = schemaVersion(candidate);
+    if (migratedVersion !== SCHEMA_VERSION) {
+      throw new Error(`Backup database could not be migrated to schema v${SCHEMA_VERSION}.`);
+    }
+    const migratedTables = new Set(
+      (candidate.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')").all() as Array<{ name: string }>)
+        .map((entry) => entry.name),
+    );
+    for (const required of [
+      'runs', 'audit_log', 'schedule_ticks', 'tasks', 'task_commands', 'task_outbox', 'runs_fts', 'tasks_fts',
+    ]) {
+      if (!migratedTables.has(required)) {
+        throw new Error(`Backup database schema is incomplete (missing ${required}).`);
+      }
+    }
+    const runColumns = new Set(
+      (candidate.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>).map((entry) => entry.name),
+    );
+    const taskColumns = new Set(
+      (candidate.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map((entry) => entry.name),
+    );
+    for (const required of ['id', 'status', 'prompt', 'ownerId', 'heartbeatAt']) {
+      if (!runColumns.has(required)) throw new Error(`Backup runs schema is incomplete (missing ${required}).`);
+    }
+    for (const required of ['id', 'status', 'runId']) {
+      if (!taskColumns.has(required)) throw new Error(`Backup tasks schema is incomplete (missing ${required}).`);
+    }
   } finally {
     candidate.close();
   }
@@ -555,8 +716,16 @@ export function claimScheduleTick(scheduleKey: string, tick: string): boolean {
     database
       .prepare('INSERT INTO schedule_ticks (scheduleKey, tick, claimedAt) VALUES (?, ?, ?)')
       .run(scheduleKey, tick, new Date().toISOString());
-  } catch {
-    return false; // this minute was already claimed by another task/process
+  } catch (error) {
+    const code = String((error as { code?: unknown })?.code || '');
+    const message = error instanceof Error ? error.message : String(error);
+    // Only the primary-key race means another scheduler won this tick. Disk,
+    // schema, lock-timeout, and maintenance failures must be visible to the
+    // caller so they can be audited instead of silently dropping work.
+    if (code.startsWith('SQLITE_CONSTRAINT') || /UNIQUE constraint failed:\s*schedule_ticks/i.test(message)) {
+      return false;
+    }
+    throw error;
   }
   // Opportunistic cleanup — claims are meaningless after the minute passes.
   try {

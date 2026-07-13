@@ -12,6 +12,7 @@ export const APPROVAL_GATED_TOOLS = new Set([
   'slack_post',
   'discord_post',
   'x_post',
+  'reddit_submit',
   'drive_upload',
   'obsidian_write',
   'vercel_deploy',
@@ -40,7 +41,19 @@ export interface PendingApproval {
 
 type ApprovalResolver = (approved: boolean) => void;
 
-const pending = new Map<string, { meta: PendingApproval; resolve: ApprovalResolver }>();
+interface ToolApprovalGlobals {
+  __shibaPendingToolApprovals?: Map<string, { meta: PendingApproval; resolve: ApprovalResolver }>;
+}
+
+// Next.js can evaluate this module more than once across route/runtime bundles.
+// Keep one process-wide registry so the route resolving an approval sees the
+// same waiter created by the agent runtime.
+const approvalGlobals = globalThis as unknown as ToolApprovalGlobals;
+const pending = approvalGlobals.__shibaPendingToolApprovals
+  ?? (approvalGlobals.__shibaPendingToolApprovals = new Map<
+    string,
+    { meta: PendingApproval; resolve: ApprovalResolver }
+  >());
 
 export function beginToolApproval(
   runId: string,

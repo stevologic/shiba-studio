@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
     ? await (await import('@/lib/chat-sessions')).getChatSession(String(body.sessionId))
     : null;
   const ephemeralSession = !!requestChatSession?.ephemeral;
+  const backgroundSessionId = requestChatSession && !ephemeralSession ? requestChatSession.id : null;
   const cfg = await loadConfig();
   let integrationCreds = cfg.integrations || {};
   const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
@@ -205,16 +206,18 @@ export async function POST(req: NextRequest) {
     'Tool results marked "[truncated…]" are incomplete — do not guess the missing part; re-read a narrower slice or say the data was cut off.',
   ].join('\n'));
 
-  // Long-running work: dispatch to the background instead of blocking the chat.
-  systemParts.push([
-    '## Background tasks (long-running work)',
-    'For BIG jobs — building a whole application, migrating a codebase, extensive multi-source research — use the background_task tool instead of trying to finish inline:',
-    '- background_task(prompt, …) starts an autonomous agent run and returns immediately with a task id; the chat stays responsive.',
-    '- The result is posted back into this chat when the run finishes, and the full execution trace is on the Automations page.',
-    '- Write the background prompt as a COMPLETE, self-contained brief (goal, constraints, where to work) — the worker cannot ask follow-up questions.',
-    '- Use background_status(task_id?) when the user asks how a task is going or wants the result.',
-    'Use ordinary inline tools for anything you can finish in this turn — background is for work that would take many minutes.',
-  ].join('\n'));
+  if (backgroundSessionId) {
+    // Long-running work requires a verified durable chat destination.
+    systemParts.push([
+      '## Background tasks (long-running work)',
+      'For BIG jobs — building a whole application, migrating a codebase, extensive multi-source research — use the background_task tool instead of trying to finish inline:',
+      '- background_task(prompt, …) starts an autonomous agent run and returns immediately with a task id; the chat stays responsive.',
+      '- The result is posted back into this chat when the run finishes, and the full execution trace is on the Automations page.',
+      '- Write the background prompt as a COMPLETE, self-contained brief (goal, constraints, where to work) — the worker cannot ask follow-up questions.',
+      '- Use background_status(task_id?) when the user asks how a task is going or wants the result.',
+      'Use ordinary inline tools for anything you can finish in this turn — background is for work that would take many minutes.',
+    ].join('\n'));
+  }
 
   let preparedSessionContext: import('@/lib/context-types').PreparedSessionContext | null = null;
   if (Array.isArray(body.messages) && body.messages.length > 0) {
@@ -367,7 +370,7 @@ export async function POST(req: NextRequest) {
                 case 'terminal_exec': return `Terminal \`${short(args.command, 120)}\``;
                 case 'web_search': return `Searching the web for “${short(args.query, 80)}”`;
                 case 'web_fetch': return `Fetching ${short(args.url, 100)}`;
-                case 'meeting_search': return `Searching voice transcripts for â€œ${short(args.query, 80)}â€`;
+                case 'meeting_search': return `Searching voice transcripts for “${short(args.query, 80)}”`;
                 case 'browser_navigate': return `Opening ${short(args.url, 100)}`;
                 case 'browser_click': return `Clicking ${short(args.selector, 60)}`;
                 case 'browser_type': return `Typing into ${short(args.selector, 60)}`;
@@ -380,6 +383,11 @@ export async function POST(req: NextRequest) {
             };
             const resultPreview = (name: string, result: unknown): string => {
               try {
+                if (name === 'reddit_read_posts' && result && typeof result === 'object' && !Array.isArray(result)) {
+                  const listing = result as { posts?: unknown[]; nextAfter?: unknown };
+                  const count = Array.isArray(listing.posts) ? listing.posts.length : 0;
+                  return `✓ read ${count} Reddit post${count === 1 ? '' : 's'}${listing.nextAfter ? '; more available' : ''}`;
+                }
                 if (name === 'fs_write') return `✓ ${typeof result === 'string' ? result : JSON.stringify(result)}`;
                 if (name === 'shell_exec' && result && typeof result === 'object') {
                   const r = result as { code?: number; stdout?: string; stderr?: string };
@@ -412,8 +420,11 @@ export async function POST(req: NextRequest) {
 
             const workspaceAgent = normalizeAgent({ id: '__chat__', name: 'Grok Chat' });
             // Base: agent tools if chatting as an agent; else empty.
+            // Chat has no live approval event protocol yet. Keep irreversible
+            // Reddit publishing in interactive/background agent runs, where the
+            // exact call is approved (or explicitly authorized by autonomous dispatch).
             const tools = agent
-              ? getToolDefinitions(agent.integrations, false)
+              ? getToolDefinitions(agent.integrations, false).filter((tool) => tool.function.name !== 'reddit_submit')
               : [];
             // Always merge chat-core research tools so plain Grok Chat can look things up.
             {
@@ -430,7 +441,7 @@ export async function POST(req: NextRequest) {
             }
             // Background dispatch: long-running work runs as an agent run while
             // the chat stays responsive; results post back into this session.
-            tools.push(
+            if (backgroundSessionId) tools.push(
               {
                 type: 'function',
                 function: {
@@ -466,7 +477,7 @@ export async function POST(req: NextRequest) {
               },
             );
             if (ephemeralSession) {
-              const privateTools = new Set([...MEMORY_TOOL_NAMES, 'background_task']);
+              const privateTools = new Set(MEMORY_TOOL_NAMES);
               const safeTools = tools.filter((tool) => !privateTools.has(tool.function.name));
               tools.length = 0;
               tools.push(...safeTools);
@@ -672,21 +683,27 @@ export async function POST(req: NextRequest) {
                 if (fn.name === 'background_task' || fn.name === 'background_status') {
                   const bg = await import('@/lib/background-tasks');
                   let result: unknown;
-                  if (fn.name === 'background_task') {
+                  if (!backgroundSessionId) {
+                    result = { error: 'Background work requires a verified, non-ephemeral chat session.' };
+                  } else if (fn.name === 'background_task') {
                     const taskPrompt = String(args.prompt || '').trim();
                     if (!taskPrompt) {
                       result = { error: 'background_task requires a non-empty prompt' };
                     } else {
                       const t = bg.startBackgroundTask({
                         prompt: taskPrompt,
-                        sessionId: body.sessionId ? String(body.sessionId) : null,
+                        sessionId: backgroundSessionId,
                         agent: chatAgent,
                         workspaceDir: workspaceDir || undefined,
                         model,
                       });
                       result = {
                         task_id: t.taskId,
+                        run_id: t.runId,
                         status: t.status,
+                        task_status: t.taskStatus,
+                        task_url: t.taskUrl,
+                        run_url: t.runUrl,
                         worker: t.agentName,
                         note: 'Task started in the background. The result will be posted into this chat when it finishes; '
                           + 'the live trace is on the Automations page. Tell the user the task is running — do not wait for it.',
@@ -694,9 +711,23 @@ export async function POST(req: NextRequest) {
                     }
                   } else {
                     const id = args.task_id ? String(args.task_id) : '';
+                    const summarize = (task: ReturnType<typeof bg.listBackgroundTasks>[number]) => ({
+                      task_id: task.taskId,
+                      run_id: task.runId,
+                      status: task.status,
+                      task_status: task.taskStatus,
+                      task_url: task.taskUrl,
+                      run_url: task.runUrl,
+                      worker: task.agentName,
+                      started_at: task.startedAt,
+                      completed_at: task.completedAt,
+                      final_output: task.finalOutput,
+                      error: task.error,
+                    });
+                    const task = id ? bg.getBackgroundTask(id, backgroundSessionId) : null;
                     result = id
-                      ? (bg.getBackgroundTask(id) || { error: `No background task ${id} (it may predate a server restart — check the Automations page)` })
-                      : bg.listBackgroundTasks(body.sessionId ? String(body.sessionId) : undefined).slice(0, 10);
+                      ? (task ? summarize(task) : { error: `No background task ${id} belongs to this chat.` })
+                      : bg.listBackgroundTasks(backgroundSessionId).slice(0, 10).map(summarize);
                   }
                   toolsUsed.push(fn.name);
                   send({ type: 'thinking', delta: `${resultPreview(fn.name, result)}\n` });

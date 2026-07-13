@@ -1,4 +1,4 @@
-// Core integrations: GitHub, Slack, Google Drive, Discord, X, Obsidian,
+// Core integrations: GitHub, Slack, Google Drive, Discord, X, Reddit, Obsidian,
 // Vercel, Netlify, plus Board-scoped Linear and Jira sync.
 // All scoped per-agent via config. Credentials stored server-side in config.
 // Lazy imports to avoid heavy top-level cjs/esm issues in tests.
@@ -51,6 +51,27 @@ export function mergeAgentIntegrationCreds(
       if (typeof v === 'string' ? v.trim() : v != null) filled[k] = v;
     }
     if (!Object.keys(filled).length) continue;
+    if (svc === 'reddit') {
+      // A Reddit OAuth client pair and token session are account boundaries.
+      // Never combine half an agent's client pair, or one account's access
+      // token with the global account's refresh/session metadata.
+      const base = { ...(global.reddit || {}) } as Record<string, unknown>;
+      const hasClientOverride = ['clientId', 'clientSecret'].some((key) => key in filled);
+      const hasSessionOverride = [
+        'accessToken', 'refreshToken', 'tokenExpiry', 'username', 'userId', 'scopes',
+      ].some((key) => key in filled);
+      if (hasClientOverride) {
+        delete base.clientId;
+        delete base.clientSecret;
+      }
+      if (hasClientOverride || hasSessionOverride) {
+        for (const key of ['accessToken', 'refreshToken', 'tokenExpiry', 'username', 'userId', 'scopes']) {
+          delete base[key];
+        }
+      }
+      merged.reddit = { ...base, ...filled } as IntegrationCreds['reddit'];
+      continue;
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     merged[svc] = { ...(global[svc] as any), ...(filled as any) };
   }
@@ -409,6 +430,37 @@ export async function xPostTweet(text: string) {
   const data = await res.json();
   const id = data.data?.id;
   return { ok: true, id, url: id ? `https://x.com/i/web/status/${id}` : undefined };
+}
+
+/** Reddit uses OAuth 2.0 user authorization and refreshes its bearer lazily. */
+export async function testReddit() {
+  const { testReddit: test } = await import('./reddit');
+  return test({ reddit: creds.reddit });
+}
+
+export async function redditReadPosts(input: {
+  subreddit?: string;
+  sort?: 'hot' | 'new' | 'top' | 'rising';
+  time?: 'hour' | 'day' | 'week' | 'month' | 'year' | 'all';
+  limit?: number;
+  after?: string;
+}) {
+  const { redditReadPosts: read } = await import('./reddit');
+  return read(input, { reddit: creds.reddit });
+}
+
+export async function redditSubmit(input: {
+  subreddit: string;
+  title: string;
+  kind?: 'self' | 'link';
+  text?: string;
+  url?: string;
+  nsfw?: boolean;
+  spoiler?: boolean;
+  sendReplies?: boolean;
+}) {
+  const { redditSubmit: submit } = await import('./reddit');
+  return submit(input, { reddit: creds.reddit });
 }
 
 export {

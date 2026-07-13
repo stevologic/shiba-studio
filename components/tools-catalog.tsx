@@ -5,10 +5,11 @@
 // definitions via /api/tools, never a hardcoded copy). Each tool has a toggle
 // to disable it globally for agent runs and workspace chat.
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Wrench, TerminalSquare, Globe, Plug2, Workflow, Boxes, Search, Compass, Brain, Image as ImageIcon, Container, KanbanSquare } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import InfoHint from '@/components/info-hint';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 
 interface ToolEntry {
   name: string;
@@ -46,6 +47,7 @@ const GROUP_BLURBS: Record<string, string> = {
 
 // Stable presentation order — most-used groups first.
 const GROUP_ORDER = ['Workspace & Files', 'Sandbox', 'Web & Research', 'Browser Automation', 'Memory', 'AI Generation', 'Integrations', 'Orchestration', 'Board', 'MCP'];
+const TOOLS_URL = '/api/tools';
 
 function requirementChip(tool: ToolEntry): { label: string; cls: string } {
   if (!tool.enabled) return { label: 'disabled', cls: 'tool-chip-disabled' };
@@ -62,25 +64,35 @@ export default function ToolsCatalog() {
   const [pending, setPending] = useState<Record<string, boolean>>({});
   // Tool names whose description is expanded past the 2-line clamp.
   const [openDescs, setOpenDescs] = useState<Set<string>>(new Set());
+  const loadRequestRef = useRef(0);
+
+  const loadTools = useCallback(async ({ force = false, signal }: { force?: boolean; signal?: AbortSignal } = {}) => {
+    const requestId = ++loadRequestRef.current;
+    if (force) invalidateClientJson(TOOLS_URL);
+    try {
+      const data = await loadClientJson<{ ok?: boolean; tools?: ToolEntry[] }>(TOOLS_URL, {
+        maxAgeMs: 10_000,
+        signal,
+      });
+      if (!signal?.aborted && requestId === loadRequestRef.current && data.ok) {
+        setTools((data.tools || []).map((tool) => ({
+          ...tool,
+          enabled: tool.enabled !== false,
+        })));
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
+      if (!signal?.aborted && requestId === loadRequestRef.current) setTools([]);
+    }
+  }, []);
 
   useEffect(() => {
-    let stale = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/tools');
-        const data = await res.json();
-        if (!stale && data.ok) {
-          setTools((data.tools || []).map((t: ToolEntry) => ({
-            ...t,
-            enabled: t.enabled !== false,
-          })));
-        }
-      } catch {
-        if (!stale) setTools([]);
-      }
-    })();
-    return () => { stale = true; };
-  }, []);
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) void loadTools({ signal: controller.signal });
+    });
+    return () => controller.abort();
+  }, [loadTools]);
 
   async function toggleTool(tool: ToolEntry, enabled: boolean) {
     if (pending[tool.name]) return;
@@ -97,18 +109,13 @@ export default function ToolsCatalog() {
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Update failed');
-      // Reconcile from server list if provided
-      if (Array.isArray(data.disabledTools)) {
-        const disabled = new Set(data.disabledTools as string[]);
-        setTools((list) =>
-          (list || []).map((t) => ({ ...t, enabled: !disabled.has(t.name) })),
-        );
-      }
+      await loadTools({ force: true });
     } catch (e: unknown) {
       // Revert
       setTools((list) =>
         (list || []).map((t) => (t.name === tool.name ? { ...t, enabled: tool.enabled } : t)),
       );
+      await loadTools({ force: true });
       toast.error(e instanceof Error ? e.message : 'Could not update tool');
     }
     setPending((p) => {
@@ -146,20 +153,10 @@ export default function ToolsCatalog() {
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Update failed');
-      if (Array.isArray(data.disabledTools)) {
-        const set = new Set(data.disabledTools as string[]);
-        setTools((list) =>
-          (list || []).map((t) => ({ ...t, enabled: !set.has(t.name) })),
-        );
-      }
+      await loadTools({ force: true });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Could not update group');
-      // Reload
-      try {
-        const res = await fetch('/api/tools');
-        const data = await res.json();
-        if (data.ok) setTools(data.tools || []);
-      } catch { /* */ }
+      await loadTools({ force: true });
     }
     setPending((p) => {
       const next = { ...p };

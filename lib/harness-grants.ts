@@ -1,12 +1,14 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { getDb } from './db';
 import {
-  createTask,
+  createTaskInOpenTransaction,
   getTask,
   getTaskDetails,
+  publishTaskChanges,
   recordTaskEvidence,
   requestTaskAttention,
   transitionTask,
+  transitionTaskInOpenTransaction,
 } from './task-ledger';
 
 export type HarnessProvider = 'grok' | 'codex' | 'claude' | 'hermes';
@@ -24,6 +26,12 @@ export interface HarnessGrant {
   createdAt: string;
   usedAt?: string;
   revokedAt?: string;
+}
+
+export interface HarnessGrantLifecycleRepairReport {
+  grantsExpired: number;
+  grantsTerminalized: number;
+  tasksCancelled: number;
 }
 
 interface GrantRow extends Omit<HarnessGrant, 'allowedTools' | 'usedAt' | 'revokedAt'> {
@@ -88,16 +96,112 @@ function getRow(id: string): GrantRow | null {
   return (getDb().prepare('SELECT * FROM harness_grants WHERE id = ?').get(id) as GrantRow | undefined) || null;
 }
 
-function expireIfNeeded(row: GrantRow): GrantRow {
-  if ((row.status === 'issued' || row.status === 'active') && Date.parse(row.expiresAt) <= Date.now()) {
-    getDb().prepare("UPDATE harness_grants SET status = 'expired' WHERE id = ? AND status IN ('issued', 'active')").run(row.id);
-    const child = getTask(row.childTaskId);
-    if (child && !['succeeded', 'failed', 'cancelled', 'lost'].includes(child.status)) {
-      transitionTask({ taskId: child.id, status: 'cancelled', error: 'External harness capability grant expired.' });
+const ACTIVE_HARNESS_TASK_STATUSES = new Set([
+  'queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked',
+]);
+
+function settleHarnessChildInOpenTransaction(childTaskId: string, message: string): boolean {
+  const child = getTask(childTaskId);
+  if (!child || !ACTIVE_HARNESS_TASK_STATUSES.has(child.status)) return false;
+  transitionTaskInOpenTransaction({
+    taskId: child.id,
+    status: 'cancelled',
+    expectedVersion: child.version,
+    error: message,
+    metadata: { harnessLifecycleReconciled: true },
+  });
+  return true;
+}
+
+function repairHarnessGrantLifecycleAt(
+  at: Date,
+  onlyGrantId?: string,
+): HarnessGrantLifecycleRepairReport {
+  ensureSchema();
+  if (!Number.isFinite(at.getTime())) throw new Error('Invalid harness lifecycle timestamp');
+  const now = at.toISOString();
+  const db = getDb();
+  const idPredicate = onlyGrantId ? 'AND grantRow.id = ?' : '';
+  const candidate = db.prepare(`
+    SELECT 1 FROM harness_grants grantRow
+    LEFT JOIN tasks child ON child.id = grantRow.childTaskId
+    WHERE (
+      (grantRow.status IN ('issued', 'active') AND grantRow.expiresAt <= ?)
+      OR (
+        grantRow.status IN ('revoked', 'expired')
+        AND child.status IN ('queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked')
+      )
+      OR (
+        grantRow.status IN ('issued', 'active')
+        AND child.status IN ('succeeded', 'failed', 'cancelled', 'lost')
+      )
+    ) ${idPredicate}
+    LIMIT 1
+  `).get(now, ...(onlyGrantId ? [onlyGrantId] : []));
+  if (!candidate) return { grantsExpired: 0, grantsTerminalized: 0, tasksCancelled: 0 };
+
+  const report: HarnessGrantLifecycleRepairReport = {
+    grantsExpired: 0,
+    grantsTerminalized: 0,
+    tasksCancelled: 0,
+  };
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    report.grantsExpired = Number(db.prepare(`
+      UPDATE harness_grants SET status = 'expired'
+      WHERE status IN ('issued', 'active') AND expiresAt <= ?
+        ${onlyGrantId ? 'AND id = ?' : ''}
+    `).run(now, ...(onlyGrantId ? [onlyGrantId] : [])).changes) || 0;
+    report.grantsTerminalized = Number(db.prepare(`
+      UPDATE harness_grants SET
+        status = CASE (SELECT child.status FROM tasks child WHERE child.id = harness_grants.childTaskId)
+          WHEN 'succeeded' THEN 'completed'
+          WHEN 'failed' THEN 'failed'
+          ELSE 'revoked'
+        END,
+        revokedAt = CASE WHEN (
+          SELECT child.status FROM tasks child WHERE child.id = harness_grants.childTaskId
+        ) IN ('cancelled', 'lost') THEN COALESCE(revokedAt, ?) ELSE revokedAt END
+      WHERE status IN ('issued', 'active')
+        AND EXISTS (
+          SELECT 1 FROM tasks child
+          WHERE child.id = harness_grants.childTaskId
+            AND child.status IN ('succeeded', 'failed', 'cancelled', 'lost')
+        ) ${onlyGrantId ? 'AND id = ?' : ''}
+    `).run(now, ...(onlyGrantId ? [onlyGrantId] : [])).changes) || 0;
+    const rows = db.prepare(`
+      SELECT id, childTaskId, status FROM harness_grants
+      WHERE status IN ('revoked', 'expired') ${onlyGrantId ? 'AND id = ?' : ''}
+      ORDER BY createdAt, id
+    `).all(...(onlyGrantId ? [onlyGrantId] : [])) as Array<{
+      id: string;
+      childTaskId: string;
+      status: 'revoked' | 'expired';
+    }>;
+    for (const row of rows) {
+      const message = row.status === 'revoked'
+        ? 'External harness grant revoked.'
+        : 'External harness capability grant expired.';
+      if (settleHarnessChildInOpenTransaction(row.childTaskId, message)) report.tasksCancelled += 1;
     }
-    return getRow(row.id)!;
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
   }
-  return row;
+  if (report.tasksCancelled) {
+    try { publishTaskChanges(true); } catch (error) {
+      console.error('[harness-grants] could not publish lifecycle task changes', error);
+    }
+  }
+  return report;
+}
+
+/** Repair expired/revoked grant projections even when no client reads them. */
+export function repairHarnessGrantLifecycleProjections(
+  at = new Date(),
+): HarnessGrantLifecycleRepairReport {
+  return repairHarnessGrantLifecycleAt(at);
 }
 
 function validateToken(row: GrantRow, token: string): void {
@@ -130,46 +234,62 @@ export function createHarnessGrant(input: {
   const token = `shg_${randomBytes(32).toString('base64url')}`;
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1_000).toISOString();
-  createTask({
-    id: childTaskId,
-    kind: 'external',
-    parentId: parent.id,
-    title: `${input.provider} harness: ${parent.title}`.slice(0, 500),
-    description: parent.description,
-    status: 'queued',
-    originType: 'manual',
-    originId: id,
-    workspaceRoots: [{ ...root }],
-    maxRetries: 0,
-    metadata: { harnessGrantId: id, provider: input.provider, allowedTools },
-  });
-  getDb().prepare(`
-    INSERT INTO harness_grants (
-      id, taskId, childTaskId, provider, workspaceRootId, workspacePath,
-      allowedTools, tokenHash, status, expiresAt, createdAt, usedAt, revokedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, NULL, NULL)
-  `).run(
-    id, parent.id, childTaskId, input.provider, root.id, root.path,
-    JSON.stringify(allowedTools), hashToken(token), expiresAt, now.toISOString(),
-  );
-  return { grant: rowToGrant(getRow(id)!), token };
+  const db = getDb();
+  let grant: HarnessGrant;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    createTaskInOpenTransaction({
+      id: childTaskId,
+      kind: 'external',
+      parentId: parent.id,
+      title: `${input.provider} harness: ${parent.title}`.slice(0, 500),
+      description: parent.description,
+      status: 'queued',
+      originType: 'manual',
+      originId: id,
+      workspaceRoots: [{ ...root }],
+      maxRetries: 0,
+      metadata: { harnessGrantId: id, provider: input.provider, allowedTools },
+    });
+    db.prepare(`
+      INSERT INTO harness_grants (
+        id, taskId, childTaskId, provider, workspaceRootId, workspacePath,
+        allowedTools, tokenHash, status, expiresAt, createdAt, usedAt, revokedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, NULL, NULL)
+    `).run(
+      id, parent.id, childTaskId, input.provider, root.id, root.path,
+      JSON.stringify(allowedTools), hashToken(token), expiresAt, now.toISOString(),
+    );
+    grant = rowToGrant(db.prepare('SELECT * FROM harness_grants WHERE id = ?').get(id) as GrantRow);
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+  try { publishTaskChanges(); } catch (error) {
+    console.error('[harness-grants] could not publish created harness task', error);
+  }
+  return { grant, token };
 }
 
 export function listHarnessGrants(taskId?: string): HarnessGrant[] {
   ensureSchema();
+  repairHarnessGrantLifecycleProjections();
   const rows = (taskId
     ? getDb().prepare('SELECT * FROM harness_grants WHERE taskId = ? ORDER BY createdAt DESC').all(taskId)
     : getDb().prepare('SELECT * FROM harness_grants ORDER BY createdAt DESC LIMIT 200').all()) as GrantRow[];
-  return rows.map(expireIfNeeded).map(rowToGrant);
+  return rows.map(rowToGrant);
 }
 
 export function authenticateHarnessGrant(id: string, token: string): HarnessGrant {
-  const row = getRow(id);
+  let row = getRow(id);
   if (!row) throw new Error('Harness grant not found');
-  const current = expireIfNeeded(row);
-  validateToken(current, token);
-  if (current.status === 'revoked' || current.status === 'expired') throw new Error(`Harness grant is ${current.status}`);
-  return rowToGrant(current);
+  repairHarnessGrantLifecycleAt(new Date(), row.id);
+  row = getRow(id);
+  if (!row) throw new Error('Harness grant not found');
+  validateToken(row, token);
+  if (row.status === 'revoked' || row.status === 'expired') throw new Error(`Harness grant is ${row.status}`);
+  return rowToGrant(row);
 }
 
 function boundedPrompt(grant: HarnessGrant, requested: string): string {
@@ -200,49 +320,84 @@ export async function startHarnessGrant(id: string, token: string, instruction =
   const grant = authenticateHarnessGrant(id, token);
   if (grant.status !== 'issued') throw new Error(`Harness grant cannot start from status ${grant.status}`);
   const now = new Date().toISOString();
-  getDb().prepare("UPDATE harness_grants SET status = 'active', usedAt = ? WHERE id = ? AND status = 'issued'").run(now, id);
-  const child = getTask(grant.childTaskId)!;
-  transitionTask({ taskId: child.id, status: 'running', expectedVersion: child.version, currentStep: `Launching ${grant.provider} harness` });
+  const db = getDb();
+  let activeGrant: HarnessGrant;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = db.prepare("UPDATE harness_grants SET status = 'active', usedAt = ? WHERE id = ? AND status = 'issued'")
+      .run(now, id);
+    if (Number(result.changes) !== 1) throw new Error('Harness grant changed before it could start');
+    const child = getTask(grant.childTaskId);
+    if (!child) throw new Error('Harness child task not found');
+    transitionTaskInOpenTransaction({
+      taskId: child.id,
+      status: 'running',
+      expectedVersion: child.version,
+      currentStep: `Launching ${grant.provider} harness`,
+    });
+    activeGrant = rowToGrant(db.prepare('SELECT * FROM harness_grants WHERE id = ?').get(id) as GrantRow);
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+  try { publishTaskChanges(); } catch (error) {
+    console.error('[harness-grants] could not publish started harness task', error);
+  }
   void (async () => {
     try {
-      const prompt = boundedPrompt(grant, instruction);
+      const prompt = boundedPrompt(activeGrant, instruction);
       // Never launch a host CLI with direct workspace access: prompt-level
       // tool names cannot enforce path, account, or secret isolation. Every
       // provider (including Grok) attaches explicitly and receives only this
       // bounded context plus the one-time callback grant. A compatible harness
       // must broker its own actions through the declared capability classes.
       requestTaskAttention({
-        taskId: grant.childTaskId,
+        taskId: activeGrant.childTaskId,
         kind: 'question',
         severity: 'info',
-        title: `${grant.provider} harness is ready to attach`,
+        title: `${activeGrant.provider} harness is ready to attach`,
         body: 'Start the external harness in its own isolated environment with the one-time capability token, then post typed evidence to the callback endpoint before expiry. Shiba will not launch a host CLI with ambient HOME, MCP, or credential access.',
-        dedupeKey: `harness-manual-attach:${grant.id}`,
+        dedupeKey: `harness-manual-attach:${activeGrant.id}`,
         action: {
-          grantId: grant.id,
-          expiresAt: grant.expiresAt,
-          allowedTools: grant.allowedTools,
+          grantId: activeGrant.id,
+          expiresAt: activeGrant.expiresAt,
+          allowedTools: activeGrant.allowedTools,
           contextDigest: createHash('sha256').update(prompt).digest('hex'),
         },
       });
       recordTaskEvidence({
-        taskId: grant.childTaskId,
+        taskId: activeGrant.childTaskId,
         kind: 'assertion',
         status: 'informational',
         label: 'Scoped harness attachment prepared',
-        summary: `Prepared ${grant.provider} attachment with ${grant.allowedTools.length} action-level permission(s); no host process or ambient secret was exposed.`,
-        scope: grant.workspaceRootId,
-        metadata: { grantId: grant.id, provider: grant.provider, contextDigest: createHash('sha256').update(prompt).digest('hex') },
+        summary: `Prepared ${activeGrant.provider} attachment with ${activeGrant.allowedTools.length} action-level permission(s); no host process or ambient secret was exposed.`,
+        scope: activeGrant.workspaceRootId,
+        metadata: { grantId: activeGrant.id, provider: activeGrant.provider, contextDigest: createHash('sha256').update(prompt).digest('hex') },
       });
-      const waiting = getTask(grant.childTaskId)!;
+      const waiting = getTask(activeGrant.childTaskId)!;
       transitionTask({ taskId: waiting.id, status: 'waiting_for_input', expectedVersion: waiting.version, currentStep: 'Waiting for isolated external harness callback' });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const task = getTask(grant.childTaskId);
-      if (task && !['succeeded', 'failed', 'cancelled', 'lost'].includes(task.status)) {
-        transitionTask({ taskId: task.id, status: 'failed', error: message });
+      let taskChanged = false;
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const task = getTask(activeGrant.childTaskId);
+        if (task && !['succeeded', 'failed', 'cancelled', 'lost'].includes(task.status)) {
+          transitionTaskInOpenTransaction({ taskId: task.id, status: 'failed', error: message });
+          taskChanged = true;
+        }
+        db.prepare("UPDATE harness_grants SET status = 'failed' WHERE id = ? AND status = 'active'").run(activeGrant.id);
+        db.exec('COMMIT');
+      } catch (settlementError) {
+        try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+        console.error(`[harness-grants] could not settle failed harness ${activeGrant.id}`, settlementError);
       }
-      getDb().prepare("UPDATE harness_grants SET status = 'failed' WHERE id = ? AND status = 'active'").run(grant.id);
+      if (taskChanged) {
+        try { publishTaskChanges(true); } catch (publishError) {
+          console.error('[harness-grants] could not publish failed harness task', publishError);
+        }
+      }
     }
   })();
   return rowToGrant(getRow(id)!);
@@ -271,28 +426,59 @@ export function postHarnessCallback(input: {
       transitionTask({ taskId: child.id, status: 'running', expectedVersion: child.version, currentStep: input.summary.slice(0, 1_000) });
     }
   } else {
-    transitionTask({
-      taskId: child.id,
-      status: input.status,
-      expectedVersion: child.version,
-      result: input.status === 'succeeded' ? input.summary.slice(0, 20_000) : null,
-      error: input.status === 'failed' ? input.summary.slice(0, 10_000) : null,
-    });
-    getDb().prepare('UPDATE harness_grants SET status = ? WHERE id = ?')
-      .run(input.status === 'succeeded' ? 'completed' : 'failed', grant.id);
+    const db = getDb();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const currentChild = getTask(grant.childTaskId);
+      if (!currentChild) throw new Error('Harness child task not found');
+      transitionTaskInOpenTransaction({
+        taskId: currentChild.id,
+        status: input.status,
+        expectedVersion: currentChild.version,
+        result: input.status === 'succeeded' ? input.summary.slice(0, 20_000) : null,
+        error: input.status === 'failed' ? input.summary.slice(0, 10_000) : null,
+      });
+      const result = db.prepare("UPDATE harness_grants SET status = ? WHERE id = ? AND status = 'active'")
+        .run(input.status === 'succeeded' ? 'completed' : 'failed', grant.id);
+      if (Number(result.changes) !== 1) throw new Error('Harness grant changed before its callback completed');
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+      throw error;
+    }
+    try { publishTaskChanges(true); } catch (error) {
+      console.error('[harness-grants] could not publish terminal harness task', error);
+    }
   }
   return rowToGrant(getRow(grant.id)!);
 }
 
 export function revokeHarnessGrant(id: string): HarnessGrant {
-  const row = getRow(id);
-  if (!row) throw new Error('Harness grant not found');
+  ensureSchema();
   const now = new Date().toISOString();
-  getDb().prepare("UPDATE harness_grants SET status = 'revoked', revokedAt = ? WHERE id = ? AND status IN ('issued', 'active')")
-    .run(now, id);
-  const child = getTask(row.childTaskId);
-  if (child && !['succeeded', 'failed', 'cancelled', 'lost'].includes(child.status)) {
-    transitionTask({ taskId: child.id, status: 'cancelled', error: 'External harness grant revoked.' });
+  const db = getDb();
+  let taskChanged = false;
+  let grant: HarnessGrant;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const row = db.prepare('SELECT * FROM harness_grants WHERE id = ?').get(id) as GrantRow | undefined;
+    if (!row) throw new Error('Harness grant not found');
+    const result = db.prepare(`
+      UPDATE harness_grants SET status = 'revoked', revokedAt = ?
+      WHERE id = ? AND status IN ('issued', 'active')
+    `).run(now, id);
+    if (Number(result.changes) !== 1) throw new Error(`Harness grant cannot be revoked from status ${row.status}`);
+    taskChanged = settleHarnessChildInOpenTransaction(row.childTaskId, 'External harness grant revoked.');
+    grant = rowToGrant(db.prepare('SELECT * FROM harness_grants WHERE id = ?').get(id) as GrantRow);
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
   }
-  return rowToGrant(getRow(id)!);
+  if (taskChanged) {
+    try { publishTaskChanges(true); } catch (error) {
+      console.error('[harness-grants] could not publish revoked task state', error);
+    }
+  }
+  return grant;
 }

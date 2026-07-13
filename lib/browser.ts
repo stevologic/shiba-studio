@@ -1,4 +1,6 @@
 // Chrome / Browser control powered by Puppeteer for agents.
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { dataDir } from './data-paths';
 // Provides navigate, click, type, screenshot, extract, scroll.
 
@@ -157,13 +159,33 @@ export async function browserType(selector: string, text: string, submit = false
   }
 }
 
+export function browserScreenshotPath(
+  name: string = 'capture',
+  nowMs: number = Date.now(),
+  uniqueId: string = randomUUID(),
+): string {
+  const stem = String(name || 'capture')
+    .normalize('NFKC')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[._-]+|[._-]+$/g, '')
+    .slice(0, 80) || 'capture';
+  const timestamp = Math.max(0, Math.floor(Number.isFinite(nowMs) ? nowMs : Date.now()));
+  const suffix = String(uniqueId).replace(/[^A-Za-z0-9-]/g, '').slice(0, 64) || randomUUID();
+  const root = path.resolve(dataDir('screenshots'));
+  const candidate = path.resolve(root, `${stem}-${timestamp}-${suffix}.png`);
+  const relative = path.relative(root, candidate);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Browser screenshot path escaped managed storage');
+  }
+  return candidate;
+}
+
 export async function browserScreenshot(name = 'capture', runId?: string): Promise<{ ok: boolean; path: string; dataUrl?: string }> {
   const page = runId ? await getPageForRun(runId) : await getPage();
   const { ensureDir } = await import('./workspace');
-  const pathMod = await import('path');
   const shotsDir = dataDir('screenshots');
   await ensureDir(shotsDir);
-  const file = pathMod.join(shotsDir, `${name}-${Date.now()}.png`);
+  const file = browserScreenshotPath(name);
   await page.screenshot({ path: file, fullPage: true });
   // Also return small data url for UI
   const buf = await page.screenshot({ encoding: 'base64', fullPage: false, clip: { x: 0, y: 0, width: 960, height: 540 } });

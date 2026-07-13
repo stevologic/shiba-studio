@@ -16,6 +16,8 @@ async function main() {
   const routines = await import('../lib/routines');
   try {
     await persistence.saveConfig({ xaiApiKey: 'xai-verifier-key', cloudAuthMode: 'api_key', defaultGrokModel: 'cloud:grok-4' });
+    const db = dbModule.getDb();
+    meetings.ensureMeetingSchema();
     let sttCalls = 0;
     let reviewCalls = 0;
     oauth.setTokenFetcher(async (input, init) => {
@@ -65,12 +67,60 @@ async function main() {
     const bytes = new TextEncoder().encode('small fake webm payload');
     const stream = () => new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } });
     await assert.rejects(() => meetings.saveMeetingAudio({ title: 'No consent', source: 'upload', originalFilename: 'test.webm', mime: 'audio/webm', retentionDays: 30, consentConfirmed: false, stream: stream() }), /consent/i);
+    db.exec(`
+      CREATE TEMP TRIGGER fail_meeting_creation
+      BEFORE INSERT ON meetings
+      BEGIN
+        SELECT RAISE(ABORT, 'forced meeting insert failure');
+      END;
+    `);
+    try {
+      await assert.rejects(
+        () => meetings.saveMeetingAudio({ title: 'Failed creation', source: 'upload', originalFilename: 'failed.webm', mime: 'audio/webm', retentionDays: 30, consentConfirmed: true, stream: stream() }),
+        /forced meeting insert failure|Meeting creation failed/,
+      );
+    } finally {
+      db.exec('DROP TRIGGER IF EXISTS fail_meeting_creation');
+    }
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE title = 'Transcribe Failed creation'").get() as { n: number }).n, 0, 'failed meeting creation removes its task');
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM meetings').get() as { n: number }).n, 0, 'failed meeting creation leaves no meeting row');
+    const failedCreationFiles = await fs.readdir(path.join(process.env.SHIBA_DATA_DIR!, 'meetings', 'audio')).catch(() => []);
+    assert.equal(failedCreationFiles.length, 0, 'failed meeting creation removes its owned audio');
     const uploaded = await meetings.saveMeetingAudio({ title: 'Launch sync', source: 'microphone', originalFilename: 'launch.webm', mime: 'audio/webm;codecs=opus', retentionDays: 30, consentConfirmed: true, stream: stream() });
     assert.equal(uploaded.status, 'uploaded');
     assert.equal(uploaded.audioAvailable, true);
     assert.equal(uploaded.audioBytes, bytes.byteLength);
     assert.match(uploaded.audioSha256, /^[a-f0-9]{64}$/);
     assert.equal(ledger.getTask(uploaded.taskId)?.status, 'queued');
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(uploaded.taskId);
+    assert.equal(ledger.getTask(uploaded.taskId), null, 'verifier creates a missing meeting task projection');
+    assert.equal(meetings.repairMissingMeetingTaskProjections(), 1, 'missing meeting task is reconstructed');
+    assert.equal(ledger.getTask(uploaded.taskId)?.status, 'queued', 'uploaded meeting recovers as queued work');
+    assert.equal(meetings.repairMissingMeetingTaskProjections(), 0, 'meeting task repair is idempotent');
+    const audioDeletedQueued = await meetings.saveMeetingAudio({ title: 'Delete queued audio', source: 'upload', originalFilename: 'delete-audio.webm', mime: 'audio/webm', retentionDays: 30, consentConfirmed: true, stream: stream() });
+    const audioDeleted = await meetings.deleteMeetingAudio(audioDeletedQueued.id);
+    assert.equal(audioDeleted.status, 'failed', 'deleting required queued audio terminates its owner state');
+    assert.equal(audioDeleted.audioAvailable, false);
+    assert.equal(ledger.getTask(audioDeletedQueued.taskId)?.status, 'cancelled', 'queued meeting task is cancelled atomically with user audio deletion');
+
+    const deletedQueued = await meetings.saveMeetingAudio({ title: 'Delete queued meeting', source: 'upload', originalFilename: 'delete-meeting.webm', mime: 'audio/webm', retentionDays: 30, consentConfirmed: true, stream: stream() });
+    await meetings.deleteMeeting(deletedQueued.id);
+    assert.equal(meetings.getMeeting(deletedQueued.id), null);
+    assert.equal(ledger.getTask(deletedQueued.taskId)?.status, 'cancelled', 'meeting deletion cancels its queued task');
+
+    const expiredQueued = await meetings.saveMeetingAudio({ title: 'Expire queued audio', source: 'upload', originalFilename: 'expire.webm', mime: 'audio/webm', retentionDays: 30, consentConfirmed: true, stream: stream() });
+    db.prepare('UPDATE meetings SET deleteAudioAt = ? WHERE id = ?').run(new Date(Date.now() - 1_000).toISOString(), expiredQueued.id);
+    assert.equal(await meetings.pruneExpiredMeetingAudio(), 1);
+    assert.equal(meetings.getMeeting(expiredQueued.id)?.status, 'failed');
+    assert.equal(ledger.getTask(expiredQueued.taskId)?.status, 'failed', 'retention cannot strand queued transcription work');
+
+    const interrupted = await meetings.saveMeetingAudio({ title: 'Interrupted meeting', source: 'upload', originalFilename: 'interrupted.webm', mime: 'audio/webm', retentionDays: 30, consentConfirmed: true, stream: stream() });
+    db.prepare("UPDATE meetings SET status = 'transcribing' WHERE id = ?").run(interrupted.id);
+    const interruptedTask = ledger.getTask(interrupted.taskId)!;
+    ledger.transitionTask({ taskId: interruptedTask.id, status: 'running', expectedVersion: interruptedTask.version });
+    assert.equal(meetings.reconcileInterruptedMeetings(), 1);
+    assert.equal(ledger.getTask(interrupted.taskId)?.status, 'lost', 'startup reconciliation settles interrupted meeting task');
+    assert.equal(meetings.repairMeetingTaskLifecycleProjections(), 0, 'meeting lifecycle repair is idempotent');
     const audioRoute = await import('../app/api/meetings/[id]/audio/route');
     const rangeResponse = await audioRoute.GET(new Request('http://localhost/audio', { headers: { Range: 'bytes=-4' } }), { params: Promise.resolve({ id: uploaded.id }) });
     assert.equal(rangeResponse.status, 206);
@@ -111,7 +161,6 @@ async function main() {
     const repeated = await meetings.createMeetingOutputs({ meetingId: ready.id, confirmed: true, actionItemIds: [ready.actionItems[0].id], createBoardCards: true, createRoutines: true, routineAgentId: 'agent-verifier' });
     assert.equal(repeated.length, 2, 'confirmed output creation is idempotent');
 
-    const db = dbModule.getDb();
     db.prepare('UPDATE meetings SET deleteAudioAt = ? WHERE id = ?').run(new Date(Date.now() - 1_000).toISOString(), ready.id);
     assert.equal(await meetings.pruneExpiredMeetingAudio(), 1);
     const retained = meetings.getMeeting(ready.id)!;

@@ -88,6 +88,12 @@ export interface NativeNodeJob {
   completedAt?: string;
 }
 
+export interface NativeNodeLifecycleRepairReport {
+  grantsRevoked: number;
+  jobsFailed: number;
+  captureStatesReset: number;
+}
+
 interface NodeRow {
   id: string;
   name: string;
@@ -429,11 +435,39 @@ export function listNativeNodes(): NativeNode[] {
 export function revokeNativeNode(id: string): NativeNode {
   ensureNativeNodeSchema();
   const now = nowIso();
-  const result = getDb().prepare('UPDATE native_nodes SET revokedAt = ?, captureState = \'idle\' WHERE id = ? AND revokedAt IS NULL').run(now, id);
-  if (Number(result.changes) !== 1) throw new NativeNodeError('Active native node not found', 404);
-  getDb().prepare('UPDATE native_node_grants SET revokedAt = ? WHERE nodeId = ? AND revokedAt IS NULL').run(now, id);
-  const node = rowToNode(getDb().prepare('SELECT * FROM native_nodes WHERE id = ?').get(id) as unknown as NodeRow);
-  audit('auth', 'native node revoked', node.name, { nodeId: node.id });
+  const db = getDb();
+  let node: NativeNode;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = db.prepare(`
+      UPDATE native_nodes SET revokedAt = ?, captureState = 'idle'
+      WHERE id = ? AND revokedAt IS NULL
+    `).run(now, id);
+    if (Number(result.changes) !== 1) throw new NativeNodeError('Active native node not found', 404);
+    db.prepare(`
+      UPDATE native_node_grants SET revokedAt = ?
+      WHERE nodeId = ? AND revokedAt IS NULL
+    `).run(now, id);
+    db.prepare(`
+      UPDATE native_node_jobs SET status = 'failed',
+        error = 'The native node was revoked before this job completed.',
+        leaseTokenHash = NULL, leaseExpiresAt = NULL,
+        completedAt = COALESCE(completedAt, ?), updatedAt = ?
+      WHERE nodeId = ? AND status IN ('queued', 'processing')
+    `).run(now, now, id);
+    node = rowToNode(db.prepare('SELECT * FROM native_nodes WHERE id = ?').get(id) as unknown as NodeRow);
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+  try {
+    audit('auth', 'native node revoked', node.name, { nodeId: node.id });
+  } catch (error) {
+    // The security boundary already committed. Audit failure must not make a
+    // successful revocation look retryable to the caller.
+    console.error('[native-nodes] could not audit node revocation', error);
+  }
   return node;
 }
 
@@ -509,12 +543,114 @@ export function listNativeNodeGrants(nodeId?: string): NativeNodeGrant[] {
 }
 
 export function revokeNativeNodeGrant(id: string): NativeNodeGrant {
+  ensureNativeNodeSchema();
   const now = nowIso();
-  const result = getDb().prepare('UPDATE native_node_grants SET revokedAt = ?, revision = revision + 1 WHERE id = ? AND revokedAt IS NULL').run(now, id);
-  if (Number(result.changes) !== 1) throw new NativeNodeError('Active native-node grant not found', 404);
-  const grant = rowToGrant(getDb().prepare('SELECT * FROM native_node_grants WHERE id = ?').get(id) as unknown as GrantRow);
-  audit('auth', 'native app grant revoked', grant.appLabel, { nodeId: grant.nodeId, grantId: grant.id });
+  const db = getDb();
+  let grant: NativeNodeGrant;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const row = db.prepare('SELECT * FROM native_node_grants WHERE id = ?').get(id) as unknown as GrantRow | undefined;
+    const result = db.prepare(`
+      UPDATE native_node_grants SET revokedAt = ?, revision = revision + 1
+      WHERE id = ? AND revokedAt IS NULL
+    `).run(now, id);
+    if (!row || Number(result.changes) !== 1) throw new NativeNodeError('Active native-node grant not found', 404);
+    db.prepare(`
+      UPDATE native_node_jobs SET status = 'failed',
+        error = 'The native-node grant was revoked before this job completed.',
+        leaseTokenHash = NULL, leaseExpiresAt = NULL,
+        completedAt = COALESCE(completedAt, ?), updatedAt = ?
+      WHERE grantId = ? AND status IN ('queued', 'processing')
+    `).run(now, now, id);
+    db.prepare(`
+      UPDATE native_nodes SET captureState = CASE WHEN EXISTS (
+        SELECT 1 FROM native_node_jobs job
+        WHERE job.nodeId = native_nodes.id AND job.status = 'processing'
+          AND job.action IN ('capture', 'click', 'type')
+      ) THEN 'active' ELSE 'idle' END
+      WHERE id = ?
+    `).run(row.nodeId);
+    grant = rowToGrant(db.prepare('SELECT * FROM native_node_grants WHERE id = ?').get(id) as unknown as GrantRow);
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+  try {
+    audit('auth', 'native app grant revoked', grant.appLabel, { nodeId: grant.nodeId, grantId: grant.id });
+  } catch (error) {
+    console.error('[native-nodes] could not audit grant revocation', error);
+  }
   return grant;
+}
+
+/**
+ * Converge historical crash windows and natural expiry without waiting for a
+ * node that can no longer authenticate to poll its queue.
+ */
+export function repairNativeNodeLifecycleProjections(at = new Date()): NativeNodeLifecycleRepairReport {
+  ensureNativeNodeSchema();
+  if (!Number.isFinite(at.getTime())) throw new Error('Invalid native-node lifecycle timestamp');
+  const now = at.toISOString();
+  const db = getDb();
+  const report: NativeNodeLifecycleRepairReport = {
+    grantsRevoked: 0,
+    jobsFailed: 0,
+    captureStatesReset: 0,
+  };
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    report.grantsRevoked = Number(db.prepare(`
+      UPDATE native_node_grants SET revokedAt = ?
+      WHERE revokedAt IS NULL AND EXISTS (
+        SELECT 1 FROM native_nodes node
+        WHERE node.id = native_node_grants.nodeId AND node.revokedAt IS NOT NULL
+      )
+    `).run(now).changes) || 0;
+    report.jobsFailed = Number(db.prepare(`
+      UPDATE native_node_jobs SET status = 'failed',
+        error = CASE WHEN EXISTS (
+          SELECT 1 FROM native_nodes node
+          WHERE node.id = native_node_jobs.nodeId
+            AND (node.revokedAt IS NOT NULL OR node.expiresAt <= ?)
+        ) THEN 'The native node is expired or revoked.'
+        ELSE 'The native-node grant is missing, expired, revoked, or changed.' END,
+        leaseTokenHash = NULL, leaseExpiresAt = NULL,
+        completedAt = COALESCE(completedAt, ?), updatedAt = ?
+      WHERE status IN ('queued', 'processing') AND (
+        EXISTS (
+          SELECT 1 FROM native_nodes node
+          WHERE node.id = native_node_jobs.nodeId
+            AND (node.revokedAt IS NOT NULL OR node.expiresAt <= ?)
+        ) OR (
+          grantId IS NOT NULL AND (
+            NOT EXISTS (SELECT 1 FROM native_node_grants grantRow WHERE grantRow.id = native_node_jobs.grantId)
+            OR EXISTS (
+              SELECT 1 FROM native_node_grants grantRow
+              WHERE grantRow.id = native_node_jobs.grantId
+                AND (grantRow.revokedAt IS NOT NULL OR grantRow.expiresAt <= ?
+                  OR grantRow.revision != native_node_jobs.grantRevision)
+            )
+          )
+        )
+      )
+    `).run(now, now, now, now, now).changes) || 0;
+    report.captureStatesReset = Number(db.prepare(`
+      UPDATE native_nodes SET captureState = 'idle'
+      WHERE captureState != 'idle' AND (
+        revokedAt IS NOT NULL OR expiresAt <= ? OR NOT EXISTS (
+          SELECT 1 FROM native_node_jobs job
+          WHERE job.nodeId = native_nodes.id AND job.status = 'processing'
+            AND job.action IN ('capture', 'click', 'type')
+        )
+      )
+    `).run(now).changes) || 0;
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+  return report;
 }
 
 export function canonicalNativeAction(value: unknown): string {
@@ -556,6 +692,9 @@ function boundedResultJson(value: Record<string, unknown>, maxBytes = 200_000): 
   result = {
     truncated: true,
     securityNotice: value.securityNotice,
+    // The screenshot is stored separately and this path is its ownership link.
+    // Dropping it while truncating the inline payload would orphan the file.
+    ...(typeof value.screenshotPath === 'string' ? { screenshotPath: value.screenshotPath } : {}),
     summary: 'Native helper result exceeded the storage limit; large fields were omitted.',
   };
   serialized = JSON.stringify(result);
@@ -748,6 +887,9 @@ export async function completeNativeNodeJob(
     ? payload.result as Record<string, unknown> : {};
   const screenshotPath = await saveScreenshot(row.id, rawResult.screenshotBase64);
   delete rawResult.screenshotBase64;
+  // File ownership is server-derived; a helper cannot inject an arbitrary
+  // local path into the stored result when no screenshot was accepted.
+  delete rawResult.screenshotPath;
   const capturedText = [rawResult.accessibilityText, rawResult.text].filter((value) => typeof value === 'string').join('\n').slice(0, 100_000);
   const scan = scanNativeCapturedText(capturedText);
   if (scan.risk === 'high') {

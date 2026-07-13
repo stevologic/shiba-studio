@@ -10,7 +10,7 @@ Every agent runs on this machine with full access: files and shell in its worksp
 
 - **Model** — any Cloud (xAI) or Local model; a provider badge shows which.
 - **Workspace** — the directory the agent works in. Enable **worktree** to give every run an isolated git worktree of the repo instead of the live checkout.
-- **Integration scopes** — per-agent switches for GitHub, Slack, Google Drive, Discord, X, Obsidian, Vercel, and Netlify. A scope both unlocks the matching tools *and* injects live context (an Obsidian-scoped agent gets its vault's contents in every run and chat; Vercel/Netlify-scoped agents see projects/sites and can deploy).
+- **Integration scopes** — per-agent switches for GitHub, Slack, Google Drive, Discord, X, Reddit, Obsidian, Vercel, and Netlify. A scope both unlocks the matching tools *and* injects live context (an Obsidian-scoped agent gets its vault's contents in every run and chat; Vercel/Netlify-scoped agents see projects/sites and can deploy).
 - **Skills** — reusable prompt capabilities from the Capabilities page, plus a free-form *chat Skill* that defines the agent's voice when you chat as it.
 - **Peers** — other agents it may message via `send_to_peer`; inboxes drain at the start of the next run.
 - **Schedules** — cron entries with their own instructions (see [Automations](automations.md)).

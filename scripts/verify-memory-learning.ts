@@ -18,6 +18,7 @@ async function main() {
   const memory = await import('../lib/agent-memory');
   const { getDb, closeDb } = await import('../lib/db');
   const { normalizeAgent } = await import('../lib/types');
+  const { saveAgents } = await import('../lib/persistence');
   const { learnFromCompletedRun } = await import('../lib/agent-learning');
   const { parseSlashCommand, slashCommandMatches, renderChatCommandHelp } = await import('../lib/chat-commands');
   const { toolNeedsApproval } = await import('../lib/tool-approval');
@@ -26,6 +27,17 @@ async function main() {
   const { POST: agentsPost } = await import('../app/api/agents/route');
 
   console.log('=== MEMORY + LEARNING VERIFICATION ===');
+
+  const agentFixture = (id: string, name: string) => normalizeAgent({
+    id, name, model: 'local:test',
+    workspace: { path: '.', useWorktree: false }, integrations: {}, peers: [], schedules: [],
+    learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  });
+  await saveAgents([
+    agentFixture('agent-a', 'Memory verifier'),
+    agentFixture('agent-b', 'Learning verifier'),
+  ]);
 
   const columns = (getDb().prepare('PRAGMA table_info(agent_memory)').all() as Array<{ name: string }>).map((row) => row.name);
   for (const name of ['kind', 'status', 'source', 'sourceId', 'confidence', 'pinned', 'createdAt', 'lastUsedAt', 'useCount']) {
@@ -96,12 +108,7 @@ async function main() {
   const approved = memory.updateMemory(learned[0].id, { status: 'active', pinned: true });
   assert(approved.status === 'active' && approved.pinned, 'pending memory can be approved and pinned');
 
-  const agent = normalizeAgent({
-    id: 'agent-b', name: 'Learner', model: 'local:test',
-    workspace: { path: '.', useWorktree: false }, integrations: {}, peers: [], schedules: [],
-    learning: { mode: 'review', autoRecall: true, maxMemories: 50 },
-    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-  });
+  const agent = agentFixture('agent-b', 'Learner');
   let learningRequest: { max_tokens: number; usageContext: { source: string; sourceId?: string } } | undefined;
   const extracted = await learnFromCompletedRun(agent, {
     id: 'run-2', prompt: 'Fix and verify the release workflow',

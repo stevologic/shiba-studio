@@ -7,6 +7,7 @@ import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import type { AppTab } from '@/lib/app-navigation';
 import type { Agent } from '@/lib/types';
 import { getLiveChatRun, listLiveChatSessionIds, subscribeLiveChatRuns } from '@/lib/chat-live-runs';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 
 interface MultitaskSidebarProps {
   agents: Agent[];
@@ -67,7 +68,11 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
       setLoaded(true);
       return;
     }
-    if (!force && multitaskCache.inflight) {
+    if (force) {
+      invalidateClientJson('/api/projects');
+      invalidateClientJson('/api/chat-sessions');
+    }
+    if (multitaskCache.inflight) {
       await multitaskCache.inflight;
       setProjects(multitaskCache.projects);
       setSessions(multitaskCache.sessions);
@@ -77,8 +82,8 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
     const run = (async () => {
       try {
         const [pRes, sRes] = await Promise.all([
-          fetch('/api/projects').then((r) => r.json()),
-          fetch('/api/chat-sessions').then((r) => r.json()),
+          loadClientJson<any>('/api/projects', { maxAgeMs: MULTITASK_TTL_MS }),
+          loadClientJson<any>('/api/chat-sessions', { maxAgeMs: MULTITASK_TTL_MS }),
         ]);
         if (pRes.ok) {
           multitaskCache.projects = (pRes.projects || []).slice(0, 5).map((p: { id: string; name: string }) => ({ id: p.id, name: p.name }));

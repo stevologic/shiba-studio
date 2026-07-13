@@ -1,10 +1,14 @@
 import type { ChildProcess } from 'child_process';
+import { randomBytes } from 'crypto';
 import type { ChatStreamEvent } from './chat-types';
 import { projectRoot } from './data-paths';
 import { parseModelRef } from './model-providers';
 import { terminateProcessTree } from './process-control';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
+const GROK_ISOLATED_HOME_PREFIX = 'shiba-grok-isolated-';
+const GROK_PROMPT_FILE_PREFIX = 'shiba-grok-cli-prompt-';
+const DEFAULT_TEMPORARY_RESOURCE_AGE_MS = 7 * 24 * 60 * 60_000;
 
 export interface GrokCliStatus {
   installed: boolean;
@@ -76,7 +80,7 @@ async function spawnCli(
       import('os'),
       import('path'),
     ]);
-    isolatedHome = await mkdtemp(path.join(os.tmpdir(), 'shiba-grok-isolated-'));
+    isolatedHome = await mkdtemp(path.join(os.tmpdir(), GROK_ISOLATED_HOME_PREFIX));
     env.HOME = isolatedHome;
     env.USERPROFILE = isolatedHome;
     env.LOCALAPPDATA = path.join(isolatedHome, 'local');
@@ -104,6 +108,69 @@ async function spawnCli(
 export function clearGrokCliStatusCache(): void {
   cachedStatus = null;
   cachedModels = null;
+}
+
+export interface GrokCliTemporaryResourceReport {
+  isolatedHomesRemoved: number;
+  promptFilesRemoved: number;
+  youngResourcesRetained: number;
+  errors: string[];
+}
+
+/**
+ * Reclaim crash-left CLI resources. Only direct children with the exact names
+ * produced above/below are eligible, and a long age grace prevents a live CLI
+ * process from losing its isolated HOME or prompt file.
+ */
+export async function reconcileGrokCliTemporaryResources(options: {
+  nowMs?: number;
+  minAgeMs?: number;
+  temporaryRoot?: string;
+} = {}): Promise<GrokCliTemporaryResourceReport> {
+  const [{ readdir, lstat, rm }, os, path] = await Promise.all([
+    import('fs/promises'),
+    import('os'),
+    import('path'),
+  ]);
+  const report: GrokCliTemporaryResourceReport = {
+    isolatedHomesRemoved: 0,
+    promptFilesRemoved: 0,
+    youngResourcesRetained: 0,
+    errors: [],
+  };
+  const nowMs = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+  const minAgeMs = Math.max(60_000, Number(options.minAgeMs) || DEFAULT_TEMPORARY_RESOURCE_AGE_MS);
+  const root = path.resolve(options.temporaryRoot || os.tmpdir());
+  const homePattern = /^shiba-grok-isolated-[A-Za-z0-9]{6}$/;
+  const promptPattern = /^shiba-grok-cli-prompt-\d{12,16}-[a-z0-9]{6,16}\.txt$/;
+  const entries = await readdir(root, { withFileTypes: true }).catch((error) => {
+    report.errors.push(`temporary root: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  });
+
+  for (const entry of entries) {
+    const isHome = entry.isDirectory() && homePattern.test(entry.name);
+    const isPrompt = entry.isFile() && promptPattern.test(entry.name);
+    if (!isHome && !isPrompt) continue;
+    const candidate = path.resolve(root, entry.name);
+    if (path.dirname(candidate) !== root) continue;
+    try {
+      const stat = await lstat(candidate);
+      if (stat.isSymbolicLink() || (isHome ? !stat.isDirectory() : !stat.isFile())) continue;
+      const age = nowMs - stat.mtimeMs;
+      if (!Number.isFinite(age) || age < minAgeMs) {
+        report.youngResourcesRetained += 1;
+        continue;
+      }
+      await rm(candidate, { recursive: isHome, force: true });
+      if (isHome) report.isolatedHomesRemoved += 1;
+      else report.promptFilesRemoved += 1;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
+      report.errors.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return report;
 }
 
 export interface GrokCliModels {
@@ -252,7 +319,7 @@ async function materializeCliArgs(opts: GrokCliRunOptions): Promise<{
   const path = await import('path');
   const file = path.join(
     os.tmpdir(),
-    `shiba-grok-cli-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.txt`,
+    `${GROK_PROMPT_FILE_PREFIX}${Date.now()}-${randomBytes(6).toString('hex')}.txt`,
   );
   await fs.writeFile(file, prompt, 'utf8');
   return {

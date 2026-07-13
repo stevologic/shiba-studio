@@ -19,6 +19,7 @@ import type {
   PackSourceType,
   PackSurface,
 } from './capability-pack-types';
+import { quarantineManagedPath } from './managed-storage-quarantine';
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 const VERSION_RE = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/i;
@@ -517,8 +518,143 @@ async function writeRegistry(manifest: CapabilityPackManifest, sourceHash: strin
   await fs.mkdir(dir, { recursive: true });
   const target = path.join(dir, 'pack.json');
   const temp = `${target}.${process.pid}.${randomUUID()}.tmp`;
-  await fs.writeFile(temp, `${JSON.stringify({ manifest, sourceHash, approvedPermissionKeys: grants }, null, 2)}\n`);
-  await fs.rename(temp, target);
+  try {
+    await fs.writeFile(temp, `${JSON.stringify({ manifest, sourceHash, approvedPermissionKeys: grants }, null, 2)}\n`);
+    await fs.rename(temp, target);
+  } finally {
+    await fs.rm(temp, { force: true }).catch(() => undefined);
+  }
+}
+
+export interface CapabilityPackRegistryIntegrityReport {
+  missingFilesRebuilt: number;
+  corruptFilesRebuilt: number;
+  unownedFilesQuarantined: number;
+  errors: string[];
+}
+
+/** Reconcile the on-disk runtime registry against its authoritative DB versions. */
+export async function reconcileCapabilityPackRegistry(options: {
+  nowMs?: number;
+  minOrphanAgeMs?: number;
+} = {}): Promise<CapabilityPackRegistryIntegrityReport> {
+  ensureCapabilityPackSchema();
+  const nowMs = options.nowMs ?? Date.now();
+  const minAge = Math.max(0, options.minOrphanAgeMs ?? 5 * 60_000);
+  const root = path.resolve(dataDir(), 'capability-packs', 'registry');
+  const report: CapabilityPackRegistryIntegrityReport = {
+    missingFilesRebuilt: 0,
+    corruptFilesRebuilt: 0,
+    unownedFilesQuarantined: 0,
+    errors: [],
+  };
+  const rows = getDb().prepare(`
+    SELECT packId, version, manifest, sourceHash, approvedPermissionKeys
+    FROM capability_pack_versions
+  `).all() as Array<{
+    packId: string;
+    version: string;
+    manifest: string;
+    sourceHash: string;
+    approvedPermissionKeys: string;
+  }>;
+  const expected = new Map<string, { manifest: CapabilityPackManifest; sourceHash: string; grants: string[] }>();
+  for (const row of rows) {
+    try {
+      const packId = id(row.packId);
+      if (!VERSION_RE.test(row.version)) throw new Error('invalid version');
+      const manifest = normalizeCapabilityPackManifest(JSON.parse(row.manifest));
+      if (manifest.id !== packId || manifest.version !== row.version) throw new Error('manifest identity differs from its DB owner');
+      const target = path.resolve(root, packId, row.version, 'pack.json');
+      if (!target.startsWith(`${root}${path.sep}`)) throw new Error('registry path escaped root');
+      expected.set(target, {
+        manifest,
+        sourceHash: row.sourceHash,
+        grants: parseJson<string[]>(row.approvedPermissionKeys, []),
+      });
+    } catch (error) {
+      report.errors.push(`${row.packId}@${row.version}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const hasCurrentDbOwner = (candidate: string): boolean => {
+    const relative = path.relative(root, candidate);
+    const segments = relative.split(path.sep);
+    if (segments.length !== 3 || segments[2] !== 'pack.json') return false;
+    return Boolean(getDb().prepare(`
+      SELECT 1 FROM capability_pack_versions WHERE packId = ? AND version = ?
+    `).get(segments[0], segments[1]));
+  };
+  for (const [target, owner] of expected) {
+    let rebuild: 'missing' | 'corrupt' | null = null;
+    try {
+      const parsed = JSON.parse(await fs.readFile(target, 'utf8')) as Record<string, unknown>;
+      if (canonical(parsed) !== canonical({
+        manifest: owner.manifest,
+        sourceHash: owner.sourceHash,
+        approvedPermissionKeys: owner.grants,
+      })) rebuild = 'corrupt';
+    } catch (error) {
+      rebuild = (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'missing' : 'corrupt';
+    }
+    if (!rebuild) continue;
+    try {
+      if (rebuild === 'corrupt') {
+        // The projection can be repaired concurrently after our first read.
+        // Re-read immediately before quarantine so we never move a newly
+        // corrected authoritative file based on stale observations.
+        try {
+          const latest = JSON.parse(await fs.readFile(target, 'utf8')) as Record<string, unknown>;
+          if (canonical(latest) === canonical({
+            manifest: owner.manifest,
+            sourceHash: owner.sourceHash,
+            approvedPermissionKeys: owner.grants,
+          })) continue;
+        } catch {
+          // Still absent or malformed; the authoritative rewrite below wins.
+        }
+        const exists = await fs.lstat(target).catch(() => null);
+        if (exists) await quarantineManagedPath(target, 'corrupt_capability_pack_registry', {}, nowMs);
+      }
+      await writeRegistry(owner.manifest, owner.sourceHash, owner.grants);
+      if (rebuild === 'missing') report.missingFilesRebuilt += 1;
+      else report.corruptFilesRebuilt += 1;
+    } catch (error) {
+      report.errors.push(`${path.relative(root, target)}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const walk = async (directory: string): Promise<void> => {
+    const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      const candidate = path.resolve(directory, entry.name);
+      if (!candidate.startsWith(`${root}${path.sep}`)) continue;
+      if (entry.isDirectory()) {
+        await walk(candidate);
+        // Empty directories are harmless. Removing them races activation's
+        // mkdir -> temporary-write window and can make a valid install fail.
+        continue;
+      }
+      if (expected.has(candidate)) continue;
+      try {
+        const stat = await fs.lstat(candidate);
+        // A version may have committed after the initial DB snapshot. Recheck
+        // ownership immediately before the destructive quarantine decision.
+        if (hasCurrentDbOwner(candidate)) continue;
+        // An explicit zero disables the grace period even on filesystems whose
+        // sub-millisecond mtime rounds a fraction ahead of Date.now().
+        if (minAge > 0 && nowMs - stat.mtimeMs < minAge) continue;
+        await quarantineManagedPath(candidate, 'unowned_capability_pack_registry', {}, nowMs);
+        report.unownedFilesQuarantined += 1;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
+        report.errors.push(`${path.relative(root, candidate)}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  };
+  await walk(root).catch((error) => report.errors.push(error instanceof Error ? error.message : String(error)));
+  return report;
 }
 
 export async function activateCapabilityPackProposal(proposalId: string, approvedPermissionKeys: string[]): Promise<CapabilityPackRecord> {
@@ -533,22 +669,42 @@ export async function activateCapabilityPackProposal(proposalId: string, approve
   if (!proposal.scan.passed) throw new Error('Security scan must pass before activation');
   if (!proposal.tests.passed) throw new Error('Pack tests must pass before activation');
   if (!proposal.setup.passed) throw new Error('Required setup checks must pass before activation');
-  const existing = getCapabilityPack(proposal.packId);
-  const existingGrants = new Set(existing?.grantedPermissionKeys || []);
   const approved = new Set(approvedPermissionKeys);
-  const missing = proposal.requestedPermissionKeys.filter((key) => !existingGrants.has(key) && !approved.has(key));
-  if (missing.length) throw new Error(`Explicit approval is required for ${missing.length} new or broadened permission(s)`);
-  const grants = unique(proposal.requestedPermissionKeys.filter((key) => existingGrants.has(key) || approved.has(key)));
-  await writeRegistry(proposal.manifest, proposal.sourceHash, grants);
   const now = nowIso();
   const db = getDb();
+  let registryManifest = proposal.manifest;
+  let registrySourceHash = proposal.sourceHash;
+  let grants: string[] = [];
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare(`INSERT INTO capability_pack_versions
+    const currentPack = db.prepare('SELECT grantedPermissionKeys FROM capability_packs WHERE id = ?')
+      .get(proposal.packId) as { grantedPermissionKeys: string } | undefined;
+    const existingGrants = new Set(parseJson<string[]>(currentPack?.grantedPermissionKeys || '[]', []));
+    const missing = proposal.requestedPermissionKeys.filter((key) => !existingGrants.has(key) && !approved.has(key));
+    if (missing.length) throw new Error(`Explicit approval is required for ${missing.length} new or broadened permission(s)`);
+    grants = unique(proposal.requestedPermissionKeys.filter((key) => existingGrants.has(key) || approved.has(key)));
+    const versionInsert = db.prepare(`INSERT INTO capability_pack_versions
       (packId, version, manifest, sourceHash, approvedPermissionKeys, proposalId, createdAt)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(packId, version) DO NOTHING`)
       .run(proposal.packId, proposal.version, JSON.stringify(proposal.manifest), proposal.sourceHash, JSON.stringify(grants), proposal.id, now);
+    if (Number(versionInsert.changes) === 0) {
+      const owner = db.prepare(`
+        SELECT manifest, sourceHash, approvedPermissionKeys FROM capability_pack_versions
+        WHERE packId = ? AND version = ?
+      `).get(proposal.packId, proposal.version) as {
+        manifest: string;
+        sourceHash: string;
+        approvedPermissionKeys: string;
+      } | undefined;
+      if (!owner) throw new Error('Capability pack version owner disappeared during activation');
+      registryManifest = normalizeCapabilityPackManifest(JSON.parse(owner.manifest));
+      if (canonical(registryManifest) !== canonical(proposal.manifest)) {
+        throw new Error('Pack versions are immutable; choose a new version');
+      }
+      registrySourceHash = owner.sourceHash;
+      grants = parseJson<string[]>(owner.approvedPermissionKeys, []);
+    }
     db.prepare(`INSERT INTO capability_packs
       (id, name, description, status, activeVersion, previousVersion, grantedPermissionKeys, sourceType, sourceRef, sourceHash,
        staleAt, createdAt, updatedAt)
@@ -557,11 +713,22 @@ export async function activateCapabilityPackProposal(proposalId: string, approve
        previousVersion = capability_packs.activeVersion, activeVersion = excluded.activeVersion,
        grantedPermissionKeys = excluded.grantedPermissionKeys, sourceType = excluded.sourceType,
        sourceRef = excluded.sourceRef, sourceHash = excluded.sourceHash, staleAt = excluded.staleAt, updatedAt = excluded.updatedAt`)
-      .run(proposal.packId, proposal.manifest.name, proposal.manifest.description, proposal.version, JSON.stringify(grants),
-        proposal.sourceType, proposal.sourceRef, proposal.sourceHash, staleAt(), now, now);
-    db.prepare("UPDATE capability_pack_proposals SET status = 'activated', reviewedAt = ? WHERE id = ?").run(now, proposal.id);
+      .run(proposal.packId, registryManifest.name, registryManifest.description, proposal.version, JSON.stringify(grants),
+        proposal.sourceType, proposal.sourceRef, registrySourceHash, staleAt(), now, now);
+    const proposalUpdate = db.prepare(`
+      UPDATE capability_pack_proposals SET status = 'activated', reviewedAt = ?
+      WHERE id = ? AND status = 'proposed'
+    `).run(now, proposal.id);
+    if (Number(proposalUpdate.changes) !== 1) throw new Error('Capability pack proposal is no longer pending');
     db.exec('COMMIT');
   } catch (error) { try { db.exec('ROLLBACK'); } catch { /* no transaction */ } throw error; }
+  try {
+    await writeRegistry(registryManifest, registrySourceHash, grants);
+  } catch (error) {
+    // Registry bytes are a derived projection. The periodic integrity pass can
+    // rebuild them, so a post-commit filesystem failure is not retryable.
+    console.error(`[capability-packs] registry write deferred for ${proposal.packId}@${proposal.version}`, error);
+  }
   return getCapabilityPack(proposal.packId)!;
 }
 
@@ -585,10 +752,15 @@ export async function rollbackCapabilityPack(packId: string, version: string): P
   const unsupported = capabilityPackRuntimeIssues(manifest);
   if (unsupported.length) throw new Error(`Capability pack rollback cannot activate unsupported ${unsupported.join(', ')}`);
   const grants = parseJson<string[]>(row.approvedPermissionKeys, []);
-  await writeRegistry(manifest, row.sourceHash, grants);
-  getDb().prepare(`UPDATE capability_packs SET previousVersion = activeVersion, activeVersion = ?, name = ?, description = ?,
+  const update = getDb().prepare(`UPDATE capability_packs SET previousVersion = activeVersion, activeVersion = ?, name = ?, description = ?,
     status = 'active', grantedPermissionKeys = ?, sourceHash = ?, staleAt = ?, updatedAt = ? WHERE id = ?`)
     .run(version, manifest.name, manifest.description, JSON.stringify(grants), row.sourceHash, staleAt(), nowIso(), packId);
+  if (Number(update.changes) !== 1) throw new Error('Capability pack disappeared during rollback');
+  try {
+    await writeRegistry(manifest, row.sourceHash, grants);
+  } catch (error) {
+    console.error(`[capability-packs] rollback registry write deferred for ${packId}@${version}`, error);
+  }
   return getCapabilityPack(packId)!;
 }
 

@@ -12,6 +12,7 @@ import {
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import BoardSyncModal from '@/components/board-sync-modal';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 import { toast } from '@/lib/toast';
 import { subscribeLiveEvents } from '@/lib/live-events';
 import type { BoardStatus, BoardTask } from '@/lib/board-types';
@@ -187,6 +188,11 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   const composerRef = useRef<HTMLInputElement | null>(null);
   const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
   const lastOpenCountRef = useRef<number | null>(null);
+  const onOpenCountChangedRef = useRef(onOpenCountChanged);
+
+  useEffect(() => {
+    onOpenCountChangedRef.current = onOpenCountChanged;
+  }, [onOpenCountChanged]);
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
@@ -232,10 +238,10 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     }
   }
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (ensureLatest = true) => {
+    if (ensureLatest) invalidateClientJson('/api/board');
     try {
-      const res = await fetch('/api/board');
-      const data = await res.json();
+      const data = await loadClientJson<{ ok?: boolean; tasks?: BoardTask[] }>('/api/board');
       if (data.ok && Array.isArray(data.tasks)) {
         setTasks(data.tasks);
         // Nav badge shows the open count — nudge the shell only when it moves
@@ -244,23 +250,25 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
           (t) => t.status === 'backlog' || t.status === 'todo' || t.status === 'in_progress',
         ).length;
         if (lastOpenCountRef.current !== null && lastOpenCountRef.current !== open) {
-          onOpenCountChanged?.();
+          onOpenCountChangedRef.current?.();
         }
         lastOpenCountRef.current = open;
       }
     } catch { /* keep last board */ }
     setLoaded(true);
-  }, [onOpenCountChanged]);
+  }, []);
 
   // Projects (for the card → project link). Loaded once on mount.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/projects');
-        const data = await res.json();
+        const data = await loadClientJson<{
+          ok?: boolean;
+          projects?: Array<{ id: string; name: string }>;
+        }>('/api/projects');
         if (!cancelled && data.ok && Array.isArray(data.projects)) {
-          setProjects(data.projects.map((p: { id: string; name: string }) => ({ id: p.id, name: p.name })));
+          setProjects(data.projects.map((p) => ({ id: p.id, name: p.name })));
         }
       } catch { /* project link is optional */ }
     })();
@@ -272,7 +280,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   // a fallback for a dropped stream. First load goes through a 0ms timer —
   // the compiler lint forbids synchronous state work directly in the effect.
   useEffect(() => {
-    const first = setTimeout(() => void refresh(), 0);
+    const first = setTimeout(() => void refresh(false), 0);
     let burst: ReturnType<typeof setTimeout> | null = null;
     const unsubscribe = subscribeLiveEvents(['board'], () => {
       if (burst) clearTimeout(burst);
@@ -280,7 +288,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     });
     const t = setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
-    }, 15_000);
+    }, 120_000);
     return () => {
       clearTimeout(first);
       if (burst) clearTimeout(burst);

@@ -15,6 +15,9 @@ import { execFile } from 'child_process';
 const SANDBOX_IMAGE = process.env.SHIBA_SANDBOX_IMAGE || 'alpine:3.22';
 const SANDBOX_PREFIX = 'shiba-sandbox-';
 const SANDBOX_WORKDIR = '/work';
+const SANDBOX_OWNER_LABEL = 'shiba.sandbox';
+const SANDBOX_OWNER_VALUE = '1';
+const SANDBOX_AGENT_LABEL = 'shiba.agent';
 const DEFAULT_EXEC_TIMEOUT_SEC = 60;
 const MAX_EXEC_TIMEOUT_SEC = 300;
 const OUTPUT_CAP = 200_000; // bytes kept from a single exec before clipping
@@ -64,11 +67,33 @@ export interface SandboxStatus {
   error?: string;
 }
 
+interface DockerResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+type DockerRunner = (
+  args: string[],
+  opts?: { timeoutMs?: number; input?: string },
+) => Promise<DockerResult>;
+
+// Narrow deterministic seam for the standalone verifier. Production callers
+// never set this; it lets destructive ownership checks run without Docker.
+let dockerRunnerForTests: DockerRunner | null = null;
+
+export function __setSandboxDockerRunnerForTests(runner: DockerRunner | null): void {
+  dockerRunnerForTests = runner;
+  dockerProbe = null;
+}
+
 /** Run the docker CLI. Never throws — failures come back as { code, stderr }. */
 function docker(
   args: string[],
   opts: { timeoutMs?: number; input?: string } = {},
-): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+): Promise<DockerResult> {
+  if (dockerRunnerForTests) return dockerRunnerForTests(args, opts);
   return new Promise((resolve) => {
     const child = execFile(
       'docker',
@@ -110,6 +135,46 @@ export async function detectDocker(): Promise<{ available: boolean; version?: st
 const DOCKER_MISSING_MSG =
   'Docker is not available on this machine (install/start Docker Desktop to give agents their sandbox containers).';
 
+type DockerLabels = Record<string, string>;
+
+interface DockerContainerInspect {
+  Id?: string;
+  Name?: string;
+  State?: { Running?: boolean };
+  Config?: { Image?: string; Labels?: DockerLabels | null };
+  HostConfig?: { Memory?: number; NanoCpus?: number };
+}
+
+function parseInspectRecord<T>(stdout: string): T | null {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const record = Array.isArray(parsed) ? parsed[0] : parsed;
+    return record && typeof record === 'object' ? record as T : null;
+  } catch {
+    return null;
+  }
+}
+
+function isMissingDockerObject(result: Pick<DockerResult, 'stderr'>): boolean {
+  return /no such (?:object|container|volume|network)|not found/i.test(result.stderr);
+}
+
+function hasSandboxOwnership(labels: DockerLabels | null | undefined, agentId?: string): boolean {
+  if (labels?.[SANDBOX_OWNER_LABEL] !== SANDBOX_OWNER_VALUE) return false;
+  return agentId === undefined || labels[SANDBOX_AGENT_LABEL] === agentId;
+}
+
+async function inspectContainer(reference: string): Promise<{
+  result: DockerResult;
+  record: DockerContainerInspect | null;
+}> {
+  const result = await docker(['inspect', reference], { timeoutMs: 10_000 });
+  return {
+    result,
+    record: result.code === 0 ? parseInspectRecord<DockerContainerInspect>(result.stdout) : null,
+  };
+}
+
 /* ── Container lifecycle ──────────────────────────────────────────────── */
 
 /** Docker names allow [a-zA-Z0-9][a-zA-Z0-9_.-]; agent ids are uuids, but sanitize anyway. */
@@ -131,34 +196,57 @@ export async function ensureSandbox(agentId: string): Promise<{ ok: boolean; cre
   if (!probe.available) return { ok: false, error: DOCKER_MISSING_MSG };
 
   const name = sandboxContainerName(agentId);
+  const inspected = await inspectContainer(name);
+  if (inspected.result.code === 0) {
+    const existing = inspected.record;
+    if (!existing) {
+      return { ok: false, error: 'Docker returned invalid sandbox inspection data; retry later.' };
+    }
+    if (!hasSandboxOwnership(existing.Config?.Labels, agentId)) {
+      return {
+        ok: false,
+        error: `Refusing to use container ${name}: its ownership labels do not match agent ${agentId}.`,
+      };
+    }
+
+    const limits = await sandboxLimits();
+    const memArgs = ['--memory', `${limits.memoryMb}m`, '--memory-swap', `${limits.memoryMb * 2}m`, '--cpus', String(limits.cpus)];
+    if (
+      Number(existing.HostConfig?.Memory) !== limits.memoryMb * 1024 * 1024
+      || Number(existing.HostConfig?.NanoCpus) !== Math.round(limits.cpus * 1e9)
+    ) {
+      await docker(['update', ...memArgs, existing.Id || name], { timeoutMs: 20_000 });
+    }
+    if (!existing.State?.Running) {
+      const start = await docker(['start', existing.Id || name], { timeoutMs: 30_000 });
+      if (start.code !== 0) {
+        return { ok: false, error: `Failed to start sandbox container: ${start.stderr.trim() || 'unknown error'}` };
+      }
+    }
+    const workdir = await docker(['exec', existing.Id || name, 'mkdir', '-p', SANDBOX_WORKDIR], { timeoutMs: 15_000 });
+    return workdir.code === 0
+      ? { ok: true }
+      : { ok: false, error: `Failed to prepare sandbox work directory: ${workdir.stderr.trim() || 'unknown error'}` };
+  }
+  if (!isMissingDockerObject(inspected.result)) {
+    return {
+      ok: false,
+      error: `Failed to inspect sandbox container: ${inspected.result.stderr.trim() || 'unknown error'}`,
+    };
+  }
+
   const limits = await sandboxLimits();
   // Swap is pinned to 2× memory so raising the memory limit via `docker
   // update` never trips the "memory > memoryswap" rejection.
   const memArgs = ['--memory', `${limits.memoryMb}m`, '--memory-swap', `${limits.memoryMb * 2}m`, '--cpus', String(limits.cpus)];
-
-  const inspect = await docker(
-    ['inspect', '-f', '{{.State.Running}} {{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}', name],
-    { timeoutMs: 10_000 },
-  );
-  if (inspect.code === 0) {
-    const [running, memBytes, nanoCpus] = inspect.stdout.trim().split(/\s+/);
-    if (Number(memBytes) !== limits.memoryMb * 1024 * 1024 || Number(nanoCpus) !== Math.round(limits.cpus * 1e9)) {
-      await docker(['update', ...memArgs, name], { timeoutMs: 20_000 }); // best-effort reconcile
-    }
-    if (running === 'true') return { ok: true };
-    const start = await docker(['start', name], { timeoutMs: 30_000 });
-    return start.code === 0
-      ? { ok: true }
-      : { ok: false, error: `Failed to start sandbox container: ${start.stderr.trim() || 'unknown error'}` };
-  }
 
   const run = await docker(
     [
       'run', '-d',
       '--name', name,
       '--hostname', 'sandbox',
-      '--label', 'shiba.sandbox=1',
-      '--label', `shiba.agent=${agentId}`,
+      '--label', `${SANDBOX_OWNER_LABEL}=${SANDBOX_OWNER_VALUE}`,
+      '--label', `${SANDBOX_AGENT_LABEL}=${agentId}`,
       // Runaway protection — an agent experiment can't starve the host.
       ...memArgs,
       '--pids-limit', '256',
@@ -171,8 +259,14 @@ export async function ensureSandbox(agentId: string): Promise<{ ok: boolean; cre
   if (run.code !== 0) {
     return { ok: false, error: `Failed to create sandbox container: ${run.stderr.trim() || 'unknown error'}` };
   }
-  await docker(['exec', name, 'mkdir', '-p', SANDBOX_WORKDIR], { timeoutMs: 15_000 });
-  return { ok: true, created: true };
+  const workdir = await docker(['exec', name, 'mkdir', '-p', SANDBOX_WORKDIR], { timeoutMs: 15_000 });
+  return workdir.code === 0
+    ? { ok: true, created: true }
+    : {
+        ok: false,
+        created: true,
+        error: `Sandbox was created but its work directory could not be prepared: ${workdir.stderr.trim() || 'unknown error'}`,
+      };
 }
 
 /**
@@ -239,16 +333,281 @@ export async function sandboxStatus(agentId: string): Promise<SandboxStatus> {
   if (!probe.available) {
     return { available: false, exists: false, running: false, name, error: DOCKER_MISSING_MSG };
   }
-  const r = await docker(['inspect', '-f', '{{.State.Running}} {{.Config.Image}}', name], { timeoutMs: 10_000 });
-  if (r.code !== 0) return { available: true, exists: false, running: false, name };
-  const [running, image] = r.stdout.trim().split(/\s+/);
-  return { available: true, exists: true, running: running === 'true', name, image };
+  const inspected = await inspectContainer(name);
+  if (inspected.result.code !== 0) {
+    return isMissingDockerObject(inspected.result)
+      ? { available: true, exists: false, running: false, name }
+      : {
+          available: true,
+          exists: false,
+          running: false,
+          name,
+          error: inspected.result.stderr.trim() || 'Failed to inspect sandbox container',
+        };
+  }
+  const record = inspected.record;
+  if (!record) {
+    return { available: true, exists: false, running: false, name, error: 'Docker returned invalid inspection data' };
+  }
+  if (!hasSandboxOwnership(record.Config?.Labels, agentId)) {
+    return {
+      available: true,
+      exists: false,
+      running: false,
+      name,
+      error: 'A container with this name exists but is not owned by this agent',
+    };
+  }
+  return {
+    available: true,
+    exists: true,
+    running: record.State?.Running === true,
+    name,
+    image: record.Config?.Image,
+  };
 }
 
-/** Remove the agent's container (used when the agent is deleted). Best-effort. */
-export async function removeSandbox(agentId: string): Promise<{ ok: boolean; removed: boolean }> {
+export interface SandboxRemovalResult {
+  ok: boolean;
+  removed: boolean;
+  retryable?: boolean;
+  ownershipConflict?: boolean;
+  error?: string;
+}
+
+/** Remove an agent's exactly-labelled container. Never deletes by name alone. */
+export async function removeSandbox(agentId: string): Promise<SandboxRemovalResult> {
   const probe = await detectDocker();
-  if (!probe.available) return { ok: false, removed: false };
-  const r = await docker(['rm', '-f', sandboxContainerName(agentId)], { timeoutMs: 30_000 });
-  return { ok: true, removed: r.code === 0 };
+  if (!probe.available) {
+    return { ok: false, removed: false, retryable: true, error: DOCKER_MISSING_MSG };
+  }
+
+  const name = sandboxContainerName(agentId);
+  const inspected = await inspectContainer(name);
+  if (inspected.result.code !== 0) {
+    if (isMissingDockerObject(inspected.result)) return { ok: true, removed: false };
+    return {
+      ok: false,
+      removed: false,
+      retryable: true,
+      error: inspected.result.stderr.trim() || 'Failed to inspect sandbox container',
+    };
+  }
+  const record = inspected.record;
+  if (!record) {
+    return { ok: false, removed: false, retryable: true, error: 'Docker returned invalid inspection data' };
+  }
+  if (!hasSandboxOwnership(record.Config?.Labels, agentId)) {
+    return {
+      ok: false,
+      removed: false,
+      ownershipConflict: true,
+      error: `Refusing to remove ${name}: its ownership labels do not match agent ${agentId}.`,
+    };
+  }
+
+  const removed = await docker(['container', 'rm', '-f', record.Id || name], { timeoutMs: 30_000 });
+  if (removed.code === 0) return { ok: true, removed: true };
+  if (isMissingDockerObject(removed)) return { ok: true, removed: false };
+  return {
+    ok: false,
+    removed: false,
+    retryable: true,
+    error: removed.stderr.trim() || 'Failed to remove sandbox container',
+  };
+}
+
+export type SandboxResourceKind = 'container' | 'network' | 'volume';
+export type SandboxReconciliationAction = 'kept' | 'removed' | 'ignored' | 'retry_pending';
+
+export interface SandboxReconciliationItem {
+  kind: SandboxResourceKind;
+  id: string;
+  name?: string;
+  agentId?: string;
+  action: SandboxReconciliationAction;
+  reason?: string;
+  error?: string;
+}
+
+export interface SandboxReconciliationReport {
+  status: 'ok' | 'retry_pending';
+  dockerAvailable: boolean;
+  retryable: boolean;
+  scanned: number;
+  owned: number;
+  kept: number;
+  removed: number;
+  ignored: number;
+  retryPending: number;
+  items: SandboxReconciliationItem[];
+  errors: string[];
+}
+
+interface DockerResourceInspect {
+  Id?: string;
+  Name?: string;
+  Labels?: DockerLabels | null;
+  Config?: { Labels?: DockerLabels | null };
+}
+
+interface SandboxResourceSpec {
+  kind: SandboxResourceKind;
+  listArgs: string[];
+  inspectArgs: (id: string) => string[];
+  removeArgs: (id: string) => string[];
+  labels: (record: DockerResourceInspect) => DockerLabels | null | undefined;
+}
+
+const SANDBOX_RESOURCE_SPECS: readonly SandboxResourceSpec[] = [
+  {
+    kind: 'container',
+    listArgs: ['container', 'ls', '-aq', '--filter', `label=${SANDBOX_OWNER_LABEL}=${SANDBOX_OWNER_VALUE}`],
+    inspectArgs: (id) => ['container', 'inspect', id],
+    removeArgs: (id) => ['container', 'rm', '-f', id],
+    labels: (record) => record.Config?.Labels,
+  },
+  {
+    kind: 'network',
+    listArgs: ['network', 'ls', '-q', '--filter', `label=${SANDBOX_OWNER_LABEL}=${SANDBOX_OWNER_VALUE}`],
+    inspectArgs: (id) => ['network', 'inspect', id],
+    removeArgs: (id) => ['network', 'rm', id],
+    labels: (record) => record.Labels,
+  },
+  {
+    kind: 'volume',
+    listArgs: ['volume', 'ls', '-q', '--filter', `label=${SANDBOX_OWNER_LABEL}=${SANDBOX_OWNER_VALUE}`],
+    inspectArgs: (id) => ['volume', 'inspect', id],
+    removeArgs: (id) => ['volume', 'rm', id],
+    labels: (record) => record.Labels,
+  },
+] as const;
+
+/**
+ * Remove Docker resources left behind by deleted agents or interrupted
+ * deletion. Inventory and deletion are label-gated; a matching name or prefix
+ * is never sufficient. Failures remain visible as retryable work so the
+ * periodic integrity pass can safely run this again.
+ */
+export async function reconcileOrphanedSandboxResources(
+  validAgentIds: Iterable<string>,
+): Promise<SandboxReconciliationReport> {
+  const validAgents = new Set(Array.from(validAgentIds, (id) => String(id)));
+  const report: SandboxReconciliationReport = {
+    status: 'ok',
+    dockerAvailable: true,
+    retryable: false,
+    scanned: 0,
+    owned: 0,
+    kept: 0,
+    removed: 0,
+    ignored: 0,
+    retryPending: 0,
+    items: [],
+    errors: [],
+  };
+
+  const probe = await detectDocker();
+  if (!probe.available) {
+    return {
+      ...report,
+      status: 'retry_pending',
+      dockerAvailable: false,
+      retryable: true,
+      retryPending: 1,
+      errors: [DOCKER_MISSING_MSG],
+    };
+  }
+
+  for (const spec of SANDBOX_RESOURCE_SPECS) {
+    const listed = await docker(spec.listArgs, { timeoutMs: 30_000 });
+    if (listed.code !== 0) {
+      const error = `${spec.kind} inventory failed: ${listed.stderr.trim() || 'unknown Docker error'}`;
+      report.retryPending += 1;
+      report.errors.push(error);
+      report.items.push({ kind: spec.kind, id: '', action: 'retry_pending', error });
+      continue;
+    }
+
+    const ids = Array.from(new Set(
+      listed.stdout.split(/\r?\n/).map((id) => id.trim()).filter(Boolean),
+    ));
+    for (const id of ids) {
+      report.scanned += 1;
+      const inspected = await docker(spec.inspectArgs(id), { timeoutMs: 15_000 });
+      if (inspected.code !== 0) {
+        // Another reconciler or a human may have removed it after inventory.
+        if (isMissingDockerObject(inspected)) continue;
+        const error = inspected.stderr.trim() || 'Docker inspection failed';
+        report.retryPending += 1;
+        report.errors.push(`${spec.kind} ${id}: ${error}`);
+        report.items.push({ kind: spec.kind, id, action: 'retry_pending', error });
+        continue;
+      }
+
+      const record = parseInspectRecord<DockerResourceInspect>(inspected.stdout);
+      if (!record) {
+        const error = 'Docker returned invalid inspection data';
+        report.retryPending += 1;
+        report.errors.push(`${spec.kind} ${id}: ${error}`);
+        report.items.push({ kind: spec.kind, id, action: 'retry_pending', error });
+        continue;
+      }
+
+      const labels = spec.labels(record);
+      const name = record.Name?.replace(/^\//, '') || undefined;
+      if (!hasSandboxOwnership(labels)) {
+        report.ignored += 1;
+        report.items.push({
+          kind: spec.kind,
+          id,
+          name,
+          action: 'ignored',
+          reason: 'ownership_label_mismatch',
+        });
+        continue;
+      }
+
+      report.owned += 1;
+      const agentId = labels?.[SANDBOX_AGENT_LABEL];
+      if (agentId && validAgents.has(agentId)) {
+        report.kept += 1;
+        report.items.push({ kind: spec.kind, id, name, agentId, action: 'kept' });
+        continue;
+      }
+
+      const removed = await docker(spec.removeArgs(record.Id || record.Name || id), { timeoutMs: 30_000 });
+      if (removed.code === 0 || isMissingDockerObject(removed)) {
+        report.removed += 1;
+        report.items.push({
+          kind: spec.kind,
+          id,
+          name,
+          agentId,
+          action: 'removed',
+          reason: agentId ? 'agent_deleted' : 'missing_agent_label',
+        });
+        continue;
+      }
+
+      const error = removed.stderr.trim() || 'Docker removal failed';
+      report.retryPending += 1;
+      report.errors.push(`${spec.kind} ${id}: ${error}`);
+      report.items.push({
+        kind: spec.kind,
+        id,
+        name,
+        agentId,
+        action: 'retry_pending',
+        reason: agentId ? 'agent_deleted' : 'missing_agent_label',
+        error,
+      });
+    }
+  }
+
+  if (report.retryPending > 0) {
+    report.status = 'retry_pending';
+    report.retryable = true;
+  }
+  return report;
 }

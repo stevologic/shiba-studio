@@ -9,6 +9,7 @@ import {
   SelectableModel,
   supportsReasoning,
 } from './model-providers';
+import type { AppConfig } from './types';
 
 export const XAI_BASE = 'https://api.x.ai/v1';
 
@@ -145,11 +146,14 @@ export function expandModelSelectableIds(models: XaiModelInfo[]): XaiModelInfo[]
   return expanded.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-export async function listGrokModels(key?: string): Promise<{ ok: boolean; models: XaiModelInfo[]; error?: string }> {
+export async function listGrokModels(
+  key?: string,
+  keySource?: 'api_key' | 'oauth',
+): Promise<{ ok: boolean; models: XaiModelInfo[]; error?: string }> {
   try {
     const { fetchCloudWithAuth } = await import('./xai-oauth');
 
-    const langRes = await fetchCloudWithAuth(`${XAI_BASE}/language-models`, { method: 'GET' }, { keyOverride: key });
+    const langRes = await fetchCloudWithAuth(`${XAI_BASE}/language-models`, { method: 'GET' }, { keyOverride: key, keySource });
     if (langRes.ok) {
       const data = await langRes.json();
       const parsed = parseXaiModelList(data);
@@ -158,7 +162,7 @@ export async function listGrokModels(key?: string): Promise<{ ok: boolean; model
       }
     }
 
-    const res = await fetchCloudWithAuth(`${XAI_BASE}/models`, { method: 'GET' }, { keyOverride: key });
+    const res = await fetchCloudWithAuth(`${XAI_BASE}/models`, { method: 'GET' }, { keyOverride: key, keySource });
     if (!res.ok) {
       const txt = await res.text();
       return { ok: false, models: [], error: `${res.status} ${txt}` };
@@ -222,11 +226,16 @@ export async function listLocalGrokModels(baseUrl?: string): Promise<{ ok: boole
   }
 }
 
-export async function listAllSelectableModels(cfg?: {
-  xaiApiKey?: string;
-  localGrokEnabled?: boolean;
-  localGrokBaseUrl?: string;
-}): Promise<{
+export async function listAllSelectableModels(
+  cfg?: AppConfig,
+  resolvedAuth?: {
+    token: string | null;
+    source: 'api_key' | 'oauth' | null;
+    hasCloudAuth: boolean;
+    hasApiKey: boolean;
+    hasOAuth: boolean;
+  },
+): Promise<{
   ok: boolean;
   models: SelectableModel[];
   cloudError?: string;
@@ -236,18 +245,16 @@ export async function listAllSelectableModels(cfg?: {
   localReachable: boolean;
 }> {
   const { loadConfig } = await import('./persistence');
-  const config = cfg ? { ...(await loadConfig()), ...cfg } : (await loadConfig());
+  const config = cfg ?? await loadConfig();
   const models: SelectableModel[] = [];
   let cloudError: string | undefined;
   let localError: string | undefined;
   let localReachable = false;
 
   const { resolveCloudBearer } = await import('./xai-oauth');
-  const { loadOAuthSession } = await import('./xai-oauth');
-  const cloudAuth = await resolveCloudBearer(config);
-  const hasKey = !!config.xaiApiKey?.trim();
-  const oauthSession = await loadOAuthSession().catch(() => null);
-  const hasOAuth = !!(oauthSession?.accessToken && oauthSession?.refreshToken);
+  const cloudAuth = resolvedAuth ?? await resolveCloudBearer(config);
+  const hasKey = cloudAuth.hasApiKey;
+  const hasOAuth = cloudAuth.hasOAuth;
   // When BOTH credentials exist, offer each cloud model twice so the user can
   // pick which one drives it (OAuth = SuperGrok quota, Token = pay-as-you-go).
   // With only one cloud credential, a plain `cloud:` entry follows it.
@@ -257,7 +264,7 @@ export async function listAllSelectableModels(cfg?: {
       : [{ source: undefined, tag: '' }];
 
   if (cloudAuth.hasCloudAuth) {
-    const cloud = await listGrokModels();
+    const cloud = await listGrokModels(cloudAuth.token || undefined, cloudAuth.source || undefined);
     const base = cloud.ok
       ? cloud.models.map((m) => ({ id: m.id, label: m.label || m.id, reasoning: m.reasoning }))
       : null;

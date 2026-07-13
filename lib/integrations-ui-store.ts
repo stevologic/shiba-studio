@@ -13,10 +13,25 @@ export type IntegrationCredsMap = Record<string, Record<string, unknown>>;
 
 const EMPTY: IntegrationCredsMap = {
   github: {}, slack: {}, googledrive: {}, discord: {}, x: {},
-  obsidian: { mode: 'local' }, vercel: {}, netlify: {}, linear: {}, jira: {},
+  reddit: {}, obsidian: { mode: 'local' }, vercel: {}, netlify: {}, linear: {}, jira: {},
 };
 
 let cached: IntegrationCredsMap | null = null;
+
+/** Public, non-secret Reddit OAuth status returned by the server. */
+export type RedditOAuthStatus = {
+  connected: boolean;
+  expired?: boolean;
+  username?: string;
+  userId?: string;
+  scopes?: string[];
+  expiresAt?: string;
+  clientReady?: boolean;
+  bundledClient?: boolean;
+  error?: string;
+};
+
+let cachedRedditStatus: RedditOAuthStatus | null = null;
 
 /** Last-known creds, or the empty scaffold on a cold start. */
 export function getCachedIntegrationCreds(): IntegrationCredsMap {
@@ -30,4 +45,13 @@ export function hasCachedIntegrationCreds(): boolean {
 /** Store the server's creds so the next remount seeds from them immediately. */
 export function setCachedIntegrationCreds(creds: IntegrationCredsMap): void {
   cached = { ...EMPTY, ...creds };
+}
+
+/** Keep OAuth identity/status stable while the catch-all client shell remounts. */
+export function getCachedRedditOAuthStatus(): RedditOAuthStatus | null {
+  return cachedRedditStatus;
+}
+
+export function setCachedRedditOAuthStatus(status: RedditOAuthStatus): void {
+  cachedRedditStatus = { ...status };
 }

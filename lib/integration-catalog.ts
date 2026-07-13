@@ -6,6 +6,7 @@ export type IntegrationId =
   | 'googledrive'
   | 'discord'
   | 'x'
+  | 'reddit'
   | 'obsidian'
   | 'vercel'
   | 'netlify'
@@ -80,6 +81,16 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     docsUrl: 'https://docs.x.com/x-api/introduction',
     setupUrl: 'https://docs.x.com/resources/fundamentals/authentication/overview',
     docsLabel: 'X API',
+  },
+  {
+    id: 'reddit',
+    label: 'Reddit',
+    shortLabel: 'Reddit',
+    icon: '/integrations/reddit.svg',
+    description: 'Read communities and publish posts',
+    docsUrl: 'https://www.reddit.com/dev/api/',
+    setupUrl: 'https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki',
+    docsLabel: 'Reddit Data API',
   },
   {
     id: 'obsidian',

@@ -47,6 +47,7 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | --- | --- | --- |
 | GET | `/api/version` | Running commit/version. `?checkUpdate=1` also probes GitHub releases (cached 6 h). |
 | GET | `/api/boot` | Boot ping — hydrates config and arms schedules (idempotent; carries the live commit). |
+| GET | `/api/health` | Lightweight liveness probe with no startup or scheduling side effects. |
 | GET | `/api/nav-stats` | Sidebar counts: chats, projects, workspace files, schedules, integrations, usage cost, `cloudReachable`. |
 | GET | `/api/models` | Selectable models (cloud + local) and cloud-auth flags. |
 | GET | `/api/tools` | The full built-in tool catalog with groups and scope requirements. |
@@ -237,6 +238,10 @@ See [Native companion nodes](native-nodes.md) for the signed protocol, escalatio
 | GET | `/api/xai-oauth/status` | OAuth connection status. |
 | POST | `/api/xai-oauth/logout` | Disconnect OAuth. |
 | GET/POST | `/api/google-oauth/start`, `/api/google-oauth/callback` | Google Drive OAuth. |
+| POST | `/api/reddit-oauth/start` | Begin Reddit authorization-code OAuth with the fixed registered callback. |
+| GET | `/api/reddit-oauth/callback` | Validate one-time state, exchange the code, and return the popup handoff page. |
+| GET | `/api/reddit-oauth/status` | Read public Reddit connection status; never returns tokens or the client secret. |
+| POST | `/api/reddit-oauth/logout` | Revoke and disconnect the Reddit session. |
 
 ### Backup & sync
 

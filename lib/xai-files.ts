@@ -27,7 +27,7 @@ async function cloudFetch(url: string, init: RequestInit = {}, keyOverride?: str
   return fetchCloudWithAuth(url, init, { keyOverride });
 }
 
-export async function listXaiFiles(): Promise<XaiFileMeta[]> {
+export async function listXaiFiles(keyOverride?: string): Promise<XaiFileMeta[]> {
   const all: XaiFileMeta[] = [];
   let token: string | undefined;
   const pageSize = 100;
@@ -40,7 +40,7 @@ export async function listXaiFiles(): Promise<XaiFileMeta[]> {
     });
     if (token) params.set('pagination_token', token);
 
-    const res = await cloudFetch(`${XAI_BASE}/files?${params}`);
+    const res = await cloudFetch(`${XAI_BASE}/files?${params}`, {}, keyOverride);
     if (!res.ok) {
       const txt = await res.text();
       throw new Error(`xAI Files API ${res.status}: ${txt}`);
@@ -72,8 +72,8 @@ export async function uploadXaiFile(filename: string, content: Buffer, keyOverri
   return res.json();
 }
 
-export async function downloadXaiFileContent(fileId: string): Promise<Buffer> {
-  const res = await cloudFetch(`${XAI_BASE}/files/${fileId}/content`);
+export async function downloadXaiFileContent(fileId: string, keyOverride?: string): Promise<Buffer> {
+  const res = await cloudFetch(`${XAI_BASE}/files/${fileId}/content`, {}, keyOverride);
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`xAI download ${res.status}: ${txt}`);
@@ -122,10 +122,10 @@ export async function resolveXaiFileLink(fileId: string, filename: string): Prom
   return cloudFileViewUrl(fileId);
 }
 
-export async function deleteXaiFile(fileId: string): Promise<void> {
+export async function deleteXaiFile(fileId: string, keyOverride?: string): Promise<void> {
   const res = await cloudFetch(`${XAI_BASE}/files/${fileId}`, {
     method: 'DELETE',
-  });
+  }, keyOverride);
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`xAI delete ${res.status}: ${txt}`);

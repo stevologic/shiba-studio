@@ -46,6 +46,7 @@ const sessionListeners = new Map<string, Set<Listener>>();
 
 /** Throttle disk writes while tokens stream. */
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const persistChains = new Map<string, Promise<void>>();
 const PERSIST_MS = 700;
 
 function emitGlobal() {
@@ -139,23 +140,49 @@ export function liveMessagesToProject(messages: LiveChatUiMessage[]): ProjectCha
 
 async function persistSessionNow(sessionId: string, messages: LiveChatUiMessage[], running: boolean) {
   const saved = liveMessagesToProject(messages);
-  try {
-    await fetch('/api/chat-sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'update',
-        id: sessionId,
-        patch: {
-          messages: saved,
-          running,
-          title: deriveSessionTitle(saved, 'New chat'),
-        },
-      }),
+  const payload = JSON.stringify({
+    action: 'update',
+    id: sessionId,
+    patch: {
+      messages: saved,
+      running,
+      title: deriveSessionTitle(saved, 'New chat'),
+    },
+  });
+  // A throttled running=true request may still be in flight when the stream
+  // finishes or is aborted. Serialize writes per session so that the later
+  // terminal snapshot cannot be overtaken by that older request.
+  const previous = persistChains.get(sessionId) ?? Promise.resolve();
+  const operation = previous
+    .catch(() => { /* a failed best-effort write must not block the next */ })
+    .then(async () => {
+      try {
+        await fetch('/api/chat-sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+        });
+      } catch {
+        /* best-effort — stream continues either way */
+      }
     });
-  } catch {
-    /* best-effort — stream continues either way */
-  }
+  persistChains.set(sessionId, operation);
+  await operation;
+  if (persistChains.get(sessionId) === operation) persistChains.delete(sessionId);
+}
+
+function scheduleFinishedRunRemoval(sessionId: string, keepMs = 8_000): void {
+  const run = runs.get(sessionId);
+  const finishedAt = run?.updatedAt;
+  const timer = setTimeout(() => {
+    const current = runs.get(sessionId);
+    // A new turn may have started for the same chat while this cleanup waited.
+    if (current && !current.streaming && current.updatedAt === finishedAt) {
+      runs.delete(sessionId);
+      emit(sessionId, { global: true });
+    }
+  }, keepMs);
+  (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
 }
 
 function schedulePersist(sessionId: string) {
@@ -231,6 +258,11 @@ export async function finishLiveChatRun(
   messages: LiveChatUiMessage[],
   opts?: { error?: string; keepEntryMs?: number },
 ) {
+  const pendingPersist = persistTimers.get(sessionId);
+  if (pendingPersist) {
+    clearTimeout(pendingPersist);
+    persistTimers.delete(sessionId);
+  }
   const run = runs.get(sessionId);
   if (run) {
     run.messages = messages;
@@ -258,14 +290,7 @@ export async function finishLiveChatRun(
 
   emit(sessionId, { global: true });
 
-  const keepMs = opts?.keepEntryMs ?? 8_000;
-  setTimeout(() => {
-    const cur = runs.get(sessionId);
-    if (cur && !cur.streaming) {
-      runs.delete(sessionId);
-      emit(sessionId, { global: true });
-    }
-  }, keepMs);
+  scheduleFinishedRunRemoval(sessionId, opts?.keepEntryMs ?? 8_000);
 }
 
 export function abortLiveChatRun(sessionId: string) {
@@ -274,6 +299,14 @@ export function abortLiveChatRun(sessionId: string) {
   try { run.abort.abort(); } catch { /* ignore */ }
   run.streaming = false;
   run.updatedAt = Date.now();
-  // Leave partial messages in place; finish path or panel will persist.
+  const pendingPersist = persistTimers.get(sessionId);
+  if (pendingPersist) {
+    clearTimeout(pendingPersist);
+    persistTimers.delete(sessionId);
+  }
+  // Persist the partial transcript as no longer running even if the fetch's
+  // normal finish path never gets another callback after abort.
+  void persistSessionNow(sessionId, run.messages, false);
   emit(sessionId, { global: true });
+  scheduleFinishedRunRemoval(sessionId);
 }

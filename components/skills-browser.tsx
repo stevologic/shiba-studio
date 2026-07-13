@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check, ChevronDown, ChevronUp, Code2, MessageSquare, Palette, Pencil, Plus,
   RefreshCw, Search, Sparkles, Trash2, Users, Wand2, Zap,
@@ -8,8 +8,10 @@ import {
 import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { SKILL_CATEGORIES, SKILL_PRESETS, type SkillCategory, type SkillPreset } from '@/lib/skills-catalog';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 
 type UiSkill = SkillPreset & { custom?: boolean };
+const SKILLS_URL = '/api/skills';
 
 interface SkillsBrowserProps {
   installed: string[];
@@ -63,19 +65,31 @@ export default function SkillsBrowser({
   const [togglingAgent, setTogglingAgent] = useState<string | null>(null);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const loadRequestRef = useRef(0);
 
-  const loadSkills = useCallback(async () => {
+  const loadSkills = useCallback(async ({ force = false, signal }: { force?: boolean; signal?: AbortSignal } = {}) => {
+    const requestId = ++loadRequestRef.current;
+    if (force) invalidateClientJson(SKILLS_URL);
     try {
-      const res = await fetch('/api/skills');
-      const data = await res.json();
-      if (data.ok && Array.isArray(data.skills)) setSkills(data.skills);
-    } catch {
+      const data = await loadClientJson<{ ok?: boolean; skills?: UiSkill[] }>(SKILLS_URL, {
+        maxAgeMs: 10_000,
+        signal,
+      });
+      if (!signal?.aborted && requestId === loadRequestRef.current && data.ok && Array.isArray(data.skills)) {
+        setSkills(data.skills);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
       /* built-in presets remain as fallback */
     }
   }, []);
 
   useEffect(() => {
-    void loadSkills();
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) void loadSkills({ signal: controller.signal });
+    });
+    return () => controller.abort();
   }, [loadSkills]);
 
   useEffect(() => {
@@ -127,7 +141,7 @@ export default function SkillsBrowser({
       if (!data.ok) throw new Error(data.error || 'Save failed');
       toast.success(editor.mode === 'create' ? `Skill "${data.skill.name}" created` : 'Skill updated');
       setEditor(null);
-      await loadSkills();
+      await loadSkills({ force: true });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Save failed');
     }
@@ -147,7 +161,7 @@ export default function SkillsBrowser({
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Regenerate failed');
       toast.success(`"${data.skill.name}" rewritten from its title by the model`);
-      await loadSkills();
+      await loadSkills({ force: true });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Regenerate failed');
     }
@@ -164,7 +178,7 @@ export default function SkillsBrowser({
   async function removeSkill(skill: UiSkill) {
     const ok = await confirmDialog({
       title: `Delete skill "${skill.name}"?`,
-      message: 'Agents that reference it keep the tag, but its prompt guidance stops applying.',
+      message: 'This skill will also be removed from every agent that currently uses it.',
       confirmLabel: 'Delete',
       danger: true,
     });
@@ -178,7 +192,7 @@ export default function SkillsBrowser({
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'Delete failed');
       toast.success('Skill deleted');
-      await loadSkills();
+      await loadSkills({ force: true });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Delete failed');
     }

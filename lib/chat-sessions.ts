@@ -111,6 +111,14 @@ export async function listChatSessions(opts?: { includeArchived?: boolean }): Pr
   });
 }
 
+/** Count-only path for badges; avoids sorting and copying full session rows. */
+export async function countChatSessions(opts?: { includeArchived?: boolean }): Promise<number> {
+  return withStoreLock(async () => {
+    const sessions = (await loadStore()).sessions;
+    return opts?.includeArchived ? sessions.length : sessions.filter((session) => !session.archived).length;
+  });
+}
+
 export async function searchChatSessions(query: string, opts?: { includeArchived?: boolean }): Promise<ChatSession[]> {
   const q = query.trim().toLowerCase();
   if (!q) return listChatSessions(opts);
@@ -246,11 +254,13 @@ export async function appendChatMessage(
 }
 
 export async function deleteChatSession(id: string): Promise<void> {
-  return withStoreLock(async () => {
-    const store = await loadStore();
-    await saveStore(store.sessions.filter((s) => s.id !== id));
-    deleteContextScope('session', id);
-  });
+  const { withIntegrityMutation } = await import('./integrity-coordinator');
+  await withIntegrityMutation(`chat deletion:${id}`, () => withStoreLock(async () => {
+      const store = await loadStore();
+      await saveStore(store.sessions.filter((s) => s.id !== id));
+      try { deleteContextScope('session', id); }
+      catch (error) { console.error('[shiba-studio] deferred deleted-chat context cleanup', error); }
+    }));
 }
 
 function cloneMessages(messages: import('./project-types').ProjectChatMessage[]) {
@@ -397,5 +407,87 @@ export async function restoreChatSessionSnapshot(snapshot: ChatSession): Promise
     indexSessionContext(restored);
     compactContextScope('session', restored.id);
     return restored;
+  });
+}
+
+export interface ChatReferenceIntegrityInput {
+  projectIds: ReadonlySet<string>;
+  agentIds: ReadonlySet<string>;
+  /** Sessions that still own a non-terminal task/live generation. */
+  activeSessionIds: ReadonlySet<string>;
+  /** Avoid racing a generation while its durable task is being announced. */
+  staleRunningBefore?: string;
+}
+
+export interface ChatReferenceIntegrityReport {
+  projectsDetached: number;
+  chatTargetsReset: number;
+  branchesDetached: number;
+  branchRootsRepaired: number;
+  readCursorsCleared: number;
+  runningFlagsCleared: number;
+}
+
+/** Repair live chat pointers after interrupted parent/project/task deletes. */
+export async function reconcileChatSessionReferences(
+  input: ChatReferenceIntegrityInput,
+): Promise<ChatReferenceIntegrityReport> {
+  return withStoreLock(async () => {
+    const report: ChatReferenceIntegrityReport = {
+      projectsDetached: 0,
+      chatTargetsReset: 0,
+      branchesDetached: 0,
+      branchRootsRepaired: 0,
+      readCursorsCleared: 0,
+      runningFlagsCleared: 0,
+    };
+    const store = await loadStore();
+    const sessionsById = new Map(store.sessions.map((session) => [session.id, session]));
+    for (const session of store.sessions) {
+      if (session.projectId && !input.projectIds.has(session.projectId)) {
+        session.projectId = null;
+        report.projectsDetached += 1;
+      }
+      if (
+        session.chatTarget
+        && session.chatTarget !== 'grok'
+        && session.chatTarget !== 'all'
+        && !input.agentIds.has(session.chatTarget)
+      ) {
+        session.chatTarget = 'grok';
+        report.chatTargetsReset += 1;
+      }
+      if (session.branch) {
+        const parent = sessionsById.get(session.branch.parentSessionId);
+        const sourceExists = parent?.messages.some((message) => message.id === session.branch?.sourceMessageId);
+        if (!parent || !sourceExists) {
+          delete session.branch;
+          report.branchesDetached += 1;
+        } else if (!sessionsById.has(session.branch.rootSessionId)) {
+          session.branch.rootSessionId = parent.branch && sessionsById.has(parent.branch.rootSessionId)
+            ? parent.branch.rootSessionId
+            : parent.id;
+          report.branchRootsRepaired += 1;
+        }
+      }
+      if (
+        session.lastReadMessageId
+        && !session.messages.some((message) => message.id === session.lastReadMessageId)
+      ) {
+        delete session.lastReadMessageId;
+        delete session.lastReadAt;
+        report.readCursorsCleared += 1;
+      }
+      if (
+        session.running
+        && !input.activeSessionIds.has(session.id)
+        && (!input.staleRunningBefore || session.updatedAt < input.staleRunningBefore)
+      ) {
+        session.running = false;
+        report.runningFlagsCleared += 1;
+      }
+    }
+    if (Object.values(report).some((count) => count > 0)) await saveStore(store.sessions);
+    return report;
   });
 }

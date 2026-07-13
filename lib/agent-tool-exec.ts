@@ -26,6 +26,8 @@ import { assertTaskShellCommand, resolveTaskPath, taskToolDecision } from './tas
 export interface AgentToolAuthorization {
   /** Set only after this exact task shell command receives a live approval. */
   liveTaskShellApproval?: boolean;
+  /** Issued only by the agent-run approval/autonomous dispatch path. */
+  redditSubmitAuthorized?: boolean;
 }
 
 export function executeAgentTool(
@@ -493,6 +495,38 @@ async function executeAgentToolScoped(
         const feed = args.feed === 'home' ? 'home' : 'mine';
         const tweets = await Ints.xReadTimeline(feed, args.count ? Number(args.count) : 5);
         return { result: tweets, sideEffect: `read ${tweets.length} tweets from X (${feed})` };
+      }
+      case 'reddit_read_posts': {
+        const result = await Ints.redditReadPosts({
+          subreddit: args.subreddit ? String(args.subreddit) : undefined,
+          sort: args.sort,
+          time: args.time,
+          limit: args.limit == null ? undefined : Number(args.limit),
+          after: args.after ? String(args.after) : undefined,
+        });
+        return {
+          result,
+          sideEffect: `read ${result.posts.length} Reddit posts${args.subreddit ? ` from r/${String(args.subreddit).replace(/^r\//i, '')}` : ''}`,
+        };
+      }
+      case 'reddit_submit': {
+        if (!authorization?.redditSubmitAuthorized) {
+          return {
+            result: { error: 'Reddit posting requires an approved or explicitly dispatched agent run.', denied: true },
+            sideEffect: 'blocked unapproved Reddit post',
+          };
+        }
+        const result = await Ints.redditSubmit({
+          subreddit: String(args.subreddit || ''),
+          title: String(args.title || ''),
+          kind: args.kind === 'link' ? 'link' : 'self',
+          text: args.text == null ? undefined : String(args.text),
+          url: args.url == null ? undefined : String(args.url),
+          nsfw: !!args.nsfw,
+          spoiler: !!args.spoiler,
+          sendReplies: args.send_replies == null ? undefined : !!args.send_replies,
+        });
+        return { result, sideEffect: `posted to Reddit r/${result.subreddit}: ${result.url}` };
       }
       case 'drive_list': {
         const folders = (agent.driveFolders || []).map((f) => f.id).filter(Boolean);

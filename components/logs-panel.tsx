@@ -3,15 +3,27 @@
 // Full audit trail — every consequential action (runs, chats, config,
 // integrations, skills, sync, auth) recorded in SQLite and browsable here.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, RefreshCw, ScrollText, Search, SquareArrowOutUpRight, Terminal, X } from 'lucide-react';
 import type { AgentRun } from '@/lib/types';
 import { modelDisplayName } from '@/lib/model-providers';
 import { MISSING_AGENT_AVATAR_PATH, resolveAgentAvatarPath } from '@/lib/agent-avatars';
 import InfoHint from '@/components/info-hint';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 
 const PAGE_SIZE = 100;
 const SEARCH_DEBOUNCE_MS = 320;
+const AGENTS_URL = '/api/agents';
+
+function logsUrl(category: string, page: number, searchQ: string): string {
+  const params = new URLSearchParams({
+    limit: String(PAGE_SIZE),
+    offset: String(page * PAGE_SIZE),
+  });
+  if (category !== 'all') params.set('category', category);
+  if (searchQ) params.set('q', searchQ);
+  return `/api/logs?${params}`;
+}
 
 /** Clamp a 1-based page number to a valid zero-based index. */
 function clampPageIndex(pageOneBased: number, pageCount: number): number {
@@ -92,20 +104,32 @@ export default function LogsPanel() {
   /** Execution trace opened in-place (no more bouncing to Automations). */
   const [traceRun, setTraceRun] = useState<AgentRun | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
+  const traceRequestRef = useRef(0);
+  const logsRequestRef = useRef(0);
 
   async function openTrace(runId: string) {
+    const requestId = ++traceRequestRef.current;
     setTraceLoading(true);
     try {
-      const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
-      const data = await res.json();
+      const data = await loadClientJson<{ ok?: boolean; run?: AgentRun; error?: string }>(
+        `/api/runs?id=${encodeURIComponent(runId)}`,
+        { maxAgeMs: 5_000 },
+      );
       if (!data.ok || !data.run) throw new Error(data.error || 'Run not found (it may have been pruned by retention)');
-      setTraceRun(data.run as AgentRun);
+      if (requestId === traceRequestRef.current) setTraceRun(data.run);
     } catch (err) {
+      if (requestId !== traceRequestRef.current) return;
       const { toast } = await import('@/lib/toast');
       toast.error(err instanceof Error ? err.message : 'Could not load the run');
     } finally {
-      setTraceLoading(false);
+      if (requestId === traceRequestRef.current) setTraceLoading(false);
     }
+  }
+
+  function closeTrace() {
+    traceRequestRef.current += 1;
+    setTraceLoading(false);
+    setTraceRun(null);
   }
   // Live agents, for avatars in the Agent column — deleted agents get the UFO.
   const [agentsById, setAgentsById] = useState<Map<string, { id: string; avatar?: string }>>(new Map());
@@ -134,46 +158,48 @@ export default function LogsPanel() {
   }, [searchDraft]);
 
   useEffect(() => {
-    let stale = false;
-    (async () => {
+    const controller = new AbortController();
+    void (async () => {
       try {
-        const res = await fetch('/api/agents');
-        const data = await res.json();
-        if (!stale && Array.isArray(data.agents)) {
+        const data = await loadClientJson<{ agents?: Array<{ id: string; avatar?: string }> }>(AGENTS_URL, {
+          maxAgeMs: 30_000,
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted && Array.isArray(data.agents)) {
           setAgentsById(new Map(data.agents.map((a: { id: string; avatar?: string }) => [a.id, a])));
         }
       } catch {
         /* avatars are decoration — ignore */
       }
     })();
-    return () => { stale = true; };
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
-    let stale = false;
-    (async () => {
+    const controller = new AbortController();
+    const requestId = ++logsRequestRef.current;
+    const url = logsUrl(category, page, searchQ);
+    void (async () => {
       try {
-        const params = new URLSearchParams({
-          limit: String(PAGE_SIZE),
-          offset: String(page * PAGE_SIZE),
+        const data = await loadClientJson<{ ok?: boolean; entries?: LogEntry[]; total?: number }>(url, {
+          maxAgeMs: 5_000,
+          signal: controller.signal,
         });
-        if (category !== 'all') params.set('category', category);
-        if (searchQ) params.set('q', searchQ);
-        const res = await fetch(`/api/logs?${params}`);
-        const data = await res.json();
-        if (!stale && data.ok) {
+        if (!controller.signal.aborted && requestId === logsRequestRef.current && data.ok) {
           setEntries(data.entries || []);
           setTotal(data.total || 0);
         }
       } catch {
         /* keep last view */
+      } finally {
+        if (!controller.signal.aborted && requestId === logsRequestRef.current) setLoading(false);
       }
-      if (!stale) setLoading(false);
     })();
-    return () => { stale = true; };
+    return () => controller.abort();
   }, [category, page, reloadKey, searchQ]);
 
   function changeCategory(next: string) {
+    if (next === category && page === 0) return;
     setLoading(true);
     setCategory(next);
     setPage(0);
@@ -193,6 +219,10 @@ export default function LogsPanel() {
   function goToPage(next: number) {
     const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const clamped = Math.min(pageCount - 1, Math.max(0, next));
+    if (clamped === page) {
+      setPageInput(String(page + 1));
+      return;
+    }
     setLoading(true);
     setPage(clamped);
     setPageInput(String(clamped + 1));
@@ -220,6 +250,7 @@ export default function LogsPanel() {
 
   function refresh() {
     setLoading(true);
+    invalidateClientJson(logsUrl(category, page, searchQ));
     setReloadKey((k) => k + 1);
   }
 
@@ -520,7 +551,7 @@ export default function LogsPanel() {
       )}
 
       {traceRun && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={() => setTraceRun(null)}>
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4" onClick={closeTrace}>
           <div className="modal modal-pop w-full max-w-4xl p-5 max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Execution trace">
             <div className="flex items-center gap-2 mb-3 shrink-0">
               <Terminal size={16} />
@@ -529,7 +560,7 @@ export default function LogsPanel() {
               <span className="text-xs text-muted truncate min-w-0">
                 {traceRun.agentName} · {modelDisplayName(traceRun.model)} · {new Date(traceRun.startedAt).toLocaleString()}
               </span>
-              <button type="button" className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0" onClick={() => setTraceRun(null)} title="Close" aria-label="Close">
+              <button type="button" className="grok-btn grok-btn-ghost p-1.5 ml-auto shrink-0" onClick={closeTrace} title="Close" aria-label="Close">
                 <X size={16} />
               </button>
             </div>

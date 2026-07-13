@@ -9,6 +9,7 @@ export interface IntegrationScope {
   googledrive: boolean;
   discord: boolean;
   x: boolean;
+  reddit: boolean;
   obsidian: boolean;
   vercel: boolean;
   netlify: boolean;
@@ -20,6 +21,7 @@ export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
   googledrive: false,
   discord: false,
   x: false,
+  reddit: false,
   obsidian: false,
   vercel: false,
   netlify: false,
@@ -188,6 +190,21 @@ export interface IntegrationCreds {
      *  x_post / x_read tools); X requires each auth type's own credentials. */
     clientId?: string;
     clientSecret?: string;
+  };
+  reddit?: {
+    /** Reddit OAuth web-app credentials. A saved client overrides env defaults. */
+    clientId?: string;
+    clientSecret?: string;
+    /** Short-lived OAuth bearer plus the permanent refresh token. */
+    accessToken?: string;
+    refreshToken?: string;
+    tokenExpiry?: string;
+    /** Public account metadata captured from /api/v1/me after consent. */
+    username?: string;
+    userId?: string;
+    scopes?: string[];
+    /** Optional explicit Reddit API User-Agent; generated from username when absent. */
+    userAgent?: string;
   };
   obsidian?: {
     /** Local vault on disk, or remote REST API (cloud). */

@@ -17,6 +17,7 @@ async function main() {
   const persistence = await import('../lib/persistence');
   const { normalizeAgent } = await import('../lib/types');
   const database = await import('../lib/db');
+  const runStore = await import('../lib/agent-runs-store');
 
   try {
     const xClientSecret = 'x-client-secret-regression';
@@ -55,8 +56,20 @@ async function main() {
     assert(raw.includes('enc:v1:'), 'encrypted MCP store should contain sealed values');
 
     const slackAppToken = 'xapp-slack-secret-regression';
+    const redditClientSecret = 'reddit-client-secret-regression';
+    const redditAccessToken = 'reddit-access-token-regression';
+    const redditRefreshToken = 'reddit-refresh-token-regression';
     await persistence.saveConfig({
-      integrations: { slack: { token: 'xoxb-slack-secret-regression', appToken: slackAppToken } },
+      integrations: {
+        slack: { token: 'xoxb-slack-secret-regression', appToken: slackAppToken },
+        reddit: {
+          clientId: 'reddit-client-id-regression',
+          clientSecret: redditClientSecret,
+          accessToken: redditAccessToken,
+          refreshToken: redditRefreshToken,
+          username: 'shiba_verify',
+        },
+      },
     });
     const agent = normalizeAgent({
       id: 'secret-agent',
@@ -65,7 +78,21 @@ async function main() {
       workspace: { path: root, useWorktree: false },
       integrations: {},
       integrationOverrides: {
-        slack: { token: 'xoxb-agent-secret-regression', appToken: slackAppToken },
+        slack: {
+          token: 'xoxb-agent-secret-regression',
+          appToken: slackAppToken,
+          mentionAgentId: 'unused-agent-override-slack-target',
+        },
+        discord: {
+          token: 'discord-agent-secret-regression',
+          mentionAgentId: 'unused-agent-override-discord-target',
+        },
+        reddit: {
+          clientId: 'reddit-agent-client-id',
+          clientSecret: redditClientSecret,
+          accessToken: redditAccessToken,
+          refreshToken: redditRefreshToken,
+        },
       },
       peers: [],
       schedules: [],
@@ -77,6 +104,33 @@ async function main() {
     const agentsRaw = await fs.readFile(path.join(process.env.SHIBA_DATA_DIR, 'agents.json'), 'utf8');
     assert(!configRaw.includes(slackAppToken), 'global Slack app token must be encrypted at rest');
     assert(!agentsRaw.includes(slackAppToken), 'agent Slack app token must be encrypted at rest');
+    assert(!agentsRaw.includes('unused-agent-override-slack-target'));
+    assert(!agentsRaw.includes('unused-agent-override-discord-target'),
+      'global-listener mention routing must not persist in per-agent credential overrides');
+    for (const [secret, label] of [
+      [redditClientSecret, 'Reddit client secret'],
+      [redditAccessToken, 'Reddit access token'],
+      [redditRefreshToken, 'Reddit refresh token'],
+    ] as const) {
+      assert(!configRaw.includes(secret), `global ${label} must be encrypted at rest`);
+      assert(!agentsRaw.includes(secret), `agent ${label} must be encrypted at rest`);
+    }
+    const agentsApi = await import('../app/api/agents/route');
+    const safeAgents = await agentsApi.GET().then((response) => response.json()) as { agents: Array<{ id: string; integrationOverrides?: { reddit?: { refreshToken?: string } } }> };
+    const exposedRefresh = safeAgents.agents.find((item) => item.id === 'secret-agent')?.integrationOverrides?.reddit?.refreshToken;
+    assert(exposedRefresh && exposedRefresh !== redditRefreshToken, 'agent API must mask per-agent Reddit refresh tokens');
+
+    const agentsPath = path.join(process.env.SHIBA_DATA_DIR, 'agents.json');
+    const legacyAgents = JSON.parse(await fs.readFile(agentsPath, 'utf8')) as Array<{
+      integrationOverrides?: { slack?: Record<string, unknown> };
+    }>;
+    legacyAgents[0].integrationOverrides ||= {};
+    legacyAgents[0].integrationOverrides.slack ||= {};
+    legacyAgents[0].integrationOverrides.slack.mentionAgentId = 'legacy-unused-mention-target';
+    await fs.writeFile(agentsPath, `${JSON.stringify(legacyAgents, null, 2)}\n`, 'utf8');
+    assert.equal((await persistence.loadAgents())[0].integrationOverrides?.slack?.mentionAgentId, undefined);
+    assert(!(await fs.readFile(agentsPath, 'utf8')).includes('legacy-unused-mention-target'),
+      'legacy unused mention references are removed from disk on load');
 
     const legacySecret = 'legacy-plaintext-token';
     await fs.writeFile(mcpFile, JSON.stringify({
@@ -158,6 +212,29 @@ async function main() {
     await assert.rejects(projects.readProjectFileText('safe-project', 'NUL'), /Invalid stored project filename/);
 
     const liveDb = database.getDb();
+    await runStore.persistAgentRun({
+      id: 'restore-active-run',
+      agentId: 'restore-verifier',
+      agentName: 'Restore verifier',
+      model: 'local:test',
+      prompt: 'Keep the live database busy',
+      startedAt: new Date().toISOString(),
+      status: 'running',
+      trace: [],
+      sideEffects: [],
+    });
+    const activeRestore = await backup.restoreBackup({
+      format: backup.BACKUP_FORMAT,
+      version: backup.BACKUP_VERSION,
+      exportedAt: new Date().toISOString(),
+      stores: {},
+      sqliteBase64: null,
+    });
+    assert.equal(activeRestore.ok, false, 'restore must not swap stores while background work is active');
+    assert.match(activeRestore.error || '', /background work is active/i);
+    liveDb.prepare('DELETE FROM tasks WHERE runId = ?').run('restore-active-run');
+    liveDb.prepare('DELETE FROM runs WHERE id = ?').run('restore-active-run');
+
     liveDb.exec('CREATE TABLE IF NOT EXISTS restore_sentinel (value TEXT); DELETE FROM restore_sentinel; INSERT INTO restore_sentinel VALUES (\'kept\')');
     const invalidSchemaPath = path.join(root, 'valid-sqlite-invalid-schema.db');
     const sqlite = process.getBuiltinModule?.('node:sqlite') as {
@@ -167,16 +244,38 @@ async function main() {
     const invalidSchema = new sqlite.DatabaseSync(invalidSchemaPath);
     invalidSchema.exec('CREATE TABLE runs_fts (bad TEXT); PRAGMA user_version = 1');
     invalidSchema.close();
+    assert.throws(
+      () => database.validateDatabaseFile(invalidSchemaPath),
+      /not a Shiba Studio database|schema is incomplete/i,
+      'quick_check-clean arbitrary SQLite must not be accepted as a backup database',
+    );
+    const futureSchemaPath = path.join(root, 'future-shiba-schema.db');
+    const futureSchema = new sqlite.DatabaseSync(futureSchemaPath);
+    futureSchema.exec('PRAGMA user_version = 999');
+    futureSchema.close();
+    assert.throws(
+      () => database.validateDatabaseFile(futureSchemaPath),
+      /newer than this Shiba Studio build/i,
+      'a backup from a future schema must fail closed instead of being stamped compatible',
+    );
+    const configPath = path.join(process.env.SHIBA_DATA_DIR, 'config.json');
+    const configBeforeFailedDatabaseRestore = await fs.readFile(configPath, 'utf8');
     const rollbackRestore = await backup.restoreBackup({
       format: backup.BACKUP_FORMAT,
       version: backup.BACKUP_VERSION,
       exportedAt: new Date().toISOString(),
-      stores: {},
+      stores: { 'config.json': JSON.stringify({ sentinel: 'must-not-survive-database-failure' }) },
       sqliteBase64: (await fs.readFile(invalidSchemaPath)).toString('base64'),
     });
-    assert.match(rollbackRestore.warnings.join('\n'), /previous database restored and reopened/);
+    assert.equal(rollbackRestore.ok, false, 'a bundle with an incompatible database must fail atomically');
+    assert.match(rollbackRestore.error || '', /failed|rollback|pre-restore|not a Shiba Studio database|incomplete/i);
     const sentinel = database.getDb().prepare('SELECT value FROM restore_sentinel').get() as { value?: string };
     assert.equal(sentinel.value, 'kept', 'failed SQLite restore must put the previous live database back');
+    assert.equal(
+      await fs.readFile(configPath, 'utf8'),
+      configBeforeFailedDatabaseRestore,
+      'failed SQLite restore must also roll back JSON stores from the same bundle',
+    );
 
     const shellAbort = new AbortController();
     const shellStarted = Date.now();
@@ -190,7 +289,6 @@ async function main() {
     assert.equal(shellResult.code, -1, 'aborted shell commands should report the cancellation');
     assert(Date.now() - shellStarted < 2_000, 'aborted shell commands must be terminated promptly');
 
-    const configPath = path.join(process.env.SHIBA_DATA_DIR, 'config.json');
     const configBeforeRejectedRestore = await fs.readFile(configPath, 'utf8');
     const rejectedRestore = await backup.restoreBackup({
       format: backup.BACKUP_FORMAT,
@@ -210,6 +308,10 @@ async function main() {
 
     console.log('Persistence and isolation verification passed');
   } finally {
+    await (await import('../lib/task-delivery')).stopTaskDeliveryPump();
+    await (await import('../lib/agent-runs-store')).stopRunLeaseReconciler();
+    await (await import('../lib/routines')).stopRoutineEngine();
+    await (await import('../lib/scheduler')).stopAllScheduledTasks();
     (await import('../lib/db')).closeDb();
     // Windows can release SQLite/child-process handles one tick after close.
     for (let attempt = 0; attempt < 5; attempt++) {

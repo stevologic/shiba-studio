@@ -6,6 +6,7 @@ import {
   MessageSquare, Bot, Globe, FileText, Layers, Sparkles,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import type { Project } from '@/lib/project-types';
 import { resolveProjectWorkspace } from '@/lib/project-types';
@@ -17,6 +18,31 @@ interface GlobalUploadSummary {
   name: string;
   size: number;
   uploadedAt?: string;
+}
+
+interface ProjectsPayload {
+  ok?: boolean;
+  projects?: Project[];
+}
+
+interface ProjectPayload {
+  ok?: boolean;
+  project?: Project;
+}
+
+interface GlobalConfigPayload {
+  globalInstructions?: unknown;
+  useAgentsMd?: boolean;
+}
+
+interface WorkspaceSyncPayload {
+  ok?: boolean;
+  uploads?: GlobalUploadSummary[];
+  uploadsPath?: unknown;
+}
+
+function projectResourceUrl(id: string): string {
+  return `/api/projects?id=${encodeURIComponent(id)}`;
 }
 
 interface ProjectsPanelProps {
@@ -65,7 +91,9 @@ export default function ProjectsPanel({
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const selectedIdRef = useRef<string | null>(selectedId);
   const projectRequestRef = useRef(0);
+  const onProjectSelectRef = useRef(onProjectSelect);
   const selectProjectId = useCallback((id: string | null) => {
+    if (selectedIdRef.current === id) return;
     // Invalidate the previous request synchronously with the user/navigation
     // choice, before React's next effects run.
     selectedIdRef.current = id;
@@ -80,29 +108,36 @@ export default function ProjectsPanel({
   const [globalUploadsPath, setGlobalUploadsPath] = useState('');
   const [globalCtxLoading, setGlobalCtxLoading] = useState(true);
 
-  const loadProjects = useCallback(async () => {
+  useEffect(() => {
+    onProjectSelectRef.current = onProjectSelect;
+  }, [onProjectSelect]);
+
+  const loadProjects = useCallback(async (ensureLatest = false) => {
+    if (ensureLatest) invalidateClientJson('/api/projects');
     try {
-      const res = await fetch('/api/projects');
-      const data = await res.json();
-      if (data.ok) setProjects(data.projects || []);
-      setProjectsLoaded(true);
+      const data = await loadClientJson<ProjectsPayload>('/api/projects');
+      if (data.ok && Array.isArray(data.projects)) setProjects(data.projects);
     } catch {
       /* ignore */
+    } finally {
+      setProjectsLoaded(true);
     }
   }, []);
 
-  const loadProject = useCallback(async (id: string) => {
+  const loadProject = useCallback(async (id: string, ensureLatest = false) => {
+    const resourceUrl = projectResourceUrl(id);
+    if (ensureLatest) invalidateClientJson(resourceUrl);
     const requestId = ++projectRequestRef.current;
     try {
-      const res = await fetch(`/api/projects?id=${encodeURIComponent(id)}`);
-      const data = await res.json();
+      const data = await loadClientJson<ProjectPayload>(resourceUrl);
       if (data.ok && data.project) {
+        const project = data.project;
         if (requestId !== projectRequestRef.current || selectedIdRef.current !== id) {
-          return data.project as Project;
+          return project;
         }
-        setSelectedProject(data.project);
-        setProjects((prev) => prev.map((p) => (p.id === id ? data.project : p)));
-        return data.project as Project;
+        setSelectedProject(project);
+        setProjects((prev) => prev.map((p) => (p.id === id ? project : p)));
+        return project;
       }
     } catch {
       /* ignore */
@@ -110,12 +145,16 @@ export default function ProjectsPanel({
     return null;
   }, []);
 
-  const loadGlobalContext = useCallback(async () => {
+  const loadGlobalContext = useCallback(async (ensureLatest = false) => {
+    if (ensureLatest) {
+      invalidateClientJson('/api/config');
+      invalidateClientJson('/api/workspace/sync');
+    }
     setGlobalCtxLoading(true);
     try {
       const [cfgRes, syncRes] = await Promise.all([
-        fetch('/api/config').then((r) => r.json()).catch(() => null),
-        fetch('/api/workspace/sync').then((r) => r.json()).catch(() => null),
+        loadClientJson<GlobalConfigPayload>('/api/config').catch(() => null),
+        loadClientJson<WorkspaceSyncPayload>('/api/workspace/sync').catch(() => null),
       ]);
       // GET /api/config returns the config object directly (not { ok, config }).
       if (cfgRes && typeof cfgRes === 'object') {
@@ -138,8 +177,11 @@ export default function ProjectsPanel({
   }, []);
 
   useEffect(() => {
-    void loadProjects();
-    void loadGlobalContext();
+    const initialLoad = window.setTimeout(() => {
+      void loadProjects();
+      void loadGlobalContext();
+    }, 0);
+    return () => window.clearTimeout(initialLoad);
   }, [loadProjects, loadGlobalContext]);
 
   useEffect(() => {
@@ -147,21 +189,27 @@ export default function ProjectsPanel({
   }, [initialProjectId, selectProjectId]);
 
   useEffect(() => {
-    onProjectSelect?.(selectedId);
-    if (selectedId) void loadProject(selectedId);
-    else {
-      // Invalidate a request for the previous selection before clearing it.
-      projectRequestRef.current += 1;
-      setSelectedProject(null);
-    }
-  }, [selectedId, loadProject, onProjectSelect]);
+    const selectionLoad = window.setTimeout(() => {
+      onProjectSelectRef.current?.(selectedId);
+      if (selectedId) void loadProject(selectedId);
+      else {
+        // Invalidate a request for the previous selection before clearing it.
+        projectRequestRef.current += 1;
+        setSelectedProject(null);
+      }
+    }, 0);
+    return () => window.clearTimeout(selectionLoad);
+  }, [selectedId, loadProject]);
 
   useEffect(() => {
     if (!selectedProject) return;
-    setSetupInstructions(selectedProject.instructions || '');
-    setSetupWorkspace(selectedProject.workspacePath || '');
-    setSetupDefaultAgent(selectedProject.defaultAgentId || '');
-  }, [selectedProject?.id, selectedProject?.instructions, selectedProject?.workspacePath, selectedProject?.defaultAgentId]);
+    const syncSetup = window.setTimeout(() => {
+      setSetupInstructions(selectedProject.instructions || '');
+      setSetupWorkspace(selectedProject.workspacePath || '');
+      setSetupDefaultAgent(selectedProject.defaultAgentId || '');
+    }, 0);
+    return () => window.clearTimeout(syncSetup);
+  }, [selectedProject]);
 
   const effectiveWorkspace = selectedProject
     ? resolveProjectWorkspace(selectedProject, defaultWorkspace)
@@ -184,7 +232,7 @@ export default function ProjectsPanel({
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      await loadProjects();
+      await loadProjects(true);
       selectProjectId(data.project.id);
       toast.success(`Project "${data.project.name}" created`);
       onStatsChange?.();
@@ -196,6 +244,7 @@ export default function ProjectsPanel({
 
   async function saveProjectSetup(silent = false): Promise<Project | null> {
     if (!selectedId) return null;
+    const projectId = selectedId;
     setSavingSetup(true);
     try {
       const res = await fetch('/api/projects', {
@@ -203,7 +252,7 @@ export default function ProjectsPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'update',
-          id: selectedId,
+          id: projectId,
           instructions: setupInstructions,
           workspacePath: setupWorkspace,
           defaultAgentId: setupDefaultAgent,
@@ -211,8 +260,9 @@ export default function ProjectsPanel({
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      setSelectedProject(data.project);
-      await loadProjects();
+      invalidateClientJson(projectResourceUrl(projectId));
+      if (selectedIdRef.current === projectId) setSelectedProject(data.project);
+      await loadProjects(true);
       if (!silent) toast.success('Project setup saved');
       return data.project as Project;
     } catch (e: unknown) {
@@ -277,8 +327,9 @@ export default function ProjectsPanel({
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      if (data.project && selectedId === id) setSelectedProject(data.project);
-      await loadProjects();
+      invalidateClientJson(projectResourceUrl(id));
+      if (data.project && selectedIdRef.current === id) setSelectedProject(data.project);
+      await loadProjects(true);
       toast.success('Project renamed');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Rename failed');
@@ -301,11 +352,12 @@ export default function ProjectsPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'delete', id }),
       });
-      if (selectedId === id) {
+      if (selectedIdRef.current === id) {
         selectProjectId(null);
         setSelectedProject(null);
       }
-      await loadProjects();
+      invalidateClientJson(projectResourceUrl(id));
+      await loadProjects(true);
       toast.success('Project deleted');
       onStatsChange?.();
     } catch (e: unknown) {
@@ -315,6 +367,7 @@ export default function ProjectsPanel({
 
   async function deleteProjectFile(fileId: string, fileName: string) {
     if (!selectedId) return;
+    const projectId = selectedId;
     const ok = await confirmDialog({
       title: `Remove "${fileName}"?`,
       message: 'The file is removed from this project and its chat context.',
@@ -326,12 +379,13 @@ export default function ProjectsPanel({
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'deleteFile', id: selectedId, fileId }),
+        body: JSON.stringify({ action: 'deleteFile', id: projectId, fileId }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      if (data.project) setSelectedProject(data.project);
-      await loadProjects();
+      invalidateClientJson(projectResourceUrl(projectId));
+      if (data.project && selectedIdRef.current === projectId) setSelectedProject(data.project);
+      await loadProjects(true);
       toast.success(`Removed ${fileName}`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Delete failed');
@@ -340,20 +394,22 @@ export default function ProjectsPanel({
 
   async function uploadToProject(files: FileList | File[]) {
     if (!selectedId) return;
+    const projectId = selectedId;
     const list = Array.from(files);
     if (!list.length) return;
     setUploading(true);
     try {
       const fd = new FormData();
-      fd.append('projectId', selectedId);
+      fd.append('projectId', projectId);
       list.forEach((f) => fd.append('files', f));
       const res = await fetch('/api/projects/upload', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (data.errors?.length) toast.error(data.errors.join('; '));
       toast.success(`Added ${data.saved?.length || 0} file(s) to project`);
-      if (data.project) setSelectedProject(data.project);
-      await loadProjects();
+      invalidateClientJson(projectResourceUrl(projectId));
+      if (data.project && selectedIdRef.current === projectId) setSelectedProject(data.project);
+      await loadProjects(true);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Upload failed');
     }
@@ -458,7 +514,7 @@ export default function ProjectsPanel({
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
-                  <button type="button" onClick={() => loadProject(selectedProject.id)} className="grok-btn grok-btn-ghost text-xs" title="Refresh">
+                  <button type="button" onClick={() => loadProject(selectedProject.id, true)} className="grok-btn grok-btn-ghost text-xs" title="Refresh">
                     <RefreshCw size={14} />
                   </button>
                   <button type="button" onClick={() => deleteProject(selectedProject.id)} className="grok-btn grok-btn-ghost text-xs text-error" title="Delete project">

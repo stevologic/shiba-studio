@@ -165,13 +165,12 @@ async function main() {
       messages: [{ id: 'hook-message', role: 'user', content: 'chat-hook-marker', createdAt: now }],
     });
     assert.equal(context.inspectContextScope('session', chat.id).sources.length, 1, 'chat writes should index automatically');
-    await chats.deleteChatSession(chat.id);
-    assert.equal(context.inspectContextScope('session', chat.id).sources.length, 0, 'chat deletion should clear its context scope');
-
     assert.throws(
       () => context.setContextSourcePinned(early.sourceId, true, { scopeType: 'session', scopeId: 'some-other-session' }),
       /does not belong/,
     );
+    await chats.deleteChatSession(chat.id);
+    assert.equal(context.inspectContextScope('session', chat.id).sources.length, 0, 'chat deletion should clear its context scope');
 
     console.log('CONTEXT_ENGINE_OK sources=112 replay<=36 citations=stable compaction=deterministic search=bounded indexes=session+project+run');
   } finally {

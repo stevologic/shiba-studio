@@ -26,7 +26,7 @@ function assert(cond: boolean, msg: string) {
 async function main() {
   // --- Bug 1: filter must never alias the input (in-place mutation safe) ---
   const tools = getToolDefinitions(
-    { github: false, slack: false, googledrive: false, discord: false, x: false, obsidian: false, vercel: false, netlify: false } as never,
+    { github: false, slack: false, googledrive: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false } as never,
     false,
   );
   assert(tools.length > 10, `local agent has a full tool list (${tools.length})`);
@@ -40,7 +40,7 @@ async function main() {
 
   // filter with a disabled tool still drops it
   const tools2 = getToolDefinitions(
-    { github: false, slack: false, googledrive: false, discord: false, x: false, obsidian: false, vercel: false, netlify: false } as never,
+    { github: false, slack: false, googledrive: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false } as never,
     false,
   );
   const minusList = filterToolsByDisabled(tools2, ['fs_list']);

@@ -108,8 +108,18 @@ import {
 import { getCachedRuns, setCachedRuns } from '@/lib/runs-ui-store';
 import { subscribeLiveEvents } from '@/lib/live-events';
 import {
+  clientJsonLoadedAt,
+  invalidateClientJson,
+  loadClientJson,
+  setClientJsonSnapshot,
+} from '@/lib/client-json';
+import {
   getCachedIntegrationCreds,
+  getCachedRedditOAuthStatus,
   setCachedIntegrationCreds,
+  setCachedRedditOAuthStatus,
+  type IntegrationCredsMap,
+  type RedditOAuthStatus,
 } from '@/lib/integrations-ui-store';
 import {
   getProvidersUiSnapshot,
@@ -238,10 +248,21 @@ function IntegrationIcon({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' |
 
 const OAUTH_POLL_MS = 2000;
 const OAUTH_POLL_MAX_MS = 5 * 60_000;
+const SCHEDULED_RUNS_URL = '/api/runs?scheduledOnly=1&limit=200';
 const APP_VERSION = pkg.version;
-/** Build-time fallback only — live SHA is fetched from /api/version. */
 const GIT_COMMIT_FALLBACK = process.env.NEXT_PUBLIC_GIT_COMMIT || 'unreleased';
 const DOGE_DONATION_ADDRESS = 'DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK';
+
+type RuntimeVersionState = {
+  version: string;
+  commit: string;
+  commitFull: string | null;
+  dirty: boolean;
+  root?: string;
+};
+
+let cachedRuntimeVersion: RuntimeVersionState | null = null;
+let cachedUpdateNotice: { latest: string; url: string | null } | null = null;
 
 /** Providers rail probes (local reachability, CLI) — cache 10 min across reloads. */
 const PROVIDER_STATUS_LS = 'shiba-provider-status-v1';
@@ -302,16 +323,22 @@ const AGENT_OVERRIDE_FIELDS: Record<string, Array<{ key: string; label: string; 
     { key: 'token', label: 'Slack bot token (xoxb-…)', secret: true },
     { key: 'appToken', label: 'App-level token (xapp-… Socket Mode)', secret: true },
     { key: 'defaultChannel', label: 'Default channel (#…)' },
-    { key: 'mentionAgentId', label: 'Mention agent id (optional)' },
   ],
   discord: [
     { key: 'token', label: 'Discord bot token', secret: true },
     { key: 'defaultChannelId', label: 'Default channel id' },
-    { key: 'mentionAgentId', label: 'Mention agent id (optional)' },
   ],
   x: [
     { key: 'apiKey', label: 'API Key' }, { key: 'apiSecret', label: 'API Secret', secret: true },
     { key: 'accessToken', label: 'Access Token' }, { key: 'accessTokenSecret', label: 'Access Token Secret', secret: true },
+  ],
+  reddit: [
+    { key: 'clientId', label: 'OAuth Client ID' },
+    { key: 'clientSecret', label: 'OAuth Client Secret', secret: true },
+    { key: 'accessToken', label: 'OAuth Access Token', secret: true },
+    { key: 'refreshToken', label: 'OAuth Refresh Token', secret: true },
+    { key: 'tokenExpiry', label: 'Access-token expiry (ISO timestamp)' },
+    { key: 'userAgent', label: 'Identifying User-Agent' },
   ],
   obsidian: [{ key: 'restApiUrl', label: 'REST API URL' }, { key: 'restApiKey', label: 'REST API key', secret: true }, { key: 'vaultPath', label: 'Vault path (local mode)' }],
   googledrive: [{ key: 'accessToken', label: 'OAuth access token', secret: true }, { key: 'serviceAccountJson', label: 'Service account JSON', secret: true }],
@@ -347,20 +374,59 @@ export default function ShibaStudio() {
   const taskId = pathToTaskId(pathname);
   const oauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const oauthPollStartedRef = useRef<number | null>(null);
+  const oauthCompletionRef = useRef<Promise<void> | null>(null);
   // The sign-in popup — the opener force-closes it once tokens are stored
   // (a popup's own window.close() can be blocked after cross-origin hops).
   const oauthPopupRef = useRef<Window | null>(null);
   const drivePopupRef = useRef<Window | null>(null);
+  const redditPopupRef = useRef<Window | null>(null);
   const [driveStarting, setDriveStarting] = useState(false);
+  const [redditStarting, setRedditStarting] = useState(false);
+  const [redditStatus, setRedditStatus] = useState<RedditOAuthStatus | null>(
+    () => getCachedRedditOAuthStatus(),
+  );
   // Drive's Advanced (one-time OAuth client setup) — collapsed by default;
   // the Sign-in button opens it only if no client is configured yet.
   const [driveAdvancedOpen, setDriveAdvancedOpen] = useState(false);
+  const [redditAdvancedOpen, setRedditAdvancedOpen] = useState(false);
   // App origin for OAuth redirect URIs (SSR-safe — filled in after mount).
   const [appOrigin, setAppOrigin] = useState('');
   // Client-only so the Chat nav link points at the last session after hydrate
   // (avoids always linking bare `/chat`, which remounts and double-loads).
   const [chatNavHref, setChatNavHref] = useState('/chat');
   useEffect(() => { setAppOrigin(window.location.origin); }, []);
+
+  const refreshRedditStatus = useCallback(async (): Promise<RedditOAuthStatus | null> => {
+    try {
+      const data = await loadClientJson<any>('/api/reddit-oauth/status', { maxAgeMs: 5_000 });
+      const payload = data.status && typeof data.status === 'object'
+        ? { ...data, ...data.status }
+        : data;
+      const scopes = Array.isArray(payload.scopes)
+        ? payload.scopes.filter((scope: unknown): scope is string => typeof scope === 'string')
+        : typeof payload.scopes === 'string'
+          ? payload.scopes.split(/\s+/).filter(Boolean)
+          : [];
+      const next: RedditOAuthStatus = {
+        connected: !!payload.connected,
+        expired: !!payload.expired,
+        username: typeof payload.username === 'string' ? payload.username : undefined,
+        userId: typeof payload.userId === 'string' ? payload.userId : undefined,
+        scopes,
+        expiresAt: typeof payload.expiresAt === 'string' ? payload.expiresAt : undefined,
+        clientReady: !!payload.clientReady,
+        bundledClient: !!payload.bundledClient,
+        error: typeof payload.error === 'string' ? payload.error : undefined,
+      };
+      setCachedRedditOAuthStatus(next);
+      setRedditStatus(next);
+      return next;
+    } catch {
+      // Preserve the last server-confirmed state during a transient request error.
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     const last = readLastChatSessionId();
     setChatNavHref(last ? chatSessionPath(last) : '/chat');
@@ -428,15 +494,36 @@ export default function ShibaStudio() {
     oauthPollStartedRef.current = null;
   }, []);
 
-  const handleOAuthConnected = useCallback(async (message?: string) => {
-    stopOAuthPolling();
-    try { oauthPopupRef.current?.close(); } catch { /* already closed */ }
-    oauthPopupRef.current = null;
-    toast.success(message || 'Signed in with X (OAuth)');
-    await loadAll();
-    await loadModels();
-    await refreshOAuthStatus();
-  }, [stopOAuthPolling]);
+  const handleOAuthConnected = useCallback((message?: string): Promise<void> => {
+    // The popup message, fallback poll, and same-tab callback can all observe
+    // the same successful exchange. Share one completion pass so they cannot
+    // stack config/model/status requests or show duplicate success toasts.
+    if (oauthCompletionRef.current) return oauthCompletionRef.current;
+    const completion = (async () => {
+      stopOAuthPolling();
+      try { oauthPopupRef.current?.close(); } catch { /* already closed */ }
+      oauthPopupRef.current = null;
+      toast.success(message || 'Signed in with X (OAuth)');
+      invalidateClientJson('/api/config');
+      invalidateClientJson('/api/integrations');
+      invalidateClientJson('/api/models');
+      invalidateClientJson('/api/xai-oauth/status');
+      await loadAll(['config']);
+      await loadModels();
+      await refreshOAuthStatus();
+    })();
+    oauthCompletionRef.current = completion;
+    void completion.finally(() => {
+      // Keep the settled promise briefly: a queued callback effect can run
+      // immediately after the postMessage handler has completed.
+      window.setTimeout(() => {
+        if (oauthCompletionRef.current === completion) oauthCompletionRef.current = null;
+      }, 2_000);
+    }).catch(() => {});
+    return completion;
+  // Shell-local loaders intentionally stay out of the callback dependency
+  // list; this handler must remain stable for message/poll subscriptions.
+  }, [stopOAuthPolling]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The Google Drive popup announces success on its own channel; the opener
   // closes it and refreshes the Drive connection status.
@@ -445,17 +532,72 @@ export default function ShibaStudio() {
     drivePopupRef.current = null;
     setDriveStarting(false);
     toast.success('Google Drive connected');
-    await loadAll();
+    invalidateClientJson('/api/config');
+    invalidateClientJson('/api/integrations');
+    await loadAll(['config']);
     try {
       const res = await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'test', which: 'googledrive' }) });
       const data = await res.json();
       setIntTest((t: any) => ({ ...t, googledrive: data }));
     } catch { /* status refresh is best-effort */ }
-  }, []);
+  // `loadAll` is shell-local; keeping this stable avoids rearming the popup
+  // message listener on every render.
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRedditConnected = useCallback(async () => {
+    try { redditPopupRef.current?.close(); } catch { /* already closed */ }
+    redditPopupRef.current = null;
+    setRedditStarting(false);
+    invalidateClientJson('/api/config');
+    invalidateClientJson('/api/integrations');
+    invalidateClientJson('/api/reddit-oauth/status');
+    await loadAll(['config']);
+
+    let liveCheck: { ok?: boolean; username?: string; error?: string } | null = null;
+    try {
+      const res = await fetch('/api/integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test', which: 'reddit' }),
+      });
+      liveCheck = await res.json() as { ok?: boolean; username?: string; error?: string };
+      setIntTest((current: Record<string, unknown>) => ({ ...current, reddit: liveCheck }));
+    } catch {
+      // The durable OAuth status below still reflects a successful callback.
+    }
+
+    const status = await refreshRedditStatus();
+    const username = liveCheck?.username || status?.username;
+    if (liveCheck?.ok) {
+      toast.success(`Reddit connected${username ? ` as u/${username}` : ''}`);
+    } else {
+      toast.warning('Reddit sign-in completed, but the live connection check did not finish.');
+    }
+    await loadNavStats();
+  // `loadAll` / `loadNavStats` are intentionally omitted: they are shell-local
+  // functions recreated per render, while this callback must remain stable for
+  // the postMessage and callback-query effects below.
+  }, [refreshRedditStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => stopOAuthPolling();
   }, [stopOAuthPolling]);
+
+  // A cancelled/closed Reddit consent popup must not leave the sign-in button
+  // disabled until the entire shell is reloaded.
+  useEffect(() => {
+    if (!redditStarting) return;
+    const timer = window.setInterval(() => {
+      const popup = redditPopupRef.current;
+      // `null` also means the browser blocked the popup; in that branch the
+      // start handler intentionally keeps working and falls back to same-tab
+      // navigation, so only an actual popup that was closed cancels loading.
+      if (!popup || !popup.closed) return;
+      redditPopupRef.current = null;
+      setRedditStarting(false);
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [redditStarting]);
 
   // The OAuth popup's callback page announces success the instant tokens are
   // stored — no waiting on the status poll (which stays as the fallback).
@@ -467,14 +609,26 @@ export default function ShibaStudio() {
       if (e.origin !== window.location.origin && !loopback) return;
       if (e.data === 'shiba-oauth:connected') void handleOAuthConnected();
       else if (e.data === 'shiba-drive:connected') void handleDriveConnected();
+      else if (e.data === 'shiba-reddit:connected' && e.origin === window.location.origin) void handleRedditConnected();
+      else if (e.data === 'shiba-reddit:error' && e.origin === window.location.origin) {
+        try { redditPopupRef.current?.close(); } catch { /* already closed */ }
+        redditPopupRef.current = null;
+        setRedditStarting(false);
+        toast.error('Reddit sign-in failed or was cancelled.');
+        void refreshRedditStatus();
+      }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [handleOAuthConnected, handleDriveConnected]);
+  }, [handleOAuthConnected, handleDriveConnected, handleRedditConnected, refreshRedditStatus]);
 
   useEffect(() => {
     if (tab === 'settings') void refreshOAuthStatus();
   }, [tab]);
+
+  useEffect(() => {
+    if (tab === 'integrations') void refreshRedditStatus();
+  }, [tab, refreshRedditStatus]);
 
   useEffect(() => {
     if (tab !== 'settings') return;
@@ -496,6 +650,23 @@ export default function ShibaStudio() {
     }
     router.replace('/settings');
   }, [tab, searchParams, router, handleOAuthConnected, handleDriveConnected]);
+
+  // Popup-blocked OAuth falls back to the current tab. Consume the callback
+  // query once, then restore the clean Capabilities URL.
+  useEffect(() => {
+    if (tab !== 'integrations') return;
+    const reddit = searchParams.get('reddit');
+    if (!reddit) return;
+    const message = searchParams.get('message') || undefined;
+    router.replace('/capabilities');
+    if (reddit === 'connected') {
+      void handleRedditConnected();
+    } else if (reddit === 'error') {
+      setRedditStarting(false);
+      toast.error(message || 'Reddit sign-in failed');
+      void refreshRedditStatus();
+    }
+  }, [tab, searchParams, router, handleRedditConnected, refreshRedditStatus]);
 
   // Seed from module cache so remounts/tab hops never show a false empty list.
   const [agents, setAgents] = useState<Agent[]>(() => getCachedAgents() ?? []);
@@ -616,7 +787,7 @@ export default function ShibaStudio() {
 
   // Integrations form state
   // Seed from the module cache so a shell remount (tab nav) never flashes
-  // configured integrations as "Not set up" while /api/integrations re-fetches.
+  // configured integrations as "Not set up" while /api/config hydrates.
   const [intCreds, setIntCreds] = useState<any>(() => getCachedIntegrationCreds());
   const [intTest, setIntTest] = useState<any>({});
   const [intSaving, setIntSaving] = useState<Record<string, boolean>>({});
@@ -627,6 +798,7 @@ export default function ShibaStudio() {
     if (id === 'obsidian') return !!(creds.vaultPath?.trim() || creds.restApiUrl?.trim());
     if (id === 'linear') return !!creds.apiKey?.trim();
     if (id === 'jira') return !!(creds.baseUrl?.trim() && creds.email?.trim() && creds.apiToken?.trim());
+    if (id === 'reddit') return !!(creds.clientId?.trim() && creds.clientSecret?.trim());
     return Object.entries(creds).some(([k, v]) => k !== 'mode' && typeof v === 'string' && v.trim().length > 0);
   }
   const [folderBrowseFor, setFolderBrowseFor] = useState<'obsidian' | 'workspace' | 'mcp' | null>(null);
@@ -719,8 +891,7 @@ export default function ShibaStudio() {
     // Module snapshot already has CLI from this tab session → skip re-probe on remount.
     if (snap?.grokCli) return;
 
-    fetch('/api/grok-cli/status')
-      .then((r) => r.json())
+    loadClientJson<any>('/api/grok-cli/status', { maxAgeMs: 10 * 60_000 })
       .then((data) => {
         const next = {
           installed: !!data.installed,
@@ -743,21 +914,32 @@ export default function ShibaStudio() {
   const [navStatsLoaded, setNavStatsLoaded] = useState(() => isNavStatsLoaded());
   const [cliUpdate, setCliUpdate] = useState<{ checking: boolean; text?: string; available?: boolean }>({ checking: false });
   /** Live commit of the tree this server process is serving (refreshed via /api/version). */
-  const [runtimeVersion, setRuntimeVersion] = useState<{
-    version: string;
-    commit: string;
-    commitFull: string | null;
-    dirty: boolean;
-    root?: string;
-  }>({ version: APP_VERSION, commit: GIT_COMMIT_FALLBACK, commitFull: null, dirty: false });
-  const [updateNotice, setUpdateNotice] = useState<{ latest: string; url: string | null } | null>(null);
+  const [runtimeVersion, setRuntimeVersion] = useState<RuntimeVersionState>(() => (
+    cachedRuntimeVersion
+      ?? { version: APP_VERSION, commit: GIT_COMMIT_FALLBACK, commitFull: null, dirty: false }
+  ));
+  const [updateNotice, setUpdateNotice] = useState<{ latest: string; url: string | null } | null>(
+    () => cachedUpdateNotice,
+  );
   // One release-update probe per app load (server caches the GitHub call 6h).
   useEffect(() => {
-    fetch('/api/version?checkUpdate=1', { cache: 'no-store' })
-      .then((r) => r.json())
+    loadClientJson<any>('/api/version?checkUpdate=1', { maxAgeMs: 6 * 60 * 60_000 })
       .then((d) => {
+        if (d?.ok && d.commit) {
+          const next: RuntimeVersionState = {
+            version: d.version || APP_VERSION,
+            commit: d.commit,
+            commitFull: d.commitFull || null,
+            dirty: !!d.dirty,
+            root: d.root,
+          };
+          cachedRuntimeVersion = next;
+          setRuntimeVersion(next);
+        }
         if (d?.update?.updateAvailable && d.update.latest) {
-          setUpdateNotice({ latest: d.update.latest, url: d.update.url || null });
+          const next = { latest: d.update.latest as string, url: (d.update.url || null) as string | null };
+          cachedUpdateNotice = next;
+          setUpdateNotice(next);
         }
       })
       .catch(() => { /* offline — no notice */ });
@@ -781,16 +963,17 @@ export default function ShibaStudio() {
 
   async function refreshRuntimeVersion() {
     try {
-      const res = await fetch('/api/version', { cache: 'no-store' });
-      const data = await res.json();
+      const data = await loadClientJson<any>('/api/version', { maxAgeMs: 55_000 });
       if (data.ok && data.commit) {
-        setRuntimeVersion({
+        const next: RuntimeVersionState = {
           version: data.version || APP_VERSION,
           commit: data.commit,
           commitFull: data.commitFull || null,
           dirty: !!data.dirty,
           root: data.root,
-        });
+        };
+        cachedRuntimeVersion = next;
+        setRuntimeVersion(next);
       }
     } catch {
       /* keep last known / fallback */
@@ -825,8 +1008,7 @@ export default function ShibaStudio() {
    */
   async function loadNavStats() {
     try {
-      const res = await fetch('/api/nav-stats');
-      const data = await res.json();
+      const data = await loadClientJson<any>('/api/nav-stats');
       if (data.ok) {
         const next: NavStats = {
           tasksActive: data.tasksActive ?? 0,
@@ -853,15 +1035,15 @@ export default function ShibaStudio() {
     }
   }
 
-  function pickDefaultModel(current?: string): string {
-    if (current && availableModels.some(m => m.id === current)) return current;
+  function pickDefaultModel(current?: string, catalog: ModelOption[] = availableModels): string {
+    if (current && catalog.some(m => m.id === current)) return current;
     const configured = config?.defaultGrokModel || defaultModelInput;
-    if (configured && availableModels.some(m => m.id === configured)) return configured;
-    const preferred = availableModels.find(m => /grok-4(?!.*fast)/i.test(m.id))
-      || availableModels.find(m => m.id.includes('grok-4'))
-      || availableModels.find(m => m.id.includes('grok-3'))
-      || availableModels.find(m => m.id.includes('grok'))
-      || availableModels[0];
+    if (configured && catalog.some(m => m.id === configured)) return configured;
+    const preferred = catalog.find(m => /grok-4(?!.*fast)/i.test(m.id))
+      || catalog.find(m => m.id.includes('grok-4'))
+      || catalog.find(m => m.id.includes('grok-3'))
+      || catalog.find(m => m.id.includes('grok'))
+      || catalog[0];
     return preferred?.id || current || configured || 'cloud:grok-4';
   }
 
@@ -869,8 +1051,8 @@ export default function ShibaStudio() {
     setModelsLoading(true);
     setModelsError(null);
     try {
-      const res = await fetch('/api/models');
-      const data = await res.json();
+      if (opts?.forceProviderProbe) invalidateClientJson('/api/models');
+      const data = await loadClientJson<any>('/api/models');
       if (data.ok && Array.isArray(data.models) && data.models.length > 0) {
         const mapped: ModelOption[] = data.models.map((m: ModelOption) => ({
           id: m.id,
@@ -890,11 +1072,11 @@ export default function ShibaStudio() {
             patchProvidersUiSnapshot({ localGrokReachable: !!data.localReachable });
           }
         }
-        setChatModel((current) => pickDefaultModel(current));
-        const resolvedDefault = pickDefaultModel(config?.defaultGrokModel || defaultModelInput || undefined);
+        setChatModel((current) => pickDefaultModel(current, mapped));
+        const resolvedDefault = pickDefaultModel(config?.defaultGrokModel || defaultModelInput || undefined, mapped);
         if (config?.defaultGrokModel) setDefaultModelInput(config.defaultGrokModel);
         else if (!defaultModelInput) setDefaultModelInput(resolvedDefault);
-        setAgentForm((f: any) => ({ ...f, model: pickDefaultModel(f.model) }));
+        setAgentForm((f: any) => ({ ...f, model: pickDefaultModel(f.model, mapped) }));
       } else {
         setAvailableModels([]);
         const errMsg = data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings');
@@ -961,7 +1143,7 @@ export default function ShibaStudio() {
   /** Refresh the run list alone (dashboard/automations data — changes often). */
   async function refreshRuns() {
     try {
-      const rRes = await fetch('/api/runs').then((r) => r.json());
+      const rRes = await loadClientJson<any>('/api/runs');
       if (Array.isArray(rRes.runs)) applyRuns(rRes.runs);
     } catch {
       /* keep last runs */
@@ -1040,33 +1222,33 @@ export default function ShibaStudio() {
 
   // Load everything. Each part applies independently (allSettled) — one
   // failing endpoint must not blank the other three until the next refresh.
-  async function loadAll() {
+  type StudioSlice = 'agents' | 'runs' | 'config';
+  async function loadAll(slices?: StudioSlice[]) {
     try {
+      const selected = new Set<StudioSlice>(slices ?? ['agents', 'runs', 'config']);
       const settle = <T,>(r: PromiseSettledResult<T>): T | null =>
         r.status === 'fulfilled' ? r.value : null;
-      const [aResS, rResS, cResS, intResS] = await Promise.allSettled([
-        fetch('/api/agents').then(r => r.json()),
-        fetch('/api/runs').then(r => r.json()),
-        fetch('/api/config').then(r => r.json()),
-        fetch('/api/integrations').then(r => r.json()),
+      const [aResS, rResS, cResS] = await Promise.allSettled([
+        selected.has('agents') ? loadClientJson<any>('/api/agents') : Promise.resolve(null),
+        selected.has('runs') ? loadClientJson<any>('/api/runs') : Promise.resolve(null),
+        selected.has('config') ? loadClientJson<any>('/api/config') : Promise.resolve(null),
       ]);
       const aRes = settle(aResS);
       const rRes = settle(rResS);
       const cRes = settle(cResS);
-      const intRes = settle(intResS);
-      if (aRes) {
-        const nextAgents = (aRes.agents || []) as Agent[];
+      if (aRes && Array.isArray(aRes.agents)) {
+        const nextAgents = aRes.agents as Agent[];
         setCachedAgents(nextAgents);
         setAgents(nextAgents);
         setAgentsReady(true);
       }
-      if (rRes) applyRuns(rRes.runs || []);
-      if (intRes?.integrations) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...intRes.integrations };
+      if (rRes && Array.isArray(rRes.runs)) applyRuns(rRes.runs);
+      if (!cRes || typeof cRes !== 'object') return;
+      if (cRes.integrations) {
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...cRes.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
-      if (!cRes) return;
       const cfg = cRes;
       const { nextOauth, nextAuthMode, nextLocalEnabled, nextLocalBase, nextAllowlist } = applyConfigToForms(cfg);
       // Persist Providers rail picture for remounts / tab hops (skip full loadAll).
@@ -1090,25 +1272,28 @@ export default function ShibaStudio() {
         apiKeyMasked: (cfg as any).hasKey ? String((cfg as any).xaiApiKey || '') : '',
         managementKeyMasked: (cfg as any).hasManagementKey ? String((cfg as any).xaiManagementKey || '') : '',
       });
-      // Boot ping — hydrates server config; schedule arming is idempotent
-      // (instrumentation.ts already armed everything at server start).
-      // Also carries live commit SHA of the tree Node is serving.
-      fetch('/api/boot')
-        .then((r) => r.json())
-        .then((data) => {
-          if (data?.commit) {
-            setRuntimeVersion({
-              version: data.version || APP_VERSION,
-              commit: data.commit,
-              commitFull: data.commitFull || null,
-              dirty: !!data.dirty,
-              root: data.root,
-            });
-          }
-        })
-        .catch(() => { void refreshRuntimeVersion(); });
     } catch (e) {
       console.error(e);
+    }
+  }
+
+  async function ensureServerBooted() {
+    try {
+      // Instrumentation normally starts these services. This is one readiness
+      // fallback per browser load, never a side effect of ordinary refreshes.
+      const data = await loadClientJson<any>('/api/boot', { maxAgeMs: 24 * 60 * 60_000 });
+      if (!data?.commit) return;
+      const next: RuntimeVersionState = {
+        version: data.version || APP_VERSION,
+        commit: data.commit,
+        commitFull: data.commitFull || null,
+        dirty: !!data.dirty,
+        root: data.root,
+      };
+      cachedRuntimeVersion = next;
+      setRuntimeVersion(next);
+    } catch {
+      void refreshRuntimeVersion();
     }
   }
 
@@ -1146,40 +1331,25 @@ export default function ShibaStudio() {
       }
       // Runs change constantly — the cache painted the first frame; refresh now
       // instead of waiting out the 30s poll.
-      void refreshRuns();
+      if (Date.now() - clientJsonLoadedAt('/api/runs') > 30_000) void refreshRuns();
       // Cold caches (HMR / partial remount) — full hydrate once.
       if (!hasCachedAgents() && !hasProvidersUiSnapshot()) {
         void loadAll();
       }
       return;
     }
-    studioBootstrapped = true;
-    loadAll();
-    void loadNavStats();
+    void Promise.allSettled([loadAll(), loadNavStats(), ensureServerBooted()]).then(() => {
+      // A partial cold-load failure remains retryable on the next shell mount.
+      studioBootstrapped = hasCachedAgents() && hasProvidersUiSnapshot();
+    });
   }, []);
 
-  // Usage badge alone: refresh the cost figure every 15 minutes (not entity counts).
+  // Refresh the shared badge snapshot every 15 minutes. Invalidation forces a
+  // real fallback poll while still coalescing with a simultaneous SSE refresh.
   useEffect(() => {
-    const t = setInterval(async () => {
-      try {
-        const res = await fetch('/api/nav-stats');
-        const data = await res.json();
-        if (data.ok) {
-          setNavStats((prev) => {
-            const next: NavStats = {
-              ...prev,
-              usageCostUsd: data.usageCostUsd ?? prev.usageCostUsd,
-              usageCostSource: data.usageCostSource === 'xai'
-                ? 'xai'
-                : (data.usageCostSource === 'local' ? 'local' : prev.usageCostSource),
-            };
-            writeCachedNavStats(next);
-            return next;
-          });
-        }
-      } catch {
-        /* keep previous figure */
-      }
+    const t = setInterval(() => {
+      invalidateClientJson('/api/nav-stats');
+      void loadNavStats();
     }, 15 * 60_000);
     return () => clearInterval(t);
   }, []);
@@ -1197,26 +1367,21 @@ export default function ShibaStudio() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled, localGrokEnabled]);
 
-  // Local reachability for Providers rail — use 10‑min cache; only probe when stale.
+  // Local reachability and Settings model choices share one probe decision.
+  // Keeping these in separate effects caused two identical POST probes when
+  // Settings opened while the provider cache was stale.
   useEffect(() => {
     if (!localGrokEnabled && !(config as any)?.localGrokEnabled) return;
     const cache = readProviderStatusCache();
-    if (providerStatusCacheFresh(cache) && cache?.localGrokReachable != null) {
+    const fresh = providerStatusCacheFresh(cache) && cache?.localGrokReachable != null;
+    if (fresh) {
       setLocalGrokReachable(!!cache.localGrokReachable);
-      return;
     }
+    const needsSettingsOptions = tab === 'settings' && localModelOptions.length === 0;
+    if (fresh && !needsSettingsOptions) return;
     void fetchLocalModelOptions({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localGrokEnabled, (config as any)?.localGrokEnabled]);
-
-  // Settings → Local models list: only refresh options when cache is stale.
-  useEffect(() => {
-    if (tab !== 'settings' || !localGrokEnabled) return;
-    const cache = readProviderStatusCache();
-    if (providerStatusCacheFresh(cache) && cache?.localGrokReachable != null && localModelOptions.length > 0) return;
-    void fetchLocalModelOptions({ silent: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, localGrokEnabled]);
+  }, [tab, localGrokEnabled, (config as any)?.localGrokEnabled, localModelOptions.length]);
 
   /**
    * A run hyperlink targets its agent's configuration + log. Execution traces
@@ -1271,6 +1436,9 @@ export default function ShibaStudio() {
   }
 
   function closeRunDetail() {
+    runDetailTargetRef.current = null;
+    runDetailRequestRef.current?.abort();
+    runDetailRequestRef.current = null;
     setRunDetail(null);
     setRunDetailLoading(false);
   }
@@ -1292,11 +1460,10 @@ export default function ShibaStudio() {
    *  live poll then shows it as cancelled. */
   async function cancelRun(runId: string | undefined) {
     if (!runId || runId === 'streaming') {
-      // Live ad-hoc run whose id hasn't landed yet — fall back to the agent's
-      // running run from the runs list.
-      runId = runs.find((r) => r.status === 'running')?.id;
+      // The server announces the exact id before trace events; never guess.
+      toast('This run is still starting. Its cancel control will be ready in a moment.');
+      return;
     }
-    if (!runId) { toast.error('No running run to cancel.'); return; }
     try {
       const res = await fetch('/api/execute/cancel', {
         method: 'POST',
@@ -1317,24 +1484,25 @@ export default function ShibaStudio() {
     if (tab !== 'automations') return;
     const runId = searchParams.get('run');
     if (!runId) return;
-    let cancelled = false;
+    const request = new AbortController();
     (async () => {
       try {
         // Runs list holds lightweight summaries — fetch the full trace here.
-        const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
-        const data = await res.json();
+        const data = await loadClientJson<any>(`/api/runs?id=${encodeURIComponent(runId)}`, {
+          signal: request.signal,
+        });
         if (!data.ok || !data.run) throw new Error(data.error || 'Run not found');
-        if (cancelled) return;
+        if (request.signal.aborted) return;
         setActiveRun(data.run);
         setLiveTrace(Array.isArray(data.run.trace) ? data.run.trace : []);
         setPreviewSelectedIdx(null);
         setPendingRunAgent({ agentId: data.run.agentId, agentName: data.run.agentName });
         setShowTraceModal(true); // deep link = explicit intent to see the trace
       } catch (e: unknown) {
-        if (!cancelled) toast.error(e instanceof Error ? e.message : 'Could not load run');
+        if (!request.signal.aborted) toast.error(e instanceof Error ? e.message : 'Could not load run');
       }
     })();
-    return () => { cancelled = true; };
+    return () => request.abort();
   }, [tab, searchParams]);
 
   // Run deep links open the trace modal only — never the agent editor. This
@@ -1351,22 +1519,32 @@ export default function ShibaStudio() {
   // Per-agent run history (History button on agent cards)
   const [historyAgent, setHistoryAgent] = useState<Agent | null>(null);
   const [historyRuns, setHistoryRuns] = useState<RunSummaryLite[] | null>(null);
+  const historyRequestRef = useRef<AbortController | null>(null);
 
   async function openRunHistory(agent: Agent) {
+    historyRequestRef.current?.abort();
+    const request = new AbortController();
+    historyRequestRef.current = request;
     setHistoryAgent(agent);
     setHistoryRuns(null);
     try {
-      const res = await fetch(`/api/runs?agentId=${encodeURIComponent(agent.id)}&limit=50`);
-      const data = await res.json();
+      const data = await loadClientJson<any>(
+        `/api/runs?agentId=${encodeURIComponent(agent.id)}&limit=50`,
+        { signal: request.signal },
+      );
       let list: RunSummaryLite[] = data.ok ? (data.runs || []) : [];
       if (list.length === 0) {
         // Agent may have been re-created with a new id — fall back to name match.
-        const all = await fetch('/api/runs?limit=200').then((r) => r.json()).catch(() => null);
+        const all = await loadClientJson<any>('/api/runs?limit=200', { signal: request.signal }).catch(() => null);
         list = ((all?.ok && all.runs) || []).filter((r: RunSummaryLite) => r.agentName === agent.name);
       }
-      setHistoryRuns(list);
-    } catch {
-      setHistoryRuns([]);
+      if (historyRequestRef.current === request) setHistoryRuns(list);
+    } catch (error) {
+      if (historyRequestRef.current === request && !(error instanceof Error && error.name === 'AbortError')) {
+        setHistoryRuns([]);
+      }
+    } finally {
+      if (historyRequestRef.current === request) historyRequestRef.current = null;
     }
   }
 
@@ -1394,34 +1572,49 @@ export default function ShibaStudio() {
   // tools, skills, side effects in one place.
   const [runDetail, setRunDetail] = useState<AgentRun | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
+  const runDetailRequestRef = useRef<AbortController | null>(null);
+  const runDetailTargetRef = useRef<string | null>(null);
 
   async function openRunDetails(runId: string) {
+    runDetailRequestRef.current?.abort();
+    const request = new AbortController();
+    runDetailRequestRef.current = request;
+    runDetailTargetRef.current = runId;
     setRunDetailLoading(true);
     try {
-      const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
-      const data = await res.json();
+      const data = await loadClientJson<any>(`/api/runs?id=${encodeURIComponent(runId)}`, {
+        signal: request.signal,
+      });
       if (!data.ok || !data.run) throw new Error(data.error || 'Run not found');
-      setRunDetail(data.run);
+      if (runDetailRequestRef.current === request && runDetailTargetRef.current === runId) {
+        setRunDetail(data.run);
+      }
     } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'Could not load run');
+      if (runDetailRequestRef.current === request && !(e instanceof Error && e.name === 'AbortError')) {
+        toast.error(e instanceof Error ? e.message : 'Could not load run');
+      }
+    } finally {
+      if (runDetailRequestRef.current === request) {
+        runDetailRequestRef.current = null;
+        setRunDetailLoading(false);
+      }
     }
-    setRunDetailLoading(false);
   }
 
   /** Refresh the open run-details modal without the loading flicker — used to
    *  poll a run that's still executing so status/trace update live. */
   async function refreshRunDetailQuiet(runId: string) {
     try {
-      const res = await fetch(`/api/runs?id=${encodeURIComponent(runId)}`);
-      const data = await res.json();
-      if (data.ok && data.run) setRunDetail(data.run);
+      const url = `/api/runs?id=${encodeURIComponent(runId)}`;
+      invalidateClientJson(url);
+      const data = await loadClientJson<any>(url);
+      if (data.ok && data.run && runDetailTargetRef.current === runId) setRunDetail(data.run);
     } catch { /* keep the last snapshot on a transient error */ }
   }
 
   /** Open the live status/trace for a running automation (its running run). */
   function openRunningRun(scheduleId: string) {
-    const running = runs.find((r) => r.scheduleId === scheduleId && r.status === 'running')
-      || runs.find((r) => r.status === 'running' && !r.scheduleId);
+    const running = runs.find((r) => r.scheduleId === scheduleId && r.status === 'running');
     if (running) { void openRunDetails(running.id); return; }
     toast('This automation is starting — its trace will appear in a moment.');
   }
@@ -1434,24 +1627,33 @@ export default function ShibaStudio() {
     if (!runDetailId || runDetailStatus !== 'running') return;
     const t = window.setInterval(() => { void refreshRunDetailQuiet(runDetailId); }, 2500);
     return () => window.clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshRunDetailQuiet is stable enough; keyed to the running run
   }, [runDetailId, runDetailStatus]);
 
   // Automations tab: what has actually run (scheduled executions), per agent
   const [scheduledRuns, setScheduledRuns] = useState<RunSummaryLite[] | null>(null);
+  const scheduledRunsRequestRef = useRef<AbortController | null>(null);
+
+  async function refreshScheduledRuns(force = false) {
+    scheduledRunsRequestRef.current?.abort();
+    const request = new AbortController();
+    scheduledRunsRequestRef.current = request;
+    if (force) invalidateClientJson(SCHEDULED_RUNS_URL);
+    try {
+      const data = await loadClientJson<any>(SCHEDULED_RUNS_URL, { signal: request.signal });
+      if (scheduledRunsRequestRef.current === request && data.ok) setScheduledRuns(data.runs || []);
+    } catch (error) {
+      if (scheduledRunsRequestRef.current === request && !(error instanceof Error && error.name === 'AbortError')) {
+        setScheduledRuns([]);
+      }
+    } finally {
+      if (scheduledRunsRequestRef.current === request) scheduledRunsRequestRef.current = null;
+    }
+  }
+
   useEffect(() => {
     if (tab !== 'automations') return;
-    let stale = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/runs?scheduledOnly=1&limit=200');
-        const data = await res.json();
-        if (!stale && data.ok) setScheduledRuns(data.runs || []);
-      } catch {
-        if (!stale) setScheduledRuns([]);
-      }
-    })();
-    return () => { stale = true; };
+    void refreshScheduledRuns();
+    return () => scheduledRunsRequestRef.current?.abort();
   }, [tab]);
 
   /** Create-automation form on the Automations page (no full agent editor). */
@@ -1552,8 +1754,9 @@ export default function ShibaStudio() {
 
   // Agents CRUD
   async function refreshAgents() {
-    const res = await fetch('/api/agents').then(r => r.json());
-    const nextAgents = (res.agents || []) as Agent[];
+    const res = await loadClientJson<{ agents?: Agent[] }>('/api/agents');
+    if (!Array.isArray(res.agents)) return;
+    const nextAgents = res.agents;
     setCachedAgents(nextAgents);
     setAgents(nextAgents);
     setAgentsReady(true);
@@ -1581,8 +1784,18 @@ export default function ShibaStudio() {
       setShowAgentModal(false);
       setEditingAgent(null);
       setHighlightScheduleIdx(null);
-      await refreshAgents();
-      await loadAll();
+      const saved = data.agent as Agent;
+      const nextAgents = isEdit
+        ? agents.map((agent) => agent.id === saved.id ? saved : agent)
+        : [...agents, saved];
+      setCachedAgents(nextAgents);
+      setAgents(nextAgents);
+      setAgentsReady(true);
+      // The mutation response is authoritative for this editor. Leave one
+      // invalidation for other consumers instead of immediately GETing twice.
+      invalidateClientJson('/api/agents');
+      invalidateClientJson('/api/nav-stats');
+      await loadNavStats();
     } catch (e: any) { toast.error(e.message); }
     setLoading(false);
   }
@@ -1761,8 +1974,7 @@ export default function ShibaStudio() {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/tts');
-        const data = await res.json();
+        const data = await loadClientJson<any>('/api/tts', { maxAgeMs: 10 * 60_000 });
         if (cancelled || !data.ok || !Array.isArray(data.voices) || !data.voices.length) return;
         setAgentVoiceOptions(data.voices);
       } catch {
@@ -1900,6 +2112,7 @@ export default function ShibaStudio() {
               approvalId?: string;
               toolName?: string;
               args?: Record<string, unknown>;
+              runId?: string;
             };
             try {
               event = JSON.parse(payload);
@@ -1907,7 +2120,22 @@ export default function ShibaStudio() {
               continue;
             }
 
-            if (event.type === 'trace' && event.step) {
+            if (event.type === 'run_started' && event.runId) {
+              setActiveRun((prev) => ({
+                ...(prev || {
+                  agentId: agent.id,
+                  agentName: agent.name,
+                  prompt: p,
+                  model: agent.model,
+                  startedAt: new Date().toISOString(),
+                  trace: [],
+                  sideEffects: [],
+                }),
+                id: event.runId!,
+                status: 'running',
+                ...(runProjectId ? { projectId: runProjectId } : {}),
+              }));
+            } else if (event.type === 'trace' && event.step) {
               setLiveTrace((prev) => [...prev, event.step]);
               setActiveRun((prev) => {
                 const base: AgentRun = prev || {
@@ -1948,11 +2176,19 @@ export default function ShibaStudio() {
       }
 
       if (!run) throw new Error('Agent run did not complete');
-      await loadAll();
+      invalidateClientJson('/api/runs');
+      invalidateClientJson(SCHEDULED_RUNS_URL);
+      await refreshRuns();
       toast.success(`Agent "${agent.name}" finished — ${run.status}`);
     } catch (e: any) {
       toast.error(e.message);
       setLiveTrace((prev) => [...prev, { type: 'error', content: e.message }]);
+      setActiveRun((prev) => prev ? {
+        ...prev,
+        status: 'error',
+        completedAt: new Date().toISOString(),
+        finalOutput: e.message,
+      } : prev);
     }
   }
 
@@ -2126,7 +2362,7 @@ export default function ShibaStudio() {
   }
 
   // Integrations
-  async function saveIntegration(which: string) {
+  async function saveIntegration(which: string, options: { silent?: boolean } = {}): Promise<boolean> {
     setIntSaving((s) => ({ ...s, [which]: true }));
     try {
       const res = await fetch('/api/integrations', {
@@ -2137,25 +2373,31 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (data.integrations) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
       const label = getIntegrationMeta(which)?.label || which;
-      toast.success(`${label} credentials saved`);
-    } catch (e: any) {
-      toast.error(e.message);
+      if (which === 'reddit') await refreshRedditStatus();
+      if (!options.silent) toast.success(`${label} credentials saved`);
+      return true;
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not save integration credentials');
+      return false;
+    } finally {
+      setIntSaving((s) => ({ ...s, [which]: false }));
     }
-    setIntSaving((s) => ({ ...s, [which]: false }));
   }
 
   async function deleteIntegration(which: string) {
     const label = getIntegrationMeta(which)?.label || which;
     const ok = await confirmDialog({
       title: `Remove ${label} credentials?`,
-      message: which === 'linear' || which === 'jira'
-        ? 'Stored credentials are deleted from this machine. Existing issue links remain on Board, but sync is unavailable until you reconnect.'
-        : 'Stored credentials for this integration are deleted from this machine. Agents lose access until you reconfigure it.',
+      message: which === 'reddit'
+        ? 'The Reddit OAuth session is revoked and all saved Reddit app credentials are deleted from this machine. Agents lose access until you reconfigure it.'
+        : which === 'linear' || which === 'jira'
+          ? 'Stored credentials are deleted from this machine. Existing issue links remain on Board, but sync is unavailable until you reconnect.'
+          : 'Stored credentials for this integration are deleted from this machine. Agents lose access until you reconfigure it.',
       confirmLabel: 'Remove',
       danger: true,
     });
@@ -2169,11 +2411,12 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (data.integrations) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
+        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
       setIntTest((t: any) => ({ ...t, [which]: undefined }));
+      if (which === 'reddit') await refreshRedditStatus();
       await loadNavStats();
       toast.success(`${label} credentials removed`);
     } catch (e: unknown) {
@@ -2185,6 +2428,7 @@ export default function ShibaStudio() {
     const res = await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'test', which, creds: intCreds }) });
     const data = await res.json();
     setIntTest((t: any) => ({ ...t, [which]: data }));
+    if (which === 'reddit') await refreshRedditStatus();
     if (data.ok) toast.success(`${which} connected`); else toast.error(`${which}: ${data.error || 'failed'}`);
   }
 
@@ -2196,7 +2440,8 @@ export default function ShibaStudio() {
     if (data.ok) {
       markSettingsTested('apiKey', true);
       toast.success('Grok API key validated & saved');
-      await loadAll();
+      invalidateClientJson('/api/config');
+      await loadAll(['config']);
       await loadModels();
     } else {
       markSettingsTested('apiKey', false);
@@ -2227,7 +2472,8 @@ export default function ShibaStudio() {
     setApiKeyInput('');
     markSettingsTested('apiKey', false);
     toast.success('API key cleared');
-    await loadAll();
+    invalidateClientJson('/api/config');
+    await loadAll(['config']);
     await loadModels();
   }
 
@@ -2242,7 +2488,8 @@ export default function ShibaStudio() {
     if (data.ok) {
       toast.success('Management key saved — Usage will pull xAI billing data');
       setManagementKeyInput(maskSecret(managementKeyInput));
-      await loadAll();
+      invalidateClientJson('/api/config');
+      await loadAll(['config']);
       await loadNavStats();
     } else {
       toast.error(data.error || 'Failed to save management key');
@@ -2298,13 +2545,13 @@ export default function ShibaStudio() {
     setManagementKeyInput('');
     markSettingsTested('managementKey', false);
     toast.success('Management key cleared');
-    await loadAll();
+    invalidateClientJson('/api/config');
+    await loadAll(['config']);
   }
 
   async function refreshOAuthStatus() {
     try {
-      const res = await fetch('/api/xai-oauth/status');
-      const data = await res.json();
+      const data = await loadClientJson<any>('/api/xai-oauth/status', { maxAgeMs: 5_000 });
       if (data.ok) {
         const next: CachedOauthStatus = {
           connected: !!data.connected,
@@ -2331,8 +2578,8 @@ export default function ShibaStudio() {
         return;
       }
       try {
-        const res = await fetch('/api/xai-oauth/status');
-        const data = await res.json();
+        invalidateClientJson('/api/xai-oauth/status');
+        const data = await loadClientJson<any>('/api/xai-oauth/status');
         if (data.ok && data.connected) {
           await handleOAuthConnected('Signed in with X (OAuth)');
         }
@@ -2415,7 +2662,82 @@ export default function ShibaStudio() {
     await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'disconnect-drive' }) });
     setIntTest((t: any) => ({ ...t, googledrive: undefined }));
     toast.success('Google Drive disconnected');
-    await loadAll();
+    invalidateClientJson('/api/config');
+    invalidateClientJson('/api/integrations');
+    await loadAll(['config']);
+  }
+
+  async function startRedditLogin() {
+    // Open synchronously with the click so browser popup blockers do not race
+    // the credential save and OAuth-start requests.
+    const popup = window.open('about:blank', 'shiba-reddit-oauth', 'width=520,height=760,menubar=no,toolbar=no,location=yes');
+    redditPopupRef.current = popup;
+    setRedditStarting(true);
+
+    const saved = await saveIntegration('reddit', { silent: true });
+    if (!saved) {
+      try { popup?.close(); } catch { /* already closed */ }
+      redditPopupRef.current = null;
+      setRedditStarting(false);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/reddit-oauth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok || !data.authorizeUrl) {
+        throw new Error(data.error || 'Failed to start Reddit sign-in');
+      }
+      if (popup && !popup.closed) {
+        popup.location.href = data.authorizeUrl;
+        popup.focus();
+        toast.success('Approve access in the Reddit popup — this page updates automatically.');
+      } else {
+        window.location.assign(data.authorizeUrl);
+        return;
+      }
+    } catch (error: unknown) {
+      try { popup?.close(); } catch { /* already closed */ }
+      redditPopupRef.current = null;
+      setRedditStarting(false);
+      toast.error(error instanceof Error ? error.message : 'Reddit sign-in failed');
+    }
+  }
+
+  async function disconnectReddit() {
+    const ok = await confirmDialog({
+      title: 'Disconnect Reddit?',
+      message: 'Shiba will revoke the Reddit session and remove its tokens. Your saved app client and User-Agent stay ready for reconnecting.',
+      confirmLabel: 'Disconnect',
+      danger: true,
+    });
+    if (!ok) return;
+
+    try {
+      const res = await fetch('/api/reddit-oauth/logout', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || 'Could not disconnect Reddit');
+      setIntTest((current: Record<string, unknown>) => ({ ...current, reddit: undefined }));
+      invalidateClientJson('/api/config');
+      invalidateClientJson('/api/integrations');
+      invalidateClientJson('/api/reddit-oauth/status');
+      await loadAll(['config']);
+      await refreshRedditStatus();
+      await loadNavStats();
+      toast.success('Reddit disconnected');
+      if (typeof data.warning === 'string') toast.warning(data.warning);
+      if (Array.isArray(data.warnings)) {
+        for (const warning of data.warnings) {
+          if (typeof warning === 'string') toast.warning(warning);
+        }
+      }
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Could not disconnect Reddit');
+    }
   }
 
   async function exchangeOAuthCallback() {
@@ -2444,12 +2766,22 @@ export default function ShibaStudio() {
     });
     if (!ok) return;
     stopOAuthPolling();
-    await fetch('/api/xai-oauth/logout', { method: 'POST' });
-    setOauthStatus({ connected: false, expired: false });
-    patchProvidersUiSnapshot({ oauthStatus: { connected: false, expired: false } });
-    toast.success('OAuth disconnected');
-    await loadAll();
-    await loadModels();
+    try {
+      const response = await fetch('/api/xai-oauth/logout', { method: 'POST' });
+      const data = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!response.ok || data.ok === false) throw new Error(data.error || 'Could not disconnect OAuth with X');
+      setOauthStatus({ connected: false, expired: false });
+      patchProvidersUiSnapshot({ oauthStatus: { connected: false, expired: false } });
+      toast.success('OAuth disconnected');
+      invalidateClientJson('/api/config');
+      invalidateClientJson('/api/integrations');
+      invalidateClientJson('/api/models');
+      await loadAll(['config']);
+      await loadModels();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not disconnect OAuth with X');
+      await refreshOAuthStatus();
+    }
   }
 
   async function saveCloudAuthMode(mode: 'api_key' | 'oauth') {
@@ -2833,8 +3165,7 @@ export default function ShibaStudio() {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/tts');
-        const data = await res.json();
+        const data = await loadClientJson<any>('/api/tts', { maxAgeMs: 10 * 60_000 });
         if (cancelled || !data.ok || !Array.isArray(data.voices) || !data.voices.length) return;
         setAgentVoiceOptions(data.voices);
       } catch {
@@ -2911,7 +3242,7 @@ export default function ShibaStudio() {
     let cancelled = false;
     const cfg = config;
     (async () => {
-      await fetch('/api/agents', {
+      const response = await fetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2924,7 +3255,15 @@ export default function ShibaStudio() {
           schedule: { enabled: true, cron: '0 */2 * * *' },
         }),
       });
-      if (!cancelled) await refreshAgents();
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.agent) return;
+      if (!cancelled) {
+        const nextAgents = [data.agent as Agent];
+        setClientJsonSnapshot('/api/agents', { agents: nextAgents });
+        setCachedAgents(nextAgents);
+        setAgents(nextAgents);
+        setAgentsReady(true);
+      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- config read once when hasConfig flips true
@@ -2950,30 +3289,80 @@ export default function ShibaStudio() {
       if (timers[key]) clearTimeout(timers[key]);
       timers[key] = setTimeout(() => { timers[key] = undefined; fn(); }, ms);
     };
-    const unsubscribe = subscribeLiveEvents(['runs', 'board', 'chats', 'agents', 'tasks', 'attention'], (type) => {
+    const shouldCatchUp = (url: string, eventTs?: string) => {
+      const eventAt = eventTs ? Date.parse(eventTs) : Number.POSITIVE_INFINITY;
+      return !Number.isFinite(eventAt) || clientJsonLoadedAt(url) < eventAt;
+    };
+    const refreshRunSlices = (eventTs?: string) => {
+      if (shouldCatchUp('/api/runs', eventTs)) {
+        void refreshRuns();
+      }
+      if (tab === 'automations' && shouldCatchUp(SCHEDULED_RUNS_URL, eventTs)) {
+        void refreshScheduledRuns();
+      }
+    };
+    const refreshAgentSlice = (eventTs?: string) => {
+      if (shouldCatchUp('/api/agents', eventTs)) {
+        void refreshAgents();
+      }
+      if (shouldCatchUp('/api/nav-stats', eventTs)) {
+        void loadNavStats();
+      }
+    };
+    const refreshNavSlice = (eventTs?: string) => {
+      if (!shouldCatchUp('/api/nav-stats', eventTs)) return;
+      void loadNavStats();
+    };
+    const unsubscribe = subscribeLiveEvents(['runs', 'board', 'chats', 'agents', 'tasks', 'attention'], (type, meta) => {
+      if (meta.reconnect) {
+        // One callback catches up every slice owned by this subscription.
+        const reconnectTs = new Date().toISOString();
+        invalidateClientJson('/api/runs');
+        invalidateClientJson(SCHEDULED_RUNS_URL);
+        invalidateClientJson('/api/agents');
+        invalidateClientJson('/api/nav-stats');
+        debounced('runs', () => refreshRunSlices(reconnectTs));
+        debounced('agents', () => refreshAgentSlice(reconnectTs));
+        return;
+      }
+      const eventTs = meta.event?.ts;
       if (type === 'runs') {
-        debounced('runs', () => { void refreshRuns(); });
+        // Invalidate synchronously, before the debounce. If an older GET is
+        // in flight, the coordinator discards it and performs one clean tail.
+        invalidateClientJson('/api/runs');
+        invalidateClientJson(SCHEDULED_RUNS_URL);
+        debounced('runs', () => refreshRunSlices(eventTs));
       } else if (type === 'agents') {
-        debounced('agents', () => { void refreshAgents(); void loadNavStats(); });
+        invalidateClientJson('/api/agents');
+        invalidateClientJson('/api/nav-stats');
+        debounced('agents', () => refreshAgentSlice(eventTs));
       } else {
         // board / chats / tasks / attention → nav badges.
-        debounced('nav', () => { void loadNavStats(); }, 600);
+        invalidateClientJson('/api/nav-stats');
+        debounced('nav', () => refreshNavSlice(eventTs), 600);
       }
     });
     return () => {
       unsubscribe();
       for (const t of Object.values(timers)) if (t) clearTimeout(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable helpers, subscribe once per mount
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers intentionally capture the active tab
+  }, [tab]);
 
   // Keep sidebar/footer commit SHA in sync with the tree Node is actually serving.
   useEffect(() => {
-    void refreshRuntimeVersion();
+    // Boot and the release probe both return the same runtime fields. Give
+    // them a moment before using the dedicated endpoint as an offline fallback.
+    const fallback = window.setTimeout(() => {
+      if (!cachedRuntimeVersion) void refreshRuntimeVersion();
+    }, 2_000);
     const t = setInterval(() => {
       if (document.visibilityState === 'visible') void refreshRuntimeVersion();
     }, 60_000);
-    return () => clearInterval(t);
+    return () => {
+      window.clearTimeout(fallback);
+      clearInterval(t);
+    };
   }, []);
 
   const currentAgent = agents[0];
@@ -4239,8 +4628,20 @@ export default function ShibaStudio() {
 
               <div className="integrations-grid">
                 {INTEGRATION_CATALOG.map((integration) => {
-                  const connected = !!intTest[integration.id]?.ok;
-                  const configured = integrationConfigured(integration.id);
+                  const isReddit = integration.id === 'reddit';
+                  const connected = isReddit
+                    ? !!((redditStatus?.connected ?? intTest.reddit?.ok) && !redditStatus?.expired)
+                    : !!intTest[integration.id]?.ok;
+                  const configured = isReddit
+                    ? !!(redditStatus?.clientReady || redditStatus?.connected || integrationConfigured(integration.id))
+                    : integrationConfigured(integration.id);
+                  const statusLabel = isReddit && redditStatus?.expired
+                    ? 'Session expired'
+                    : connected
+                      ? 'Connected'
+                      : configured
+                        ? 'Configured'
+                        : 'Not set up';
                   const expanded = expandedIntegration === integration.id;
                   return (
                   <div
@@ -4266,7 +4667,7 @@ export default function ShibaStudio() {
                         <div className="cap-card-title flex items-center gap-2 flex-wrap">
                           {integration.label}
                           <span className={`integration-status-chip ${connected ? 'integration-chip-connected' : configured ? 'integration-chip-configured' : 'integration-chip-unset'}`}>
-                            {connected ? 'Connected' : configured ? 'Configured' : 'Not set up'}
+                            {statusLabel}
                           </span>
                         </div>
                         <div className="cap-card-desc mt-0.5">{integration.description}</div>
@@ -4294,6 +4695,14 @@ export default function ShibaStudio() {
                         )}
                         {integration.id === 'x' && intTest.x?.ok && (
                           <span className="integration-card-status text-success">connected as @{intTest.x.username}</span>
+                        )}
+                        {integration.id === 'reddit' && redditStatus?.connected && !redditStatus.expired && (
+                          <span className="integration-card-status text-success">
+                            connected{redditStatus.username ? ` as u/${redditStatus.username}` : ''}
+                          </span>
+                        )}
+                        {integration.id === 'reddit' && redditStatus?.expired && (
+                          <span className="integration-card-status text-error">session expired — reconnect to restore access</span>
                         )}
                         {integration.id === 'obsidian' && intTest.obsidian?.ok && (
                           <span className="integration-card-status text-success">
@@ -4434,6 +4843,147 @@ export default function ShibaStudio() {
                           </div>
                         </details>
                       </>
+                      );
+                    })()}
+                    {integration.id === 'reddit' && (() => {
+                      const reddit = intCreds.reddit || {};
+                      const bundled = !!redditStatus?.bundledClient;
+                      const clientReady = !!redditStatus?.clientReady
+                        || !!(reddit.clientId?.trim() && reddit.clientSecret?.trim());
+                      const redditConnected = !!((redditStatus?.connected ?? intTest.reddit?.ok) && !redditStatus?.expired);
+                      const username = redditStatus?.username || intTest.reddit?.username;
+                      const redirectUri = `${appOrigin}/api/reddit-oauth/callback`;
+                      return (
+                        <>
+                          <div className="text-xs text-dim mb-3">
+                            Sign in once to let enabled agents read Reddit feeds and submit approved text or link posts.
+                            Access and refresh tokens are handled automatically.
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 mb-1">
+                            {redditStatus?.expired ? (
+                              <span className="status-pill text-error">Session expired</span>
+                            ) : redditConnected ? (
+                              <span className="status-pill text-success">Connected{username ? ` · u/${username}` : ''}</span>
+                            ) : (
+                              <span className="status-pill text-dim">Not signed in</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!clientReady) {
+                                  setRedditAdvancedOpen(true);
+                                  toast('One-time: add your Reddit web app client below, then Sign in with Reddit.');
+                                  return;
+                                }
+                                void startRedditLogin();
+                              }}
+                              disabled={redditStarting || !!intSaving.reddit}
+                              className="grok-btn grok-btn-primary text-xs"
+                              title="Open the Reddit authorization popup"
+                            >
+                              <KeyRound size={13} />
+                              {redditStarting ? 'Opening Reddit…' : redditStatus?.expired ? 'Reconnect with Reddit' : 'Sign in with Reddit'}
+                            </button>
+                            {(redditConnected || redditStatus?.expired) && (
+                              <button
+                                type="button"
+                                onClick={() => void disconnectReddit()}
+                                className="grok-btn grok-btn-ghost text-xs text-error"
+                              >
+                                Disconnect
+                              </button>
+                            )}
+                          </div>
+                          {bundled && clientReady && !redditConnected && !redditStatus?.expired && (
+                            <div className="text-[11px] text-dim mb-1">Ready — click Sign in with Reddit, no app setup needed.</div>
+                          )}
+                          {redditStatus?.error && (
+                            <div className="text-[11px] text-error mb-1">{redditStatus.error}</div>
+                          )}
+                          <details
+                            className="text-xs mt-1"
+                            open={redditAdvancedOpen}
+                            onToggle={(event) => setRedditAdvancedOpen((event.currentTarget as HTMLDetailsElement).open)}
+                          >
+                            <summary className="text-dim cursor-pointer select-none">
+                              {bundled ? 'Advanced — override the bundled Reddit app' : 'Advanced — one-time Reddit app setup'}
+                            </summary>
+                            <div className="mt-2 space-y-2">
+                              <div className="text-[11px] text-dim">
+                                Create a <strong>web app</strong> in{' '}
+                                <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener noreferrer" className="link-accent">Reddit app preferences</a>{' '}
+                                and register this exact redirect URI. Reddit also requires{' '}
+                                <a
+                                  href="https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="link-accent"
+                                >
+                                  approved Data API access
+                                </a>
+                                ; commercial use may require separate permission.
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <code className="grok-input flex-1 min-w-0 text-[11px] font-mono py-1.5 truncate" title={redirectUri}>{redirectUri}</code>
+                                <button
+                                  type="button"
+                                  className="grok-btn grok-btn-ghost text-xs shrink-0"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(redirectUri)
+                                      .then(() => toast.success('Reddit redirect URI copied'))
+                                      .catch(() => toast.error('Could not copy the redirect URI'));
+                                  }}
+                                >
+                                  Copy
+                                </button>
+                              </div>
+                              <input
+                                className="grok-input font-mono text-xs"
+                                aria-label="Reddit OAuth Client ID"
+                                placeholder="Reddit OAuth Client ID"
+                                value={reddit.clientId || ''}
+                                onChange={(event) => setIntCreds((current: IntegrationCredsMap) => ({
+                                  ...current,
+                                  reddit: { ...(current.reddit || {}), clientId: event.target.value },
+                                }))}
+                              />
+                              <input
+                                className="grok-input font-mono text-xs"
+                                type="password"
+                                aria-label="Reddit OAuth Client Secret"
+                                autoComplete="off"
+                                placeholder="Reddit OAuth Client Secret"
+                                value={reddit.clientSecret || ''}
+                                onChange={(event) => setIntCreds((current: IntegrationCredsMap) => ({
+                                  ...current,
+                                  reddit: { ...(current.reddit || {}), clientSecret: event.target.value },
+                                }))}
+                              />
+                              <input
+                                className="grok-input font-mono text-xs"
+                                aria-label="Custom Reddit User-Agent"
+                                placeholder="Custom User-Agent (optional)"
+                                value={reddit.userAgent || ''}
+                                onChange={(event) => setIntCreds((current: IntegrationCredsMap) => ({
+                                  ...current,
+                                  reddit: { ...(current.reddit || {}), userAgent: event.target.value },
+                                }))}
+                              />
+                              <div className="text-[10px] text-dim">
+                                The User-Agent override is optional; Shiba generates an identifying one when blank. Sign in saves these app settings before OAuth begins.
+                              </div>
+                              <div className="text-[10px] text-dim border-t border-white/5 pt-2">
+                                Requested permissions: identity, read, and submit. Ask mode requires exact post approval; autonomous or YOLO runs post only when the task explicitly names Reddit as the destination.
+                                Ensure your approved use case permits AI-assisted processing by your configured model provider.{' '}
+                                Use of Reddit data remains subject to the{' '}
+                                <a href="https://redditinc.com/policies/data-api-terms" target="_blank" rel="noopener noreferrer" className="link-accent">Data API Terms</a>.
+                              </div>
+                              {!!redditStatus?.scopes?.length && (
+                                <div className="text-[10px] text-dim">Granted scopes: {redditStatus.scopes.join(', ')}</div>
+                              )}
+                            </div>
+                          </details>
+                        </>
                       );
                     })()}
                     {integration.id === 'discord' && (

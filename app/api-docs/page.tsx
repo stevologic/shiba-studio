@@ -35,6 +35,7 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'Status', method: 'GET', path: '/api/version', summary: 'Running commit, version, and (with checkUpdate=1) the latest GitHub release.', query: [{ name: 'checkUpdate', desc: 'Set to 1 to also probe GitHub releases', example: '1' }] },
   { group: 'Status', method: 'GET', path: '/api/nav-stats', summary: 'Sidebar counts: chats, projects, memories, workspace files, schedules, integrations, usage cost, cloud reachability.' },
   { group: 'Status', method: 'GET', path: '/api/boot', summary: 'Boot ping — hydrates server config and arms schedules (idempotent).' },
+  { group: 'Status', method: 'GET', path: '/api/health', summary: 'Lightweight liveness probe with no startup side effects.' },
   { group: 'Status', method: 'GET', path: '/api/models', summary: 'All selectable models (cloud + local) and cloud-auth flags.' },
   { group: 'Status', method: 'GET', path: '/api/tools', summary: 'The full built-in tool catalog with groups and scope requirements.' },
 
@@ -42,6 +43,7 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'Config', method: 'GET', path: '/api/config', summary: 'Settings (secrets masked), auth flags, secret-key location.' },
   { group: 'Config', method: 'POST', path: '/api/config', summary: 'Update settings. This example sets the daily spend budget.', mutating: true, body: JSON.stringify({ dailyBudgetUsd: 0 }, null, 2) },
   { group: 'Config', method: 'GET', path: '/api/integrations', summary: 'Configured integration credentials (as stored) + channel-listener status.' },
+  { group: 'Config', method: 'GET', path: '/api/reddit-oauth/status', summary: 'Public Reddit OAuth status (never returns tokens or the client secret).' },
 
   // --- Agents & runs ---
   { group: 'Agents', method: 'GET', path: '/api/agents', summary: 'All agents with models, workspaces, scopes, skills, schedules.' },

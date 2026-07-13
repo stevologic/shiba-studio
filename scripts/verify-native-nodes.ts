@@ -153,8 +153,92 @@ async function main() {
     assert.equal(native.listNativeNodes().find((node) => node.id === paired.node.id)?.captureState, 'idle');
     assert(await fs.stat(String(completedCapture.result?.screenshotPath)));
 
+    const largeCaptureJob = native.enqueueNativeNodeJob({
+      nodeId: paired.node.id,
+      action: 'capture',
+      grantId: grant.id,
+      expectedGrantRevision: grant.revision,
+      targetAppId: appId,
+      targetAppRevision: grant.appRevision,
+    });
+    const claimedLargeCapture = native.claimNativeNodeJob(auth);
+    assert(claimedLargeCapture);
+    const largeCapturePayload = JSON.parse(Buffer.from(claimedLargeCapture.payloadBase64, 'base64').toString('utf8'));
+    const largeCaptureCompletion = signed({
+      jobId: largeCaptureJob.id,
+      leaseToken: largeCapturePayload.leaseToken,
+      actionDigest: largeCapturePayload.actionDigest,
+      success: true,
+      result: { screenshotBase64: onePixelPng, oversizedHelperField: 'x'.repeat(210_000) },
+    }, stored.keyHash);
+    const completedLargeCapture = await native.completeNativeNodeJob(
+      auth,
+      largeCaptureCompletion.payloadBase64,
+      largeCaptureCompletion.signature,
+    );
+    assert.equal(completedLargeCapture.result?.truncated, true);
+    assert.equal(typeof completedLargeCapture.result?.screenshotPath, 'string', 'bounded result retains screenshot ownership');
+    assert(await fs.stat(String(completedLargeCapture.result?.screenshotPath)));
+
+    const processingGrantJob = native.enqueueNativeNodeJob({
+      nodeId: paired.node.id,
+      action: 'capture',
+      grantId: grant.id,
+      expectedGrantRevision: grant.revision,
+      targetAppId: appId,
+      targetAppRevision: grant.appRevision,
+    });
+    assert(native.claimNativeNodeJob(auth));
+    const queuedGrantJob = native.enqueueNativeNodeJob({
+      nodeId: paired.node.id,
+      action: 'click',
+      args: { x: 2, y: 3 },
+      grantId: grant.id,
+      expectedGrantRevision: grant.revision,
+      targetAppId: appId,
+      targetAppRevision: grant.appRevision,
+    });
+    db.exec(`
+      CREATE TEMP TRIGGER fail_native_grant_job_settlement
+      BEFORE UPDATE OF status ON native_node_jobs
+      WHEN OLD.id = '${processingGrantJob.id}' AND NEW.status = 'failed'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated native settlement failure');
+      END
+    `);
+    try {
+      assert.throws(() => native.revokeNativeNodeGrant(grant.id), /simulated native settlement failure/);
+    } finally {
+      db.exec('DROP TRIGGER fail_native_grant_job_settlement');
+    }
+    const grantAfterRollback = db.prepare(`
+      SELECT revision, revokedAt FROM native_node_grants WHERE id = ?
+    `).get(grant.id) as { revision: number; revokedAt: string | null };
+    assert.deepEqual({ ...grantAfterRollback }, { revision: 1, revokedAt: null });
+    assert.equal(native.getNativeNodeJob(processingGrantJob.id)?.status, 'processing');
+    assert.equal(native.getNativeNodeJob(queuedGrantJob.id)?.status, 'queued');
+
     const revokedGrant = native.revokeNativeNodeGrant(grant.id);
     assert.equal(revokedGrant.revision, 2);
+    assert.equal(native.getNativeNodeJob(processingGrantJob.id)?.status, 'failed');
+    assert.equal(native.getNativeNodeJob(queuedGrantJob.id)?.status, 'failed');
+    assert.equal(native.listNativeNodes().find((node) => node.id === paired.node.id)?.captureState, 'idle');
+
+    // Simulate an older crash window that left an active job projection after
+    // its grant was revoked. The periodic pass must converge it without a poll.
+    db.prepare(`
+      UPDATE native_node_jobs SET status = 'processing', error = NULL,
+        leaseTokenHash = 'stale-lease', leaseExpiresAt = ?, completedAt = NULL
+      WHERE id = ?
+    `).run(new Date(Date.now() + 60_000).toISOString(), queuedGrantJob.id);
+    db.prepare("UPDATE native_nodes SET captureState = 'active' WHERE id = ?").run(paired.node.id);
+    const nativeRepair = native.repairNativeNodeLifecycleProjections();
+    assert.equal(nativeRepair.jobsFailed, 1);
+    assert.equal(nativeRepair.captureStatesReset, 1);
+    const repairedJob = db.prepare(`
+      SELECT status, leaseTokenHash, leaseExpiresAt FROM native_node_jobs WHERE id = ?
+    `).get(queuedGrantJob.id) as { status: string; leaseTokenHash: string | null; leaseExpiresAt: string | null };
+    assert.deepEqual({ ...repairedJob }, { status: 'failed', leaseTokenHash: null, leaseExpiresAt: null });
     assert.throws(() => native.enqueueNativeNodeJob({
       nodeId: paired.node.id,
       action: 'click',
@@ -204,9 +288,46 @@ async function main() {
     assert.equal(releaseResponse.status, 200);
     assert.equal((await releaseResponse.json()).releaseId, proof.releaseId);
 
+    const nodeRevocationGrant = native.createNativeNodeGrant({
+      nodeId: paired.node.id,
+      appId,
+      appLabel: 'Notes',
+      appRevision: '1.0|stamp',
+      capabilities: ['capture'],
+      ttlMinutes: 5,
+    });
+    const processingNodeJob = native.enqueueNativeNodeJob({ nodeId: paired.node.id, action: 'list_apps' });
+    assert(native.claimNativeNodeJob(auth));
+    const queuedNodeJob = native.enqueueNativeNodeJob({ nodeId: paired.node.id, action: 'list_apps' });
+    db.exec(`
+      CREATE TEMP TRIGGER fail_native_node_job_settlement
+      BEFORE UPDATE OF status ON native_node_jobs
+      WHEN OLD.id = '${processingNodeJob.id}' AND NEW.status = 'failed'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated node settlement failure');
+      END
+    `);
+    try {
+      assert.throws(() => native.revokeNativeNode(paired.node.id), /simulated node settlement failure/);
+    } finally {
+      db.exec('DROP TRIGGER fail_native_node_job_settlement');
+    }
+    assert.equal(
+      (db.prepare('SELECT revokedAt FROM native_nodes WHERE id = ?').get(paired.node.id) as { revokedAt: string | null }).revokedAt,
+      null,
+    );
+    assert.equal(
+      (db.prepare('SELECT revokedAt FROM native_node_grants WHERE id = ?').get(nodeRevocationGrant.id) as { revokedAt: string | null }).revokedAt,
+      null,
+    );
+    assert.equal(native.getNativeNodeJob(processingNodeJob.id)?.status, 'processing');
+    assert.equal(native.getNativeNodeJob(queuedNodeJob.id)?.status, 'queued');
     native.revokeNativeNode(paired.node.id);
+    assert(native.listNativeNodeGrants(paired.node.id).find((item) => item.id === nodeRevocationGrant.id)?.revokedAt);
+    assert.equal(native.getNativeNodeJob(processingNodeJob.id)?.status, 'failed');
+    assert.equal(native.getNativeNodeJob(queuedNodeJob.id)?.status, 'failed');
     assert.throws(() => native.authenticateNativeNode(authRequest()), /expired or revoked/);
-    console.log('native-nodes: 45 passed, 0 failed');
+    console.log('native-nodes: 49 passed, 0 failed');
   } finally {
     dbModule.closeDb();
     await fs.rm(root, { recursive: true, force: true });

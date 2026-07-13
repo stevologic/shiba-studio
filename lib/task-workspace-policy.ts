@@ -28,6 +28,8 @@ const INTEGRATION_TOOL_SCOPES: Record<string, string> = {
   discord_post: 'discord',
   x_post: 'x',
   x_read_timeline: 'x',
+  reddit_read_posts: 'reddit',
+  reddit_submit: 'reddit',
   drive_list: 'googledrive',
   drive_upload: 'googledrive',
   obsidian_list: 'obsidian',
@@ -159,7 +161,7 @@ export function taskToolDecision(taskId: string | undefined, toolName: string, a
     if (readOnly) return { allowed: false, reason: 'Read-only tasks cannot execute host shell commands.' };
     return { allowed: true, requiresLiveApproval: true };
   }
-  if (readOnly && ['fs_write', 'grok_cli', 'sandbox_write_file', 'generate_image', 'github_create_pr'].includes(toolName)) {
+  if (readOnly && ['fs_write', 'grok_cli', 'sandbox_write_file', 'generate_image', 'github_create_pr', 'reddit_submit'].includes(toolName)) {
     return { allowed: false, reason: `Read-only tasks cannot use ${toolName}.` };
   }
 

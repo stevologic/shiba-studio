@@ -30,6 +30,9 @@ const SENSITIVE_CONFIG_PATHS = [
   'integrations.x.accessToken',
   'integrations.x.accessTokenSecret',
   'integrations.x.clientSecret',
+  'integrations.reddit.clientSecret',
+  'integrations.reddit.accessToken',
+  'integrations.reddit.refreshToken',
   'integrations.obsidian.restApiKey',
   'integrations.vercel.token',
   'integrations.netlify.token',
@@ -108,6 +111,7 @@ const AGENT_OVERRIDE_SECRET_FIELDS: Record<string, string[]> = {
   slack: ['token', 'appToken'],
   discord: ['token'],
   x: ['apiKey', 'apiSecret', 'accessToken', 'accessTokenSecret'],
+  reddit: ['clientSecret', 'accessToken', 'refreshToken'],
   obsidian: ['restApiKey'],
   googledrive: ['accessToken', 'serviceAccountJson', 'clientSecret', 'refreshToken'],
   vercel: ['token'],
@@ -130,6 +134,32 @@ function transformAgentOverrideSecrets(agent: Agent, fn: (v: string) => string):
   return { ...agent, integrationOverrides: nextOv } as Agent;
 }
 
+/**
+ * Mention routing belongs to the one global Slack/Discord listener. Agent
+ * overrides are outbound credential scopes, so a mentionAgentId stored there
+ * is unused and can become a dangling internal reference. Strip legacy/API
+ * values at both read and write boundaries.
+ */
+function stripUnusedAgentOverrideReferences(agent: Agent): boolean {
+  const overrides = agent.integrationOverrides as Record<string, Record<string, unknown>> | undefined;
+  if (!overrides) return false;
+  let changed = false;
+  const nextOverrides: Record<string, Record<string, unknown>> = { ...overrides };
+  for (const service of ['slack', 'discord']) {
+    const current = nextOverrides[service];
+    if (!current || !Object.prototype.hasOwnProperty.call(current, 'mentionAgentId')) continue;
+    const next = { ...current };
+    delete next.mentionAgentId;
+    if (Object.keys(next).length) nextOverrides[service] = next;
+    else delete nextOverrides[service];
+    changed = true;
+  }
+  if (!changed) return false;
+  if (Object.keys(nextOverrides).length) agent.integrationOverrides = nextOverrides as IntegrationCreds;
+  else delete agent.integrationOverrides;
+  return true;
+}
+
 const persistenceLockGlobal = globalThis as typeof globalThis & {
   __shibaAgentsChain?: Promise<unknown>;
   __shibaConfigChain?: Promise<unknown>;
@@ -147,7 +177,11 @@ async function loadAgentsUnlocked(): Promise<Agent[]> {
   try {
     const raw = await fs.readFile(agentsFile(), 'utf8');
     const list = JSON.parse(raw) as unknown[];
-    return list.map(normalizeAgent).map((a) => transformAgentOverrideSecrets(a, decryptSecret));
+    const agents = list.map(normalizeAgent).map((a) => transformAgentOverrideSecrets(a, decryptSecret));
+    let migrated = false;
+    for (const agent of agents) migrated = stripUnusedAgentOverrideReferences(agent) || migrated;
+    if (migrated) await saveAgentsUnlocked(agents);
+    return agents;
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     return [];
@@ -156,6 +190,7 @@ async function loadAgentsUnlocked(): Promise<Agent[]> {
 
 async function saveAgentsUnlocked(agents: Agent[]): Promise<void> {
   await ensureData();
+  for (const agent of agents) stripUnusedAgentOverrideReferences(agent);
   const sealed = agents.map((a) => transformAgentOverrideSecrets(a, encryptSecret));
   const target = agentsFile();
   const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
@@ -172,6 +207,20 @@ async function saveAgentsUnlocked(agents: Agent[]): Promise<void> {
 
 export async function loadAgents(): Promise<Agent[]> {
   return withAgentsLock(loadAgentsUnlocked);
+}
+
+/**
+ * Hold the agent store stable while repairing references in another store.
+ * Cross-store reconcilers use this instead of acting on a stale list that
+ * could classify a concurrently-created agent as missing.
+ */
+export function withAgentOwnershipSnapshot<T>(
+  inspect: (agentIds: ReadonlySet<string>) => Promise<T>,
+): Promise<T> {
+  return withAgentsLock(async () => {
+    const agents = await loadAgentsUnlocked();
+    return inspect(new Set(agents.map((agent) => agent.id)));
+  });
 }
 
 export async function saveAgents(agents: Agent[]): Promise<void> {

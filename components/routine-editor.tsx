@@ -42,7 +42,10 @@ function newTrigger(type: RoutineTriggerType): RoutineTrigger {
   if (type === 'schedule') return { ...base, type, cron: '0 9 * * 1-5' };
   if (type === 'one_time') return { ...base, type, at: new Date(Date.now() + 60 * 60_000).toISOString() };
   if (type === 'webhook') return { ...base, type, secret: '' };
-  if (type === 'health') return { ...base, type, intervalSeconds: 60, timeoutMs: 10_000, url: 'http://127.0.0.1:3000/api/boot' };
+  if (type === 'health') {
+    const origin = typeof window === 'undefined' ? 'http://127.0.0.1:3000' : window.location.origin;
+    return { ...base, type, intervalSeconds: 60, timeoutMs: 10_000, url: `${origin}/api/health` };
+  }
   if (type === 'filesystem') return { ...base, type, path: '', intervalSeconds: 30 };
   if (type === 'integration_event') return { ...base, type, integration: 'github', event: 'push' };
   return { ...base, type: 'manual' };
@@ -127,7 +130,7 @@ function TriggerFields({
     return (
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-xs sm:col-span-2" htmlFor={`${inputPrefix}-url`}>URL <span className="text-dim">(URL or process ID is required)</span>
-          <input id={`${inputPrefix}-url`} className="grok-input text-xs mt-1 w-full" value={trigger.url || ''} onChange={(event) => onChange({ ...trigger, url: event.target.value || undefined })} placeholder="http://127.0.0.1:3000/health" />
+          <input id={`${inputPrefix}-url`} className="grok-input text-xs mt-1 w-full" value={trigger.url || ''} onChange={(event) => onChange({ ...trigger, url: event.target.value || undefined })} placeholder="http://127.0.0.1:3000/api/health" />
         </label>
         <label className="text-xs" htmlFor={`${inputPrefix}-pid`}>Process ID
           <input id={`${inputPrefix}-pid`} type="number" min={1} className="grok-input text-xs mt-1 w-full" value={trigger.processPid || ''} onChange={(event) => onChange({ ...trigger, processPid: event.target.value ? Number(event.target.value) : undefined })} />

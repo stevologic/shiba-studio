@@ -348,9 +348,10 @@ export async function applyDoctorRepair(action: DoctorRepairAction, confirmation
   if (confirmation !== action) throw new Error(`Exact confirmation is required: ${action}`);
   let result: Record<string, unknown>;
   if (action === 'reconcile_interrupted_work') {
-    const { reconcileOrphanedRuns } = await import('./agent-runs-store');
+    const { reconcileExpiredRunLeases } = await import('./agent-runs-store');
     const { reconcileOrphanedTasks } = await import('./task-ledger');
-    result = { runs: reconcileOrphanedRuns(), tasks: reconcileOrphanedTasks() };
+    const runs = reconcileExpiredRunLeases();
+    result = { runs: runs.count, tasks: reconcileOrphanedTasks(runs.runIds), runIds: runs.runIds };
   } else if (action === 'resync_scheduler') {
     const { loadAndScheduleAll, listScheduled } = await import('./scheduler');
     await loadAndScheduleAll();

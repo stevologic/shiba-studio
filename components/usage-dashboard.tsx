@@ -1,9 +1,13 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, HardDrive } from 'lucide-react';
 import type { LocalUsageSavings, UsageRecord, UsageSummary } from '@/lib/usage';
 import { modelDisplayName, parseModelRef, providerLabel } from '@/lib/model-providers';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
+
+const USAGE_URL = '/api/usage';
+const USAGE_REFRESH_URL = '/api/usage?refresh=1';
 
 function fmtNum(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
@@ -435,14 +439,27 @@ export default function UsageDashboard() {
   const [usageBadge, setUsageBadge] = useState<UsageBadge | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const loadRequestRef = useRef(0);
 
-  async function load(force = false) {
+  const load = useCallback(async (force = false, signal?: AbortSignal) => {
+    const requestId = ++loadRequestRef.current;
+    const url = force ? USAGE_REFRESH_URL : USAGE_URL;
+    if (force) {
+      invalidateClientJson(USAGE_URL);
+      invalidateClientJson(USAGE_REFRESH_URL);
+    }
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/usage${force ? '?refresh=1' : ''}`);
-      const data = await res.json();
+      const data = await loadClientJson<UsageSummary & {
+        ok?: boolean;
+        error?: string;
+        xaiAccount?: XaiAccountUsage;
+        authoritativeCostUsd?: number;
+        usageBadge?: UsageBadge;
+      }>(url, { maxAgeMs: force ? 0 : 10_000, signal });
       if (!data.ok) throw new Error(data.error || 'Failed to load usage');
+      if (signal?.aborted || requestId !== loadRequestRef.current) return;
       setSummary(data as UsageSummary);
       setXaiAccount((data.xaiAccount as XaiAccountUsage) || null);
       setAuthoritativeCostUsd(
@@ -450,12 +467,22 @@ export default function UsageDashboard() {
       );
       setUsageBadge((data.usageBadge as UsageBadge) || null);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load usage');
+      if (e instanceof Error && e.name === 'AbortError') return;
+      if (!signal?.aborted && requestId === loadRequestRef.current) {
+        setError(e instanceof Error ? e.message : 'Failed to load usage');
+      }
+    } finally {
+      if (!signal?.aborted && requestId === loadRequestRef.current) setLoading(false);
     }
-    setLoading(false);
-  }
+  }, []);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) void load(false, controller.signal);
+    });
+    return () => controller.abort();
+  }, [load]);
 
   if (loading && !summary) {
     return (

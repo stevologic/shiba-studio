@@ -431,7 +431,7 @@ export default function MemoriesPanel({ onDataChanged }: { onDataChanged?: () =>
                 disabled={loading || loadingMore}
                 aria-controls="memory-list"
               >
-                {loadingMore ? <><span className="data-spinner" /> Loading moreâ€¦</> : `Load ${Math.min(PAGE_SIZE, matchingTotal - nextOffset)} more`}
+                {loadingMore ? <><span className="data-spinner" /> Loading more…</> : `Load ${Math.min(PAGE_SIZE, matchingTotal - nextOffset)} more`}
               </button>
             )}
           </div>

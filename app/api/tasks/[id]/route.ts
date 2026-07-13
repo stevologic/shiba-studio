@@ -26,6 +26,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           progress: body.progress,
           currentStep: body.currentStep,
           nextAction: body.nextAction,
+          expectedVersion,
         })
       : transitionTask({
           taskId: id,

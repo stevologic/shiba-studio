@@ -53,26 +53,39 @@ export interface FileInspect {
 /** Read a file for the in-app viewer: UTF-8 text when it really is text, or a
  *  binary verdict (a NUL byte or invalid UTF-8 in the head). Null if unreadable. */
 export async function inspectFile(absPath: string, name: string): Promise<FileInspect | null> {
-  const data = await fs.readFile(absPath).catch(() => null);
-  if (!data) return null;
-  const head = data.subarray(0, 8192);
-  let binary = head.includes(0);
-  if (!binary) {
-    try {
-      new TextDecoder('utf-8', { fatal: true }).decode(head);
-    } catch {
-      binary = true;
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    handle = await fs.open(absPath, 'r');
+    const stat = await handle.stat();
+    if (!stat.isFile()) return null;
+    const buffer = Buffer.allocUnsafe(Math.min(stat.size, VIEW_CAP));
+    const { bytesRead } = buffer.length
+      ? await handle.read(buffer, 0, buffer.length, 0)
+      : { bytesRead: 0 };
+    const data = buffer.subarray(0, bytesRead);
+    const head = data.subarray(0, 8192);
+    let binary = head.includes(0);
+    if (!binary) {
+      try {
+        new TextDecoder('utf-8', { fatal: true }).decode(head);
+      } catch {
+        binary = true;
+      }
     }
+    const truncated = !binary && stat.size > VIEW_CAP;
+    return {
+      ok: true,
+      name,
+      size: stat.size,
+      binary,
+      truncated,
+      content: binary ? '' : data.toString('utf8'),
+    };
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => {});
   }
-  const truncated = !binary && data.length > VIEW_CAP;
-  return {
-    ok: true,
-    name,
-    size: data.length,
-    binary,
-    truncated,
-    content: binary ? '' : data.subarray(0, VIEW_CAP).toString('utf8'),
-  };
 }
 
 /** Serve a file's raw bytes with a safe content type (images/pdf inline, code

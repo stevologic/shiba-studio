@@ -8,9 +8,15 @@ import { normalizeAgent, type Agent, type ScheduleEntry } from './types';
 import { listProjects, updateProject, createProject } from './projects';
 import { listChatSessions, createChatSession, updateChatSession, type ChatSession } from './chat-sessions';
 import { syncUploadToCloud, syncDownloadFromCloud } from './cloud-sync';
-import { deleteXaiFile, downloadXaiFileContent, listXaiFiles, uploadXaiFile } from './xai-files';
+import { downloadXaiFileContent, listXaiFiles } from './xai-files';
 import { resolveCloudBearer } from './xai-oauth';
 import { setApiKey } from './grok-client';
+import {
+  getActiveOwnedXaiResourceId,
+  processPendingOwnedXaiDeletions,
+  uploadOwnedXaiEntitySnapshot,
+  type OwnedXaiAuthSource,
+} from './external-resource-integrity';
 
 export type SyncKind = 'agents' | 'automations' | 'projects' | 'chats' | 'workspace' | 'models';
 
@@ -31,34 +37,51 @@ function snapshotName(kind: SyncKind): string {
   return `${SNAPSHOT_PREFIX}${kind}.json`;
 }
 
-async function requireCloudAuth(): Promise<void> {
+async function requireCloudAuth(): Promise<{ token: string; source: OwnedXaiAuthSource }> {
   const cfg = await loadConfig();
   const auth = await resolveCloudBearer(cfg);
   if (!auth.token) throw new Error('Cloud credentials required (xAI API key or OAuth with X)');
   setApiKey(auth.token);
+  return { token: auth.token, source: auth.source };
 }
 
 /** Upload a JSON snapshot, replacing older snapshots of the same kind to avoid clutter. */
-async function pushSnapshot(kind: SyncKind, payload: unknown): Promise<string> {
+async function pushSnapshot(
+  kind: SyncKind,
+  payload: unknown,
+  auth: { token: string; source: OwnedXaiAuthSource },
+): Promise<string> {
   const name = snapshotName(kind);
-  const body = Buffer.from(JSON.stringify({ kind, exportedAt: new Date().toISOString(), payload }, null, 2));
-  const meta = await uploadXaiFile(name, body);
-  try {
-    const stale = (await listXaiFiles()).filter((f) => f.filename === name && f.id !== meta.id);
-    await Promise.allSettled(stale.map((f) => deleteXaiFile(f.id)));
-  } catch {
-    /* stale cleanup is best-effort */
-  }
+  const meta = await uploadOwnedXaiEntitySnapshot({
+    ownerKey: `entity-sync:${kind}`,
+    filename: name,
+    kind,
+    payload,
+    authToken: auth.token,
+    authSource: auth.source,
+  });
+  // Replacement tombstones are already durable. Try them now for responsive
+  // cleanup; provider/network failures remain queued for coordinator retries.
+  await processPendingOwnedXaiDeletions({
+    kind: 'entity_snapshot',
+    tombstoneGraceMs: 0,
+    deleteBatchSize: 20,
+  })
+    .catch(() => undefined);
   return meta.id;
 }
 
 async function pullSnapshot<T>(kind: SyncKind): Promise<T | null> {
   const all = await listXaiFiles();
+  const ownedId = getActiveOwnedXaiResourceId('entity_snapshot', `entity-sync:${kind}`);
+  const owned = ownedId ? all.find((file) => file.id === ownedId) : undefined;
   const latestNamed = (name: string) =>
     all.filter((f) => f.filename === name).sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
   // Prefer current snapshots; fall back to pre-rebrand ones so a fresh install
   // can still pull entities pushed by an older version.
-  const files = latestNamed(snapshotName(kind)).length
+  const files = owned
+    ? [owned]
+    : latestNamed(snapshotName(kind)).length
     ? latestNamed(snapshotName(kind))
     : latestNamed(`${LEGACY_SNAPSHOT_PREFIX}${kind}.json`);
   if (!files.length) return null;
@@ -92,7 +115,7 @@ function mergeAgents(local: Agent[], cloud: Agent[]): { merged: Agent[]; added: 
 
 export async function pushKind(kind: SyncKind): Promise<SyncKindResult> {
   try {
-    await requireCloudAuth();
+    const auth = await requireCloudAuth();
 
     if (kind === 'workspace') {
       const res = await syncUploadToCloud();
@@ -106,7 +129,7 @@ export async function pushKind(kind: SyncKind): Promise<SyncKindResult> {
 
     if (kind === 'agents') {
       const agents = await loadAgents();
-      await pushSnapshot(kind, agents);
+      await pushSnapshot(kind, agents, auth);
       return { kind, ok: true, detail: `${agents.length} agent(s) pushed` };
     }
 
@@ -115,20 +138,20 @@ export async function pushKind(kind: SyncKind): Promise<SyncKindResult> {
       const automations = agents
         .filter((a) => (a.schedules || []).length > 0)
         .map((a) => ({ agentId: a.id, agentName: a.name, schedules: a.schedules }));
-      await pushSnapshot(kind, automations);
+      await pushSnapshot(kind, automations, auth);
       const count = automations.reduce((n, a) => n + a.schedules.length, 0);
       return { kind, ok: true, detail: `${count} schedule(s) across ${automations.length} agent(s) pushed` };
     }
 
     if (kind === 'projects') {
       const projects = await listProjects();
-      await pushSnapshot(kind, projects);
+      await pushSnapshot(kind, projects, auth);
       return { kind, ok: true, detail: `${projects.length} project(s) pushed (metadata + chat history)` };
     }
 
     if (kind === 'chats') {
       const sessions = await listChatSessions({ includeArchived: true });
-      await pushSnapshot(kind, sessions);
+      await pushSnapshot(kind, sessions, auth);
       return { kind, ok: true, detail: `${sessions.length} chat session(s) pushed` };
     }
 
@@ -141,7 +164,7 @@ export async function pushKind(kind: SyncKind): Promise<SyncKindResult> {
         localGrokEnabled: cfg.localGrokEnabled,
         localGrokBaseUrl: cfg.localGrokBaseUrl,
         defaultGrokModel: cfg.defaultGrokModel,
-      });
+      }, auth);
       return { kind, ok: true, detail: 'Local model settings pushed' };
     }
 

@@ -23,8 +23,33 @@ import {
   registerBrowserEphemeralSession,
   unregisterBrowserEphemeralSession,
 } from '@/lib/ephemeral-chat-lifecycle';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 
 type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' | 'cli' };
+
+const CHAT_READ_REUSE_MS = 10_000;
+
+function chatSessionsUrl(query: string | undefined, showArchived: boolean): string {
+  const params = new URLSearchParams();
+  if (query?.trim()) params.set('q', query.trim());
+  if (showArchived) params.set('archived', '1');
+  const qs = params.toString();
+  return `/api/chat-sessions${qs ? `?${qs}` : ''}`;
+}
+
+function chatSessionUrl(id: string): string {
+  return `/api/chat-sessions?id=${encodeURIComponent(id)}`;
+}
+
+function projectUrl(id?: string | null): string {
+  return id ? `/api/projects?id=${encodeURIComponent(id)}` : '/api/projects';
+}
+
+function invalidateChatSessionReads(id?: string): void {
+  invalidateClientJson(chatSessionsUrl(undefined, false));
+  invalidateClientJson(chatSessionsUrl(undefined, true));
+  if (id) invalidateClientJson(chatSessionUrl(id));
+}
 
 /**
  * Survives catch-all route remounts when the URL rewrites `/chat` → `/chat/:id`.
@@ -35,15 +60,11 @@ const sessionCache: {
   sessions: ChatSession[];
   active: ChatSession | null;
   loadedId: string | null;
-  listInflight: Promise<ChatSession[] | undefined> | null;
-  listInflightKey: string | null;
 } = {
   listKey: null,
   sessions: [],
   active: null,
   loadedId: null,
-  listInflight: null,
-  listInflightKey: null,
 };
 
 interface ChatSessionsPanelProps {
@@ -235,6 +256,9 @@ export default function ChatSessionsPanel({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'markRead', id: viewed.id, throughMessageId: lastMessageId || undefined }),
+        }).then((response) => {
+          if (!response.ok) return;
+          invalidateChatSessionReads(viewed.id);
         }).catch(() => { /* read receipts are best-effort */ });
       }
     }
@@ -288,54 +312,38 @@ export default function ChatSessionsPanel({
     });
   }
 
-  const loadSessions = useCallback(async (query?: string) => {
+  const loadSessions = useCallback(async (query?: string, options?: { force?: boolean }) => {
     const filter = showArchived ? 'archived' : 'active';
     const normalizedQuery = query?.trim() || '';
     const requestKey = normalizedQuery ? `${filter}:${normalizedQuery}` : filter;
-    // Dedupe concurrent list fetches (Strict Mode / remount races).
-    if (!query?.trim() && sessionCache.listInflight && sessionCache.listInflightKey === requestKey) {
-      return sessionCache.listInflight;
-    }
+    const url = chatSessionsUrl(query, showArchived);
+    if (options?.force) invalidateClientJson(url);
     const requestId = ++listRequestRef.current;
-    const run = (async () => {
-      try {
-        const params = new URLSearchParams();
-        if (query?.trim()) params.set('q', query.trim());
-        if (showArchived) params.set('archived', '1');
-        const qs = params.toString();
-        const res = await fetch(`/api/chat-sessions${qs ? `?${qs}` : ''}`);
-        const data = await res.json();
-        if (data.ok) {
-          const list = (data.sessions || []) as ChatSession[];
-          if (requestId !== listRequestRef.current) return list;
-          sessionCache.listKey = requestKey;
-          commitSessions(list);
-          return list;
-        }
-        return undefined;
-      } catch {
-        return undefined;
+    try {
+      const data = await loadClientJson<{ ok?: boolean; sessions?: ChatSession[] }>(url, {
+        // Search is an explicit user action and should always read fresh data.
+        maxAgeMs: normalizedQuery ? 0 : CHAT_READ_REUSE_MS,
+      });
+      if (data.ok) {
+        const list = Array.isArray(data.sessions) ? data.sessions : [];
+        if (requestId !== listRequestRef.current) return list;
+        sessionCache.listKey = requestKey;
+        commitSessions(list);
+        return list;
       }
-    })();
-    if (!query?.trim()) {
-      sessionCache.listInflight = run;
-      sessionCache.listInflightKey = requestKey;
-      try {
-        return await run;
-      } finally {
-        if (sessionCache.listInflight === run) {
-          sessionCache.listInflight = null;
-          sessionCache.listInflightKey = null;
-        }
-      }
+      return undefined;
+    } catch {
+      return undefined;
     }
-    return run;
   }, [showArchived]);
 
-  const loadSession = useCallback(async (id: string) => {
+  const loadSession = useCallback(async (id: string, options?: { force?: boolean }) => {
+    const url = chatSessionUrl(id);
+    if (options?.force) invalidateClientJson(url);
     try {
-      const res = await fetch(`/api/chat-sessions?id=${encodeURIComponent(id)}`);
-      const data = await res.json();
+      const data = await loadClientJson<{ ok?: boolean; session?: ChatSession }>(url, {
+        maxAgeMs: CHAT_READ_REUSE_MS,
+      });
       if (data.ok && data.session) {
         const session = data.session as ChatSession;
         // Always refresh the rail/cache row, including for a background chat
@@ -375,14 +383,15 @@ export default function ChatSessionsPanel({
     if (prev <= 0 || nextIds.length >= prev) return;
     const finished = prevIds.filter((id) => !nextIds.includes(id));
     for (const id of finished) {
-      void loadSession(id);
+      void loadSession(id, { force: true });
     }
   }, [liveRunIds, loadSession]);
 
   const loadProjects = useCallback(async () => {
     try {
-      const res = await fetch('/api/projects');
-      const data = await res.json();
+      const data = await loadClientJson<{ ok?: boolean; projects?: Project[] }>('/api/projects', {
+        maxAgeMs: CHAT_READ_REUSE_MS,
+      });
       if (data.ok) setProjects(data.projects || []);
     } catch {
       /* ignore */
@@ -397,8 +406,9 @@ export default function ChatSessionsPanel({
       return;
     }
     try {
-      const res = await fetch(`/api/projects?id=${encodeURIComponent(projectId)}`);
-      const data = await res.json();
+      const data = await loadClientJson<{ ok?: boolean; project?: Project }>(projectUrl(projectId), {
+        maxAgeMs: CHAT_READ_REUSE_MS,
+      });
       if (
         requestId !== linkedProjectRequestRef.current
         || (forSessionId && sessionCache.active?.id !== forSessionId)
@@ -442,7 +452,6 @@ export default function ChatSessionsPanel({
         && sessionCache.loadedId === effectSessionId
         && sessionCache.active?.id === effectSessionId
         && sessionCache.listKey === listKey
-        && sessionCache.sessions.length > 0
       ) {
         if (sessionsRef.current.length === 0) {
           setSessions(sessionCache.sessions);
@@ -452,19 +461,16 @@ export default function ChatSessionsPanel({
         return;
       }
 
-      // Reload when archive filter changes, or when the cache is empty (e.g. a
-      // prior parse of a corrupt store returned []). Never stick on a blank rail.
-      const cacheMiss =
-        sessionCache.listKey !== listKey
-        || sessionCache.sessions.length === 0
-        || sessionsRef.current.length === 0;
+      // A successful empty list is a valid cache entry. `listKey` remains null
+      // on failures, so the next mount still retries instead of double-loading now.
+      const cacheMiss = sessionCache.listKey !== listKey;
       if (cacheMiss) {
         setBootstrapping(true);
         list = await loadSessions();
         if (cancelled) return;
-        sessionCache.listKey = listKey;
+        if (list !== undefined) sessionCache.listKey = listKey;
       } else {
-        list = sessionCache.sessions.length ? sessionCache.sessions : sessionsRef.current;
+        list = sessionCache.sessions;
       }
 
       // --- no URL session: pick/create, hydrate, navigate ---
@@ -476,10 +482,10 @@ export default function ChatSessionsPanel({
           return;
         }
         setBootstrapping(true);
-        if (!list?.length) {
+        if (list === undefined) {
           list = await loadSessions();
           if (cancelled) return;
-          sessionCache.listKey = listKey;
+          if (list !== undefined) sessionCache.listKey = listKey;
         }
 
         let chosen: ChatSession | null = null;
@@ -499,6 +505,7 @@ export default function ChatSessionsPanel({
             if (data.ok && data.session) {
               chosen = data.session as ChatSession;
               commitSessions([chosen]);
+              invalidateChatSessionReads(chosen.id);
               onStatsChangeRef.current?.();
             }
           } catch {
@@ -581,6 +588,7 @@ export default function ChatSessionsPanel({
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       const created = data.session as ChatSession;
+      invalidateChatSessionReads(created.id);
       if (created.ephemeral) registerBrowserEphemeralSession(created.id);
       commitSessions([created, ...sessionsRef.current.filter((s) => s.id !== created.id)]);
       preferredSessionIdRef.current = created.id;
@@ -603,7 +611,8 @@ export default function ChatSessionsPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'archive', id, archived: true }),
       });
-      await loadSessions(searchQuery);
+      invalidateChatSessionReads(id);
+      await loadSessions(searchQuery, { force: true });
       onStatsChange?.();
       if (sessionId === id) {
         const remaining = sessions.filter((s) => s.id !== id);
@@ -624,7 +633,8 @@ export default function ChatSessionsPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'archive', id, archived: false }),
       });
-      await loadSessions(searchQuery);
+      invalidateChatSessionReads(id);
+      await loadSessions(searchQuery, { force: true });
       onStatsChange?.();
       toast.success('Session restored');
     } catch (e: unknown) {
@@ -648,7 +658,8 @@ export default function ChatSessionsPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update', id, patch: { title: name } }),
       });
-      await loadSessions(searchQuery);
+      invalidateChatSessionReads(id);
+      await loadSessions(searchQuery, { force: true });
       onStatsChange?.();
       if (activeSession?.id === id && sessionCache.active) {
         commitActive({ ...sessionCache.active, title: name });
@@ -675,6 +686,8 @@ export default function ChatSessionsPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'delete', id }),
       });
+      invalidateChatSessionReads(id);
+      invalidateClientJson(chatSessionsUrl(searchQuery, showArchived));
       const remaining = sessions.filter((s) => s.id !== id);
       unregisterBrowserEphemeralSession(id);
       commitSessions(remaining);
@@ -706,7 +719,7 @@ export default function ChatSessionsPanel({
     if (!mayApplySession(id)) return;
     // Patch only this session into the rail — never re-fetch the full list
     // and never refresh left-nav badges (counts didn't change).
-    await loadSession(id);
+    await loadSession(id, { force: true });
   }
 
   async function onProjectLinkChange(projectId: string | null) {
@@ -725,6 +738,7 @@ export default function ChatSessionsPanel({
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to link project');
       const updated = data.session as ChatSession;
+      invalidateChatSessionReads(targetSessionId);
       commitSessions(sessionsRef.current.map((item) => item.id === targetSessionId ? updated : item));
       if (sessionCache.active?.id === targetSessionId && preferredSessionIdRef.current === targetSessionId) {
         commitActive(updated);
@@ -811,7 +825,7 @@ export default function ChatSessionsPanel({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void loadSessions(searchQuery);
+                if (e.key === 'Enter') void loadSessions(searchQuery, { force: true });
               }}
             />
           </div>
@@ -943,6 +957,7 @@ export default function ChatSessionsPanel({
               });
               const data = await res.json();
               if (!res.ok || !data.ok) throw new Error(data.error || 'Could not change model');
+              invalidateChatSessionReads(targetSessionId);
               if (sessionCache.active?.id === targetSessionId) {
                 commitActive({ ...sessionCache.active, chatModel: model });
               }

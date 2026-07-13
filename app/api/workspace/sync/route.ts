@@ -1,35 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   enrichCloudSyncEntry,
-  getCloudSyncEntries,
+  getCloudSyncOverview,
   listCloudFilesPreview,
   syncDownloadFromCloud,
   syncUploadToCloud,
 } from '@/lib/cloud-sync';
-import { promises as fs } from 'fs';
-import path from 'path';
-
-const SYNC_FILE = path.join(process.cwd(), 'data', 'cloud-sync.json');
-
-async function getLastSyncAt(): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(SYNC_FILE, 'utf8');
-    return JSON.parse(raw).lastSyncAt || null;
-  } catch {
-    return null;
-  }
-}
 import { getGlobalUploadsDir, listGlobalUploadFiles } from '@/lib/workspace';
 
 export async function GET() {
   try {
-    const [uploads, sync, cloud, uploadsPath, lastSyncAt] = await Promise.all([
+    const [uploads, syncState, cloud, uploadsPath] = await Promise.all([
       listGlobalUploadFiles(),
-      getCloudSyncEntries(),
+      getCloudSyncOverview(),
       listCloudFilesPreview().catch(() => []),
       getGlobalUploadsDir(),
-      getLastSyncAt(),
     ]);
+    const sync = syncState.files;
     const syncByName = new Map(sync.map((s) => [s.localName, s]));
     const enriched = uploads.map((u) => {
       const cloud = syncByName.get(u.name);
@@ -43,7 +30,7 @@ export async function GET() {
       uploadsPath,
       uploads: enriched,
       cloudFiles: cloud,
-      lastSyncAt,
+      lastSyncAt: syncState.lastSyncAt,
     });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });

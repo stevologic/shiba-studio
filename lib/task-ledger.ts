@@ -2,7 +2,7 @@
 // Board work, dynamic workers, artifacts, and external harnesses project into
 // this one SQLite ledger instead of maintaining parallel lifecycle stores.
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { AgentRun } from './types';
 import { getDb } from './db';
 import { emitAppEvent } from './app-events';
@@ -30,7 +30,8 @@ import type {
   TaskWorkspaceRoot,
 } from './task-types';
 import { TASK_STATUSES, TERMINAL_TASK_STATUSES } from './task-types';
-import { resolveToolApproval } from './tool-approval';
+import { getPendingApproval, resolveToolApproval } from './tool-approval';
+import { isAutomationMaintenanceActive } from './automation-maintenance';
 
 type SqlValue = string | number | null;
 
@@ -124,6 +125,23 @@ interface OutboxRow {
   deliveredAt: string | null;
   lastError: string | null;
   idempotencyKey: string;
+}
+
+interface RunControlRow {
+  id: string;
+  commandId: string;
+  taskId: string;
+  runId: string;
+  kind: string;
+  instruction: string | null;
+  status: string;
+  attempts: number;
+  availableAt: string;
+  consumerId: string | null;
+  leaseUntil: string | null;
+  lastError: string | null;
+  createdAt: string;
+  acknowledgedAt: string | null;
 }
 
 const VALID_KINDS = new Set<TaskKind>([
@@ -403,7 +421,16 @@ function insertEvent(taskId: string, type: string, data: Record<string, unknown>
     .run(taskId, cleanText(type, 120, true), nowIso(), JSON.stringify(data));
 }
 
-export function createTask(input: CreateTaskInput): TaskRecord {
+/**
+ * Publish a task projection change after a caller-owned ledger transaction.
+ * Most callers should use createTask/transitionTask directly; this is for
+ * compound mutations such as atomically creating a task team and its edges.
+ */
+export function publishTaskChanges(attention = false): void {
+  emitTaskChanges(attention);
+}
+
+function createTaskInTransaction(input: CreateTaskInput): TaskRecord {
   const db = getDb();
   const id = assertTaskId(input.id || randomUUID());
   const kind = assertTaskKind(input.kind);
@@ -423,41 +450,62 @@ export function createTask(input: CreateTaskInput): TaskRecord {
   const completedAt = TERMINAL_TASK_STATUSES.has(status) ? now : null;
   const progress = status === 'succeeded' ? 1 : 0;
 
+  db.prepare(`
+    INSERT INTO tasks (
+      id, kind, status, title, description, parentId, originType, originId,
+      agentId, projectId, runId, sessionId, workspaceRoots, plan, progress,
+      currentStep, nextAction, retryCount, maxRetries, heartbeatAt, startedAt,
+      completedAt, result, error, contract, completion, checkpointId, metadata,
+      version, createdAt, updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, 1, ?, ?)
+  `).run(
+    id, kind, status, title, description, parentId, originType,
+    input.originId ? cleanText(input.originId, 500) : null,
+    input.agentId ? cleanText(input.agentId, 200) : null,
+    input.projectId ? cleanText(input.projectId, 200) : null,
+    input.runId ? cleanText(input.runId, 200) : null,
+    input.sessionId ? cleanText(input.sessionId, 200) : null,
+    JSON.stringify(roots), JSON.stringify(plan), progress,
+    Math.max(0, Math.min(20, Number(input.maxRetries) || 0)),
+    status === 'running' ? now : null, startedAt, completedAt,
+    contract ? JSON.stringify(contract) : null,
+    JSON.stringify(input.metadata || {}), now, now,
+  );
+  insertEvent(id, 'created', { kind, status, originType });
+  return getTask(id)!;
+}
+
+/** Apply task creation inside a caller-owned SQLite transaction. */
+export function createTaskInOpenTransaction(input: CreateTaskInput): TaskRecord {
+  return createTaskInTransaction(input);
+}
+
+export function createTask(input: CreateTaskInput): TaskRecord {
+  const db = getDb();
+  let created: TaskRecord;
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare(`
-      INSERT INTO tasks (
-        id, kind, status, title, description, parentId, originType, originId,
-        agentId, projectId, runId, sessionId, workspaceRoots, plan, progress,
-        currentStep, nextAction, retryCount, maxRetries, heartbeatAt, startedAt,
-        completedAt, result, error, contract, completion, checkpointId, metadata,
-        version, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, ?, 1, ?, ?)
-    `).run(
-      id, kind, status, title, description, parentId, originType,
-      input.originId ? cleanText(input.originId, 500) : null,
-      input.agentId ? cleanText(input.agentId, 200) : null,
-      input.projectId ? cleanText(input.projectId, 200) : null,
-      input.runId ? cleanText(input.runId, 200) : null,
-      input.sessionId ? cleanText(input.sessionId, 200) : null,
-      JSON.stringify(roots), JSON.stringify(plan), progress,
-      Math.max(0, Math.min(20, Number(input.maxRetries) || 0)),
-      status === 'running' ? now : null, startedAt, completedAt,
-      contract ? JSON.stringify(contract) : null,
-      JSON.stringify(input.metadata || {}), now, now,
-    );
-    insertEvent(id, 'created', { kind, status, originType });
+    created = createTaskInTransaction(input);
     db.exec('COMMIT');
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
     throw error;
   }
   emitTaskChanges();
-  return getTask(id)!;
+  return created;
 }
 
 export function getTask(id: string): TaskRecord | null {
   const row = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(assertTaskId(id)) as unknown as TaskRow | undefined;
+  return row ? rowToTask(row) : null;
+}
+
+/** Resolve the durable task projection for an exact run identity. */
+export function getTaskByRunId(runId: string): TaskRecord | null {
+  const value = cleanText(runId, 200, true);
+  const row = getDb().prepare(`
+    SELECT * FROM tasks WHERE runId = ? ORDER BY updatedAt DESC, createdAt DESC LIMIT 1
+  `).get(value) as unknown as TaskRow | undefined;
   return row ? rowToTask(row) : null;
 }
 
@@ -497,6 +545,93 @@ export function listTasks(opts: TaskListOptions = {}): { tasks: TaskRecord[]; to
   const rows = db.prepare(`SELECT * FROM tasks ${where} ORDER BY updatedAt DESC, createdAt DESC LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as unknown as TaskRow[];
   return { tasks: rows.map(rowToTask), total };
+}
+
+export interface DetachedTaskOriginReport {
+  tasksDetached: number;
+  activeTasksCancelled: number;
+}
+
+/**
+ * Settle live descendants and replace a deleted UI/entity pointer with an
+ * immutable snapshot. The task history remains useful without retaining a
+ * dangling originId.
+ */
+export function detachTasksFromDeletedOrigin(
+  originTypeInput: TaskOriginType,
+  originIdInput: string,
+  snapshot: Record<string, unknown> = {},
+): DetachedTaskOriginReport {
+  const originType = assertOriginType(originTypeInput);
+  const originId = cleanText(originIdInput, 500, true);
+  const initial = (getDb().prepare('SELECT * FROM tasks WHERE originType = ? AND originId = ?')
+    .all(originType, originId) as unknown as TaskRow[]).map(rowToTask);
+  let activeTasksCancelled = 0;
+  const idempotencyKey = `origin-deleted:${createHash('sha256')
+    .update(`${originType}\0${originId}`)
+    .digest('hex')
+    .slice(0, 32)}`;
+  for (const task of initial) {
+    if (TERMINAL_TASK_STATUSES.has(task.status)) continue;
+    const command = enqueueTaskCommand({
+      taskId: task.id,
+      kind: 'cancel',
+      expectedVersion: task.version,
+      idempotencyKey,
+    });
+    applyTaskCommand(command.id);
+    activeTasksCancelled += 1;
+  }
+
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM tasks WHERE originType = ? AND originId = ?')
+    .all(originType, originId) as unknown as TaskRow[];
+  const detachedAt = nowIso();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const row of rows) {
+      const task = rowToTask(row);
+      const metadata = {
+        ...task.metadata,
+        deletedOrigin: {
+          type: originType,
+          id: originId,
+          detachedAt,
+          ...snapshot,
+        },
+      };
+      const updated = db.prepare(`
+        UPDATE tasks
+        SET originId = NULL, metadata = ?, version = version + 1, updatedAt = ?
+        WHERE id = ? AND version = ? AND originType = ? AND originId = ?
+      `).run(JSON.stringify(metadata), detachedAt, task.id, task.version, originType, originId);
+      if (Number(updated.changes) !== 1) {
+        throw new Error(`Task changed while detaching deleted ${originType} origin`);
+      }
+      insertEvent(task.id, 'origin_detached', { originType, originId, snapshot });
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
+    throw error;
+  }
+  if (rows.length) emitTaskChanges();
+  return { tasksDetached: rows.length, activeTasksCancelled };
+}
+
+/** Durable retry/capacity intents, ordered oldest first for fair recovery. */
+export function listQueuedRetryTasks(limit = 50): TaskRecord[] {
+  const capped = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)));
+  return (getDb().prepare(`
+    SELECT * FROM tasks
+    WHERE status = 'queued' AND CASE
+      WHEN retryCount > 0 THEN 1
+      WHEN json_valid(metadata) THEN COALESCE(json_extract(metadata, '$.capacityDeferred'), 0)
+      ELSE 0
+    END = 1
+    ORDER BY updatedAt ASC, createdAt ASC
+    LIMIT ?
+  `).all(capped) as unknown as TaskRow[]).map(rowToTask);
 }
 
 export function getTaskDetails(id: string): TaskDetails | null {
@@ -855,7 +990,14 @@ function enqueueOutbox(input: {
   );
 }
 
-function terminalSignals(task: TaskRecord, emit = true): void {
+function terminalSignalsSuppressed(task: TaskRecord): boolean {
+  if (task.metadata.suppressTerminalSignals === true) return true;
+  return task.status !== 'succeeded' && task.metadata.suppressFailureSignals === true;
+}
+
+/** Returns true when Attention/outbox terminal signals were created. */
+function terminalSignals(task: TaskRecord, emit = true): boolean {
+  if (terminalSignalsSuppressed(task)) return false;
   const succeeded = task.status === 'succeeded';
   const cancelled = task.status === 'cancelled';
   const kind: AttentionKind = succeeded ? 'completion' : cancelled ? 'warning' : 'failure';
@@ -878,9 +1020,10 @@ function terminalSignals(task: TaskRecord, emit = true): void {
     payload: { taskId: task.id, status: task.status, title, body },
     idempotencyKey: `task-terminal:${task.id}:${task.status}:${task.retryCount}`,
   });
+  return true;
 }
 
-export function transitionTask(input: {
+interface TransitionTaskInput {
   taskId: string;
   status: TaskStatus;
   expectedVersion?: number;
@@ -891,10 +1034,24 @@ export function transitionTask(input: {
   error?: string | null;
   checkpointId?: string | null;
   metadata?: Record<string, unknown>;
-}): TaskRecord {
+}
+
+interface TransitionTaskEffects {
+  task: TaskRecord;
+  attentionChanged: boolean;
+}
+
+/** Apply one task transition inside the caller's SQLite transaction. */
+function transitionTaskInTransaction(input: TransitionTaskInput): TransitionTaskEffects {
   const task = getTask(input.taskId);
   if (!task) throw new Error('Task not found');
   const next = assertTaskStatus(input.status);
+  // Terminal rows are immutable. Treat an exact terminal replay as an
+  // idempotent no-op instead of allowing it to rewrite result/metadata or
+  // move completedAt forward.
+  if (next === task.status && TERMINAL_TASK_STATUSES.has(task.status)) {
+    return { task, attentionChanged: false };
+  }
   if (next !== task.status && !TRANSITIONS[task.status].has(next)) {
     throw new Error(`Invalid task transition: ${task.status} → ${next}`);
   }
@@ -917,59 +1074,156 @@ export function transitionTask(input: {
   const metadata = input.metadata ? { ...task.metadata, ...input.metadata } : task.metadata;
   const db = getDb();
   const shouldSignalTerminal = terminal && (!TERMINAL_TASK_STATUSES.has(task.status) || task.status !== next);
-  let updated: TaskRecord;
+  const shouldResolveTerminalAttention = next === 'queued'
+    && (task.status === 'failed' || task.status === 'lost');
+  let terminalSignalsCreated = false;
+  let terminalAttentionResolved = false;
+  let terminalOutboxSuperseded = false;
+  const res = db.prepare(`
+    UPDATE tasks SET
+      status = ?, progress = ?, currentStep = ?, nextAction = ?, result = ?, error = ?,
+      checkpointId = ?, metadata = ?, heartbeatAt = ?, startedAt = ?, completedAt = ?,
+      completion = ?, version = version + 1, updatedAt = ?
+    WHERE id = ? AND version = ?
+  `).run(
+    next, progress,
+    input.currentStep === undefined ? task.currentStep || null : input.currentStep,
+    input.nextAction === undefined ? task.nextAction || null : input.nextAction,
+    input.result === undefined ? task.result || null : input.result,
+    input.error === undefined ? task.error || null : input.error,
+    input.checkpointId === undefined ? task.checkpointId || null : input.checkpointId,
+    JSON.stringify(metadata), terminal ? task.heartbeatAt || now : now,
+    startedAt, completedAt, completion ? JSON.stringify(completion) : null,
+    now, task.id, version,
+  );
+  if (Number(res.changes) !== 1) throw new Error('Task changed concurrently; reload and retry');
+  insertEvent(task.id, 'status_changed', { from: task.status, to: next });
+  const updated = getTask(task.id)!;
+  if (shouldResolveTerminalAttention) {
+    const resolvedAt = nowIso();
+    const resolved = db.prepare(`
+      UPDATE task_attention SET status = 'resolved', updatedAt = ?, resolvedAt = ?
+      WHERE taskId = ? AND status = 'open' AND dedupeKey LIKE 'terminal:%'
+    `).run(resolvedAt, resolvedAt, task.id);
+    terminalAttentionResolved = Number(resolved.changes) > 0;
+    if (terminalAttentionResolved) {
+      insertEvent(task.id, 'terminal_attention_resolved', { reason: 'task_retried' });
+    }
+    const superseded = db.prepare(`
+      UPDATE task_outbox
+      SET status = 'delivered', deliveredAt = ?, lastError = NULL, attempts = attempts + 1
+      WHERE taskId = ? AND kind = 'task_terminal'
+        AND status IN ('pending', 'failed', 'processing')
+    `).run(resolvedAt, task.id);
+    terminalOutboxSuperseded = Number(superseded.changes) > 0;
+    if (terminalOutboxSuperseded) {
+      insertEvent(task.id, 'terminal_delivery_superseded', { reason: 'task_retried' });
+    }
+  }
+  if (shouldSignalTerminal) terminalSignalsCreated = terminalSignals(updated, false);
+  return {
+    task: updated,
+    attentionChanged: terminalSignalsCreated || terminalAttentionResolved || terminalOutboxSuperseded,
+  };
+}
+
+/** Apply a task transition inside a caller-owned SQLite transaction. */
+export function transitionTaskInOpenTransaction(input: TransitionTaskInput): TaskRecord {
+  return transitionTaskInTransaction(input).task;
+}
+
+export function transitionTask(input: TransitionTaskInput): TaskRecord {
+  const db = getDb();
+  let effects: TransitionTaskEffects;
   db.exec('BEGIN IMMEDIATE');
   try {
-    const res = db.prepare(`
-      UPDATE tasks SET
-        status = ?, progress = ?, currentStep = ?, nextAction = ?, result = ?, error = ?,
-        checkpointId = ?, metadata = ?, heartbeatAt = ?, startedAt = ?, completedAt = ?,
-        completion = ?, version = version + 1, updatedAt = ?
-      WHERE id = ? AND version = ?
-    `).run(
-      next, progress,
-      input.currentStep === undefined ? task.currentStep || null : input.currentStep,
-      input.nextAction === undefined ? task.nextAction || null : input.nextAction,
-      input.result === undefined ? task.result || null : input.result,
-      input.error === undefined ? task.error || null : input.error,
-      input.checkpointId === undefined ? task.checkpointId || null : input.checkpointId,
-      JSON.stringify(metadata), terminal ? task.heartbeatAt || now : now,
-      startedAt, completedAt, completion ? JSON.stringify(completion) : null,
-      now, task.id, version,
-    );
-    if (Number(res.changes) !== 1) throw new Error('Task changed concurrently; reload and retry');
-    insertEvent(task.id, 'status_changed', { from: task.status, to: next });
-    updated = getTask(task.id)!;
-    if (shouldSignalTerminal) terminalSignals(updated, false);
+    effects = transitionTaskInTransaction(input);
     db.exec('COMMIT');
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
     throw error;
   }
-  emitTaskChanges(shouldSignalTerminal);
-  return updated;
+  emitTaskChanges(effects.attentionChanged);
+  return effects.task;
 }
 
 export function heartbeatTask(taskId: string, input: {
   progress?: number;
   currentStep?: string;
   nextAction?: string;
+  expectedVersion?: number;
 } = {}): TaskRecord {
   const task = getTask(taskId);
   if (!task) throw new Error('Task not found');
-  if (TERMINAL_TASK_STATUSES.has(task.status)) throw new Error('Cannot heartbeat a terminal task');
+  if (task.status !== 'running') throw new Error('Only a running task can be heartbeated');
+  const expectedVersion = input.expectedVersion ?? task.version;
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw new Error('A valid expectedVersion is required');
   const now = nowIso();
-  getDb().prepare(`
+  const result = getDb().prepare(`
     UPDATE tasks SET progress = ?, currentStep = ?, nextAction = ?, heartbeatAt = ?,
-      version = version + 1, updatedAt = ? WHERE id = ?
+      version = version + 1, updatedAt = ?
+    WHERE id = ? AND version = ? AND status = 'running'
   `).run(
     input.progress == null ? task.progress : Math.max(0, Math.min(1, Number(input.progress) || 0)),
     input.currentStep === undefined ? task.currentStep || null : cleanText(input.currentStep, 1_000),
     input.nextAction === undefined ? task.nextAction || null : cleanText(input.nextAction, 1_000),
-    now, now, task.id,
+    now, now, task.id, expectedVersion,
   );
+  if (Number(result.changes) !== 1) throw new Error('Task changed concurrently; reload and retry');
   emitTaskChanges();
   return getTask(task.id)!;
+}
+
+/**
+ * Close the narrow start-up crash gap where a task was assigned a run id and
+ * moved to running, but the process died before the matching runs row could be
+ * inserted. Exact ids, staleness, active status, and run absence are all re-checked
+ * under one write transaction so a late run insert cannot be mistaken as an
+ * orphan. Normal terminal attention/outbox effects are retained.
+ */
+export function markStaleRunningTasksWithoutRunsLost(
+  taskIds: readonly string[],
+  staleBefore: string,
+): string[] {
+  const ids = [...new Set(taskIds.map(assertTaskId))].slice(0, 500);
+  if (!ids.length) return [];
+  const parsed = new Date(staleBefore);
+  if (Number.isNaN(parsed.getTime())) throw new Error('A valid staleBefore timestamp is required');
+  const cutoff = parsed.toISOString();
+  const db = getDb();
+  const lost: string[] = [];
+  let attentionChanged = false;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const select = db.prepare(`
+      SELECT t.* FROM tasks t
+      WHERE t.id = ?
+        AND t.status IN ('running', 'paused', 'waiting_for_input', 'waiting_for_approval')
+        AND t.runId IS NOT NULL
+        AND COALESCE(t.heartbeatAt, t.updatedAt, t.createdAt) <= ?
+        AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = t.runId)
+    `);
+    for (const id of ids) {
+      const row = select.get(id, cutoff) as unknown as TaskRow | undefined;
+      if (!row) continue;
+      const task = rowToTask(row);
+      const effects = transitionTaskInTransaction({
+        taskId: task.id,
+        status: 'lost',
+        expectedVersion: task.version,
+        error: 'Worker process stopped before the run could be durably started.',
+        currentStep: 'Run start was interrupted',
+      });
+      attentionChanged ||= effects.attentionChanged;
+      lost.push(task.id);
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
+    throw error;
+  }
+  if (lost.length) emitTaskChanges(attentionChanged);
+  return lost;
 }
 
 export function enqueueTaskCommand(input: {
@@ -1028,19 +1282,568 @@ export interface TaskCommandApplication extends TaskCommand {
   appliedNow: boolean;
 }
 
-export function applyTaskCommand(commandId: string, accepted = true): TaskCommandApplication {
+type RunControlKind = 'cancel' | 'pause' | 'resume' | 'steer';
+
+type RunControlSignal = {
+  kind: RunControlKind;
+  taskId: string;
+  runId: string;
+  instruction?: string;
+};
+
+export interface TaskRunControlSignal extends RunControlSignal {
+  id: string;
+  commandId: string;
+  attempts: number;
+  createdAt: string;
+}
+
+export interface ProcessingTaskCommandReconciliation {
+  inspected: number;
+  requeued: number;
+  applied: number;
+  rejected: number;
+  errors: number;
+  pendingCommandIds: string[];
+  retryTaskIds: string[];
+}
+
+const TASK_COMMAND_CLAIM_TIMEOUT_MS = 30_000;
+
+function ensureRunControlSchema(): void {
+  getDb().exec(`
+    CREATE TABLE IF NOT EXISTS task_run_controls (
+      id TEXT PRIMARY KEY,
+      commandId TEXT NOT NULL,
+      taskId TEXT NOT NULL,
+      runId TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      instruction TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      availableAt TEXT NOT NULL,
+      consumerId TEXT,
+      leaseUntil TEXT,
+      lastError TEXT,
+      createdAt TEXT NOT NULL,
+      acknowledgedAt TEXT,
+      UNIQUE(commandId, runId)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_run_controls_claim
+      ON task_run_controls(runId, status, availableAt, leaseUntil);
+    CREATE INDEX IF NOT EXISTS idx_task_run_controls_acknowledged
+      ON task_run_controls(status, acknowledgedAt);
+  `);
+}
+
+function rowToRunControl(row: RunControlRow): TaskRunControlSignal {
+  return {
+    id: row.id,
+    commandId: row.commandId,
+    taskId: row.taskId,
+    runId: row.runId,
+    kind: row.kind as RunControlKind,
+    ...(row.instruction ? { instruction: row.instruction } : {}),
+    attempts: Number(row.attempts) || 0,
+    createdAt: row.createdAt,
+  };
+}
+
+function persistRunControlSignalsInTransaction(commandId: string, signals: readonly RunControlSignal[]): void {
+  if (!signals.length) return;
+  const now = nowIso();
+  const insert = getDb().prepare(`
+    INSERT OR IGNORE INTO task_run_controls (
+      id, commandId, taskId, runId, kind, instruction, status, attempts,
+      availableAt, consumerId, leaseUntil, lastError, createdAt, acknowledgedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, ?, NULL)
+  `);
+  for (const signal of signals) {
+    insert.run(
+      randomUUID(), commandId, signal.taskId, signal.runId, signal.kind,
+      signal.instruction || null, now, now,
+    );
+  }
+}
+
+/**
+ * Claim durable controls for the process that owns a run. The runtime should
+ * apply each signal and then call finishTaskRunControlSignal with the returned
+ * attempt generation. Expired claims are safely retryable.
+ */
+export function claimTaskRunControlSignals(
+  runId: string,
+  consumerId: string,
+  limit = 20,
+): TaskRunControlSignal[] {
+  ensureRunControlSchema();
+  const exactRunId = cleanText(runId, 200, true);
+  const exactConsumerId = cleanText(consumerId, 200, true);
+  const capped = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
+  const now = nowIso();
+  const leaseUntil = new Date(Date.now() + 30_000).toISOString();
+  const db = getDb();
+  const claimed: RunControlRow[] = [];
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const candidates = db.prepare(`
+      SELECT * FROM task_run_controls
+      WHERE runId = ? AND (
+        (status = 'pending' AND availableAt <= ?)
+        OR (status = 'processing' AND leaseUntil IS NOT NULL AND leaseUntil <= ?)
+      )
+      ORDER BY createdAt ASC, rowid ASC LIMIT ?
+    `).all(exactRunId, now, now, capped) as unknown as RunControlRow[];
+    const update = db.prepare(`
+      UPDATE task_run_controls
+      SET status = 'processing', attempts = attempts + 1, consumerId = ?,
+        leaseUntil = ?, lastError = NULL
+      WHERE id = ? AND runId = ? AND (
+        (status = 'pending' AND availableAt <= ?)
+        OR (status = 'processing' AND leaseUntil IS NOT NULL AND leaseUntil <= ?)
+      )
+    `);
+    for (const row of candidates) {
+      const result = update.run(exactConsumerId, leaseUntil, row.id, exactRunId, now, now);
+      if (Number(result.changes) === 1) {
+        claimed.push({
+          ...row,
+          status: 'processing',
+          attempts: row.attempts + 1,
+          consumerId: exactConsumerId,
+          leaseUntil,
+          lastError: null,
+        });
+      }
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
+    throw error;
+  }
+  return claimed.map(rowToRunControl);
+}
+
+export function finishTaskRunControlSignal(input: {
+  id: string;
+  runId: string;
+  consumerId: string;
+  expectedAttempts: number;
+  delivered: boolean;
+  error?: string;
+}): boolean {
+  ensureRunControlSchema();
+  const id = assertTaskId(input.id);
+  const runId = cleanText(input.runId, 200, true);
+  const consumerId = cleanText(input.consumerId, 200, true);
+  if (!Number.isInteger(input.expectedAttempts) || input.expectedAttempts < 1) {
+    throw new Error('A valid expectedAttempts value is required');
+  }
+  const now = nowIso();
+  const result = input.delivered
+    ? getDb().prepare(`
+        UPDATE task_run_controls
+        SET status = 'acknowledged', acknowledgedAt = ?, leaseUntil = NULL, lastError = NULL
+        WHERE id = ? AND runId = ? AND status = 'processing'
+          AND consumerId = ? AND attempts = ?
+      `).run(now, id, runId, consumerId, input.expectedAttempts)
+    : getDb().prepare(`
+        UPDATE task_run_controls
+        SET status = 'pending', availableAt = ?, consumerId = NULL, leaseUntil = NULL,
+          lastError = ?
+        WHERE id = ? AND runId = ? AND status = 'processing'
+          AND consumerId = ? AND attempts = ?
+      `).run(
+        new Date(Date.now() + 1_000).toISOString(),
+        cleanText(input.error || 'Run control delivery failed', 2_000),
+        id, runId, consumerId, input.expectedAttempts,
+      );
+  return Number(result.changes) === 1;
+}
+
+export interface TaskDeliveryRetentionCleanup {
+  acknowledgedRunControls: number;
+  deliveredOutbox: number;
+  cutoff: string;
+}
+
+/**
+ * Prune transport receipts after their retry/idempotency window has passed.
+ * Commands and task events remain task-owned history; only acknowledged run
+ * controls and delivered outbox rows are disposable delivery bookkeeping.
+ */
+export function pruneTaskDeliveryReceipts(options: {
+  nowMs?: number;
+  olderThanMs?: number;
+  limit?: number;
+} = {}): TaskDeliveryRetentionCleanup {
+  const nowMs = Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now();
+  const requestedRetention = Number(options.olderThanMs);
+  const olderThanMs = Number.isFinite(requestedRetention) && requestedRetention >= 0
+    ? requestedRetention
+    : 30 * 24 * 60 * 60 * 1_000;
+  const limit = Math.max(1, Math.min(5_000, Math.floor(Number(options.limit) || 1_000)));
+  const cutoff = new Date(nowMs - olderThanMs).toISOString();
+  if (isAutomationMaintenanceActive()) {
+    return { acknowledgedRunControls: 0, deliveredOutbox: 0, cutoff };
+  }
+  ensureRunControlSchema();
+  const db = getDb();
+  let acknowledgedRunControls = 0;
+  let deliveredOutbox = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    acknowledgedRunControls = Number(db.prepare(`
+      DELETE FROM task_run_controls
+      WHERE id IN (
+        SELECT id FROM task_run_controls
+        WHERE status = 'acknowledged'
+          AND acknowledgedAt IS NOT NULL
+          AND acknowledgedAt < ?
+        ORDER BY acknowledgedAt ASC, rowid ASC
+        LIMIT ?
+      )
+    `).run(cutoff, limit).changes);
+    deliveredOutbox = Number(db.prepare(`
+      DELETE FROM task_outbox
+      WHERE id IN (
+        SELECT id FROM task_outbox
+        WHERE status = 'delivered'
+          AND deliveredAt IS NOT NULL
+          AND deliveredAt < ?
+        ORDER BY deliveredAt ASC, rowid ASC
+        LIMIT ?
+      )
+    `).run(cutoff, limit).changes);
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
+    throw error;
+  }
+  return { acknowledgedRunControls, deliveredOutbox, cutoff };
+}
+
+function runControlSignal(
+  task: TaskRecord,
+  kind: TaskCommandKind,
+  instruction?: string,
+): RunControlSignal | null {
+  if (!task.runId || !['cancel', 'pause', 'resume', 'steer'].includes(kind)) return null;
+  return { kind: kind as RunControlKind, taskId: task.id, runId: task.runId, instruction };
+}
+
+/**
+ * Parent tasks (notably routines) own the user-facing command while their
+ * direct children own the active runtimes. Mirror lifecycle state to those
+ * children and return their exact run identities for cooperative signalling.
+ */
+function cascadeTaskCommandToChildrenInTransaction(
+  parent: TaskRecord,
+  command: TaskCommand,
+  instruction?: string,
+): { signals: RunControlSignal[]; attentionChanged: boolean } {
+  if (!['cancel', 'pause', 'resume', 'steer'].includes(command.kind)) {
+    return { signals: [], attentionChanged: false };
+  }
+  const childRows = (command.kind === 'cancel'
+    ? getDb().prepare(`
+        SELECT * FROM tasks
+        WHERE parentId = ?
+          AND status IN ('queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked')
+        ORDER BY createdAt ASC
+      `).all(parent.id)
+    : getDb().prepare(`
+        SELECT * FROM tasks
+        WHERE parentId = ?
+          AND status IN ('running', 'paused', 'waiting_for_input', 'waiting_for_approval')
+        ORDER BY createdAt ASC
+      `).all(parent.id)
+  ) as unknown as TaskRow[];
+  const signals: RunControlSignal[] = [];
+  let attentionChanged = false;
+
+  for (const row of childRows) {
+    const child = rowToTask(row);
+    if (command.kind === 'cancel') {
+      const effects = transitionTaskInTransaction({
+        taskId: child.id,
+        status: 'cancelled',
+        expectedVersion: child.version,
+        error: 'Cancelled by the parent task.',
+      });
+      attentionChanged ||= effects.attentionChanged;
+    } else if (command.kind === 'pause' && child.status === 'running') {
+      const effects = transitionTaskInTransaction({ taskId: child.id, status: 'paused', expectedVersion: child.version });
+      attentionChanged ||= effects.attentionChanged;
+    } else if (command.kind === 'resume' && child.status === 'paused') {
+      const effects = transitionTaskInTransaction({ taskId: child.id, status: 'running', expectedVersion: child.version });
+      attentionChanged ||= effects.attentionChanged;
+    }
+    const signal = runControlSignal(child, command.kind, instruction);
+    if (signal) signals.push(signal);
+  }
+  return { signals, attentionChanged };
+}
+
+function applyCommandMutationsInTransaction(
+  task: TaskRecord,
+  command: TaskCommand,
+  instruction?: string,
+): { signals: RunControlSignal[]; attentionChanged: boolean; approvalId?: string } {
+  const signals: RunControlSignal[] = [];
+  let attentionChanged = false;
+  let approvalId: string | undefined;
+
+  if (command.kind === 'pause') {
+    attentionChanged ||= transitionTaskInTransaction({
+      taskId: task.id, status: 'paused', expectedVersion: task.version,
+    }).attentionChanged;
+  } else if (command.kind === 'resume') {
+    attentionChanged ||= transitionTaskInTransaction({
+      taskId: task.id, status: 'running', expectedVersion: task.version,
+    }).attentionChanged;
+  } else if (command.kind === 'cancel') {
+    attentionChanged ||= transitionTaskInTransaction({
+      taskId: task.id, status: 'cancelled', expectedVersion: task.version,
+    }).attentionChanged;
+  } else if (command.kind === 'retry') {
+    const retryUpdate = getDb().prepare(`
+      UPDATE tasks SET retryCount = retryCount + 1, result = NULL, error = NULL,
+        completion = NULL, version = version + 1, updatedAt = ?
+      WHERE id = ? AND version = ? AND status IN ('failed', 'lost') AND retryCount < maxRetries
+    `).run(nowIso(), task.id, task.version);
+    if (Number(retryUpdate.changes) !== 1) {
+      throw new Error('Task retry state changed concurrently or retry limit reached');
+    }
+    const retryable = getTask(task.id)!;
+    attentionChanged ||= transitionTaskInTransaction({
+      taskId: retryable.id,
+      status: 'queued',
+      expectedVersion: retryable.version,
+      result: null,
+      error: null,
+    }).attentionChanged;
+  } else if (command.kind === 'steer' && task.status === 'waiting_for_input') {
+    attentionChanged ||= transitionTaskInTransaction({
+      taskId: task.id,
+      status: 'running',
+      expectedVersion: task.version,
+      currentStep: 'Continuing with appended instruction',
+    }).attentionChanged;
+  } else if (command.kind === 'approve' || command.kind === 'deny') {
+    approvalId = cleanText(command.payload.approvalId, 200, true);
+    if (!getPendingApproval(approvalId)) throw new Error('Approval no longer exists or has expired');
+    if (task.status === 'waiting_for_approval') {
+      attentionChanged ||= transitionTaskInTransaction({
+        taskId: task.id,
+        status: 'running',
+        expectedVersion: task.version,
+        currentStep: command.kind === 'approve' ? 'Approved action continuing' : 'Denied action handled',
+      }).attentionChanged;
+    }
+  }
+
+  const parentSignal = runControlSignal(task, command.kind, instruction);
+  if (parentSignal) signals.push(parentSignal);
+  const cascaded = cascadeTaskCommandToChildrenInTransaction(task, command, instruction);
+  signals.push(...cascaded.signals);
+  attentionChanged ||= cascaded.attentionChanged;
+  return { signals, attentionChanged, ...(approvalId ? { approvalId } : {}) };
+}
+
+function processingCommandProvesApplied(command: TaskCommand, task: TaskRecord): boolean {
+  const nextVersion = command.expectedVersion + 1;
+  if (command.kind === 'pause') return task.version === nextVersion && task.status === 'paused';
+  if (command.kind === 'resume') return task.version === nextVersion && task.status === 'running';
+  if (command.kind === 'cancel') return task.version === nextVersion && task.status === 'cancelled';
+  if (command.kind === 'steer') return task.version === nextVersion && task.status === 'running';
+  if (command.kind === 'approve' || command.kind === 'deny') {
+    return task.version === nextVersion && task.status === 'running';
+  }
+  return command.kind === 'retry'
+    && task.version === command.expectedVersion + 2
+    && task.status === 'queued';
+}
+
+function processingCommandIsHalfAppliedRetry(command: TaskCommand, task: TaskRecord): boolean {
+  return command.kind === 'retry'
+    && task.version === command.expectedVersion + 1
+    && (task.status === 'failed' || task.status === 'lost')
+    && task.result === undefined
+    && task.error === undefined;
+}
+
+function applyTaskCommandInternal(
+  commandId: string,
+  accepted: boolean,
+  reapplyUnchangedProcessing: boolean,
+  staleBefore = new Date(Date.now() - TASK_COMMAND_CLAIM_TIMEOUT_MS).toISOString(),
+  throwDeferredErrors = reapplyUnchangedProcessing,
+): TaskCommandApplication {
   const db = getDb();
   const id = assertTaskId(commandId);
-  let row: CommandRow | undefined;
-  let claimed = false;
+  ensureRunControlSchema();
+  let appliedNow = false;
+  let attentionChanged = false;
+  let approvalToResolve: { id: string; approved: boolean; taskId: string } | undefined;
+  let deferredError: Error | undefined;
+  let resultRow: CommandRow | undefined;
 
   db.exec('BEGIN IMMEDIATE');
   try {
-    row = db.prepare('SELECT * FROM task_commands WHERE id = ?').get(id) as unknown as CommandRow | undefined;
+    let row = db.prepare('SELECT * FROM task_commands WHERE id = ?').get(id) as unknown as CommandRow | undefined;
     if (!row) throw new Error('Task command not found');
-    if (row.status === 'pending') {
-      const result = db.prepare("UPDATE task_commands SET status = 'processing' WHERE id = ? AND status = 'pending'").run(id);
-      claimed = Number(result.changes) === 1;
+    if (row.status === 'processing') {
+      const claimedAt = row.appliedAt || row.createdAt;
+      if (claimedAt > staleBefore) {
+        resultRow = row;
+      } else {
+        const command = rowToCommand(row);
+        const task = getTask(command.taskId);
+        if (!task) {
+          db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'processing'")
+            .run(nowIso(), command.id);
+          if (throwDeferredErrors) deferredError = new Error('Task not found');
+        } else if (task.version === command.expectedVersion) {
+          if (command.kind === 'approve' || command.kind === 'deny') {
+            db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'processing'")
+              .run(nowIso(), command.id);
+            insertEvent(task.id, 'command_rejected', {
+              commandId: command.id,
+              kind: command.kind,
+              reason: 'Approval command expired during process recovery',
+            });
+            if (throwDeferredErrors) {
+              deferredError = new Error('Approval command expired before it could be safely applied');
+            }
+          } else {
+            db.prepare("UPDATE task_commands SET status = 'pending', appliedAt = NULL WHERE id = ? AND status = 'processing'")
+              .run(command.id);
+            insertEvent(task.id, 'command_requeued', { commandId: command.id, kind: command.kind, reason: 'stale_processing_claim' });
+            row = { ...row, status: 'pending', appliedAt: null };
+            if (!reapplyUnchangedProcessing) resultRow = row;
+          }
+        } else if (processingCommandProvesApplied(command, task) || processingCommandIsHalfAppliedRetry(command, task)) {
+          db.exec('SAVEPOINT recover_task_command');
+          try {
+            let recoveredAttentionChanged = false;
+            let recoveredTask = task;
+            if (processingCommandIsHalfAppliedRetry(command, task)) {
+              const effects = transitionTaskInTransaction({
+                taskId: task.id,
+                status: 'queued',
+                expectedVersion: task.version,
+                result: null,
+                error: null,
+              });
+              recoveredTask = effects.task;
+              recoveredAttentionChanged ||= effects.attentionChanged;
+            }
+            const instruction = command.kind === 'steer'
+              ? cleanText(command.payload.instruction, 8_000, true)
+              : undefined;
+            const signals: RunControlSignal[] = [];
+            const parentSignal = runControlSignal(recoveredTask, command.kind, instruction);
+            if (parentSignal) signals.push(parentSignal);
+            const cascaded = cascadeTaskCommandToChildrenInTransaction(recoveredTask, command, instruction);
+            signals.push(...cascaded.signals);
+            recoveredAttentionChanged ||= cascaded.attentionChanged;
+            persistRunControlSignalsInTransaction(command.id, signals);
+            const finalized = db.prepare(`
+              UPDATE task_commands SET status = 'applied', appliedAt = ?
+              WHERE id = ? AND status = 'processing'
+            `).run(nowIso(), command.id);
+            if (Number(finalized.changes) !== 1) throw new Error('Task command recovery claim was lost');
+            insertEvent(task.id, 'command_recovered', { commandId: command.id, kind: command.kind, status: 'applied' });
+            db.exec('RELEASE recover_task_command');
+            attentionChanged ||= recoveredAttentionChanged;
+            appliedNow = true;
+          } catch (error) {
+            try { db.exec('ROLLBACK TO recover_task_command'); db.exec('RELEASE recover_task_command'); } catch { /* transaction will roll back */ }
+            throw error;
+          }
+        } else {
+          db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'processing'")
+            .run(nowIso(), command.id);
+          insertEvent(task.id, 'command_rejected', {
+            commandId: command.id,
+            kind: command.kind,
+            reason: 'Task state changed while the command claim was abandoned',
+          });
+          if (throwDeferredErrors) {
+            deferredError = new Error('Task changed concurrently; reload and retry');
+          }
+        }
+      }
+    }
+
+    if (!resultRow) {
+      row = db.prepare('SELECT * FROM task_commands WHERE id = ?').get(id) as unknown as CommandRow;
+      if (row.status === 'pending') {
+        const command = rowToCommand(row);
+        const task = getTask(command.taskId);
+        if (!task) {
+          db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'pending'")
+            .run(nowIso(), command.id);
+          if (throwDeferredErrors) deferredError = new Error('Task not found');
+        } else if (!accepted) {
+          db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'pending'")
+            .run(nowIso(), command.id);
+          insertEvent(task.id, 'command_rejected', { commandId: command.id, kind: command.kind });
+          appliedNow = true;
+        } else {
+          db.exec('SAVEPOINT apply_task_command');
+          try {
+            if (task.version !== command.expectedVersion) {
+              throw new Error('Task changed concurrently; reload and retry');
+            }
+            const instruction = command.kind === 'steer'
+              ? cleanText(command.payload.instruction, 8_000, true)
+              : undefined;
+            const effects = applyCommandMutationsInTransaction(task, command, instruction);
+            persistRunControlSignalsInTransaction(command.id, effects.signals);
+            const finalized = db.prepare(`
+              UPDATE task_commands SET status = 'applied', appliedAt = ?
+              WHERE id = ? AND status = 'pending'
+            `).run(nowIso(), command.id);
+            if (Number(finalized.changes) !== 1) throw new Error('Task command changed concurrently');
+            insertEvent(task.id, 'command_applied', { commandId: command.id, kind: command.kind });
+            if (effects.approvalId) {
+              approvalToResolve = {
+                id: effects.approvalId,
+                approved: command.kind === 'approve',
+                taskId: task.id,
+              };
+            }
+            db.exec('RELEASE apply_task_command');
+            attentionChanged ||= effects.attentionChanged;
+            appliedNow = true;
+          } catch (error) {
+            try { db.exec('ROLLBACK TO apply_task_command'); db.exec('RELEASE apply_task_command'); } catch { /* transaction will roll back */ }
+            const message = error instanceof Error ? error.message : String(error);
+            db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'pending'")
+              .run(nowIso(), command.id);
+            insertEvent(task.id, 'command_rejected', {
+              commandId: command.id,
+              kind: command.kind,
+              reason: message.slice(0, 500),
+            });
+            if (/Approval no longer exists/i.test(message)) {
+              upsertAttention({
+                taskId: task.id,
+                kind: 'warning',
+                severity: 'warning',
+                title: 'Approval expired',
+                body: 'This approval no longer exists or has already expired. No action was taken.',
+                dedupeKey: `approval-expired:${String(command.payload.approvalId || '')}`,
+              }, false);
+              attentionChanged = true;
+            }
+            if (throwDeferredErrors) deferredError = error instanceof Error ? error : new Error(message);
+          }
+        }
+      }
+      resultRow = db.prepare('SELECT * FROM task_commands WHERE id = ?').get(id) as unknown as CommandRow;
     }
     db.exec('COMMIT');
   } catch (error) {
@@ -1048,95 +1851,157 @@ export function applyTaskCommand(commandId: string, accepted = true): TaskComman
     throw error;
   }
 
-  if (!claimed) {
-    const current = db.prepare('SELECT * FROM task_commands WHERE id = ?').get(id) as unknown as CommandRow;
-    return { ...rowToCommand(current), appliedNow: false };
-  }
-
-  const command = rowToCommand({ ...row!, status: 'processing' });
-  const task = getTask(command.taskId);
-  if (!task) {
-    db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'processing'")
-      .run(nowIso(), command.id);
-    throw new Error('Task not found');
-  }
-  try {
-    if (task.version !== command.expectedVersion) throw new Error('Task changed concurrently; reload and retry');
-    if (accepted) {
-      if (command.kind === 'pause') transitionTask({ taskId: task.id, status: 'paused', expectedVersion: task.version });
-      if (command.kind === 'resume') transitionTask({ taskId: task.id, status: 'running', expectedVersion: task.version });
-      if (command.kind === 'cancel') transitionTask({ taskId: task.id, status: 'cancelled', expectedVersion: task.version });
-      if (command.kind === 'retry') {
-        const retryUpdate = db.prepare(`
-          UPDATE tasks SET retryCount = retryCount + 1, result = NULL, error = NULL,
-            completion = NULL, version = version + 1, updatedAt = ?
-          WHERE id = ? AND version = ? AND status IN ('failed', 'lost') AND retryCount < maxRetries
-        `).run(nowIso(), task.id, task.version);
-        if (Number(retryUpdate.changes) !== 1) throw new Error('Task retry state changed concurrently or retry limit reached');
-        const retryable = getTask(task.id)!;
-        transitionTask({ taskId: retryable.id, status: 'queued', expectedVersion: retryable.version, result: null, error: null });
-      }
-      if (command.kind === 'steer' && task.status === 'waiting_for_input') {
-        transitionTask({ taskId: task.id, status: 'running', expectedVersion: task.version, currentStep: 'Continuing with appended instruction' });
-      }
-      if (command.kind === 'approve' || command.kind === 'deny') {
-        const approvalId = cleanText(command.payload.approvalId, 200, true);
-        if (!resolveToolApproval(approvalId, command.kind === 'approve')) {
-          requestTaskAttention({
-            taskId: task.id,
-            kind: 'warning',
-            severity: 'warning',
-            title: 'Approval expired',
-            body: 'This approval no longer exists or has already expired. No action was taken.',
-            dedupeKey: `approval-expired:${approvalId}`,
-          });
-          throw new Error('Approval no longer exists or has expired');
-        }
-        if (task.status === 'waiting_for_approval') {
-          transitionTask({
-            taskId: task.id,
-            status: 'running',
-            expectedVersion: task.version,
-            currentStep: command.kind === 'approve' ? 'Approved action continuing' : 'Denied action handled',
-          });
-        }
-      }
-    }
-
-    const now = nowIso();
-    const finalized = db.prepare(`
-      UPDATE task_commands SET status = ?, appliedAt = ? WHERE id = ? AND status = 'processing'
-    `).run(accepted ? 'applied' : 'rejected', now, command.id);
-    if (Number(finalized.changes) !== 1) throw new Error('Task command claim was lost before it could be finalized');
-    insertEvent(task.id, accepted ? 'command_applied' : 'command_rejected', { commandId: command.id, kind: command.kind });
-
-    if (accepted && task.runId) {
-      if (command.kind === 'cancel') {
-        void import('./agent-runtime').then(({ requestRunCancel }) => requestRunCancel(task.runId!));
-      } else if (command.kind === 'pause') {
-        void import('./agent-runtime').then(({ requestRunPause }) => requestRunPause(task.runId!));
-      } else if (command.kind === 'resume') {
-        void import('./agent-runtime').then(({ requestRunResume }) => requestRunResume(task.runId!));
-      } else if (command.kind === 'steer') {
-        const instruction = cleanText(command.payload.instruction, 8_000, true);
-        void import('./agent-runtime').then(({ appendRunInstruction }) => appendRunInstruction(task.runId!, instruction));
-      }
-    }
-    emitTaskChanges();
-    const applied = rowToCommand(db.prepare('SELECT * FROM task_commands WHERE id = ?').get(command.id) as unknown as CommandRow);
-    return { ...applied, appliedNow: true };
-  } catch (error) {
-    const rejectedAt = nowIso();
-    db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'processing'")
-      .run(rejectedAt, command.id);
-    insertEvent(task.id, 'command_rejected', {
-      commandId: command.id,
-      kind: command.kind,
-      reason: error instanceof Error ? error.message.slice(0, 500) : 'command_failed',
+  emitTaskChanges(attentionChanged);
+  if (approvalToResolve && !resolveToolApproval(approvalToResolve.id, approvalToResolve.approved)) {
+    requestTaskAttention({
+      taskId: approvalToResolve.taskId,
+      kind: 'warning',
+      severity: 'warning',
+      title: 'Approval delivery was interrupted',
+      body: 'The decision was saved, but the original waiting process no longer exists.',
+      dedupeKey: `approval-delivery-interrupted:${approvalToResolve.id}`,
     });
-    emitTaskChanges();
-    throw error;
   }
+  if (deferredError) throw deferredError;
+  return { ...rowToCommand(resultRow!), appliedNow };
+}
+
+export function applyTaskCommand(commandId: string, accepted = true): TaskCommandApplication {
+  return applyTaskCommandInternal(commandId, accepted, true);
+}
+
+/** Recover stale command claims without re-authorizing approval decisions. */
+export async function reconcileProcessingTaskCommands(
+  staleAfterMs = TASK_COMMAND_CLAIM_TIMEOUT_MS,
+): Promise<ProcessingTaskCommandReconciliation> {
+  const emptyResult = (): ProcessingTaskCommandReconciliation => ({
+    inspected: 0,
+    requeued: 0,
+    applied: 0,
+    rejected: 0,
+    errors: 0,
+    pendingCommandIds: [],
+    retryTaskIds: [],
+  });
+  if (isAutomationMaintenanceActive()) return emptyResult();
+  const staleBefore = new Date(Date.now() - Math.max(0, staleAfterMs)).toISOString();
+  const rows = getDb().prepare(`
+    SELECT * FROM task_commands
+    WHERE status = 'processing' AND COALESCE(appliedAt, createdAt) <= ?
+    ORDER BY createdAt ASC
+  `).all(staleBefore) as unknown as CommandRow[];
+  const result = emptyResult();
+  result.inspected = rows.length;
+  for (const row of rows) {
+    if (isAutomationMaintenanceActive()) break;
+    try {
+      // Unchanged non-approval commands are safe to finish in the same
+      // transaction: expectedVersion proves no task mutation committed.
+      // Approve/deny are always rejected rather than re-authorized.
+      const recovered = applyTaskCommandInternal(row.id, true, true, staleBefore, false);
+      if (recovered.status === 'pending') {
+        result.requeued += 1;
+        result.pendingCommandIds.push(recovered.id);
+      } else if (recovered.status === 'applied') {
+        result.applied += 1;
+        if (recovered.kind === 'retry') result.retryTaskIds.push(recovered.taskId);
+      } else if (recovered.status === 'rejected') {
+        result.rejected += 1;
+      }
+    } catch {
+      result.errors += 1;
+    }
+  }
+  // A process can also die after the durable command INSERT but before it
+  // claims the row as processing. Recover aged commands as well: ordinary
+  // control mutations remain protected by expectedVersion, while approvals
+  // are rejected because their in-memory authorization cannot be recreated.
+  const pendingRows = getDb().prepare(`
+    SELECT * FROM task_commands
+    WHERE status = 'pending' AND createdAt <= ?
+    ORDER BY createdAt ASC
+  `).all(staleBefore) as unknown as CommandRow[];
+  result.inspected += pendingRows.length;
+  for (const row of pendingRows) {
+    if (isAutomationMaintenanceActive()) break;
+    try {
+      const safeToApply = row.kind !== 'approve' && row.kind !== 'deny';
+      const recovered = applyTaskCommandInternal(row.id, safeToApply, false, staleBefore, false);
+      if (recovered.status === 'applied') {
+        result.applied += 1;
+        if (recovered.kind === 'retry') result.retryTaskIds.push(recovered.taskId);
+      } else if (recovered.status === 'rejected') {
+        result.rejected += 1;
+      }
+    } catch {
+      result.errors += 1;
+    }
+  }
+  result.retryTaskIds = [...new Set(result.retryTaskIds)];
+  if (result.retryTaskIds.length && !isAutomationMaintenanceActive()) {
+    try {
+      const { dispatchExistingTask } = await import('./background-tasks');
+      const dispatches = await Promise.allSettled(result.retryTaskIds.map((taskId) => dispatchExistingTask(taskId)));
+      result.errors += dispatches.filter((dispatch) => dispatch.status === 'rejected').length;
+    } catch {
+      result.errors += result.retryTaskIds.length;
+    }
+  }
+  return result;
+}
+
+/** Instrumentation and the browser boot fallback can race on first request. */
+export function reconcileProcessingTaskCommandsAtStartup(): Promise<ProcessingTaskCommandReconciliation> {
+  const startup = globalThis as typeof globalThis & {
+    __shibaTaskCommandStartupReconciliation?: Promise<ProcessingTaskCommandReconciliation>;
+  };
+  if (startup.__shibaTaskCommandStartupReconciliation) {
+    return startup.__shibaTaskCommandStartupReconciliation;
+  }
+  const run = reconcileProcessingTaskCommands();
+  const shared = run.catch((error) => {
+    if (startup.__shibaTaskCommandStartupReconciliation === shared) {
+      startup.__shibaTaskCommandStartupReconciliation = undefined;
+    }
+    throw error;
+  });
+  startup.__shibaTaskCommandStartupReconciliation = shared;
+  startTaskCommandReconciler();
+  return startup.__shibaTaskCommandStartupReconciliation;
+}
+
+interface TaskCommandReconcilerGlobals {
+  __shibaTaskCommandReconcilerTimer?: ReturnType<typeof setInterval>;
+  __shibaTaskCommandReconcilerPass?: Promise<ProcessingTaskCommandReconciliation>;
+}
+
+const taskCommandReconcilerGlobals = globalThis as typeof globalThis & TaskCommandReconcilerGlobals;
+
+/** Keep the INSERT-before-apply crash window self-healing after startup. */
+export function startTaskCommandReconciler(intervalMs = 15_000): void {
+  if (taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerTimer) return;
+  const period = Math.max(1_000, Math.floor(Number(intervalMs) || 15_000));
+  taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerTimer = setInterval(() => {
+    if (taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerPass || isAutomationMaintenanceActive()) return;
+    const pass = reconcileProcessingTaskCommands();
+    taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerPass = pass;
+    void pass.catch((error) => {
+      console.error('[task-ledger] task command reconciliation failed', error);
+    }).finally(() => {
+      if (taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerPass === pass) {
+        taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerPass = undefined;
+      }
+    });
+  }, period);
+  taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerTimer.unref?.();
+}
+
+export async function stopTaskCommandReconciler(): Promise<void> {
+  if (taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerTimer) {
+    clearInterval(taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerTimer);
+    taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerTimer = undefined;
+  }
+  await taskCommandReconcilerGlobals.__shibaTaskCommandReconcilerPass?.catch(() => undefined);
 }
 
 export function listPendingTaskCommands(taskId: string): TaskCommand[] {
@@ -1182,14 +2047,30 @@ export function claimOutbox(limit = 20): TaskOutboxItem[] {
   }
 }
 
-export function finishOutbox(id: string, result: { delivered: boolean; error?: string; retryAt?: string }): TaskOutboxItem {
+export function finishOutbox(id: string, result: {
+  delivered: boolean;
+  error?: string;
+  retryAt?: string;
+  expectedAttempts?: number;
+}): TaskOutboxItem {
   const now = nowIso();
+  const outboxId = assertTaskId(id);
+  const expectedAttempts = result.expectedAttempts;
+  if (expectedAttempts !== undefined && (!Number.isInteger(expectedAttempts) || expectedAttempts < 1)) {
+    throw new Error('A valid expectedAttempts value is required');
+  }
   const res = result.delivered
-    ? getDb().prepare("UPDATE task_outbox SET status = 'delivered', deliveredAt = ?, lastError = NULL WHERE id = ? AND status = 'processing'")
-      .run(now, assertTaskId(id))
-    : getDb().prepare("UPDATE task_outbox SET status = 'failed', availableAt = ?, lastError = ? WHERE id = ? AND status = 'processing'")
-      .run(result.retryAt || new Date(Date.now() + 60_000).toISOString(), cleanText(result.error || 'Delivery failed', 2_000), assertTaskId(id));
-  if (Number(res.changes) !== 1) throw new Error('Outbox item is not currently claimed');
+    ? expectedAttempts === undefined
+      ? getDb().prepare("UPDATE task_outbox SET status = 'delivered', deliveredAt = ?, lastError = NULL WHERE id = ? AND status = 'processing'")
+        .run(now, outboxId)
+      : getDb().prepare("UPDATE task_outbox SET status = 'delivered', deliveredAt = ?, lastError = NULL WHERE id = ? AND status = 'processing' AND attempts = ?")
+        .run(now, outboxId, expectedAttempts)
+    : expectedAttempts === undefined
+      ? getDb().prepare("UPDATE task_outbox SET status = 'failed', availableAt = ?, lastError = ? WHERE id = ? AND status = 'processing'")
+        .run(result.retryAt || new Date(Date.now() + 60_000).toISOString(), cleanText(result.error || 'Delivery failed', 2_000), outboxId)
+      : getDb().prepare("UPDATE task_outbox SET status = 'failed', availableAt = ?, lastError = ? WHERE id = ? AND status = 'processing' AND attempts = ?")
+        .run(result.retryAt || new Date(Date.now() + 60_000).toISOString(), cleanText(result.error || 'Delivery failed', 2_000), outboxId, expectedAttempts);
+  if (Number(res.changes) !== 1) throw new Error('Outbox item claim is no longer current');
   return rowToOutbox(getDb().prepare('SELECT * FROM task_outbox WHERE id = ?').get(id) as unknown as OutboxRow);
 }
 
@@ -1251,6 +2132,12 @@ export function syncTaskFromRun(run: AgentRun): TaskRecord {
   if (TERMINAL_TASK_STATUSES.has(current.status) && desired !== current.status) {
     return current;
   }
+  // A late/initial running projection must not erase a lifecycle decision that
+  // was applied after assignment (notably pause before the first runs-row
+  // insert). Terminal run results may still complete/fail these states.
+  if (desired === 'running' && !['queued', 'running'].includes(current.status)) {
+    return current;
+  }
   if (desired === 'succeeded' && current.contract) {
     const evaluation = evaluateTaskCompletion(id, false);
     if (!evaluation.complete) {
@@ -1300,20 +2187,46 @@ export function syncTaskFromRun(run: AgentRun): TaskRecord {
   });
 }
 
-/** Mark active task leases as lost after a process restart. */
-export function reconcileOrphanedTasks(): number {
+/**
+ * Mark task projections for exact interrupted run identities as lost. Passing
+ * the run ids prevents one server instance from declaring another instance's
+ * live work orphaned. The no-argument running-only path remains for callers
+ * migrating from the pre-run-id reconciler.
+ */
+export function reconcileOrphanedTasks(interruptedRunIds?: readonly string[]): number {
   const db = getDb();
   const now = nowIso();
-  const ids = (db.prepare("SELECT id FROM tasks WHERE status = 'running'").all() as Array<{ id: string }>).map((row) => row.id);
-  for (const id of ids) {
-    const task = getTask(id);
-    if (!task) continue;
-    transitionTask({
-      taskId: id,
-      status: 'lost',
-      error: 'Task execution was interrupted when the Shiba Studio server stopped.',
-      metadata: { ...task.metadata, restartReconciledAt: now },
-    });
+  const interrupted = interruptedRunIds === undefined
+    ? null
+    : new Set(interruptedRunIds.map((id) => cleanText(id, 200)).filter(Boolean));
+  if (interrupted?.size === 0) return 0;
+  const rows = (interrupted
+    ? db.prepare(`
+        SELECT * FROM tasks
+        WHERE status IN ('running', 'paused', 'waiting_for_input', 'waiting_for_approval')
+          AND runId IS NOT NULL
+        ORDER BY updatedAt ASC
+      `).all()
+    : db.prepare("SELECT * FROM tasks WHERE status = 'running' ORDER BY updatedAt ASC").all()
+  ) as unknown as TaskRow[];
+  let reconciled = 0;
+  for (const row of rows) {
+    const task = rowToTask(row);
+    if (interrupted && (!task.runId || !interrupted.has(task.runId))) continue;
+    try {
+      transitionTask({
+        taskId: task.id,
+        status: 'lost',
+        expectedVersion: task.version,
+        error: 'Task execution was interrupted when the Shiba Studio server stopped.',
+        metadata: { ...task.metadata, restartReconciledAt: now },
+      });
+      reconciled += 1;
+    } catch (error) {
+      if (!/concurrently|Invalid task transition/i.test(error instanceof Error ? error.message : String(error))) {
+        throw error;
+      }
+    }
   }
-  return ids.length;
+  return reconciled;
 }

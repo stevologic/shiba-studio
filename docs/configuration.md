@@ -35,6 +35,8 @@ Settings is a card grid; each card maps to a concern:
 | `SHIBA_MDNS` | on | Set to `off` to disable mDNS advertising entirely |
 | `SHIBA_LAN` | unset | Set by `npm run dev:lan`/`start:lan`; makes mDNS advertise the machine's LAN IP (network-wide) instead of `127.0.0.1` |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | unset | A bundled Google OAuth client for Drive. When both are set, Capabilities → Google Drive becomes zero-setup — users just click **Sign in with Google**. Unset = each user adds their own client under the card's Advanced section. See [Capabilities](capabilities.md) |
+| `REDDIT_OAUTH_CLIENT_ID` / `REDDIT_OAUTH_CLIENT_SECRET` | unset | Optional bundled Reddit Data API web-app client. Its registered callback must exactly match `/api/reddit-oauth/callback` on the app origin. Saved credentials in the Reddit card override these values |
+| `REDDIT_USER_AGENT` | generated from the connected username | Identifying User-Agent sent to Reddit, e.g. `desktop:shiba-studio:v0.2.0 (by /u/yourname)` |
 
 Put these in a `.env.local` file in the project root (gitignored) or your shell environment; see `.env.example`.
 

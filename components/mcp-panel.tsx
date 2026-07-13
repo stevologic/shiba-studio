@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BookOpen, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Plus, Plug,
   RefreshCw, Server, Trash2, Wrench, Zap,
@@ -9,6 +9,7 @@ import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { McpPreset } from '@/lib/mcp-catalog';
 import { MCP_PROTOCOL_DOCS_URL, MCP_SERVERS_REGISTRY_URL, getMcpPreset } from '@/lib/mcp-catalog';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 
 type McpServer = {
   id: string;
@@ -34,6 +35,13 @@ interface McpPanelProps {
 }
 
 const X_MCP_REDIRECT_URI = 'http://localhost:8080/callback';
+const MCP_URL = '/api/mcp';
+
+interface McpResponse {
+  ok?: boolean;
+  presets?: McpPreset[];
+  servers?: McpServer[];
+}
 
 function ExternalDocsLink({
   href,
@@ -79,24 +87,32 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
     envJson: '{}',
     notes: '',
   });
+  const loadRequestRef = useRef(0);
 
-  const loadMcp = useCallback(async () => {
+  const loadMcp = useCallback(async ({ force = false, signal }: { force?: boolean; signal?: AbortSignal } = {}) => {
+    const requestId = ++loadRequestRef.current;
+    if (force) invalidateClientJson(MCP_URL);
     setLoading(true);
     try {
-      const res = await fetch('/api/mcp');
-      const data = await res.json();
-      if (data.ok) {
+      const data = await loadClientJson<McpResponse>(MCP_URL, { maxAgeMs: 10_000, signal });
+      if (!signal?.aborted && requestId === loadRequestRef.current && data.ok) {
         setPresets(data.presets || []);
         setServers(data.servers || []);
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
       /* ignore */
+    } finally {
+      if (!signal?.aborted && requestId === loadRequestRef.current) setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
-    loadMcp();
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) void loadMcp({ signal: controller.signal });
+    });
+    return () => controller.abort();
   }, [loadMcp]);
 
   useEffect(() => {
@@ -135,7 +151,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       toast.success(`${addedServer?.name || 'MCP server'} added`);
       setAddingPreset(null);
       setPresetFields({});
-      await loadMcp();
+      await loadMcp({ force: true });
       if (addingPreset === 'x' && addedServer?.id) await testServer(addedServer.id, true);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to add MCP server');
@@ -168,7 +184,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       toast.success(`Custom MCP "${data.server?.name}" added`);
       setShowCustom(false);
       setCustomForm({ name: '', command: 'npx', args: '-y @modelcontextprotocol/server-fetch', envJson: '{}', notes: '' });
-      await loadMcp();
+      await loadMcp({ force: true });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to add custom server');
     }
@@ -183,7 +199,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Could not update MCP server');
-      await loadMcp();
+      await loadMcp({ force: true });
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : 'Could not update MCP server');
     }
@@ -207,7 +223,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
       if (!res.ok || !data.ok) throw new Error(data.error || 'Could not remove MCP server');
       toast.success('MCP server removed');
       if (expandedServerId === id) setExpandedServerId(null);
-      await loadMcp();
+      await loadMcp({ force: true });
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : 'Could not remove MCP server');
     }
@@ -257,7 +273,7 @@ export default function McpPanel({ githubToken, defaultWorkspace, onBrowsePath, 
             <BookOpen size={13} />
             MCP registry
           </ExternalDocsLink>
-          <button type="button" onClick={loadMcp} disabled={loading} className="grok-btn grok-btn-ghost text-xs">
+          <button type="button" onClick={() => void loadMcp({ force: true })} disabled={loading} className="grok-btn grok-btn-ghost text-xs">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
         </div>

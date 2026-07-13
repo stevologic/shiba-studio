@@ -8,47 +8,119 @@ import type { AgentStreamEvent } from './agent-stream-types';
 import { grokChat, GrokMessage, GrokTool, type GrokUsageContext } from './grok-client';
 import { resolveWorkspace, ensureWorktree, getGlobalUploadsDir, GLOBAL_UPLOADS_SUBDIR } from './workspace';
 import * as Browser from './browser';
-import { persistAgentRun } from './agent-runs-store';
+import {
+  heartbeatAgentRun,
+  persistAgentRun,
+  persistAgentRunProgress,
+  RUN_LEASE_HEARTBEAT_MS,
+} from './agent-runs-store';
 import { buildSkillsPrompt } from './skills-catalog';
 import { drainInbox } from './agent-inbox';
 import { detectGrokCli } from './grok-cli';
 import { listEnabledMcpServers } from './mcp';
+import { isAutomationMaintenanceActive } from './automation-maintenance';
 
 export { postToAgentInbox, drainInbox } from './agent-inbox';
 
 const MAX_STEPS = 18;
+const TRACE_PROGRESS_PERSIST_MS = 750;
 
 /**
- * A successful X receipt is an irreversible commit boundary. If only the
+ * A successful social-post receipt is an irreversible commit boundary. If only the
  * follow-up Grok auth/summary turn fails, retrying the whole run would publish
  * a duplicate post. Preserve the confirmed outcome and surface the auth issue
  * as a non-fatal note instead of converting the completed post into a failure.
  */
-function completedXPostFallback(trace: TraceStep[], error: unknown): string | null {
+function completedSocialPostFallback(
+  trace: TraceStep[],
+  error: unknown,
+): { output: string; provider: 'X' | 'Reddit' } | null {
   const message = error instanceof Error ? error.message : String(error);
-  if (!/(?:Grok API error (?:401|403)|unauthenticated:bad-credentials|OAuth2 access token could not be validated|Missing cloud credentials)/i.test(message)) {
-    return null;
-  }
+  const authFailure = /(?:Grok API error (?:401|403)|unauthenticated:bad-credentials|OAuth2 access token could not be validated|Missing cloud credentials)/i.test(message);
   for (let index = trace.length - 1; index >= 0; index--) {
     const step = trace[index];
-    if (step.type !== 'result' || step.tool?.name !== 'x_post') continue;
-    const receipt = step.tool.result;
+    const tool = step.tool;
+    if (step.type !== 'result' || !tool || !['x_post', 'reddit_submit'].includes(tool.name)) continue;
+    const receipt = tool.result;
     if (!receipt || typeof receipt !== 'object') continue;
     const record = receipt as Record<string, unknown>;
     if (record.ok !== true) continue;
     const id = typeof record.id === 'string' ? record.id.trim() : '';
+    const isX = tool.name === 'x_post';
     const url = typeof record.url === 'string' && record.url.trim()
       ? record.url.trim()
-      : id
+      : isX && id
         ? `https://x.com/i/web/status/${encodeURIComponent(id)}`
         : '';
     if (!url) continue;
-    return [
-      `Posted to X: ${url}`,
-      'The post succeeded, but Grok could not generate its final summary because cloud authentication changed after the post. No duplicate post was attempted.',
-    ].join('\n\n');
+    const provider = isX ? 'X' : 'Reddit';
+    return {
+      provider,
+      output: [
+        `Posted to ${provider}: ${url}`,
+        authFailure
+          ? `The ${provider} post succeeded, but Grok could not generate its final summary because cloud authentication changed after the post. No duplicate post was attempted.`
+          : `The ${provider} post succeeded, but a later run step failed after the post was confirmed. No duplicate post was attempted; review the trace before retrying any unfinished work.`,
+      ].join('\n\n'),
+    };
   }
   return null;
+}
+
+/**
+ * A model may propose a post after reading untrusted feed text. Autonomous
+ * dispatch and YOLO mode therefore authorize Reddit publishing only when the
+ * user's own task explicitly names Reddit (or r/name) as the destination.
+ * In Ask mode, approving the exact live call is also sufficient.
+ */
+function explicitlyRequestsRedditSubmission(prompt: string): boolean {
+  const text = prompt.replace(/\s+/g, ' ').trim();
+  if (!text) return false;
+  if (/\b(?:do\s+not|don't|never|without)\b.{0,40}\b(?:post|posting|publish|submit|share)\b.{0,80}\b(?:reddit|r\/[A-Za-z0-9_]{1,21}|subreddit)\b/i.test(text)) {
+    return false;
+  }
+  const destination = String.raw`(?:reddit|r\/[A-Za-z0-9_]{1,21}|(?:the|a)\s+[A-Za-z0-9_]{1,21}\s+subreddit)`;
+  return new RegExp(
+    String.raw`\b(?:post|publish|submit|share)\b.{0,100}\b(?:to|on|in)\s+${destination}\b`,
+    'i',
+  ).test(text)
+    || /\b(?:create|write|make|schedule)\b.{0,80}\breddit\s+(?:post|submission)\b/i.test(text)
+    || /\breddit\s+(?:post|submission)\b.{0,80}\b(?:create|write|make|publish|submit|schedule)\b/i.test(text);
+}
+
+/**
+ * Reddit feed payloads are useful to the model for the current turn, but a
+ * complete copy does not belong in the durable run trace. Keep only enough
+ * metadata to explain what happened. Submission receipts
+ * deliberately remain untouched because their id/URL is the authoritative
+ * commit boundary that prevents a duplicate post after a later model error.
+ */
+function durableToolResult(
+  toolName: string,
+  result: unknown,
+): { content: string; result: unknown } {
+  if (toolName !== 'reddit_read_posts') {
+    return { content: (JSON.stringify(result) || '').slice(0, 300), result };
+  }
+
+  const record = result && typeof result === 'object' && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : {};
+  const error = typeof record.error === 'string' ? record.error.trim().slice(0, 500) : '';
+  const postsRead = Array.isArray(record.posts) ? record.posts.length : 0;
+  const hasNextPage = typeof record.nextAfter === 'string' && record.nextAfter.trim().length > 0;
+  const receipt = {
+    postsRead,
+    hasNextPage,
+    contentRetained: false,
+    ...(error ? { error } : {}),
+  };
+  return {
+    content: error
+      ? `Reddit read failed: ${error}`
+      : `Read ${postsRead} Reddit post${postsRead === 1 ? '' : 's'}${hasNextPage ? '; more are available' : ''}. Feed content was not retained in the run trace.`,
+    result: receipt,
+  };
 }
 
 // Runs whose owner asked them to stop. The generator checks this at the top of
@@ -58,8 +130,11 @@ function completedXPostFallback(trace: TraceStep[], error: unknown): string | nu
 const runCancelGlobals = globalThis as typeof globalThis & {
   __shibaRunCancelRequests?: Set<string>;
   __shibaRunAbortControllers?: Map<string, AbortController>;
+  __shibaRunStartReservations?: Map<string, number>;
   __shibaRunPauseRequests?: Set<string>;
   __shibaRunSteering?: Map<string, string[]>;
+  __shibaRunControlConsumerId?: string;
+  __shibaAppliedRunControlIds?: Map<string, Set<string>>;
 };
 // Route chunks can load separate module instances. Keep cancellation state on
 // globalThis so /api/execute/cancel always reaches the generator/controller
@@ -68,10 +143,61 @@ const runCancelRequests = runCancelGlobals.__shibaRunCancelRequests
   ?? (runCancelGlobals.__shibaRunCancelRequests = new Set<string>());
 const runAbortControllers = runCancelGlobals.__shibaRunAbortControllers
   ?? (runCancelGlobals.__shibaRunAbortControllers = new Map<string, AbortController>());
+const runStartReservations = runCancelGlobals.__shibaRunStartReservations
+  ?? (runCancelGlobals.__shibaRunStartReservations = new Map<string, number>());
 const runPauseRequests = runCancelGlobals.__shibaRunPauseRequests
   ?? (runCancelGlobals.__shibaRunPauseRequests = new Set<string>());
 const runSteering = runCancelGlobals.__shibaRunSteering
   ?? (runCancelGlobals.__shibaRunSteering = new Map<string, string[]>());
+const runControlConsumerId = runCancelGlobals.__shibaRunControlConsumerId
+  ?? (runCancelGlobals.__shibaRunControlConsumerId = `${process.pid}:${uuidv4()}`);
+const appliedRunControlIds = runCancelGlobals.__shibaAppliedRunControlIds
+  ?? (runCancelGlobals.__shibaAppliedRunControlIds = new Map<string, Set<string>>());
+const RUN_START_RESERVATION_MS = 30_000;
+const MAX_APPLIED_RUN_CONTROL_IDS = 500;
+
+function applyRunControlOnce(appliedIds: Set<string>, controlId: string, apply: () => void): boolean {
+  if (appliedIds.has(controlId)) return false;
+  apply();
+  if (appliedIds.size >= MAX_APPLIED_RUN_CONTROL_IDS) {
+    const oldest = appliedIds.values().next().value as string | undefined;
+    if (oldest) appliedIds.delete(oldest);
+  }
+  appliedIds.add(controlId);
+  return true;
+}
+
+export const durableRunControlTestHooks = { applyRunControlOnce };
+
+function pruneRunStartReservations(now = Date.now()): void {
+  for (const [id, expiresAt] of runStartReservations) {
+    if (expiresAt <= now) runStartReservations.delete(id);
+  }
+}
+
+/** Reserve an exact id during the short gap between SSE announcement and the
+ * generator's durable/active registration. Unknown ids are never cancellable. */
+export function reserveRunStart(runId: string): void {
+  if (!runId) return;
+  const now = Date.now();
+  pruneRunStartReservations(now);
+  runStartReservations.set(runId, now + RUN_START_RESERVATION_MS);
+}
+
+export function isRunStartReserved(runId: string): boolean {
+  pruneRunStartReservations();
+  return (runStartReservations.get(runId) || 0) > Date.now();
+}
+
+export function releaseRunStartReservation(runId: string): void {
+  runStartReservations.delete(runId);
+}
+
+/** Stream teardown cleanup for starts that failed before a controller existed. */
+export function discardRunStartReservation(runId: string): void {
+  runStartReservations.delete(runId);
+  if (!runAbortControllers.has(runId)) runCancelRequests.delete(runId);
+}
 /** Ask an in-flight run to stop at its next step boundary. */
 export function requestRunCancel(runId: string): void {
   if (!runId) return;
@@ -99,9 +225,18 @@ export function appendRunInstruction(runId: string, instruction: string): void {
   runSteering.set(runId, pending.slice(-20));
 }
 
-async function waitWhileRunPaused(runId: string, signal: AbortSignal): Promise<void> {
+async function waitWhileRunPaused(
+  runId: string,
+  signal: AbortSignal,
+  pollDurableControls?: () => Promise<void>,
+): Promise<void> {
+  let lastControlPoll = 0;
   while (runPauseRequests.has(runId) && !signal.aborted && !isRunCancelRequested(runId)) {
     await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    if (pollDurableControls && Date.now() - lastControlPoll >= 750) {
+      lastControlPoll = Date.now();
+      await pollDurableControls();
+    }
   }
 }
 
@@ -114,7 +249,7 @@ async function waitWhileRunPaused(runId: string, signal: AbortSignal): Promise<v
 const SEQUENTIAL_ONLY_TOOLS = new Set([
   'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
   'shell_exec', 'terminal_exec', 'grok_cli', 'github_create_pr', 'schedule_task', 'delegate_task_team',
-  'native_node_action',
+  'native_node_action', 'reddit_submit',
   // The agent's sandbox container is one stateful box: later commands depend
   // on what earlier ones installed or wrote, so order must be preserved.
   'sandbox_exec', 'sandbox_write_file',
@@ -388,6 +523,46 @@ export function getToolDefinitions(
             feed: { type: 'string', enum: ['mine', 'home'], description: "Which feed: 'mine' = the user's own tweets (default), 'home' = their following timeline" },
             count: { type: 'number', description: 'How many tweets (5-25, default 5)' },
           },
+        },
+      },
+    });
+  }
+  if (scope.reddit) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'reddit_read_posts',
+        description: 'Read posts from the signed-in Reddit home feed or a specific subreddit. Returns normalized posts and a pagination cursor.',
+        parameters: {
+          type: 'object',
+          properties: {
+            subreddit: { type: 'string', description: 'Subreddit name without r/. Omit for the signed-in home feed.' },
+            sort: { type: 'string', enum: ['hot', 'new', 'top', 'rising'], description: 'Listing order (default hot).' },
+            time: { type: 'string', enum: ['hour', 'day', 'week', 'month', 'year', 'all'], description: 'Time window for top listings.' },
+            limit: { type: 'number', description: 'Posts to return (1-25, default 10).' },
+            after: { type: 'string', description: 'Pagination cursor from a previous result.' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'reddit_submit',
+        description: 'Publish a text or link post to a subreddit. This is irreversible: Ask mode requires exact approval, while autonomous or YOLO execution requires the user task to explicitly name Reddit as the destination.',
+        parameters: {
+          type: 'object',
+          properties: {
+            subreddit: { type: 'string', description: 'Target subreddit name without r/.' },
+            title: { type: 'string', description: 'Post title.' },
+            kind: { type: 'string', enum: ['self', 'link'], description: 'Text post (self, default) or link post.' },
+            text: { type: 'string', description: 'Markdown body for a self post.' },
+            url: { type: 'string', description: 'HTTP(S) URL for a link post.' },
+            nsfw: { type: 'boolean', description: 'Mark the post NSFW.' },
+            spoiler: { type: 'boolean', description: 'Mark the post as a spoiler.' },
+            send_replies: { type: 'boolean', description: 'Receive inbox replies (default true).' },
+          },
+          required: ['subreddit', 'title'],
         },
       },
     });
@@ -935,7 +1110,7 @@ function buildSystem(
     : '';
   const homeLine = `Workspace: ${agent.workspace.path} ${agent.workspace.useWorktree ? '(using isolated git worktree)' : ''}
 Global shared uploads (all agents): ${globalUploadsPath} — files dropped here are available to every agent. Use fs_list/fs_read with paths under "${GLOBAL_UPLOADS_SUBDIR}/" relative to workspace root, or the absolute path above.`;
-  const actionLine = 'You use tools to take real actions: edit files, run shell, control Chrome browser, GitHub/Slack/Drive when enabled. '
+  const actionLine = 'You use tools to take real actions: edit files, run shell, control Chrome browser, and connected integrations such as GitHub, Slack, Drive, or Reddit when enabled. '
     + 'You also own a private Alpine Linux container (sandbox_exec / sandbox_write_file): a persistent, isolated Linux box with root and network — install packages with apk, run any language, and do risky experiments there instead of on the host. '
     + 'Native desktop access is the final escalation only: first use a connector or MCP, then the controlled browser, then a user-signed-in browser. native_node_action requires exact evidence for all three earlier stages and a fresh user approval.';
   return `You are a powerful autonomous Grok agent named "${agent.name}" running inside Shiba Studio (localhost agent studio).
@@ -963,7 +1138,8 @@ export type AgentRunOpts = {
   scheduled?: boolean;
   /** No interactive approver watches this run (scheduler, board, background,
    *  channel replies). Most gated tools proceed because dispatch is the
-   *  authorization; native GUI actions are denied without a live approver. */
+   *  authorization; native GUI actions are denied without a live approver,
+   *  and Reddit publishing must be explicit in the dispatched task. */
   autonomous?: boolean;
   /** Injectable chat double for tests — canned responses only need choices. */
   grokChatFn?: (params: {
@@ -1008,20 +1184,208 @@ async function* agentRunGenerator(
   prompt: string,
   opts: AgentRunOpts = {},
 ): AsyncGenerator<AgentRunEvent> {
+  // Maintenance is a dispatch fence: backup restore may have closed the DB,
+  // so reject before allocating or mutating any durable identity.
+  if (isAutomationMaintenanceActive()) {
+    throw new Error('Agent runs are temporarily paused for maintenance. Retry after maintenance finishes.');
+  }
   const runId = opts.runId || uuidv4();
   const taskId = opts.taskId || `run:${runId}`;
   const attemptNo = Math.max(1, Number(opts.attemptNo) || 1);
   const startedAt = new Date().toISOString();
+  const effectivePrompt = (opts.scheduleInstructions && opts.scheduled) ? opts.scheduleInstructions : prompt;
   const trace: TraceStep[] = [];
-  const { audit } = await import('./audit-log');
-  audit('run', opts.scheduled ? 'scheduled run started' : 'run started', `${agent.name}: ${prompt.slice(0, 120)}`, {
-    runId, agent: agent.name, agentId: agent.id, model: agent.model,
-  });
+  let traceProgressEnabled = false;
+  let traceProgressDirty = false;
+  let traceProgressTimer: ReturnType<typeof setTimeout> | undefined;
+  let traceProgressWrite = Promise.resolve();
+
+  const queueTraceProgressWrite = () => {
+    traceProgressDirty = false;
+    const snapshot = [...trace];
+    traceProgressWrite = traceProgressWrite
+      .then(() => { persistAgentRunProgress(runId, snapshot); })
+      .catch(() => { /* terminal persistence remains authoritative */ });
+  };
+  const scheduleTraceProgress = () => {
+    if (!traceProgressEnabled) return;
+    traceProgressDirty = true;
+    if (traceProgressTimer) return;
+    traceProgressTimer = setTimeout(() => {
+      traceProgressTimer = undefined;
+      queueTraceProgressWrite();
+    }, TRACE_PROGRESS_PERSIST_MS);
+    traceProgressTimer.unref?.();
+  };
+  const flushTraceProgress = async () => {
+    if (traceProgressTimer) {
+      clearTimeout(traceProgressTimer);
+      traceProgressTimer = undefined;
+    }
+    if (traceProgressDirty) queueTraceProgressWrite();
+    await traceProgressWrite;
+  };
 
   const emit = (step: TraceStep) => {
     trace.push(step);
+    scheduleTraceProgress();
     return { kind: 'step' as const, step };
   };
+
+  // Register cooperative control before any fallible setup. The run row is
+  // then persisted first inside the encompassing try, so an announced run
+  // always receives either a live lease or an exact terminal diagnostic.
+  const runAbortController = new AbortController();
+  runAbortControllers.set(runId, runAbortController);
+  const appliedControlIds = appliedRunControlIds.get(runId) ?? new Set<string>();
+  appliedRunControlIds.set(runId, appliedControlIds);
+  if (isRunCancelRequested(runId)) runAbortController.abort(new Error('Run cancelled by the user'));
+  const runSignal = opts.signal
+    ? AbortSignal.any([opts.signal, runAbortController.signal])
+    : runAbortController.signal;
+  let leaseOwnershipLost = false;
+  const userCancellationRequested = () => !leaseOwnershipLost
+    && isRunCancelRequested(runId);
+  const runFailureMessage = (error: unknown, fallback = 'Run interrupted before completion.') => {
+    if (!userCancellationRequested() && runSignal.aborted) {
+      const reason = runSignal.reason;
+      if (reason instanceof Error && reason.message.trim()) return reason.message;
+      if (typeof reason === 'string' && reason.trim()) return reason.trim();
+    }
+    if (error instanceof Error && error.message.trim()) return error.message;
+    if (typeof error === 'string' && error.trim()) return error.trim();
+    return fallback;
+  };
+  const assertRunNotAborted = () => {
+    if (!runSignal.aborted && !isRunCancelRequested(runId)) return;
+    throw runSignal.reason instanceof Error
+      ? runSignal.reason
+      : new Error(runFailureMessage(runSignal.reason));
+  };
+  const markDurableCancellation = async () => {
+    try {
+      const { getTask, transitionTask } = await import('./task-ledger');
+      const task = getTask(taskId);
+      if (task && !['succeeded', 'failed', 'cancelled', 'lost'].includes(task.status)) {
+        transitionTask({
+          taskId,
+          status: 'cancelled',
+          expectedVersion: task.version,
+          error: 'Run cancelled by the user.',
+          currentStep: 'Cancelled',
+          nextAction: null,
+        });
+      }
+    } catch {
+      /* terminal run persistence remains authoritative */
+    }
+  };
+  const pollDurableRunControls = async () => {
+    let ledger: typeof import('./task-ledger');
+    try {
+      ledger = await import('./task-ledger');
+    } catch {
+      return;
+    }
+    let signals: ReturnType<typeof ledger.claimTaskRunControlSignals>;
+    try {
+      signals = ledger.claimTaskRunControlSignals(runId, runControlConsumerId);
+    } catch {
+      return;
+    }
+    for (const signal of signals) {
+      try {
+        applyRunControlOnce(appliedControlIds, signal.id, () => {
+          if (signal.kind === 'cancel') requestRunCancel(runId);
+          else if (signal.kind === 'pause') requestRunPause(runId);
+          else if (signal.kind === 'resume') requestRunResume(runId);
+          else if (signal.kind === 'steer') {
+            if (!signal.instruction?.trim()) throw new Error('Steering signal did not include an instruction.');
+            appendRunInstruction(runId, signal.instruction);
+          }
+        });
+        const acknowledged = ledger.finishTaskRunControlSignal({
+          id: signal.id,
+          runId,
+          consumerId: runControlConsumerId,
+          expectedAttempts: signal.attempts,
+          delivered: true,
+        });
+        if (!acknowledged) throw new Error('Run control acknowledgement claim is no longer current');
+      } catch (error) {
+        try {
+          ledger.finishTaskRunControlSignal({
+            id: signal.id,
+            runId,
+            consumerId: runControlConsumerId,
+            expectedAttempts: signal.attempts,
+            delivered: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } catch {
+          // The claim may already have expired and been recovered elsewhere.
+        }
+      }
+    }
+  };
+
+  let audit: typeof import('./audit-log').audit = () => {};
+  let guards!: typeof import('./run-guards');
+  let runSlotClaimed = false;
+  let leaseHeartbeat: ReturnType<typeof setInterval> | undefined;
+  let durableRunStarted = false;
+  let terminalRunPersisted = false;
+  let workDir = opts.workspacePathOverride?.trim() || agent.workspace.path;
+  let finalOutput = '';
+  let steps = 0;
+  const sideEffects: string[] = [];
+
+  try {
+    await persistAgentRun({
+      id: runId, taskId, attemptNo, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
+      model: agent.model, startedAt, status: 'running', trace: [], sideEffects: [],
+      ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
+      ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
+      ...(opts.projectId ? { projectId: opts.projectId } : {}),
+    });
+    durableRunStarted = true;
+    releaseRunStartReservation(runId);
+    traceProgressEnabled = true;
+    const startingTask = (await import('./task-ledger')).getTask(taskId);
+    if (startingTask?.status === 'cancelled') {
+      requestRunCancel(runId);
+    } else if (startingTask && ['succeeded', 'failed', 'lost'].includes(startingTask.status)) {
+      throw new Error(`Task is already ${startingTask.status}; refusing to start a late worker.`);
+    }
+    leaseHeartbeat = setInterval(() => {
+      try {
+        if (!heartbeatAgentRun(runId)) {
+          leaseOwnershipLost = true;
+          runAbortController.abort(new Error('Run lease ownership was lost.'));
+          return;
+        }
+      } catch { /* terminal persistence remains authoritative */ }
+      void pollDurableRunControls();
+      // Retain the task-row check for older callers that transitioned a task
+      // directly instead of creating a durable run-control signal.
+      void import('./task-ledger').then(({ getTask }) => {
+        if (getTask(taskId)?.status === 'cancelled' && !runSignal.aborted) {
+          requestRunCancel(runId);
+        }
+      }).catch(() => {});
+    }, RUN_LEASE_HEARTBEAT_MS);
+    leaseHeartbeat.unref?.();
+
+    // Consume controls as soon as the durable identity exists. This prevents a
+    // queued cancel/pause from spending time in config/auth/workspace setup.
+    await pollDurableRunControls();
+    await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+    assertRunNotAborted();
+
+    ({ audit } = await import('./audit-log'));
+    audit('run', opts.scheduled ? 'scheduled run started' : 'run started', `${agent.name}: ${prompt.slice(0, 120)}`, {
+      runId, agent: agent.name, agentId: agent.id, model: agent.model,
+    });
 
   const { parseModelRef } = await import('./model-providers');
   const { loadConfig } = await import('./persistence');
@@ -1053,9 +1417,8 @@ async function* agentRunGenerator(
   // Run guards — refuse before any model spend: monthly/daily budget hard
   // stop, (cloud models) reachability, then the atomic concurrency slot claim
   // LAST so a refusal for other reasons never leaks a claimed slot.
-  const guards = await import('./run-guards');
+  guards = await import('./run-guards');
   const scheduleKey = opts.scheduleId ? `${agent.id}:${opts.scheduleId}` : undefined;
-  let runSlotClaimed = false;
   if (!modelError) modelError = await guards.checkSpendGuard(cfg, modelRef.provider !== 'cloud');
   if (!modelError && modelRef.provider === 'cloud' && !opts.grokChatFn) {
     const reach = await guards.cloudReachable();
@@ -1068,16 +1431,23 @@ async function* agentRunGenerator(
     modelError = guards.tryAcquireRunSlot(cfg, runId, agent.id, agent.name, scheduleKey);
     runSlotClaimed = !modelError;
   }
+  await pollDurableRunControls();
+  await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+  assertRunNotAborted();
   if (modelError) {
+    releaseRunStartReservation(runId);
     yield emit({ id: uuidv4(), ts: startedAt, type: 'error', content: modelError });
     const r: AgentRun = {
-      id: runId, taskId, attemptNo, agentId: agent.id, agentName: agent.name, prompt, model: agent.model,
-      startedAt, status: 'error', trace, sideEffects: [],
+      id: runId, taskId, attemptNo, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt, model: agent.model,
+      startedAt, completedAt: new Date().toISOString(), status: 'error', trace,
+      finalOutput: modelError, sideEffects: [],
     };
     await persistAgentRun(r);
+    terminalRunPersisted = true;
     audit('run', 'run failed', `${agent.name}: ${modelError.slice(0, 120)}`, {
       runId, agent: agent.name, agentId: agent.id, model: agent.model,
     });
+    runCancelRequests.delete(runId);
     yield { kind: 'done', run: r };
     return;
   }
@@ -1085,24 +1455,20 @@ async function* agentRunGenerator(
   // Keep the concurrency slot until every part of the run, including
   // best-effort learning, has finished. The outer finally also releases it if
   // a streaming consumer cancels the generator midway through a tool turn.
-  const runAbortController = new AbortController();
-  runAbortControllers.set(runId, runAbortController);
-  if (isRunCancelRequested(runId)) runAbortController.abort(new Error('Run cancelled by the user'));
-  const runSignal = opts.signal
-    ? AbortSignal.any([opts.signal, runAbortController.signal])
-    : runAbortController.signal;
-  try {
+  await pollDurableRunControls();
+  await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+  assertRunNotAborted();
   // Resolve workspace + optional worktree (project override skips agent worktree)
   const workspaceBase = opts.workspacePathOverride?.trim() || agent.workspace.path;
-  let workDir = resolveWorkspace(workspaceBase);
+  workDir = resolveWorkspace(workspaceBase);
   if (!opts.workspacePathOverride && agent.workspace.useWorktree) {
     try {
-      const wt = await ensureWorktree(agent.workspace.path, agent.id);
+      const wt = await ensureWorktree(agent.workspace.path, agent.id, 'main', { taskId });
       workDir = wt.worktreePath;
       yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'think', content: `Using worktree at ${workDir}` });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: `Worktree setup issue: ${msg}. Using base workspace.` });
+      yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'think', content: `Worktree setup issue: ${msg}. Using base workspace.` });
     }
   }
 
@@ -1121,8 +1487,6 @@ async function* agentRunGenerator(
       content: `Project scope active${opts.projectId ? ` (${opts.projectId})` : ''} — workspace: ${workDir}`,
     });
   }
-  const effectivePrompt = (opts.scheduleInstructions && opts.scheduled) ? opts.scheduleInstructions : prompt;
-
   // Tool grants are derived from durable workspace roots, so project the
   // resolved runtime cwd before filtering/offering any host tool.
   try {
@@ -1169,7 +1533,7 @@ async function* agentRunGenerator(
   const { taskToolDecision } = await import('./task-workspace-policy');
   const readOnlyDenied = new Set([
     'fs_write', 'shell_exec', 'terminal_exec', 'browser_navigate', 'browser_click', 'browser_type',
-    'github_create_issue', 'slack_post', 'discord_post', 'x_post', 'drive_upload', 'obsidian_write',
+    'github_create_issue', 'slack_post', 'discord_post', 'x_post', 'reddit_submit', 'drive_upload', 'obsidian_write',
     'vercel_deploy', 'vercel_set_env', 'netlify_deploy', 'netlify_set_env', 'grok_cli', 'mcp_invoke',
     'memory_forget', 'schedule_task', 'board_update_task',
   ]);
@@ -1179,17 +1543,6 @@ async function* agentRunGenerator(
   const { buildGlobalInstructionsContext } = await import('./global-instructions');
   const globalInstructionsText = await buildGlobalInstructionsContext(cfg);
 
-  // Broadcast a 'running' record the moment execution begins so the Automations
-  // page (and dashboards) light a live spinner via SSE — including scheduled
-  // fires the user never clicked. The completion/error persists below upsert
-  // this same run id to its final status (INSERT OR REPLACE by id).
-  await persistAgentRun({
-    id: runId, taskId, attemptNo, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
-    model: agent.model, startedAt, status: 'running', trace: [], sideEffects: [],
-    ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
-    ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
-    ...(opts.projectId ? { projectId: opts.projectId } : {}),
-  }).catch(() => { /* best-effort live signal; the run proceeds regardless */ });
   // CLI-model agents delegate the whole task to the headless Grok CLI: it is
   // its own agentic harness (reads/edits files, runs commands) working in the
   // agent's workspace, with its own authentication.
@@ -1211,6 +1564,9 @@ async function* agentRunGenerator(
           maxTurns: 18,
           signal: runSignal,
         });
+        await pollDurableRunControls();
+        await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+        assertRunNotAborted();
         finalOutput = (out.stdout || '').trim().slice(-6000);
         if (!out.ok) {
           cliStatusOut = 'error';
@@ -1226,10 +1582,16 @@ async function* agentRunGenerator(
         });
       } catch (e) {
         cliStatusOut = 'error';
-        finalOutput = e instanceof Error ? e.message : String(e);
+        if (userCancellationRequested()) {
+          runCancelRequests.delete(runId);
+          finalOutput = 'Run cancelled by the user.';
+          await markDurableCancellation();
+        } else {
+          finalOutput = runFailureMessage(e);
+        }
         yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: finalOutput });
       }
-      trace.push({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: finalOutput.slice(0, 500) });
+      yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: finalOutput.slice(0, 500) });
       const run: AgentRun = {
         id: runId, taskId, attemptNo, agentId: agent.id, agentName: agent.name, prompt: effectivePrompt,
         model: agent.model, startedAt, completedAt: new Date().toISOString(),
@@ -1238,9 +1600,14 @@ async function* agentRunGenerator(
         ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
         ...(opts.projectId ? { projectId: opts.projectId } : {}),
       };
-      const { recordCapabilityPackUsage } = await import('./capability-packs');
-      recordCapabilityPackUsage(agent.skills || [], run.status === 'completed' ? run.id : undefined);
+      try {
+        const { recordCapabilityPackUsage } = await import('./capability-packs');
+        recordCapabilityPackUsage(agent.skills || [], run.status === 'completed' ? run.id : undefined);
+      } catch {
+        /* derived capability bookkeeping must not change the run outcome */
+      }
       await persistAgentRun(run);
+      terminalRunPersisted = true;
       audit('run', `run ${run.status}`, `${agent.name}: ${(finalOutput || prompt).slice(0, 120)}`, {
         runId, agent: agent.name, agentId: agent.id, model: agent.model,
         steps: trace.length, sideEffects: cliSideEffects.length,
@@ -1289,9 +1656,7 @@ async function* agentRunGenerator(
     { role: 'user', content: effectivePrompt },
   ];
 
-  let finalOutput = '';
-  let steps = 0;
-  const sideEffects: string[] = [];
+  const redditSubmissionRequested = explicitlyRequestsRedditSubmission(effectivePrompt);
   const configuredTokenCap = guards.perRunTokenCap(cfg);
   const requestedTokenCap = Math.max(0, Math.floor(Number(opts.tokenCap) || 0));
   const tokenCap = configuredTokenCap > 0 && requestedTokenCap > 0
@@ -1304,22 +1669,31 @@ async function* agentRunGenerator(
     while (steps < maxSteps) {
       steps++;
       try {
-        const { heartbeatTask } = await import('./task-ledger');
-        heartbeatTask(taskId, {
-          progress: Math.min(0.95, steps / maxSteps),
-          currentStep: `Agent turn ${steps} of ${maxSteps}`,
-          nextAction: 'Continue the active plan',
-        });
+        const { getTask, heartbeatTask } = await import('./task-ledger');
+        if (getTask(taskId)?.status === 'cancelled') {
+          requestRunCancel(runId);
+        } else {
+          heartbeatTask(taskId, {
+            progress: Math.min(0.95, steps / maxSteps),
+            currentStep: `Agent turn ${steps} of ${maxSteps}`,
+            nextAction: 'Continue the active plan',
+          });
+        }
       } catch {
         /* heartbeat projection is best-effort */
       }
-      await waitWhileRunPaused(runId, runSignal);
-      if (runSignal.aborted || isRunCancelRequested(runId)) {
+      await pollDurableRunControls();
+      await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+      if (userCancellationRequested()) {
         runCancelRequests.delete(runId);
         finalOutput = 'Run cancelled by the user.';
+        await markDurableCancellation();
         yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: 'Run cancelled by the user.' });
         audit('run', 'run cancelled', `${agent.name}: cancelled by user`, { runId, agentId: agent.id });
         break;
+      }
+      if (runSignal.aborted) {
+        throw new Error(runFailureMessage(runSignal.reason));
       }
       const steering = runSteering.get(runId) || [];
       if (steering.length) {
@@ -1349,17 +1723,21 @@ async function* agentRunGenerator(
         tool_choice: 'auto',
         usageContext: { source: 'agent', sourceId: runId },
       });
-      await waitWhileRunPaused(runId, runSignal);
+      await pollDurableRunControls();
+      await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
       if (runSignal.aborted || isRunCancelRequested(runId)) {
-        throw runSignal.reason instanceof Error ? runSignal.reason : new Error('Run cancelled by the user');
+        throw runSignal.reason instanceof Error
+          ? runSignal.reason
+          : new Error(runFailureMessage(runSignal.reason));
       }
       if (tokenCap > 0) {
         const { parseGrokUsage } = await import('./usage');
         runTokens += parseGrokUsage(resp?.usage)?.totalTokens ?? 0;
         if (runTokens >= tokenCap) {
+          finalOutput = `Per-run token cap reached (${runTokens.toLocaleString()} of ${tokenCap.toLocaleString()} tokens) — run stopped. Raise the cap in Settings → Cost & safety.`;
           yield emit({
             id: uuidv4(), ts: new Date().toISOString(), type: 'error',
-            content: `Per-run token cap reached (${runTokens.toLocaleString()} of ${tokenCap.toLocaleString()} tokens) — run stopped. Raise the cap in Settings → Cost & safety.`,
+            content: finalOutput,
           });
           audit('run', 'token cap reached', `${agent.name}: ${runTokens} tokens (cap ${tokenCap})`, { runId, agentId: agent.id });
           break;
@@ -1401,6 +1779,12 @@ async function* agentRunGenerator(
         messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: effectiveToolCalls });
       }
 
+      // Durable commands can be applied by another route process. Claim them
+      // immediately before crossing from model reasoning into tool execution.
+      await pollDurableRunControls();
+      await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+      assertRunNotAborted();
+
       // When the model batches several INDEPENDENT tool calls (parallel file
       // reads, multiple searches), execute them concurrently up front and let
       // the loop below consume the precomputed results. Tools on shared
@@ -1427,9 +1811,15 @@ async function* agentRunGenerator(
               }));
             preExecuted.set(tc.id, res as { result: unknown; sideEffect?: string; screenshot?: string });
           }));
+          await pollDurableRunControls();
+          await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+          assertRunNotAborted();
         }
       }
       for (const tc of (effectiveToolCalls || [])) {
+        await pollDurableRunControls();
+        await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+        assertRunNotAborted();
         const fn = tc.function;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced JSON, coerced per tool by the executor
         let args: any = {};
@@ -1479,6 +1869,7 @@ async function* agentRunGenerator(
         // is the authorization). Native GUI was denied above; interactive
         // native access always pauses regardless of the global approval mode.
         let liveTaskShellApproval = false;
+        let liveToolApprovalGranted = false;
         if (!opts.autonomous && (taskDispatchPolicy.requiresLiveApproval || toolNeedsApproval(fn.name, cfg.toolApprovalMode))) {
           const { approvalId, wait } = beginToolApproval(runId, fn.name, args);
           let taskAttentionId: string | undefined;
@@ -1558,13 +1949,24 @@ async function* agentRunGenerator(
             });
             continue;
           }
+          liveToolApprovalGranted = true;
           liveTaskShellApproval = taskDispatchPolicy.requiresLiveApproval === true;
         }
+
+        // Issue Reddit's executor authorization only after exact live approval
+        // or when the user's dispatched task explicitly targets Reddit.
+        const redditSubmitAuthorized = fn.name === 'reddit_submit'
+          && (liveToolApprovalGranted || redditSubmissionRequested);
 
         const execRes = preExecuted.get(tc.id)
           ?? await executeTool(
             fn.name, args, agent, { id: runId, taskId }, workDir, runId, integrationCreds, runSignal,
-            liveTaskShellApproval ? { liveTaskShellApproval: true } : undefined,
+            liveTaskShellApproval || redditSubmitAuthorized
+              ? {
+                  ...(liveTaskShellApproval ? { liveTaskShellApproval: true } : {}),
+                  ...(redditSubmitAuthorized ? { redditSubmitAuthorized: true } : {}),
+                }
+              : undefined,
           );
 
         if (execRes.sideEffect) sideEffects.push(execRes.sideEffect);
@@ -1590,14 +1992,19 @@ async function* agentRunGenerator(
         };
         messages.push(toolResultMsg);
 
+        const durableResult = durableToolResult(fn.name, execRes.result);
+
         yield emit({
           id: uuidv4(),
           ts: new Date().toISOString(),
           type: 'result',
-          content: JSON.stringify(execRes.result).slice(0, 300),
-          tool: { name: fn.name, args, result: execRes.result },
+          content: durableResult.content,
+          tool: { name: fn.name, args, result: durableResult.result },
           screenshot: execRes.screenshot,
         });
+        await pollDurableRunControls();
+        await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+        assertRunNotAborted();
       }
     }
 
@@ -1646,25 +2053,27 @@ async function* agentRunGenerator(
         : 'Agent completed without output or recorded actions (see trace for details).';
     }
   } catch (e) {
-    if (runSignal.aborted || isRunCancelRequested(runId)) {
+    if (userCancellationRequested()) {
       runCancelRequests.delete(runId);
       finalOutput = 'Run cancelled by the user.';
+      await markDurableCancellation();
       yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: finalOutput });
       audit('run', 'run cancelled', `${agent.name}: cancelled by user`, { runId, agentId: agent.id });
     } else {
-      const completedPost = completedXPostFallback(trace, e);
+      const completedPost = completedSocialPostFallback(trace, e);
       if (completedPost) {
-        finalOutput = completedPost;
+        finalOutput = completedPost.output;
         yield emit({
           id: uuidv4(), ts: new Date().toISOString(), type: 'think',
-          content: `The X post was confirmed, but its follow-up model summary failed: ${e instanceof Error ? e.message : String(e)}`,
+          content: `The ${completedPost.provider} post was confirmed, but a follow-up run step failed: ${runFailureMessage(e)}`,
         });
-        yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: completedPost });
-        audit('run', 'post completed; summary unavailable', `${agent.name}: confirmed X post preserved after model auth failure`, {
+        yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: completedPost.output });
+        audit('run', 'post completed; follow-up failed', `${agent.name}: confirmed ${completedPost.provider} post preserved after a later failure`, {
           runId, agentId: agent.id,
         });
       } else {
-        yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: e instanceof Error ? e.message : String(e) });
+        finalOutput = runFailureMessage(e);
+        yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: finalOutput });
       }
     }
   } finally {
@@ -1753,19 +2162,105 @@ async function* agentRunGenerator(
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
   };
 
-  const { recordCapabilityPackUsage } = await import('./capability-packs');
-  recordCapabilityPackUsage(agent.skills || [], run.status === 'completed' ? run.id : undefined);
+  try {
+    const { recordCapabilityPackUsage } = await import('./capability-packs');
+    recordCapabilityPackUsage(agent.skills || [], run.status === 'completed' ? run.id : undefined);
+  } catch {
+    /* derived capability bookkeeping must not change the run outcome */
+  }
   await persistAgentRun(run);
+  terminalRunPersisted = true;
   audit('run', `run ${run.status}`, `${agent.name}: ${(run.finalOutput || prompt).slice(0, 120)}`, {
     runId, agent: agent.name, agentId: agent.id, model: agent.model,
     steps: trace.length, sideEffects: run.sideEffects?.length || 0,
   });
   yield { kind: 'done', run };
+  } catch (error) {
+    if (terminalRunPersisted) throw error;
+    const message = runFailureMessage(error);
+    // Lost ownership means another process/reconciler already made the
+    // authoritative terminal decision. Never overwrite it from this worker.
+    if (/lease ownership was lost/i.test(message)) throw error;
+    const cancelled = userCancellationRequested();
+    finalOutput = cancelled ? 'Run cancelled by the user.' : message;
+    if (cancelled) await markDurableCancellation();
+    if (!trace.some((step) => step.type === 'error' && step.content === finalOutput)) {
+      yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: finalOutput });
+    }
+    const failedRun: AgentRun = {
+      id: runId,
+      taskId,
+      attemptNo,
+      agentId: agent.id,
+      agentName: agent.name,
+      prompt: effectivePrompt,
+      model: agent.model,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      status: 'error',
+      trace,
+      finalOutput,
+      workspaceSnapshot: workDir || undefined,
+      sideEffects,
+      ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
+      ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
+      ...(opts.projectId ? { projectId: opts.projectId } : {}),
+    };
+    await persistAgentRun(failedRun);
+    terminalRunPersisted = true;
+    audit('run', cancelled ? 'run cancelled' : 'run failed', `${agent.name}: ${finalOutput.slice(0, 160)}`, {
+      runId, agentId: agent.id, steps, sideEffects: sideEffects.length,
+    });
+    yield { kind: 'done', run: failedRun };
   } finally {
+    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+    traceProgressEnabled = false;
+    await flushTraceProgress();
+    // Async-generator consumers can disconnect by calling return(), which
+    // skips the catch block. Do not leave the durable row running until lease
+    // expiry; record an interruption immediately when this worker still owns it.
+    if (durableRunStarted && !terminalRunPersisted && !leaseOwnershipLost) {
+      const cancelled = userCancellationRequested();
+      const interruptedOutput = cancelled
+        ? 'Run cancelled by the user.'
+        : runFailureMessage(runSignal.reason, 'Run interrupted before completion.');
+      if (cancelled) await markDurableCancellation();
+      try {
+        await persistAgentRun({
+          id: runId,
+          taskId,
+          attemptNo,
+          agentId: agent.id,
+          agentName: agent.name,
+          prompt: effectivePrompt,
+          model: agent.model,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          status: 'error',
+          trace,
+          finalOutput: interruptedOutput,
+          workspaceSnapshot: workDir || undefined,
+          sideEffects,
+          ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
+          ...(opts.scheduleInstructions ? { scheduleInstructions: opts.scheduleInstructions } : {}),
+          ...(opts.projectId ? { projectId: opts.projectId } : {}),
+        });
+        terminalRunPersisted = true;
+        audit('run', cancelled ? 'run cancelled' : 'run interrupted', `${agent.name}: ${interruptedOutput.slice(0, 160)}`, {
+          runId, agentId: agent.id, steps, sideEffects: sideEffects.length,
+        });
+      } catch (error) {
+        if (!/lease ownership was lost/i.test(error instanceof Error ? error.message : String(error))) {
+          console.error(`[agent-runtime] failed to finalize interrupted run ${runId}`, error);
+        }
+      }
+    }
+    releaseRunStartReservation(runId);
     runCancelRequests.delete(runId);
     runAbortControllers.delete(runId);
     runPauseRequests.delete(runId);
     runSteering.delete(runId);
+    appliedRunControlIds.delete(runId);
     if (runSlotClaimed) guards.releaseActiveRun(runId);
   }
 }

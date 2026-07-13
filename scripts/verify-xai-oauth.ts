@@ -13,14 +13,17 @@ import {
   buildAuthorizeUrl,
   clearOAuthSession,
   describeCloudAuthPrecedence,
+  disconnectOAuth,
   ensureCloudAuth,
   fetchCloudWithAuth,
   generatePkce,
   getValidAccessToken,
   isSessionExpired,
+  loadOAuthSession,
   parseOAuthCallbackInput,
   resolveCloudBearer,
   saveOAuthSession,
+  setLegacyOAuthMigrationHookForTests,
   sessionFromTokenResponse,
   setOAuthDataDir,
   setTokenFetcher,
@@ -89,7 +92,7 @@ async function runUnitTests() {
   };
   assert(isSessionExpired(expiredSession), 'expired session detected');
 
-  await withTempDataDir(async () => {
+  await withTempDataDir(async (dir) => {
     const future: XaiOAuthSession = {
       accessToken: 'live-token',
       refreshToken: 'rt-live',
@@ -141,11 +144,59 @@ async function runUnitTests() {
     const stored = await getValidAccessToken();
     assert(stored === 'refreshed-token', 'refreshed token persisted');
 
+    let announceRefresh!: () => void;
+    let releaseRefresh!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => { announceRefresh = resolve; });
+    const refreshRelease = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    setTokenFetcher(async () => {
+      announceRefresh();
+      await refreshRelease;
+      return new Response(JSON.stringify({
+        access_token: 'must-not-resurrect',
+        refresh_token: 'rt-disconnect-race',
+        expires_in: 7200,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    await saveOAuthSession({
+      ...future,
+      accessToken: 'disconnect-race-stale',
+      refreshToken: 'rt-disconnect-race',
+      expiresAt: new Date(Date.now() - 5_000).toISOString(),
+    });
+    const racingRefresh = getValidAccessToken();
+    await refreshStarted;
+    await disconnectOAuth();
+    releaseRefresh();
+    assert(await racingRefresh === null, 'disconnect fences an in-flight OAuth refresh');
+    assert(await loadOAuthSession() === null, 'an in-flight refresh cannot resurrect a disconnected session');
+
+    let announceMigration!: () => void;
+    let releaseMigration!: () => void;
+    const migrationStarted = new Promise<void>((resolve) => { announceMigration = resolve; });
+    const migrationRelease = new Promise<void>((resolve) => { releaseMigration = resolve; });
+    await fs.writeFile(path.join(dir, 'xai-oauth.json'), JSON.stringify({
+      ...future,
+      accessToken: 'legacy-plaintext-access',
+      refreshToken: 'legacy-plaintext-refresh',
+    }));
+    setLegacyOAuthMigrationHookForTests(async () => {
+      announceMigration();
+      await migrationRelease;
+    });
+    const racingMigration = loadOAuthSession();
+    await migrationStarted;
+    await disconnectOAuth();
+    releaseMigration();
+    assert(await racingMigration === null, 'disconnect fences legacy plaintext session migration');
+    assert(await loadOAuthSession() === null, 'legacy migration cannot recreate a disconnected session');
+    setLegacyOAuthMigrationHookForTests(null);
+
     await clearOAuthSession();
     const afterClear = await resolveCloudBearer(cfg);
     assert(!afterClear.hasCloudAuth, 'disconnect clears OAuth state');
 
     setTokenFetcher(null);
+    setLegacyOAuthMigrationHookForTests(null);
   });
 
   const keyCfg: AppConfig = {

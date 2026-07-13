@@ -12,9 +12,12 @@ import { createBoardTask } from './board';
 import { createRoutine, getRoutine } from './routines';
 import {
   createTask,
+  createTaskInOpenTransaction,
   getTask,
+  publishTaskChanges,
   recordTaskEvidence,
   transitionTask,
+  transitionTaskInOpenTransaction,
 } from './task-ledger';
 import type {
   MeetingActionItem,
@@ -31,6 +34,9 @@ export const MAX_MEETING_AUDIO_BYTES = 50 * 1024 * 1024;
 export const MEETING_CONSENT_VERSION = 'meeting-recording-v1';
 export const MEETING_CONSENT_TEXT = 'I confirm that everyone required has consented to this recording and that I am responsible for complying with applicable recording laws.';
 const XAI_STT_URL = 'https://api.x.ai/v1/stt';
+const ACTIVE_MEETING_TASK_STATUSES = new Set([
+  'queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked',
+]);
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'audio/webm': '.webm',
@@ -94,6 +100,7 @@ interface OutputRow {
   taskId: string | null;
   error: string | null;
   createdAt: string;
+  actionItemSnapshot: string;
 }
 
 const initializedHandles = new WeakSet<object>();
@@ -149,9 +156,28 @@ export function ensureMeetingSchema(): void {
       taskId TEXT,
       error TEXT,
       createdAt TEXT NOT NULL,
+      actionItemSnapshot TEXT NOT NULL DEFAULT '{}',
       UNIQUE(meetingId, actionItemId, type)
     );
     CREATE INDEX IF NOT EXISTS idx_meeting_outputs_meeting ON meeting_outputs(meetingId, createdAt ASC);
+  `);
+  const outputColumns = new Set(
+    (db.prepare('PRAGMA table_info(meeting_outputs)').all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  if (!outputColumns.has('actionItemSnapshot')) {
+    db.exec("ALTER TABLE meeting_outputs ADD COLUMN actionItemSnapshot TEXT NOT NULL DEFAULT '{}'");
+  }
+  db.exec(`
+    UPDATE meeting_outputs
+    SET actionItemSnapshot = COALESCE((
+      SELECT item.value FROM meetings owner, json_each(
+        CASE WHEN json_valid(owner.actionItems) THEN owner.actionItems ELSE '[]' END
+      ) item
+      WHERE owner.id = meeting_outputs.meetingId
+        AND json_extract(item.value, '$.id') = meeting_outputs.actionItemId
+      LIMIT 1
+    ), '{}')
+    WHERE actionItemSnapshot IS NULL OR actionItemSnapshot = '' OR actionItemSnapshot = '{}'
   `);
   initializedHandles.add(db as object);
 }
@@ -295,6 +321,66 @@ async function writeBoundedAudio(stream: ReadableStream<Uint8Array>, destination
   }
 }
 
+/** Remove only the exact, undispatched task created for a meeting that failed
+ * to finish creation. If another process has already attached work, retain the
+ * complete graph for integrity recovery instead of deleting live ownership. */
+function compensateFailedMeetingCreation(meetingId: string, taskId: string): boolean {
+  const db = getDb();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const task = db.prepare(`
+      SELECT status, originType, originId, runId
+      FROM tasks WHERE id = ?
+    `).get(taskId) as { status: string; originType: string; originId: string | null; runId: string | null } | undefined;
+    const meeting = db.prepare(`
+      SELECT taskId, status, version, transcriptText
+      FROM meetings WHERE id = ?
+    `).get(meetingId) as { taskId: string; status: string; version: number; transcriptText: string } | undefined;
+    const hasChild = Boolean(db.prepare('SELECT 1 FROM tasks WHERE parentId = ? LIMIT 1').get(taskId));
+    const hasRun = Boolean(db.prepare('SELECT 1 FROM runs WHERE taskId = ? OR id = ? LIMIT 1').get(taskId, task?.runId || ''));
+    const taskIsOwned = task
+      && task.status === 'queued'
+      && task.originType === 'manual'
+      && task.originId === meetingId
+      && !task.runId
+      && !hasChild
+      && !hasRun;
+    const meetingIsOwned = !meeting || (
+      meeting.taskId === taskId
+      && meeting.status === 'uploaded'
+      && Number(meeting.version) === 1
+      && !meeting.transcriptText
+    );
+    if (!taskIsOwned || !meetingIsOwned) {
+      db.exec('ROLLBACK');
+      return false;
+    }
+
+    if (meeting) db.prepare('DELETE FROM meetings WHERE id = ? AND taskId = ?').run(meetingId, taskId);
+    db.prepare('DELETE FROM task_checkpoint_files WHERE checkpointId IN (SELECT id FROM task_checkpoints WHERE taskId = ?)').run(taskId);
+    db.prepare('DELETE FROM task_checkpoint_restores WHERE taskId = ?').run(taskId);
+    db.prepare('DELETE FROM task_checkpoints WHERE taskId = ?').run(taskId);
+    db.prepare('DELETE FROM task_outbox WHERE taskId = ?').run(taskId);
+    db.prepare('DELETE FROM task_commands WHERE taskId = ?').run(taskId);
+    db.prepare('DELETE FROM task_attention WHERE taskId = ?').run(taskId);
+    db.prepare('DELETE FROM task_evidence WHERE taskId = ?').run(taskId);
+    db.prepare('DELETE FROM task_events WHERE taskId = ?').run(taskId);
+    const removed = db.prepare(`
+      DELETE FROM tasks
+      WHERE id = ? AND status = 'queued' AND originType = 'manual'
+        AND originId = ? AND runId IS NULL
+        AND NOT EXISTS (SELECT 1 FROM tasks child WHERE child.parentId = tasks.id)
+        AND NOT EXISTS (SELECT 1 FROM runs run WHERE run.taskId = tasks.id)
+    `).run(taskId, meetingId);
+    if (Number(removed.changes) !== 1) throw new Error('Meeting task changed during creation compensation');
+    db.exec('COMMIT');
+    return true;
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+}
+
 export async function saveMeetingAudio(input: {
   title: string;
   source: MeetingSource;
@@ -317,27 +403,29 @@ export async function saveMeetingAudio(input: {
   const stored = await writeBoundedAudio(input.stream, audioPath);
   const days = retentionDays(input.retentionDays);
   const now = nowIso();
-  const task = createTask({
-    id: `meeting:${id}`,
-    kind: 'artifact',
-    title: `Transcribe ${title}`,
-    description: `Create a speaker-aware transcript and review for ${title}.`,
-    status: 'queued',
-    originType: 'manual',
-    originId: id,
-    maxRetries: 1,
-    contract: {
-      outcome: 'The recording has a timestamped transcript and reviewable meeting notes.',
-      constraints: ['No Board card or Automation is created without explicit confirmation.'],
-      requiredArtifacts: [],
-      requirements: [
-        { id: 'transcript', label: 'Speaker-aware transcript recorded', required: true, acceptedKinds: ['integration'], scope: `meeting:${id}` },
-        { id: 'review', label: 'Summary and action review recorded', required: true, acceptedKinds: ['assertion'], scope: `meeting:${id}` },
-      ],
-    },
-    metadata: { meetingId: id, consentVersion: MEETING_CONSENT_VERSION },
-  });
+  let task: ReturnType<typeof createTask> | null = null;
+  let meetingInserted = false;
   try {
+    task = createTask({
+      id: `meeting:${id}`,
+      kind: 'artifact',
+      title: `Transcribe ${title}`,
+      description: `Create a speaker-aware transcript and review for ${title}.`,
+      status: 'queued',
+      originType: 'manual',
+      originId: id,
+      maxRetries: 1,
+      contract: {
+        outcome: 'The recording has a timestamped transcript and reviewable meeting notes.',
+        constraints: ['No Board card or Automation is created without explicit confirmation.'],
+        requiredArtifacts: [],
+        requirements: [
+          { id: 'transcript', label: 'Speaker-aware transcript recorded', required: true, acceptedKinds: ['integration'], scope: `meeting:${id}` },
+          { id: 'review', label: 'Summary and action review recorded', required: true, acceptedKinds: ['assertion'], scope: `meeting:${id}` },
+        ],
+      },
+      metadata: { meetingId: id, consentVersion: MEETING_CONSENT_VERSION },
+    });
     getDb().prepare(`
       INSERT INTO meetings (
         id, title, source, status, consentAt, consentVersion, originalFilename,
@@ -351,20 +439,45 @@ export async function saveMeetingAudio(input: {
       id, title, input.source, now, MEETING_CONSENT_VERSION, originalFilename,
       audioPath, mime, stored.bytes, stored.sha256, days, deleteAt(days), task.id, now, now,
     );
+    meetingInserted = true;
+    recordTaskEvidence({
+      taskId: task.id,
+      kind: 'artifact',
+      status: 'informational',
+      label: originalFilename,
+      summary: `Locally stored consented audio (${stored.bytes} bytes, SHA-256 ${stored.sha256}).`,
+      uri: `/api/meetings/${id}/audio`,
+      scope: `meeting:${id}`,
+      metadata: { meetingId: id, bytes: stored.bytes, sha256: stored.sha256, mime },
+    });
   } catch (error) {
-    try { await fs.unlink(/* turbopackIgnore: true */ audioPath); } catch { /* best effort */ }
+    const cleanupErrors: Error[] = [];
+    let databaseCompensated = task === null;
+    if (task) {
+      try {
+        databaseCompensated = compensateFailedMeetingCreation(id, task.id);
+        if (!databaseCompensated) cleanupErrors.push(new Error('Meeting task was no longer safe to remove'));
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)));
+      }
+    }
+    // If no meeting row committed, the file has no owner regardless of task
+    // cleanup. Otherwise delete it only after its owning row was removed.
+    if (!meetingInserted || databaseCompensated) {
+      try { await fs.unlink(/* turbopackIgnore: true */ audioPath); }
+      catch (cleanupError) {
+        if ((cleanupError as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+          cleanupErrors.push(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)));
+        }
+      }
+    }
+    if (task && databaseCompensated) emitAppEvent('tasks');
+    if (cleanupErrors.length) {
+      throw new AggregateError([error, ...cleanupErrors], 'Meeting creation failed and compensation was incomplete');
+    }
     throw error;
   }
-  recordTaskEvidence({
-    taskId: task.id,
-    kind: 'artifact',
-    status: 'informational',
-    label: originalFilename,
-    summary: `Locally stored consented audio (${stored.bytes} bytes, SHA-256 ${stored.sha256}).`,
-    uri: `/api/meetings/${id}/audio`,
-    scope: `meeting:${id}`,
-    metadata: { meetingId: id, bytes: stored.bytes, sha256: stored.sha256, mime },
-  });
+  if (!task) throw new Error('Meeting task was not created');
   audit('run', 'meeting audio stored', title, { meetingId: id, bytes: stored.bytes, source: input.source, retentionDays: days });
   emitAppEvent('meetings');
   return getMeeting(id)!;
@@ -376,20 +489,110 @@ export function getMeetingAudioDescriptor(id: string): { path: string; mime: str
   return { path: row.audioPath, mime: row.audioMime, bytes: row.audioBytes, filename: row.originalFilename };
 }
 
+async function stageMeetingAudioRemoval(row: MeetingRow): Promise<string | null> {
+  if (!row.audioPath) return null;
+  const staged = `${row.audioPath}.meeting-delete-${randomUUID()}.tmp`;
+  try {
+    await fs.rename(/* turbopackIgnore: true */ row.audioPath, staged);
+    return staged;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function settleMeetingTaskInOpenTransaction(
+  taskId: string,
+  status: 'failed' | 'cancelled' | 'lost',
+  message: string,
+): boolean {
+  const task = getTask(taskId);
+  if (!task || !ACTIVE_MEETING_TASK_STATUSES.has(task.status)) return false;
+  transitionTaskInOpenTransaction({
+    taskId: task.id,
+    status,
+    expectedVersion: task.version,
+    error: message,
+    currentStep: message,
+    metadata: { meetingLifecycleReconciled: true },
+  });
+  return true;
+}
+
+async function commitMeetingAudioRemoval(
+  row: MeetingRow,
+  mode: 'audio-delete' | 'meeting-delete' | 'retention',
+): Promise<boolean> {
+  const staged = await stageMeetingAudioRemoval(row);
+  const db = getDb();
+  const now = nowIso();
+  const message = mode === 'meeting-delete'
+    ? 'The owning meeting was deleted.'
+    : mode === 'retention'
+      ? 'Meeting audio expired before transcription completed.'
+      : 'Meeting audio was deleted before transcription completed.';
+  let committed = false;
+  let taskChanged = false;
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    const current = db.prepare('SELECT * FROM meetings WHERE id = ?').get(row.id) as unknown as MeetingRow | undefined;
+    if (!current || current.deletedAt || current.version !== row.version || current.status === 'transcribing') {
+      throw new Error('Meeting changed concurrently; reload and retry');
+    }
+    const nextStatus = current.status === 'uploaded' ? 'failed' : current.status;
+    const nextError = current.status === 'uploaded' ? message : current.error;
+    const result = mode === 'meeting-delete'
+      ? db.prepare(`
+          UPDATE meetings SET audioPath = NULL, audioDeletedAt = COALESCE(audioDeletedAt, ?),
+            deleteAudioAt = NULL, deletedAt = ?, status = ?, error = ?,
+            version = version + 1, updatedAt = ?
+          WHERE id = ? AND version = ? AND deletedAt IS NULL AND status != 'transcribing'
+        `).run(now, now, nextStatus, nextError, now, current.id, current.version)
+      : db.prepare(`
+          UPDATE meetings SET audioPath = NULL, audioDeletedAt = COALESCE(audioDeletedAt, ?),
+            deleteAudioAt = NULL, status = ?, error = ?, version = version + 1, updatedAt = ?
+          WHERE id = ? AND version = ? AND deletedAt IS NULL AND status != 'transcribing'
+        `).run(now, nextStatus, nextError, now, current.id, current.version);
+    if (Number(result.changes) !== 1) throw new Error('Meeting changed concurrently; reload and retry');
+    if (mode === 'meeting-delete') {
+      taskChanged = settleMeetingTaskInOpenTransaction(current.taskId, 'cancelled', message);
+    } else if (current.status === 'uploaded') {
+      taskChanged = settleMeetingTaskInOpenTransaction(
+        current.taskId,
+        mode === 'audio-delete' ? 'cancelled' : 'failed',
+        message,
+      );
+    }
+    db.exec('COMMIT');
+    committed = true;
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    if (staged) {
+      try { await fs.rename(/* turbopackIgnore: true */ staged, row.audioPath!); }
+      catch (restoreError) {
+        throw new AggregateError([error, restoreError], 'Meeting update failed and staged audio could not be restored');
+      }
+    }
+    throw error;
+  } finally {
+    if (committed && staged) {
+      // The database no longer references these app-owned bytes. A failed
+      // unlink is intentionally non-fatal: the binary sweeper recognizes and
+      // quarantines this exact unowned file on its next pass.
+      await fs.rm(/* turbopackIgnore: true */ staged, { force: true }).catch((error) => {
+        console.error('[shiba-studio] could not finalize staged meeting audio deletion', error);
+      });
+    }
+  }
+  if (taskChanged) publishTaskChanges(true);
+  return committed;
+}
+
 export async function deleteMeetingAudio(id: string): Promise<MeetingRecord> {
   const row = meetingRow(id);
   if (!row) throw new Error('Meeting not found');
   if (row.status === 'transcribing') throw new Error('Wait for transcription to finish before deleting its audio');
-  if (row.audioPath) {
-    try { await fs.unlink(/* turbopackIgnore: true */ row.audioPath); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
-  const now = nowIso();
-  getDb().prepare(`
-    UPDATE meetings SET audioPath = NULL, audioDeletedAt = ?, deleteAudioAt = NULL,
-      version = version + 1, updatedAt = ? WHERE id = ?
-  `).run(now, now, row.id);
+  await commitMeetingAudioRemoval(row, 'audio-delete');
   emitAppEvent('meetings');
   return getMeeting(row.id)!;
 }
@@ -398,16 +601,7 @@ export async function deleteMeeting(id: string): Promise<void> {
   const row = meetingRow(id);
   if (!row) throw new Error('Meeting not found');
   if (row.status === 'transcribing') throw new Error('Wait for transcription to finish before deleting this meeting');
-  if (row.audioPath) {
-    try { await fs.unlink(/* turbopackIgnore: true */ row.audioPath); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
-  const now = nowIso();
-  getDb().prepare(`
-    UPDATE meetings SET audioPath = NULL, audioDeletedAt = COALESCE(audioDeletedAt, ?),
-      deletedAt = ?, version = version + 1, updatedAt = ? WHERE id = ?
-  `).run(now, now, now, row.id);
+  await commitMeetingAudioRemoval(row, 'meeting-delete');
   audit('run', 'meeting deleted', row.title, { meetingId: row.id });
   emitAppEvent('meetings');
 }
@@ -718,18 +912,23 @@ async function performMeetingTranscription(id: string, taskId: string, options: 
     const review = attachReviewCitations(row.id, segments, await summarizeMeeting(segments));
     const duration = Number(payload.duration);
     const now = nowIso();
-    getDb().prepare(`
+    const completed = getDb().prepare(`
       UPDATE meetings SET status = 'ready', duration = ?, language = ?, transcriptText = ?,
         words = ?, segments = ?, speakerLabels = ?, summary = ?, decisions = ?,
         actionItems = ?, owners = ?, error = NULL, version = version + 1,
-        updatedAt = ?, transcribedAt = ? WHERE id = ?
+        updatedAt = ?, transcribedAt = ?
+      WHERE id = ? AND status = 'transcribing' AND deletedAt IS NULL
+        AND audioPath IS NOT NULL AND taskId = ?
     `).run(
       Number.isFinite(duration) ? duration : words[words.length - 1].end,
       cleanText(payload.language, 100), transcriptText, JSON.stringify(words), JSON.stringify(segments),
       JSON.stringify(Object.fromEntries([...new Set(words.map((word) => word.speakerId))].map((speaker) => [speaker, speaker.replace('-', ' ')]))),
       review.summary, JSON.stringify(review.decisions), JSON.stringify(review.actionItems), JSON.stringify(review.owners),
-      now, now, row.id,
+      now, now, row.id, taskId,
     );
+    if (Number(completed.changes) !== 1) {
+      throw new Error('Meeting transcription was superseded by a newer lifecycle change');
+    }
     recordTaskEvidence({
       taskId,
       requirementId: 'transcript',
@@ -760,11 +959,15 @@ async function performMeetingTranscription(id: string, taskId: string, options: 
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const now = nowIso();
-    getDb().prepare("UPDATE meetings SET status = 'failed', error = ?, version = version + 1, updatedAt = ? WHERE id = ?")
-      .run(message.slice(0, 20_000), now, row.id);
-    recordTaskEvidence({ taskId, requirementId: 'transcript', kind: 'integration', status: 'failed', label: 'Meeting transcription failed', summary: message.slice(0, 8_000), scope, metadata: { meetingId: row.id, endpoint: '/v1/stt' } });
-    const task = getTask(taskId);
-    if (task?.status === 'running') transitionTask({ taskId, status: 'failed', error: message });
+    const failed = getDb().prepare(`
+      UPDATE meetings SET status = 'failed', error = ?, version = version + 1, updatedAt = ?
+      WHERE id = ? AND status = 'transcribing' AND deletedAt IS NULL AND taskId = ?
+    `).run(message.slice(0, 20_000), now, row.id, taskId);
+    if (Number(failed.changes) === 1) {
+      recordTaskEvidence({ taskId, requirementId: 'transcript', kind: 'integration', status: 'failed', label: 'Meeting transcription failed', summary: message.slice(0, 8_000), scope, metadata: { meetingId: row.id, endpoint: '/v1/stt' } });
+      const task = getTask(taskId);
+      if (task?.status === 'running') transitionTask({ taskId, status: 'failed', error: message });
+    }
     emitAppEvent('meetings');
     throw error;
   }
@@ -802,9 +1005,10 @@ export async function createMeetingOutputs(input: {
       const id = `meeting-output-${outputKey}`;
       const now = nowIso();
       getDb().prepare(`
-        INSERT OR IGNORE INTO meeting_outputs (id, meetingId, actionItemId, type, status, externalId, taskId, error, createdAt)
-        VALUES (?, ?, ?, ?, 'creating', '', ?, NULL, ?)
-      `).run(id, meeting.id, item.id, type, meeting.taskId, now);
+        INSERT OR IGNORE INTO meeting_outputs (
+          id, meetingId, actionItemId, type, status, externalId, taskId, error, createdAt, actionItemSnapshot
+        ) VALUES (?, ?, ?, ?, 'creating', '', ?, NULL, ?, ?)
+      `).run(id, meeting.id, item.id, type, meeting.taskId, now, JSON.stringify(item));
       const existing = getDb().prepare('SELECT id, status FROM meeting_outputs WHERE meetingId = ? AND actionItemId = ? AND type = ?')
         .get(meeting.id, item.id, type) as { id: string; status: string } | undefined;
       if (existing?.status === 'ready') continue;
@@ -904,16 +1108,16 @@ export async function pruneExpiredMeetingAudio(at = new Date()): Promise<number>
   ensureMeetingSchema();
   const rows = getDb().prepare(`
     SELECT * FROM meetings WHERE deletedAt IS NULL AND audioPath IS NOT NULL
+      AND status != 'transcribing'
       AND audioDeletedAt IS NULL AND deleteAudioAt IS NOT NULL AND deleteAudioAt <= ?
   `).all(at.toISOString()) as unknown as MeetingRow[];
   let removed = 0;
   for (const row of rows) {
-    try { await fs.unlink(/* turbopackIgnore: true */ row.audioPath!); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') continue; }
-    const now = nowIso();
-    getDb().prepare('UPDATE meetings SET audioPath = NULL, audioDeletedAt = ?, deleteAudioAt = NULL, version = version + 1, updatedAt = ? WHERE id = ?')
-      .run(now, now, row.id);
-    removed += 1;
+    try {
+      if (await commitMeetingAudioRemoval(row, 'retention')) removed += 1;
+    } catch (error) {
+      console.error(`[shiba-studio] meeting audio retention failed for ${row.id}`, error);
+    }
   }
   if (removed) {
     audit('system', 'meeting audio retention prune', `${removed} recording(s) removed`);
@@ -928,18 +1132,240 @@ const meetingGlobals = globalThis as typeof globalThis & MeetingGlobals;
 export function startMeetingRetention(): void {
   ensureMeetingSchema();
   if (meetingGlobals.__shibaMeetingRetention) return;
-  void pruneExpiredMeetingAudio();
-  meetingGlobals.__shibaMeetingRetention = setInterval(() => { void pruneExpiredMeetingAudio(); }, 60 * 60_000);
+  void pruneExpiredMeetingAudio().catch((error) => {
+    console.error('[shiba-studio] meeting audio retention failed', error);
+  });
+  meetingGlobals.__shibaMeetingRetention = setInterval(() => {
+    void pruneExpiredMeetingAudio().catch((error) => {
+      console.error('[shiba-studio] meeting audio retention failed', error);
+    });
+  }, 60 * 60_000);
   meetingGlobals.__shibaMeetingRetention.unref?.();
 }
 
 export function reconcileInterruptedMeetings(): number {
   ensureMeetingSchema();
+  const db = getDb();
   const now = nowIso();
-  const result = getDb().prepare(`
-    UPDATE meetings SET status = 'failed', error = 'Transcription was interrupted when the Shiba Studio server stopped.',
-      version = version + 1, updatedAt = ? WHERE status = 'transcribing' AND deletedAt IS NULL
-  `).run(now);
-  if (Number(result.changes)) emitAppEvent('meetings');
-  return Number(result.changes);
+  const message = 'Transcription was interrupted when the Shiba Studio server stopped.';
+  const ids = (db.prepare(`
+    SELECT id FROM meetings WHERE status = 'transcribing' AND deletedAt IS NULL
+  `).all() as Array<{ id: string }>).map((row) => row.id);
+  let repaired = 0;
+  let taskChanged = false;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const id of ids) {
+      const row = db.prepare(`
+        SELECT * FROM meetings WHERE id = ? AND status = 'transcribing' AND deletedAt IS NULL
+      `).get(id) as unknown as MeetingRow | undefined;
+      if (!row) continue;
+      const result = db.prepare(`
+        UPDATE meetings SET status = 'failed', error = ?, version = version + 1, updatedAt = ?
+        WHERE id = ? AND status = 'transcribing' AND deletedAt IS NULL
+      `).run(message, now, row.id);
+      if (Number(result.changes) !== 1) continue;
+      taskChanged = settleMeetingTaskInOpenTransaction(row.taskId, 'lost', message) || taskChanged;
+      repaired += 1;
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+  if (taskChanged) publishTaskChanges(true);
+  if (repaired) emitAppEvent('meetings');
+  return repaired;
+}
+
+/** Converge existing meeting tasks whose owner is already terminal or unusable. */
+export function repairMeetingTaskLifecycleProjections(): number {
+  ensureMeetingSchema();
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT m.id FROM meetings m JOIN tasks t ON t.id = m.taskId
+    WHERE t.status IN ('queued','running','paused','waiting_for_input','waiting_for_approval','blocked')
+      AND (
+        m.deletedAt IS NOT NULL OR m.status IN ('ready','failed')
+        OR (m.audioPath IS NULL AND m.status IN ('uploaded','transcribing'))
+      )
+    ORDER BY m.createdAt, m.id
+  `).all() as Array<{ id: string }>;
+  if (!rows.length) return 0;
+  const now = nowIso();
+  let repaired = 0;
+  let taskChanged = false;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const candidate of rows) {
+      const meeting = db.prepare('SELECT * FROM meetings WHERE id = ?').get(candidate.id) as unknown as MeetingRow | undefined;
+      if (!meeting) continue;
+      const task = getTask(meeting.taskId);
+      if (!task || !ACTIVE_MEETING_TASK_STATUSES.has(task.status)) continue;
+      let status: 'succeeded' | 'failed' | 'cancelled' | 'lost';
+      let message: string;
+      if (meeting.deletedAt) {
+        status = 'cancelled';
+        message = 'The owning meeting was deleted.';
+      } else if (meeting.status === 'ready') {
+        status = 'succeeded';
+        message = `Meeting transcript ready: ${meetingCitationUrl(meeting.id, 0)}`;
+      } else if (meeting.status === 'failed') {
+        status = 'failed';
+        message = meeting.error || 'Meeting transcription failed.';
+      } else if (!meeting.audioPath) {
+        status = meeting.status === 'transcribing' ? 'lost' : 'failed';
+        message = 'Meeting audio is unavailable, so transcription cannot continue.';
+        db.prepare(`
+          UPDATE meetings SET status = 'failed', error = ?, version = version + 1, updatedAt = ?
+          WHERE id = ? AND deletedAt IS NULL AND audioPath IS NULL
+        `).run(message, now, meeting.id);
+      } else {
+        continue;
+      }
+      transitionTaskInOpenTransaction({
+        taskId: task.id,
+        status,
+        expectedVersion: task.version,
+        ...(status === 'succeeded' ? { result: message } : { error: message }),
+        metadata: { meetingLifecycleReconciled: true },
+      });
+      taskChanged = true;
+      repaired += 1;
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+  if (taskChanged) publishTaskChanges(true);
+  if (repaired) emitAppEvent('meetings');
+  return repaired;
+}
+
+/**
+ * Restore the exact task projection owned by every meeting. This covers the
+ * crash/corruption window where a meeting row committed but its task did not,
+ * as well as duplicate or repurposed task ids. The repair is transactional so
+ * callers never observe a meeting pointing at a half-created replacement.
+ */
+export function repairMissingMeetingTaskProjections(): number {
+  ensureMeetingSchema();
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT m.*, t.id AS joinedTaskId, t.originType AS joinedOriginType,
+      t.originId AS joinedOriginId
+    FROM meetings m
+    LEFT JOIN tasks t ON t.id = m.taskId
+    WHERE t.id IS NULL OR t.originType != 'manual' OR t.originId IS NULL OR t.originId != m.id
+    ORDER BY m.createdAt ASC, m.id ASC
+  `).all() as unknown as Array<MeetingRow & {
+    joinedTaskId: string | null;
+    joinedOriginType: string | null;
+    joinedOriginId: string | null;
+  }>;
+  if (!rows.length) return 0;
+
+  const taskIdFor = (row: MeetingRow): string => {
+    const original = row.taskId.trim();
+    if (/^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$/.test(original)
+      && !db.prepare('SELECT 1 FROM tasks WHERE id = ?').get(original)) {
+      return original;
+    }
+    const digest = createHash('sha256').update(row.id).digest('hex').slice(0, 32);
+    const base = `meeting:recovered:${digest}`;
+    for (let suffix = 0; suffix < 1_000; suffix += 1) {
+      const candidate = suffix === 0 ? base : `${base}:${suffix}`;
+      if (!db.prepare('SELECT 1 FROM tasks WHERE id = ?').get(candidate)) return candidate;
+    }
+    throw new Error(`Could not allocate a recovery task id for meeting ${row.id}`);
+  };
+
+  const now = nowIso();
+  let repaired = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const row of rows) {
+      // Recheck under the write lock. A concurrent creator may already have
+      // restored the exact ownership relation after the initial scan.
+      const current = db.prepare(`
+        SELECT m.*, t.id AS joinedTaskId, t.originType AS joinedOriginType,
+          t.originId AS joinedOriginId
+        FROM meetings m LEFT JOIN tasks t ON t.id = m.taskId
+        WHERE m.id = ?
+      `).get(row.id) as unknown as (MeetingRow & {
+        joinedTaskId: string | null;
+        joinedOriginType: string | null;
+        joinedOriginId: string | null;
+      }) | undefined;
+      if (!current || (
+        current.joinedTaskId
+        && current.joinedOriginType === 'manual'
+        && current.joinedOriginId === current.id
+      )) continue;
+
+      const taskId = taskIdFor(current);
+      const task = createTaskInOpenTransaction({
+        id: taskId,
+        kind: 'artifact',
+        title: `Transcribe ${current.title}`,
+        description: `Recovered durable task projection for ${current.title}.`,
+        status: 'queued',
+        originType: 'manual',
+        originId: current.id,
+        maxRetries: 1,
+        metadata: {
+          meetingId: current.id,
+          integrityReconstructed: true,
+          previousTaskId: current.taskId,
+        },
+      });
+
+      let meetingStatus = current.status;
+      let meetingError = current.error;
+      let targetStatus: 'queued' | 'succeeded' | 'failed' | 'cancelled' | 'lost' = 'queued';
+      let result: string | null | undefined;
+      let error: string | null | undefined;
+      if (current.deletedAt) {
+        targetStatus = 'cancelled';
+        error = 'The owning meeting was deleted.';
+      } else if (current.status === 'ready') {
+        targetStatus = 'succeeded';
+        result = `Meeting transcript ready: ${meetingCitationUrl(current.id, 0)}`;
+      } else if (current.status === 'failed') {
+        targetStatus = 'failed';
+        error = current.error || 'Meeting transcription failed.';
+      } else if (current.status === 'transcribing') {
+        targetStatus = 'lost';
+        meetingStatus = 'failed';
+        meetingError = 'Transcription was interrupted before its durable task projection was saved.';
+        error = meetingError;
+      }
+      if (targetStatus !== 'queued') {
+        transitionTaskInOpenTransaction({
+          taskId: task.id,
+          status: targetStatus,
+          expectedVersion: task.version,
+          result,
+          error,
+          metadata: { integrityReconstructed: true },
+        });
+      }
+      db.prepare(`
+        UPDATE meetings
+        SET taskId = ?, status = ?, error = ?, version = version + 1, updatedAt = ?
+        WHERE id = ?
+      `).run(task.id, meetingStatus, meetingError, now, current.id);
+      repaired += 1;
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no open transaction */ }
+    throw error;
+  }
+  if (repaired) {
+    publishTaskChanges(true);
+    emitAppEvent('meetings');
+  }
+  return repaired;
 }

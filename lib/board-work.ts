@@ -6,7 +6,7 @@
 import path from 'path';
 import { getBoardTask } from './board';
 import { getRun, loadRuns } from './agent-runs-store';
-import type { AgentRun, TraceStep } from './types';
+import type { Agent, AgentRun, TraceStep } from './types';
 
 const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
 if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
@@ -65,8 +65,12 @@ function fileKind(p: string): WorkFile['kind'] {
  * substantial line.
  */
 async function textPreview(absPath: string): Promise<string | undefined> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
-    const head = (await fs.readFile(absPath, 'utf8')).slice(0, 4000);
+    handle = await fs.open(absPath, 'r');
+    const buffer = Buffer.allocUnsafe(4000);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const head = buffer.subarray(0, bytesRead).toString('utf8');
     const lines = head.split('\n').map((l) => l.trim());
     const heading = lines.find((l) => /^#{1,3}\s+\S/.test(l));
     if (heading) return heading.replace(/^#{1,3}\s+/, '').slice(0, 140);
@@ -74,6 +78,8 @@ async function textPreview(absPath: string): Promise<string | undefined> {
     return first ? first.slice(0, 140) : undefined;
   } catch {
     return undefined;
+  } finally {
+    await handle?.close().catch(() => {});
   }
 }
 
@@ -82,12 +88,21 @@ async function textPreview(absPath: string): Promise<string | undefined> {
  * column — reconstruct from the agent's current workspace config (including
  * its per-agent worktree, which is where useWorktree agents write).
  */
-async function runWorkDir(run: AgentRun): Promise<string> {
-  if (run.workspaceSnapshot) return run.workspaceSnapshot;
+async function loadAgentWorkspaceMap(runs: AgentRun[]): Promise<Map<string, Agent>> {
+  if (!runs.some((run) => !run.workspaceSnapshot)) return new Map();
   try {
     const { loadAgents } = await import('./persistence');
+    return new Map((await loadAgents()).map((agent) => [agent.id, agent]));
+  } catch {
+    return new Map();
+  }
+}
+
+async function runWorkDir(run: AgentRun, agentsById: ReadonlyMap<string, Agent>): Promise<string> {
+  if (run.workspaceSnapshot) return run.workspaceSnapshot;
+  try {
     const { resolveWorkspace } = await import('./workspace');
-    const agent = (await loadAgents()).find((a) => a.id === run.agentId);
+    const agent = agentsById.get(run.agentId);
     const base = resolveWorkspace(agent?.workspace?.path || '');
     if (agent?.workspace?.useWorktree) {
       const wt = path.join(base, '.worktrees', agent.id);
@@ -160,10 +175,12 @@ export async function collectCardWork(idOrKey: string): Promise<CardWork | null>
 
   const runs: WorkRun[] = [];
   const fileMap = new Map<string, WorkFile>();
+  const sourceRuns = (await Promise.all(task.runIds.map((runId) => getRun(runId).catch(() => null))))
+    .filter((run): run is AgentRun => run !== null);
+  const agentsById = await loadAgentWorkspaceMap(sourceRuns);
 
-  for (const runId of task.runIds) {
-    const run = await getRun(runId).catch(() => null);
-    if (!run) continue;
+  for (const run of sourceRuns) {
+    const runId = run.id;
     runs.push({
       runId: run.id,
       agentName: run.agentName,
@@ -171,7 +188,7 @@ export async function collectCardWork(idOrKey: string): Promise<CardWork | null>
       completedAt: run.completedAt || null,
       finalOutput: run.finalOutput || '',
     });
-    const workDir = await runWorkDir(run);
+    const workDir = await runWorkDir(run, agentsById);
     for (const f of filePathsFromTrace(run, workDir)) {
       const stat = await fs.stat(f.absPath).catch(() => null);
       const kind = fileKind(f.absPath);
@@ -251,11 +268,13 @@ export interface CreatedFile extends WorkFile {
  */
 export async function collectAllCreatedFiles(): Promise<CreatedFile[]> {
   const runs = await loadRuns();
-  // Oldest → newest so the newest run wins the per-path dedupe below.
-  const ordered = [...runs].sort((a, b) => (a.startedAt || '').localeCompare(b.startedAt || ''));
+  // Newest first lets the winning run claim a path before any older duplicate
+  // causes another stat or preview read.
+  const ordered = [...runs].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+  const agentsById = await loadAgentWorkspaceMap(ordered);
   const map = new Map<string, CreatedFile>();
   for (const run of ordered) {
-    const workDir = await runWorkDir(run);
+    const workDir = await runWorkDir(run, agentsById);
     const candidates = [
       ...filePathsFromTrace(run, workDir),
       ...filePathsFromText(run.finalOutput || '', workDir),
@@ -263,7 +282,7 @@ export async function collectAllCreatedFiles(): Promise<CreatedFile[]> {
     const seenInRun = new Set<string>();
     for (const f of candidates) {
       const key = f.absPath.toLowerCase();
-      if (seenInRun.has(key)) continue;
+      if (seenInRun.has(key) || map.has(key)) continue;
       seenInRun.add(key);
       const stat = await fs.stat(f.absPath).catch(() => null);
       if (!stat?.isFile()) continue; // the Files view tracks real, on-disk deliverables
@@ -290,7 +309,39 @@ export async function collectAllCreatedFiles(): Promise<CreatedFile[]> {
 /** Capability check for serving a Files-page file: only paths that really are
  *  tracked created files may be read through the endpoint. */
 export async function resolveCreatedFile(absPath: string): Promise<CreatedFile | null> {
-  const all = await collectAllCreatedFiles();
   const wanted = path.normalize(absPath).toLowerCase();
-  return all.find((f) => f.absPath.toLowerCase() === wanted) || null;
+  const runs = await loadRuns();
+  const ordered = [...runs].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+  const agentsById = await loadAgentWorkspaceMap(ordered);
+
+  for (const run of ordered) {
+    const workDir = await runWorkDir(run, agentsById);
+    const candidates = [
+      ...filePathsFromTrace(run, workDir),
+      ...filePathsFromText(run.finalOutput || '', workDir),
+    ];
+    const seen = new Set<string>();
+    for (const file of candidates) {
+      const key = file.absPath.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (key !== wanted) continue;
+      const stat = await fs.stat(file.absPath).catch(() => null);
+      if (!stat?.isFile()) continue;
+      return {
+        name: path.basename(file.absPath),
+        relPath: file.relPath,
+        absPath: file.absPath,
+        exists: true,
+        size: stat.size,
+        mtime: stat.mtime.toISOString(),
+        kind: fileKind(file.absPath),
+        runId: run.id,
+        agentName: run.agentName,
+        createdAt: run.completedAt || run.startedAt || null,
+        workspaceRoot: workDir,
+      };
+    }
+  }
+  return null;
 }

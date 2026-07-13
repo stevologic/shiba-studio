@@ -243,7 +243,13 @@ async function main() {
     }))).json() as typeof data;
     const staleProjection = staleData.attention.find((item) => item.id === staleAttention.id)?.approval;
     assert(staleProjection);
-    ledger.heartbeatTask(staleTask.id, { currentStep: 'Task changed after phone sync' });
+    ledger.recordTaskEvidence({
+      taskId: staleTask.id,
+      kind: 'assertion',
+      status: 'informational',
+      label: 'Task changed after phone sync',
+      summary: 'A durable task update invalidates the stale companion revision.',
+    });
     const staleDecision = await actionRoute.POST(jsonRequest('http://shiba.local:3000/api/companion/actions', {
       action: 'approve', idempotencyKey: 'stale-action-0001', attentionId: staleAttention.id,
       taskId: staleTask.id, expectedVersion: staleProjection.taskVersion,

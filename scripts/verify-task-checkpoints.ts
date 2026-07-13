@@ -31,7 +31,7 @@ async function main() {
   try {
     const db = dbModule.getDb();
     const version = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(version.user_version, 8);
+    assert.equal(version.user_version, 12);
     for (const table of ['task_checkpoints', 'task_checkpoint_files', 'task_checkpoint_restores']) {
       assert.equal(
         (db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { n: number }).n,
@@ -70,6 +70,49 @@ async function main() {
     assert.equal(checkpoints.listTaskCheckpoints(task.id)[0].id, mutation.checkpoint.id);
     assert.equal(checkpoints.getTaskCheckpoint(mutation.checkpoint.id, task.id)?.taskSnapshot.plan[0].id, 'edit');
 
+    db.exec(`
+      CREATE TEMP TRIGGER fail_checkpoint_task_commit
+      BEFORE UPDATE ON tasks
+      WHEN OLD.id = 'checkpoint-task' AND NEW.status = 'queued'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated checkpoint task commit failure');
+      END
+    `);
+    try {
+      await assert.rejects(
+        () => checkpoints.restoreTaskCheckpoint(task.id, mutation.checkpoint.id),
+        /database commit failed/i,
+      );
+    } finally {
+      db.exec('DROP TRIGGER fail_checkpoint_task_commit');
+    }
+    assert.equal(
+      await fs.readFile(path.join(workspace, 'owned.txt'), 'utf8'),
+      'task bytes\n',
+      'a failed task commit compensates file bytes to the pre-restore generation',
+    );
+    assert.equal(await fs.readFile(path.join(workspace, 'new.txt'), 'utf8'), 'task new file\n');
+
+    const blockingRestoreId = 'already-processing-restore';
+    db.prepare(`
+      INSERT INTO task_checkpoint_restores
+        (id, checkpointId, taskId, status, restoredPaths, conflicts, startedAt, completedAt, error, conversationSnapshot)
+      VALUES (?, ?, ?, 'processing', '[]', '{}', ?, NULL, NULL, NULL)
+    `).run(blockingRestoreId, mutation.checkpoint.id, task.id, new Date().toISOString());
+    try {
+      await assert.rejects(
+        () => checkpoints.restoreTaskCheckpoint(task.id, mutation.checkpoint.id),
+        /already has a checkpoint restore in progress/i,
+      );
+      assert.equal(
+        await fs.readFile(path.join(workspace, 'owned.txt'), 'utf8'),
+        'task bytes\n',
+        'a competing restore is rejected before it can touch file bytes',
+      );
+    } finally {
+      db.prepare('DELETE FROM task_checkpoint_restores WHERE id = ?').run(blockingRestoreId);
+    }
+
     const unrelatedBefore = await fs.readFile(path.join(workspace, 'unrelated.txt'));
     const restored = await checkpoints.restoreTaskCheckpoint(task.id, mutation.checkpoint.id);
     assert.equal(restored.status, 'restored');
@@ -84,6 +127,47 @@ async function main() {
     assert.equal(git(workspace, 'status', '--porcelain'), 'M unrelated.txt');
     const idempotent = await checkpoints.restoreTaskCheckpoint(task.id, mutation.checkpoint.id);
     assert.deepEqual(idempotent.restoredPaths, [], 'repeat restore is an idempotent no-op');
+
+    const interruptedIdempotentRestoreId = 'interrupted-idempotent-restore';
+    db.prepare(`
+      INSERT INTO task_checkpoint_restores
+        (id, checkpointId, taskId, status, restoredPaths, conflicts, startedAt, completedAt, error, conversationSnapshot)
+      VALUES (?, ?, ?, 'processing', '[]', ?, ?, NULL, NULL, NULL)
+    `).run(
+      interruptedIdempotentRestoreId,
+      mutation.checkpoint.id,
+      task.id,
+      JSON.stringify({ originalSides: { 'repo/owned.txt': 'before', 'repo/new.txt': 'before' } }),
+      new Date(Date.now() - 60_000).toISOString(),
+    );
+    const idempotentRecovery = await checkpoints.reconcileInterruptedCheckpointRestores();
+    assert.deepEqual(idempotentRecovery, { inspected: 1, compensated: 1, attention: 0, errors: [] });
+    assert.equal(await fs.readFile(path.join(workspace, 'owned.txt'), 'utf8'), 'baseline\n');
+    await assert.rejects(() => fs.stat(path.join(workspace, 'new.txt')), /ENOENT/);
+
+    // Simulate a process stopping after file rewind but before the task commit.
+    // The durable processing row must drive startup compensation back to the
+    // sealed post-mutation generation.
+    await fs.writeFile(path.join(workspace, 'owned.txt'), 'baseline\n');
+    await fs.rm(path.join(workspace, 'new.txt'), { force: true });
+    const interruptedRestoreId = 'interrupted-checkpoint-restore';
+    db.prepare(`
+      INSERT INTO task_checkpoint_restores
+        (id, checkpointId, taskId, status, restoredPaths, conflicts, startedAt, completedAt, error, conversationSnapshot)
+      VALUES (?, ?, ?, 'processing', ?, '[]', ?, NULL, NULL, NULL)
+    `).run(
+      interruptedRestoreId,
+      mutation.checkpoint.id,
+      task.id,
+      JSON.stringify(['repo/owned.txt', 'repo/new.txt']),
+      new Date(Date.now() - 60_000).toISOString(),
+    );
+    const interruptedRecovery = await checkpoints.reconcileInterruptedCheckpointRestores();
+    assert.deepEqual(interruptedRecovery, { inspected: 1, compensated: 1, attention: 0, errors: [] });
+    assert.equal(await fs.readFile(path.join(workspace, 'owned.txt'), 'utf8'), 'task bytes\n');
+    assert.equal(await fs.readFile(path.join(workspace, 'new.txt'), 'utf8'), 'task new file\n');
+    assert.equal(checkpoints.getTaskCheckpointRestore(interruptedRestoreId)?.status, 'failed');
+    await checkpoints.restoreTaskCheckpoint(task.id, mutation.checkpoint.id);
 
     await fs.writeFile(path.join(workspace, 'second-owned.txt'), 'second before\n');
     const conflictCheckpoint = await checkpoints.withTaskCheckpoint({

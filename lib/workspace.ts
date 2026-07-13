@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { FileEntry } from './types';
 import { dataDir, projectRoot } from './data-paths';
 import { terminateProcessTree } from './process-control';
+import { quarantineManagedPath } from './managed-storage-quarantine';
 
 // Workspace paths are selected at runtime and may live anywhere on disk.
 // Keeping fs runtime-only prevents Next's file tracer from treating that as a
@@ -18,7 +19,6 @@ const execFileAsync = promisify(execFile);
 const DATA_DIR = dataDir();
 export const GLOBAL_UPLOADS_SUBDIR = 'uploads';
 const UPLOADS_META_FILE = path.join(DATA_DIR, 'uploads-meta.json');
-const UPLOADS_META_TMP = path.join(DATA_DIR, 'uploads-meta.json.tmp');
 const MAX_UPLOAD_BYTES = 48 * 1024 * 1024; // xAI per-file limit
 const uploadsLockGlobal = globalThis as typeof globalThis & { __shibaUploadsMetaWriteChain?: Promise<unknown> };
 
@@ -39,7 +39,10 @@ async function loadUploadsMeta(): Promise<UploadsMetaStore> {
   try {
     const raw = await fs.readFile(UPLOADS_META_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Invalid uploads metadata store: expected an object');
+    }
+    return parsed;
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return {};
     throw error;
@@ -48,8 +51,13 @@ async function loadUploadsMeta(): Promise<UploadsMetaStore> {
 
 async function saveUploadsMeta(store: UploadsMetaStore): Promise<void> {
   await ensureDir(DATA_DIR);
-  await fs.writeFile(UPLOADS_META_TMP, JSON.stringify(store, null, 2));
-  await fs.rename(UPLOADS_META_TMP, UPLOADS_META_FILE);
+  const temporary = `${UPLOADS_META_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
+    await fs.rename(temporary, UPLOADS_META_FILE);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
 }
 
 function withUploadsMetaWriteLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -81,6 +89,81 @@ export async function removeUploadMeta(name: string): Promise<void> {
     if (!(name in store)) return;
     delete store[name];
     await saveUploadsMeta(store);
+  });
+}
+
+/** Remove legacy project-upload cache rows when their owning project is deleted. */
+export async function removeProjectUploadMetadata(projectId: string): Promise<number> {
+  const prefix = `project:${projectId}:`;
+  return withUploadsMetaWriteLock(async () => {
+    const store = await loadUploadsMeta();
+    const matches = Object.keys(store).filter((key) => key.startsWith(prefix));
+    if (!matches.length) return 0;
+    for (const key of matches) delete store[key];
+    await saveUploadsMeta(store);
+    return matches.length;
+  });
+}
+
+export interface UploadMetadataReconcileReport {
+  projectEntriesRemoved: number;
+  globalEntriesRemoved: number;
+  corruptStoreQuarantined: number;
+}
+
+/**
+ * Reconcile derived upload metadata only. This never deletes workspace files:
+ * global uploads are user-controlled bytes and an absent cache row is rebuilt
+ * by listGlobalUploadFiles on its next read.
+ */
+export async function reconcileUploadMetadata(input: {
+  validProjectFileKeys: ReadonlySet<string>;
+  defaultWorkspace?: string;
+  nowMs?: number;
+}): Promise<UploadMetadataReconcileReport> {
+  return withUploadsMetaWriteLock(async () => {
+    const report: UploadMetadataReconcileReport = {
+      projectEntriesRemoved: 0,
+      globalEntriesRemoved: 0,
+      corruptStoreQuarantined: 0,
+    };
+    let store: UploadsMetaStore;
+    try {
+      store = await loadUploadsMeta();
+    } catch (error) {
+      const exists = await fs.lstat(UPLOADS_META_FILE).catch(() => null);
+      if (!exists) throw error;
+      await quarantineManagedPath(UPLOADS_META_FILE, 'corrupt_upload_metadata', {
+        error: error instanceof Error ? error.message : String(error),
+      }, input.nowMs);
+      store = {};
+      report.corruptStoreQuarantined = 1;
+    }
+
+    const base = input.defaultWorkspace?.trim() || projectRoot();
+    const globalDir = path.join(/* turbopackIgnore: true */ resolveWorkspace(base), GLOBAL_UPLOADS_SUBDIR);
+    let changed = report.corruptStoreQuarantined > 0;
+    for (const key of Object.keys(store)) {
+      if (key.startsWith('project:')) {
+        if (!input.validProjectFileKeys.has(key)) {
+          delete store[key];
+          report.projectEntriesRemoved += 1;
+          changed = true;
+        }
+        continue;
+      }
+      const validName = key === path.basename(key) && sanitizeUploadName(key) === key;
+      const stat = validName
+        ? await fs.lstat(path.join(/* turbopackIgnore: true */ globalDir, key)).catch(() => null)
+        : null;
+      if (!stat?.isFile() || stat.isSymbolicLink()) {
+        delete store[key];
+        report.globalEntriesRemoved += 1;
+        changed = true;
+      }
+    }
+    if (changed) await saveUploadsMeta(store);
+    return report;
   });
 }
 
@@ -198,6 +281,18 @@ export async function listGlobalUploadFiles(): Promise<GlobalUploadFile[]> {
   }
 }
 
+/** Count uploads without statting or hashing every file. */
+export async function countGlobalUploadFiles(defaultWorkspace?: string): Promise<number> {
+  const base = defaultWorkspace?.trim() || projectRoot();
+  const dir = path.join(/* turbopackIgnore: true */ resolveWorkspace(base), GLOBAL_UPLOADS_SUBDIR);
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return entries.filter((entry) => entry.isFile() && !entry.name.startsWith('.')).length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function buildGlobalUploadsChatContext(): Promise<string> {
   const files = await listGlobalUploadFiles();
   const uploadsPath = await getGlobalUploadsDir();
@@ -247,19 +342,63 @@ export async function writeBinaryFile(filePath: string, content: Buffer): Promis
     throw new Error(`File exceeds ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB limit`);
   }
   await ensureDir(path.dirname(p));
-  await fs.writeFile(p, content);
+  const operationId = crypto.randomUUID();
+  const staged = `${p}.${process.pid}.${operationId}.shiba-write.tmp`;
+  const rollback = `${p}.${process.pid}.${operationId}.shiba-write.rollback`;
+  let hadPrevious = false;
+  let installed = false;
+  await fs.writeFile(staged, content, { flag: 'wx' });
+  try {
+    try {
+      await fs.rename(p, rollback);
+      hadPrevious = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    }
+    await fs.rename(staged, p);
+    installed = true;
+  } catch (error) {
+    let restoreError: unknown;
+    try {
+      if (installed) await fs.rm(p, { force: true });
+      if (hadPrevious) await fs.rename(rollback, p);
+    } catch (caught) {
+      restoreError = caught;
+    }
+    if (restoreError) {
+      throw new AggregateError([error, restoreError], 'Binary write failed and previous bytes could not be restored');
+    }
+    throw error;
+  } finally {
+    await fs.rm(staged, { force: true }).catch(() => undefined);
+  }
+  if (hadPrevious) await fs.rm(rollback, { force: true }).catch(() => undefined);
 }
 
 export async function deleteGlobalUploadFile(filename: string): Promise<void> {
   const safe = sanitizeUploadName(filename);
   const dir = await getGlobalUploadsDir();
   const filePath = path.join(/* turbopackIgnore: true */ dir, safe);
+  const staged = `${filePath}.${process.pid}.${crypto.randomUUID()}.upload-delete.tmp`;
+  let moved = false;
   try {
-    await fs.unlink(filePath);
-  } catch (e: unknown) {
-    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e;
+    try {
+      await fs.rename(filePath, staged);
+      moved = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    }
+    await removeUploadMeta(safe);
+  } catch (error) {
+    if (moved) {
+      try { await fs.rename(staged, filePath); }
+      catch (restoreError) {
+        throw new AggregateError([error, restoreError], 'Upload deletion failed and its bytes could not be restored');
+      }
+    }
+    throw error;
   }
-  await removeUploadMeta(safe);
+  if (moved) await fs.rm(staged, { force: true }).catch(() => undefined);
 }
 
 export async function saveUploadFromBuffer(filename: string, content: Buffer): Promise<GlobalUploadFile> {
@@ -269,11 +408,42 @@ export async function saveUploadFromBuffer(filename: string, content: Buffer): P
   const dir = await getGlobalUploadsDir();
   const safe = sanitizeUploadName(filename);
   const dest = path.join(/* turbopackIgnore: true */ dir, safe);
-  await fs.writeFile(dest, content);
-  const st = await fs.stat(dest);
+  const operationId = crypto.randomUUID();
+  const staged = `${dest}.${process.pid}.${operationId}.upload.tmp`;
+  const rollback = `${dest}.${process.pid}.${operationId}.upload.rollback`;
   const checksum = sha256Checksum(content);
   const uploadedAt = new Date().toISOString();
-  await recordUploadMeta(safe, checksum, uploadedAt, st.size, st.mtime.toISOString());
+  let hadPrevious = false;
+  let installed = false;
+  let st: Awaited<ReturnType<typeof fs.stat>>;
+  await fs.writeFile(staged, content, { flag: 'wx' });
+  try {
+    try {
+      await fs.rename(dest, rollback);
+      hadPrevious = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    }
+    await fs.rename(staged, dest);
+    installed = true;
+    st = await fs.stat(dest);
+    await recordUploadMeta(safe, checksum, uploadedAt, st.size, st.mtime.toISOString());
+  } catch (error) {
+    let restoreError: unknown;
+    try {
+      if (installed) await fs.rm(dest, { force: true });
+      if (hadPrevious) await fs.rename(rollback, dest);
+    } catch (caught) {
+      restoreError = caught;
+    }
+    if (restoreError) {
+      throw new AggregateError([error, restoreError], 'Upload failed and previous bytes could not be restored');
+    }
+    throw error;
+  } finally {
+    await fs.rm(staged, { force: true }).catch(() => undefined);
+  }
+  if (hadPrevious) await fs.rm(rollback, { force: true }).catch(() => undefined);
   return {
     name: safe,
     path: dest,
@@ -411,37 +581,78 @@ async function gitExec(args: string[], cwd: string, timeoutMs = 30_000): Promise
   }
 }
 
-export async function ensureWorktree(baseWorkspace: string, agentId: string, branch = 'main'): Promise<{ worktreePath: string; created: boolean }> {
+export async function ensureWorktree(
+  baseWorkspace: string,
+  agentId: string,
+  branch = 'main',
+  owner: { taskId?: string } = {},
+): Promise<{ worktreePath: string; created: boolean }> {
   const base = resolveWorkspace(baseWorkspace);
+  const normalizedAgentId = agentId.trim();
   const wtRoot = path.join(/* turbopackIgnore: true */ base, '.worktrees');
   await ensureDir(wtRoot);
-  const wtPath = safeWorktreePath(base, agentId);
+  const rootStat = await fs.lstat(wtRoot);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error('Worktree root must be a real directory');
+  }
+  const wtPath = safeWorktreePath(base, normalizedAgentId);
   const gitDir = path.join(/* turbopackIgnore: true */ base, '.git');
+  const resources = await import('./worktree-integrity');
+  await resources.registerWorktreeResource({ baseWorkspace: base, agentId: normalizedAgentId, taskId: owner.taskId });
 
-  // If worktree already exists reuse
   try {
-    const st = await fs.stat(wtPath);
-    if (st.isDirectory()) {
+    // If worktree already exists, reuse it.
+    try {
+      const st = await fs.lstat(wtPath);
+      if (!st.isDirectory() || st.isSymbolicLink()) {
+        throw new Error('Worktree path exists but is not a real directory');
+      }
+        await resources.registerWorktreeResource({ baseWorkspace: base, agentId: normalizedAgentId, taskId: owner.taskId, active: true });
       return { worktreePath: wtPath, created: false };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     }
-  } catch {}
 
-  // Create the worktree if the base has a git repo.
-  try { await fs.stat(gitDir); } catch {
-    await ensureDir(wtPath);
+    // Create the worktree if the base has a git repo.
+    let hasGitRepository = true;
+    try {
+      await fs.stat(gitDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+      hasGitRepository = false;
+    }
+    if (!hasGitRepository) {
+      await ensureDir(wtPath);
+      await resources.registerWorktreeResource({ baseWorkspace: base, agentId: normalizedAgentId, taskId: owner.taskId, active: true });
+      return { worktreePath: wtPath, created: true };
+    }
+
+    const branchName = String(branch || 'main').trim();
+    const branchCheck = await gitExec(['check-ref-format', '--branch', branchName], base);
+    if (branchCheck.code !== 0) throw new Error(`Invalid git branch: ${branchName}`);
+
+    const added = await gitExec(['worktree', 'add', wtPath, branchName], base);
+    if (added.code !== 0) {
+      const preferredFallback = `agent-${normalizedAgentId}`;
+      const fallbackNameCheck = await gitExec(['check-ref-format', '--branch', preferredFallback], base);
+      const fallbackBranch = fallbackNameCheck.code === 0
+        ? preferredFallback
+        : `agent-${crypto.createHash('sha256').update(normalizedAgentId).digest('hex').slice(0, 16)}`;
+      const fallbackExists = await gitExec(
+        ['show-ref', '--verify', '--quiet', `refs/heads/${fallbackBranch}`],
+        base,
+      );
+      const fallback = fallbackExists.code === 0
+        ? await gitExec(['worktree', 'add', wtPath, fallbackBranch], base)
+        : await gitExec(['worktree', 'add', '-b', fallbackBranch, wtPath, 'HEAD'], base);
+      if (fallback.code !== 0) throw new Error(fallback.stderr || added.stderr || 'Could not create worktree');
+    }
+    await resources.registerWorktreeResource({ baseWorkspace: base, agentId: normalizedAgentId, taskId: owner.taskId, active: true });
     return { worktreePath: wtPath, created: true };
+  } catch (error) {
+    await resources.requestWorktreeResourceDeletion(base, normalizedAgentId, 'Worktree creation was interrupted.').catch(() => undefined);
+    throw error;
   }
-
-  const branchName = String(branch || 'main').trim();
-  const branchCheck = await gitExec(['check-ref-format', '--branch', branchName], base);
-  if (branchCheck.code !== 0) throw new Error(`Invalid git branch: ${branchName}`);
-
-  const added = await gitExec(['worktree', 'add', wtPath, branchName], base);
-  if (added.code !== 0) {
-    const fallback = await gitExec(['worktree', 'add', wtPath, '-b', `agent-${agentId}`], base);
-    if (fallback.code !== 0) throw new Error(fallback.stderr || added.stderr || 'Could not create worktree');
-  }
-  return { worktreePath: wtPath, created: true };
 }
 
 export async function getWorktreePath(baseWorkspace: string, agentId: string): Promise<string | null> {

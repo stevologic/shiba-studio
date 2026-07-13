@@ -18,6 +18,7 @@ import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { Agent } from '@/lib/types';
 import type { ChatSession } from '@/lib/chat-session-types';
+import { loadClientJson } from '@/lib/client-json';
 
 const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
 
@@ -44,6 +45,12 @@ interface WorktreeEntry {
   path: string;
   branch?: string;
   exists: boolean;
+}
+
+interface ExplorerIntent {
+  key: number;
+  dir?: string;
+  userInitiated?: boolean;
 }
 
 interface WorkspacePageProps {
@@ -124,6 +131,21 @@ export default function WorkspacePage({
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   /** Once the user Browse… / navigates, stop overriding with Settings default. */
   const userPickedPathRef = useRef(false);
+  const wsPathRef = useRef(wsPath);
+  const wsUploadsPathRef = useRef(wsUploadsPath);
+  const defaultWorkspaceRef = useRef(defaultWorkspace);
+  const uploadsLoadRef = useRef<Promise<string> | null>(null);
+  const explorerAbortRef = useRef<AbortController | null>(null);
+  const explorerRequestRef = useRef(0);
+  const fileReadAbortRef = useRef<AbortController | null>(null);
+  const fileReadRequestRef = useRef(0);
+  const [explorerIntent, setExplorerIntent] = useState<ExplorerIntent>({ key: 0 });
+
+  useEffect(() => {
+    wsPathRef.current = wsPath;
+    wsUploadsPathRef.current = wsUploadsPath;
+    defaultWorkspaceRef.current = defaultWorkspace;
+  }, [defaultWorkspace, wsPath, wsUploadsPath]);
 
   // Follow the global default workspace until the user picks another folder.
   useEffect(() => {
@@ -133,24 +155,41 @@ export default function WorkspacePage({
     setPathInput(next);
   }, [defaultWorkspace]);
 
-  const loadUploads = useCallback(async () => {
+  const loadUploads = useCallback(async (force = false): Promise<string> => {
+    if (force && uploadsLoadRef.current) await uploadsLoadRef.current;
+    if (!force && uploadsLoadRef.current) return uploadsLoadRef.current;
+
+    const run = (async () => {
+      try {
+        const res = await fetch('/api/workspace/sync');
+        const data = await res.json();
+        if (data.ok) {
+          const uploadsPath = String(data.uploadsPath || '');
+          wsUploadsPathRef.current = uploadsPath;
+          setWsUploads(data.uploads || []);
+          setWsUploadsPath(uploadsPath);
+          setCloudFiles(data.cloudFiles || []);
+          setWsLastSync(data.lastSyncAt || null);
+          return uploadsPath.trim();
+        }
+      } catch { /* ignore */ }
+      return wsUploadsPathRef.current.trim();
+    })();
+    uploadsLoadRef.current = run;
     try {
-      const res = await fetch('/api/workspace/sync');
-      const data = await res.json();
-      if (data.ok) {
-        setWsUploads(data.uploads || []);
-        setWsUploadsPath(data.uploadsPath || '');
-        setCloudFiles(data.cloudFiles || []);
-        setWsLastSync(data.lastSyncAt || null);
-      }
-    } catch { /* ignore */ }
+      return await run;
+    } finally {
+      if (uploadsLoadRef.current === run) uploadsLoadRef.current = null;
+    }
   }, []);
 
   const loadSessions = useCallback(async () => {
     try {
-      const res = await fetch('/api/chat-sessions');
-      const data = await res.json();
-      if (data.ok && Array.isArray(data.sessions)) setSessions(data.sessions);
+      const data = await loadClientJson<{ ok?: boolean; sessions?: ChatSession[] } | ChatSession[]>(
+        '/api/chat-sessions',
+        { maxAgeMs: 15_000 },
+      );
+      if (!Array.isArray(data) && data.ok && Array.isArray(data.sessions)) setSessions(data.sessions);
       else if (Array.isArray(data)) setSessions(data);
     } catch { /* ignore */ }
   }, []);
@@ -173,70 +212,85 @@ export default function WorkspacePage({
 
   /** Resolve the global uploads folder path (creates it server-side if needed). */
   const resolveUploadsPath = useCallback(async (): Promise<string> => {
-    if (wsUploadsPath.trim()) return wsUploadsPath.trim();
-    try {
-      const res = await fetch('/api/workspace/sync');
-      const data = await res.json();
-      if (data.ok && data.uploadsPath) {
-        const p = String(data.uploadsPath).trim();
-        setWsUploadsPath(p);
-        if (Array.isArray(data.uploads)) setWsUploads(data.uploads);
-        return p;
-      }
-    } catch { /* ignore */ }
-    return '';
-  }, [wsUploadsPath]);
+    const cached = wsUploadsPathRef.current.trim();
+    if (cached) return cached;
+    return loadUploads();
+  }, [loadUploads]);
 
   const loadExplorer = useCallback(async (
     dir?: string,
     opts?: { userInitiated?: boolean },
   ) => {
     if (opts?.userInitiated) userPickedPathRef.current = true;
-    // Non-user opens prefer the workspace uploads folder.
-    let fallback = '';
-    if (!opts?.userInitiated && !dir) {
-      fallback = await resolveUploadsPath();
-    }
-    const p = (
-      opts?.userInitiated
-        ? (dir ?? wsPath ?? defaultWorkspace ?? '')
-        : (dir || fallback || wsUploadsPath || defaultWorkspace || wsPath || '')
-    ).trim();
-    if (!p) return;
+
+    explorerAbortRef.current?.abort();
+    const controller = new AbortController();
+    const requestId = ++explorerRequestRef.current;
+    explorerAbortRef.current = controller;
     setExplorerLoading(true);
     try {
-      const res = await fetch(`/api/workspace?dir=${encodeURIComponent(p)}`);
+      // Non-user opens prefer the workspace uploads folder. Resolution may
+      // share the already-running uploads request; a superseded navigation
+      // stops here before it can issue or commit another directory request.
+      let fallback = '';
+      if (!opts?.userInitiated && !dir) fallback = await resolveUploadsPath();
+      if (controller.signal.aborted || requestId !== explorerRequestRef.current) return;
+
+      const currentPath = wsPathRef.current;
+      const currentUploadsPath = wsUploadsPathRef.current;
+      const currentDefault = defaultWorkspaceRef.current;
+      const p = (
+        opts?.userInitiated
+          ? (dir ?? currentPath ?? currentDefault ?? '')
+          : (dir || fallback || currentUploadsPath || currentDefault || currentPath || '')
+      ).trim();
+      if (!p) return;
+
+      const res = await fetch(`/api/workspace?dir=${encodeURIComponent(p)}`, {
+        signal: controller.signal,
+      });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      if (controller.signal.aborted || requestId !== explorerRequestRef.current) return;
       setWsFiles(data.files || []);
       if (data.resolved) {
-        setWsPath(data.resolved);
-        setPathInput(data.resolved);
+        const resolved = String(data.resolved);
+        wsPathRef.current = resolved;
+        setWsPath(resolved);
+        setPathInput(resolved);
       } else {
+        wsPathRef.current = p;
         setWsPath(p);
         setPathInput(p);
       }
     } catch (e: unknown) {
+      if (controller.signal.aborted || requestId !== explorerRequestRef.current) return;
       toast.error(e instanceof Error ? e.message : 'Could not open folder');
+    } finally {
+      if (explorerAbortRef.current === controller) explorerAbortRef.current = null;
+      if (requestId === explorerRequestRef.current) setExplorerLoading(false);
     }
-    setExplorerLoading(false);
-  }, [wsPath, defaultWorkspace, wsUploadsPath, resolveUploadsPath]);
+  }, [resolveUploadsPath]);
+
+  const enterExplorer = useCallback((
+    dir?: string,
+    opts?: { userInitiated?: boolean; forceDefault?: boolean },
+  ) => {
+    if (opts?.forceDefault) userPickedPathRef.current = false;
+    else if (opts?.userInitiated) userPickedPathRef.current = true;
+    const preserveCurrent = !dir && userPickedPathRef.current && !opts?.forceDefault;
+    const target = preserveCurrent
+      ? (wsPathRef.current || defaultWorkspaceRef.current).trim() || undefined
+      : dir;
+    const userInitiated = opts?.userInitiated || preserveCurrent || undefined;
+    setExplorerIntent((current) => ({ key: current.key + 1, dir: target, userInitiated }));
+    setView('explorer');
+  }, []);
 
   /** Open Explorer on the workspace uploads folder unless the user already navigated elsewhere. */
   const openExplorer = useCallback((opts?: { forceDefault?: boolean }) => {
-    if (opts?.forceDefault) userPickedPathRef.current = false;
-    setView('explorer');
-    void (async () => {
-      if (userPickedPathRef.current && !opts?.forceDefault) {
-        const target = (wsPath || defaultWorkspace || '').trim();
-        if (target) void loadExplorer(target, { userInitiated: true });
-        return;
-      }
-      const uploads = await resolveUploadsPath();
-      const target = (uploads || defaultWorkspace || wsPath || '').trim();
-      if (target) void loadExplorer(target);
-    })();
-  }, [wsPath, defaultWorkspace, loadExplorer, resolveUploadsPath]);
+    enterExplorer(undefined, opts);
+  }, [enterExplorer]);
 
   useEffect(() => {
     void loadUploads();
@@ -247,22 +301,26 @@ export default function WorkspacePage({
     if (view === 'worktrees') void loadWorktrees();
   }, [view, loadWorktrees]);
 
-  // Explorer defaults to the uploads folder; reload when that path arrives after mount.
+  // Entering Explorer has one loading owner. The intent and view transition
+  // batch into this effect, avoiding the former manual load + enter-view load
+  // + uploads-path follow-up load sequence.
   useEffect(() => {
     if (view !== 'explorer') return;
-    if (userPickedPathRef.current) {
-      const cur = (wsPath || '').trim();
-      if (cur) void loadExplorer(cur, { userInitiated: true });
-      return;
-    }
-    void (async () => {
-      const uploads = await resolveUploadsPath();
-      const target = (uploads || defaultWorkspace || wsPath || '').trim();
-      if (!target) return;
-      void loadExplorer(target);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- enter-view / uploads seed only
-  }, [view, wsUploadsPath, defaultWorkspace]);
+    const timer = window.setTimeout(() => {
+      void loadExplorer(explorerIntent.dir, { userInitiated: explorerIntent.userInitiated });
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      explorerAbortRef.current?.abort();
+    };
+  }, [defaultWorkspace, explorerIntent, loadExplorer, view]);
+
+  useEffect(() => () => {
+    explorerRequestRef.current += 1;
+    fileReadRequestRef.current += 1;
+    explorerAbortRef.current?.abort();
+    fileReadAbortRef.current?.abort();
+  }, []);
 
   async function deleteUpload(name: string) {
     const ok = await confirmDialog({
@@ -277,7 +335,7 @@ export default function WorkspacePage({
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       toast.success(`Removed ${name}`);
-      await loadUploads();
+      await loadUploads(true);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Remove failed');
     }
@@ -295,7 +353,7 @@ export default function WorkspacePage({
       if (data.error) throw new Error(data.error);
       if (data.errors?.length) toast.error(data.errors.join('; '));
       toast.success(`Uploaded ${data.saved?.length || 0} file(s)`);
-      await loadUploads();
+      await loadUploads(true);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Upload failed');
     }
@@ -314,7 +372,7 @@ export default function WorkspacePage({
       if (!data.ok) throw new Error(data.error);
       toast.success(`Synced ${data.uploaded?.length || 0} file(s) to Grok cloud`);
       if (data.errors?.length) toast.error(data.errors.join('; '));
-      await loadUploads();
+      await loadUploads(true);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Sync failed');
     }
@@ -333,7 +391,7 @@ export default function WorkspacePage({
       if (!data.ok) throw new Error(data.error);
       toast.success(`Downloaded ${data.downloaded?.length || 0} file(s) from Grok cloud`);
       if (data.errors?.length) toast.error(data.errors.join('; '));
-      await loadUploads();
+      await loadUploads(true);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Download failed');
     }
@@ -358,14 +416,22 @@ export default function WorkspacePage({
         });
         if (!leave) return;
       }
+      fileReadRequestRef.current += 1;
+      fileReadAbortRef.current?.abort();
+      fileReadAbortRef.current = null;
       setSelectedFile('');
       setFileContent('');
       setFileDirty(false);
+      setFileLoading(false);
       setFileBinary(false);
       await loadExplorer(fpath, { userInitiated: true });
       return;
     }
 
+    fileReadAbortRef.current?.abort();
+    const controller = new AbortController();
+    const requestId = ++fileReadRequestRef.current;
+    fileReadAbortRef.current = controller;
     setSelectedFile(fpath);
     setFileLoading(true);
     setFileBinary(false);
@@ -375,9 +441,11 @@ export default function WorkspacePage({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'read', path: fpath }),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      if (controller.signal.aborted || requestId !== fileReadRequestRef.current) return;
       if (data.binary || data.encoding === 'binary') {
         setFileBinary(true);
         setFileContent('');
@@ -385,9 +453,12 @@ export default function WorkspacePage({
         setFileContent(typeof data.content === 'string' ? data.content : JSON.stringify(data, null, 2));
       }
     } catch (e: unknown) {
+      if (controller.signal.aborted || requestId !== fileReadRequestRef.current) return;
       setFileContent(`// Could not read file\n// ${e instanceof Error ? e.message : 'error'}`);
+    } finally {
+      if (fileReadAbortRef.current === controller) fileReadAbortRef.current = null;
+      if (requestId === fileReadRequestRef.current) setFileLoading(false);
     }
-    setFileLoading(false);
   }
 
   async function saveFile() {
@@ -417,9 +488,13 @@ export default function WorkspacePage({
       });
       if (!leave) return;
     }
+    fileReadRequestRef.current += 1;
+    fileReadAbortRef.current?.abort();
+    fileReadAbortRef.current = null;
     setSelectedFile('');
     setFileContent('');
     setFileDirty(false);
+    setFileLoading(false);
     setFileBinary(false);
   }
 
@@ -718,10 +793,7 @@ export default function WorkspacePage({
                                 type="button"
                                 className="grok-btn grok-btn-ghost text-xs"
                                 title="Open in Explorer"
-                                onClick={() => {
-                                  setView('explorer');
-                                  void loadExplorer(wt.path, { userInitiated: true });
-                                }}
+                                onClick={() => enterExplorer(wt.path, { userInitiated: true })}
                               >
                                 <FolderOpen size={13} /> Open
                               </button>
@@ -1075,8 +1147,7 @@ export default function WorkspacePage({
           onClose={() => setShowFolderBrowse(false)}
           onSelect={(p) => {
             setShowFolderBrowse(false);
-            setView('explorer');
-            void loadExplorer(p, { userInitiated: true });
+            enterExplorer(p, { userInitiated: true });
           }}
         />
       )}

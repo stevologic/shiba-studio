@@ -64,6 +64,11 @@ interface RestoreRow {
   startedAt: string;
   completedAt: string | null;
   error: string | null;
+  conversationSnapshot?: string | null;
+}
+
+interface RestoreCompensationPlan {
+  originalSides?: Record<string, 'before' | 'after'>;
 }
 
 interface FileState {
@@ -622,21 +627,44 @@ async function writeState(fullPath: string, state: FileState): Promise<void> {
   if (!state.content) throw new Error(`Checkpoint content is missing for ${fullPath}`);
   await fs.mkdir(path.dirname(fullPath), { recursive: true });
   const temp = path.join(path.dirname(fullPath), `.${path.basename(fullPath)}.${randomUUID()}.checkpoint-tmp`);
+  const rollback = path.join(path.dirname(fullPath), `.${path.basename(fullPath)}.${randomUUID()}.checkpoint-rollback`);
   await fs.writeFile(temp, state.content, { mode: state.mode ?? undefined });
+  let hadPrevious = false;
+  let installed = false;
   try {
-    await fs.rename(temp, fullPath);
-  } catch (error) {
-    if (process.platform !== 'win32') {
-      await fs.rm(temp, { force: true });
-      throw error;
+    try {
+      await fs.rename(temp, fullPath);
+      installed = true;
+    } catch (error) {
+      if (process.platform !== 'win32') throw error;
+      // Windows cannot always replace an open existing file. Preserve the
+      // exact old bytes first; never unlink the only committed generation.
+      await fs.rename(fullPath, rollback);
+      hadPrevious = true;
+      try {
+        await fs.rename(temp, fullPath);
+        installed = true;
+      } catch (installError) {
+        await fs.rename(rollback, fullPath);
+        hadPrevious = false;
+        throw installError;
+      }
     }
-    // Windows rename cannot replace an existing target. Removing only this
-    // already-conflict-checked task-owned path avoids writing through hardlinks.
-    await fs.rm(fullPath, { force: true });
-    await fs.rename(temp, fullPath);
+  } catch (error) {
+    if (installed && hadPrevious) {
+      try {
+        await fs.rm(fullPath, { force: true });
+        await fs.rename(rollback, fullPath);
+        hadPrevious = false;
+      } catch (restoreError) {
+        throw new AggregateError([error, restoreError], `Checkpoint write failed and ${fullPath} could not be restored`);
+      }
+    }
+    throw error;
   } finally {
     await fs.rm(temp, { force: true }).catch(() => undefined);
   }
+  if (hadPrevious) await fs.rm(rollback, { force: true }).catch(() => undefined);
   if (state.mode != null && process.platform !== 'win32') await fs.chmod(fullPath, state.mode);
 }
 
@@ -708,6 +736,41 @@ export async function restoreTaskCheckpoint(taskId: string, checkpointId: string
     throw new CheckpointConflictError(restore);
   }
 
+  // This row is the durable compensation intent. Startup treats every
+  // lingering processing row as interrupted and restores each path to the
+  // exact sealed side observed when this attempt began.
+  const originalSides = Object.fromEntries([...current.entries()].map(([label, value]) => [
+    label,
+    value.alreadyRestored ? 'before' : 'after',
+  ]));
+  // Claim the task before touching files. Without the immediate transaction,
+  // two restores can both preflight the same post-mutation bytes; the loser
+  // then compensates to "after" and undoes the winner's completed restore.
+  const intentDb = getDb();
+  intentDb.exec('BEGIN IMMEDIATE');
+  try {
+    const activeRestore = intentDb.prepare(`
+      SELECT id FROM task_checkpoint_restores
+      WHERE taskId = ? AND status = 'processing'
+      LIMIT 1
+    `).get(task.id) as { id: string } | undefined;
+    if (activeRestore) throw new Error(`Task already has a checkpoint restore in progress: ${activeRestore.id}`);
+    const currentTask = intentDb.prepare('SELECT version FROM tasks WHERE id = ?')
+      .get(task.id) as { version: number } | undefined;
+    if (!currentTask || currentTask.version !== task.version) {
+      throw new Error('Task changed while its checkpoint restore was being prepared');
+    }
+    intentDb.prepare(`
+      INSERT INTO task_checkpoint_restores
+        (id, checkpointId, taskId, status, restoredPaths, conflicts, startedAt, completedAt, error, conversationSnapshot)
+      VALUES (?, ?, ?, 'processing', '[]', ?, ?, NULL, NULL, NULL)
+    `).run(restoreId, checkpoint.id, task.id, JSON.stringify({ originalSides }), startedAt);
+    intentDb.exec('COMMIT');
+  } catch (error) {
+    try { intentDb.exec('ROLLBACK'); } catch { /* no transaction */ }
+    throw error;
+  }
+
   const restoredPaths: string[] = [];
   const applied: Array<{ row: CheckpointFileRow; fullPath: string }> = [];
   let conversationSnapshot: Awaited<ReturnType<typeof getChatSession>> = null;
@@ -726,6 +789,8 @@ export async function restoreTaskCheckpoint(taskId: string, checkpointId: string
       await writeState(live.fullPath, stateFromRow(row, 'before'));
       applied.push({ row, fullPath: live.fullPath });
       restoredPaths.push(label);
+      getDb().prepare('UPDATE task_checkpoint_restores SET restoredPaths = ? WHERE id = ? AND status = ?')
+        .run(JSON.stringify(restoredPaths), restoreId, 'processing');
     }
     const conversationCursor = checkpoint.context.conversationCursor as {
       sessionId?: string;
@@ -739,6 +804,10 @@ export async function restoreTaskCheckpoint(taskId: string, checkpointId: string
       const { rewindChatSessionToMessage } = await import('./chat-sessions');
       conversationSnapshot = await getChatSession(conversationCursor.sessionId);
       if (!conversationSnapshot) throw new Error('Checkpoint chat session no longer exists');
+      getDb().prepare(`
+        UPDATE task_checkpoint_restores SET conversationSnapshot = ?
+        WHERE id = ? AND status = 'processing'
+      `).run(JSON.stringify(conversationSnapshot), restoreId);
       await rewindChatSessionToMessage({
         sessionId: conversationCursor.sessionId,
         sourceMessageId: conversationCursor.lastMessageId,
@@ -758,10 +827,10 @@ export async function restoreTaskCheckpoint(taskId: string, checkpointId: string
     const completedAt = nowIso();
     const message = `${error instanceof Error ? error.message : String(error)}${rollbackErrors.length ? `; rollback errors: ${rollbackErrors.join(', ')}` : ''}`;
     getDb().prepare(`
-      INSERT INTO task_checkpoint_restores
-        (id, checkpointId, taskId, status, restoredPaths, conflicts, startedAt, completedAt, error)
-      VALUES (?, ?, ?, 'failed', ?, '[]', ?, ?, ?)
-    `).run(restoreId, checkpoint.id, task.id, JSON.stringify(restoredPaths), startedAt, completedAt, message.slice(0, 4_000));
+      UPDATE task_checkpoint_restores
+      SET status = 'failed', restoredPaths = ?, conflicts = '[]', completedAt = ?, error = ?, conversationSnapshot = NULL
+      WHERE id = ?
+    `).run(JSON.stringify(restoredPaths), completedAt, message.slice(0, 4_000), restoreId);
     insertEvent(task.id, 'checkpoint_restore_failed', { checkpointId: checkpoint.id, error: message.slice(0, 1_000) });
     emitAppEvent('tasks');
     throw new Error(`Checkpoint restore failed: ${message}`);
@@ -771,11 +840,15 @@ export async function restoreTaskCheckpoint(taskId: string, checkpointId: string
   const db = getDb();
   try {
     db.exec('BEGIN IMMEDIATE');
-    db.prepare(`
-      INSERT INTO task_checkpoint_restores
-        (id, checkpointId, taskId, status, restoredPaths, conflicts, startedAt, completedAt, error)
-      VALUES (?, ?, ?, 'restored', ?, '[]', ?, ?, NULL)
-    `).run(restoreId, checkpoint.id, task.id, JSON.stringify(restoredPaths), startedAt, completedAt);
+    const restoreUpdate = db.prepare(`
+      UPDATE task_checkpoint_restores
+      SET status = 'restored', restoredPaths = ?, completedAt = ?, error = NULL,
+        conflicts = '[]', conversationSnapshot = NULL
+      WHERE id = ? AND status = 'processing'
+    `).run(JSON.stringify(restoredPaths), completedAt, restoreId);
+    if (Number(restoreUpdate.changes) !== 1) {
+      throw new Error('Checkpoint restore ownership was lost before commit');
+    }
     db.prepare(`
       INSERT INTO task_evidence (
         id, taskId, requirementId, kind, status, label, summary, uri,
@@ -787,12 +860,12 @@ export async function restoreTaskCheckpoint(taskId: string, checkpointId: string
       `checkpoint:${checkpoint.id}`, completedAt,
       JSON.stringify({ checkpointId: checkpoint.id, restoredPaths }),
     );
-    db.prepare(`
+    const taskUpdate = db.prepare(`
       UPDATE tasks SET
         status = 'queued', plan = ?, progress = ?, currentStep = ?, nextAction = ?,
         result = NULL, error = NULL, completion = NULL, completedAt = NULL,
         heartbeatAt = ?, checkpointId = ?, metadata = ?, version = version + 1, updatedAt = ?
-      WHERE id = ?
+      WHERE id = ? AND version = ?
     `).run(
       JSON.stringify(checkpoint.taskSnapshot.plan),
       checkpoint.taskSnapshot.progress,
@@ -808,7 +881,11 @@ export async function restoreTaskCheckpoint(taskId: string, checkpointId: string
       }),
       completedAt,
       task.id,
+      task.version,
     );
+    if (Number(taskUpdate.changes) !== 1) {
+      throw new Error('Task changed while its checkpoint restore was being applied');
+    }
     insertEvent(task.id, 'checkpoint_restored', { checkpointId: checkpoint.id, restoredPaths });
     db.exec('COMMIT');
   } catch (error) {
@@ -832,10 +909,10 @@ export async function restoreTaskCheckpoint(taskId: string, checkpointId: string
     const message = error instanceof Error ? error.message : String(error);
     try {
       db.prepare(`
-        INSERT INTO task_checkpoint_restores
-          (id, checkpointId, taskId, status, restoredPaths, conflicts, startedAt, completedAt, error)
-        VALUES (?, ?, ?, 'failed', ?, '[]', ?, ?, ?)
-      `).run(restoreId, checkpoint.id, task.id, JSON.stringify(restoredPaths), startedAt, nowIso(), `Database commit failed; compensated: ${message}`.slice(0, 4_000));
+        UPDATE task_checkpoint_restores
+        SET status = 'failed', restoredPaths = ?, conflicts = '[]', completedAt = ?, error = ?, conversationSnapshot = NULL
+        WHERE id = ?
+      `).run(JSON.stringify(restoredPaths), nowIso(), `Database commit failed; compensated: ${message}`.slice(0, 4_000), restoreId);
       insertEvent(task.id, 'checkpoint_restore_failed', { checkpointId: checkpoint.id, error: message.slice(0, 1_000), compensated: compensationErrors.length === 0 });
     } catch { /* the database failure itself may prevent durable failure recording */ }
     if (compensationErrors.length) {
@@ -860,4 +937,90 @@ export function listTaskCheckpointRestores(taskId: string, checkpointId?: string
     ORDER BY startedAt DESC
   `).all(...(checkpointId ? [taskId, validCheckpointId(checkpointId)] : [taskId])) as unknown as RestoreRow[];
   return rows.map(rowToRestore);
+}
+
+export interface InterruptedCheckpointRestoreReport {
+  inspected: number;
+  compensated: number;
+  attention: number;
+  errors: string[];
+}
+
+/**
+ * Roll back checkpoint restores interrupted before their task/chat commit.
+ * Call only while startup maintenance fences workers: a live restore also has
+ * status=processing and must never be mistaken for a dead one.
+ */
+export async function reconcileInterruptedCheckpointRestores(): Promise<InterruptedCheckpointRestoreReport> {
+  const db = getDb();
+  const interrupted = db.prepare(`
+    SELECT * FROM task_checkpoint_restores WHERE status = 'processing' ORDER BY startedAt, id
+  `).all() as unknown as RestoreRow[];
+  const report: InterruptedCheckpointRestoreReport = {
+    inspected: interrupted.length,
+    compensated: 0,
+    attention: 0,
+    errors: [],
+  };
+  for (const restore of interrupted) {
+    const errors: string[] = [];
+    const rows = checkpointFiles(restore.checkpointId);
+    const compensationPlan = parseObject<RestoreCompensationPlan>(restore.conflicts, {});
+    if (!rows.length) errors.push('Checkpoint file manifest is missing.');
+    for (const row of rows) {
+      const label = fileLabel(row);
+      try {
+        const rootReal = await fs.realpath(row.workspacePath);
+        if (pathKey(rootReal) !== pathKey(row.workspacePath)) throw new Error('workspace root identity changed');
+        const fullPath = await safeOwnedPath(rootReal, row.relativePath);
+        const current = await captureFile(fullPath, label);
+        const originalSide = compensationPlan.originalSides?.[label] === 'before' ? 'before' : 'after';
+        const original = stateFromRow(row, originalSide);
+        const changed = stateFromRow(row, originalSide === 'before' ? 'after' : 'before');
+        if (matches(current, original.exists, original.hash)) continue;
+        if (!matches(current, changed.exists, changed.hash)) {
+          throw new Error('current bytes match neither sealed generation');
+        }
+        await writeState(fullPath, original);
+      } catch (error) {
+        errors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (restore.conversationSnapshot) {
+      try {
+        const snapshot = JSON.parse(restore.conversationSnapshot) as Awaited<ReturnType<typeof getChatSession>>;
+        if (!snapshot?.id || !Array.isArray(snapshot.messages)) throw new Error('invalid chat compensation snapshot');
+        const { restoreChatSessionSnapshot } = await import('./chat-sessions');
+        await restoreChatSessionSnapshot(snapshot);
+      } catch (error) {
+        errors.push(`chat: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const completedAt = nowIso();
+    const message = errors.length
+      ? `Interrupted checkpoint restore needs attention: ${errors.join('; ')}`
+      : 'Interrupted checkpoint restore was automatically rolled back to its sealed post-mutation state.';
+    db.prepare(`
+      UPDATE task_checkpoint_restores
+      SET status = 'failed', conflicts = '[]', completedAt = ?, error = ?,
+        conversationSnapshot = CASE WHEN ? = 0 THEN NULL ELSE conversationSnapshot END
+      WHERE id = ? AND status = 'processing'
+    `).run(completedAt, message.slice(0, 4_000), errors.length, restore.id);
+    if (errors.length) {
+      report.attention += 1;
+      report.errors.push(`${restore.id}: ${message}`);
+    } else {
+      report.compensated += 1;
+    }
+    if (getTask(restore.taskId)) {
+      insertEvent(restore.taskId, 'checkpoint_restore_failed', {
+        checkpointId: restore.checkpointId,
+        interrupted: true,
+        compensated: errors.length === 0,
+        errors,
+      });
+    }
+  }
+  if (interrupted.length) emitAppEvent('tasks');
+  return report;
 }

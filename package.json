@@ -17,6 +17,7 @@
     "test:e2e": "playwright test",
     "test:xai-oauth": "tsx scripts/verify-xai-oauth.ts",
     "test:oauth-launch": "tsx scripts/verify-oauth-launch.ts",
+    "test:reddit": "tsx scripts/verify-reddit.ts",
     "test:theme": "tsx scripts/verify-theme.ts",
     "test:page-chrome": "tsx scripts/verify-page-chrome.ts",
     "generate:avatars": "tsx scripts/generate-alien-avatars.ts"

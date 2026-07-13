@@ -63,9 +63,31 @@ import {
 } from '@/lib/chat-commands';
 import { v4 as uuidv4 } from 'uuid';
 import { createPortal } from 'react-dom';
+import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
 
 const SubBrowser = dynamic(() => import('@/components/sub-browser'));
 const WorkspacePicker = dynamic(() => import('@/components/workspace-picker'));
+const CHAT_READ_REUSE_MS = 10_000;
+
+function chatSessionUrl(id: string): string {
+  return `/api/chat-sessions?id=${encodeURIComponent(id)}`;
+}
+
+function invalidateChatSessionReads(id: string): void {
+  invalidateClientJson('/api/chat-sessions');
+  invalidateClientJson('/api/chat-sessions?archived=1');
+  invalidateClientJson(chatSessionUrl(id));
+}
+
+function projectUrl(id?: string | null): string {
+  return id ? `/api/projects?id=${encodeURIComponent(id)}` : '/api/projects';
+}
+
+function invalidateProjectReads(id: string): void {
+  invalidateClientJson('/api/projects');
+  invalidateClientJson(projectUrl(id));
+}
+
 export type ChatTarget = 'grok' | 'all' | string;
 
 type ModelOption = { id: string; label: string; provider?: 'cloud' | 'local' | 'cli'; reasoning?: boolean };
@@ -543,8 +565,9 @@ export default function GrokChatPanel({
         // Fall back to studio Settings defaults when no session override.
         if (!voice || !speedRaw) {
           try {
-            const cfgRes = await fetch('/api/config');
-            const cfg = await cfgRes.json();
+            const cfg = await loadClientJson<Record<string, unknown>>('/api/config', {
+              maxAgeMs: CHAT_READ_REUSE_MS,
+            });
             if (!voice) {
               voice = String(cfg?.defaultTtsVoice || '').trim().toLowerCase();
               if (voice) {
@@ -974,10 +997,15 @@ export default function GrokChatPanel({
   }, [streaming, dictating, stopDictation]);
 
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch('/api/tts');
-        const data = await res.json();
+        const data = await loadClientJson<{
+          ok?: boolean;
+          voices?: TtsVoiceOpt[];
+          defaultVoice?: string;
+        }>('/api/tts', { maxAgeMs: CHAT_READ_REUSE_MS });
+        if (cancelled) return;
         if (data.ok && Array.isArray(data.voices) && data.voices.length) {
           setTtsVoices(data.voices);
           if (!data.voices.some((v: TtsVoiceOpt) => v.id === ttsVoiceRef.current)) {
@@ -990,6 +1018,7 @@ export default function GrokChatPanel({
         /* built-in voice list remains */
       }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   /** Wipe any transcript that may have been speaker-echo so it cannot auto-send. */
@@ -2022,11 +2051,13 @@ export default function GrokChatPanel({
   async function patchSession(patch: Record<string, unknown>, opts?: { notify?: boolean }) {
     if (!session) return;
     try {
-      await fetch('/api/chat-sessions', {
+      const response = await fetch('/api/chat-sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update', id: session.id, patch }),
       });
+      if (!response.ok) return;
+      invalidateChatSessionReads(session.id);
       // Default: refresh this session row only. Callers that don't need a
       // rail refresh (e.g. clearing a stale running flag) can pass notify:false.
       if (opts?.notify !== false) onSessionUpdated?.();
@@ -2056,11 +2087,13 @@ export default function GrokChatPanel({
       && !getLiveChatRun(session.id)?.streaming
     ) {
       try {
-        await fetch('/api/chat-sessions', {
+        const response = await fetch('/api/chat-sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'autotitle', id: session.id }),
         });
+        if (!response.ok) return;
+        invalidateChatSessionReads(session.id);
         onSessionUpdated?.();
       } catch {
         /* derived title stays */
@@ -2135,10 +2168,16 @@ export default function GrokChatPanel({
   }
 
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+    void (async () => {
       try {
-        const res = await fetch('/api/grok-cli/status');
-        const data = await res.json();
+        const data = await loadClientJson<{
+          installed?: boolean;
+          version?: string;
+          models?: string[];
+          defaultModel?: string;
+        }>('/api/grok-cli/status', { maxAgeMs: CHAT_READ_REUSE_MS });
+        if (cancelled) return;
         setGrokCliInstalled(!!data.installed);
         setGrokCliVersion(data.version || null);
         const models: string[] = Array.isArray(data.models) ? data.models : [];
@@ -2147,11 +2186,13 @@ export default function GrokChatPanel({
         setCliModel((cur) => (cur && models.includes(cur) ? cur : (data.defaultModel || models[0] || '')));
         if (!data.installed) setUseGrokCli(false);
       } catch {
+        if (cancelled) return;
         setGrokCliInstalled(false);
         setUseGrokCli(false);
       }
-      setCliModelsLoading(false);
+      if (!cancelled) setCliModelsLoading(false);
     })();
+    return () => { cancelled = true; };
   }, []);
 
   function updateCliModel(next: string) {
@@ -2162,7 +2203,7 @@ export default function GrokChatPanel({
   async function persistProjectChat(msgs: UiMessage[]) {
     if (!project) return;
     try {
-      await fetch('/api/projects', {
+      const response = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2171,6 +2212,8 @@ export default function GrokChatPanel({
           messages: uiToProjectMessages(msgs),
         }),
       });
+      if (!response.ok) return;
+      invalidateProjectReads(project.id);
       onProjectUpdated?.();
     } catch {
       /* ignore */
@@ -2289,11 +2332,13 @@ export default function GrokChatPanel({
       await persistSessionMessages(reset);
     } else if (project) {
       try {
-        await fetch('/api/projects', {
+        const response = await fetch('/api/projects', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'saveMessages', id: project.id, messages: [] }),
         });
+        if (!response.ok) return;
+        invalidateProjectReads(project.id);
         onProjectUpdated?.();
       } catch {
         /* ignore */
@@ -2314,6 +2359,7 @@ export default function GrokChatPanel({
           const pres = await fetch('/api/projects/upload', { method: 'POST', body: pfd });
           const pdata = await pres.json();
           if (pdata.error) throw new Error(pdata.error);
+          invalidateProjectReads(project.id);
           onProjectUpdated?.();
         }
         const fd = new FormData();
@@ -2669,6 +2715,8 @@ export default function GrokChatPanel({
             chatModel: useModel,
           },
         }),
+      }).then((response) => {
+        if (response.ok) invalidateChatSessionReads(session.id);
       }).catch(() => { /* ignore */ });
     }
 
@@ -3237,6 +3285,7 @@ export default function GrokChatPanel({
       if (!response.ok || !data.ok || !data.session?.id) {
         throw new Error(data.error || 'Could not fork chat');
       }
+      invalidateChatSessionReads(session.id);
       if (data.session.ephemeral) registerBrowserEphemeralSession(String(data.session.id));
       toast.success('Forked chat from this message');
       router.push(`/chat/${encodeURIComponent(String(data.session.id))}`);

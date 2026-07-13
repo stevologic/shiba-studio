@@ -326,13 +326,25 @@ export async function moveBoardTask(
 
 export async function deleteBoardTask(idOrKey: string): Promise<void> {
   const needle = idOrKey.trim().toUpperCase();
-  return withStoreLock(async () => {
-    const store = await loadStore();
-    const idx = store.tasks.findIndex((t) => t.id === idOrKey || t.key.toUpperCase() === needle);
-    if (idx < 0) throw new Error(`Board task not found: ${idOrKey}`);
-    store.tasks.splice(idx, 1);
-    await saveStore(store);
-  });
+  const { withIntegrityMutation } = await import('./integrity-coordinator');
+  await withIntegrityMutation(`board deletion:${idOrKey}`, () => withStoreLock(async () => {
+      const store = await loadStore();
+      const idx = store.tasks.findIndex((t) => t.id === idOrKey || t.key.toUpperCase() === needle);
+      if (idx < 0) throw new Error(`Board task not found: ${idOrKey}`);
+      const task = store.tasks[idx];
+      store.tasks.splice(idx, 1);
+      await saveStore(store);
+      try {
+        const { detachTasksFromDeletedOrigin } = await import('./task-ledger');
+        detachTasksFromDeletedOrigin('board', task.id, { key: task.key, title: task.title });
+      } catch (error) {
+        // The owner deletion is already durable and its repair request is
+        // committed by withIntegrityMutation. Let the immediate/queued generic
+        // sweep settle the tasks without turning a successful delete into a
+        // false API failure.
+        console.error(`[board] task-origin detach deferred for ${task.id}`, error);
+      }
+    }));
 }
 
 /**
@@ -341,12 +353,23 @@ export async function deleteBoardTask(idOrKey: string): Promise<void> {
  * — the caller (Settings) gates this behind an explicit confirm.
  */
 export async function clearBoard(): Promise<{ removed: number }> {
-  return withStoreLock(async () => {
-    const store = await loadStore();
-    const removed = store.tasks.length;
-    await saveStore({ nextNumber: 1, tasks: [], syncState: {} });
-    return { removed };
-  });
+  const { withIntegrityMutation } = await import('./integrity-coordinator');
+  const { result } = await withIntegrityMutation('board cleared', () => withStoreLock(async () => {
+      const store = await loadStore();
+      const removedTasks = [...store.tasks];
+      const removed = store.tasks.length;
+      const { detachTasksFromDeletedOrigin } = await import('./task-ledger');
+      await saveStore({ nextNumber: 1, tasks: [], syncState: {} });
+      for (const task of removedTasks) {
+        try {
+          detachTasksFromDeletedOrigin('board', task.id, { key: task.key, title: task.title });
+        } catch (error) {
+          console.error(`[board] task-origin detach deferred for ${task.id}`, error);
+        }
+      }
+      return { removed };
+    }));
+  return result;
 }
 
 export async function findBoardTaskByExternalRef(
@@ -375,5 +398,85 @@ export async function recordBoardSyncState(state: BoardSyncState): Promise<void>
     const store = await loadStore();
     store.syncState = { ...(store.syncState || {}), [state.provider]: state };
     await saveStore(store);
+  });
+}
+
+export interface BoardReferenceIntegrityInput {
+  agentIds: ReadonlySet<string>;
+  projectIds: ReadonlySet<string>;
+  runIds: ReadonlySet<string>;
+  /** Board ids that still own a non-terminal task, including its start gap. */
+  activeOriginIds: ReadonlySet<string>;
+  /** Avoid racing a card whose durable task is about to be created. */
+  staleWorkingBefore?: string;
+}
+
+export interface BoardReferenceIntegrityReport {
+  assigneesDetached: number;
+  projectsDetached: number;
+  staleRunLinksRemoved: number;
+  staleActivityRunLinksRemoved: number;
+  workingFlagsCleared: number;
+}
+
+/**
+ * Reconcile live Board pointers without erasing the card or its human-readable
+ * history. This is deliberately store-locked and idempotent so startup and the
+ * periodic integrity janitor can safely call it after any interrupted delete.
+ */
+export async function reconcileBoardReferences(
+  input: BoardReferenceIntegrityInput,
+): Promise<BoardReferenceIntegrityReport> {
+  return withStoreLock(async () => {
+    const report: BoardReferenceIntegrityReport = {
+      assigneesDetached: 0,
+      projectsDetached: 0,
+      staleRunLinksRemoved: 0,
+      staleActivityRunLinksRemoved: 0,
+      workingFlagsCleared: 0,
+    };
+    const store = await loadStore();
+    for (const task of store.tasks) {
+      const repairs: string[] = [];
+      if (task.assigneeAgentId && !input.agentIds.has(task.assigneeAgentId)) {
+        task.assigneeAgentId = null;
+        report.assigneesDetached += 1;
+        repairs.push('Removed a reference to a deleted agent');
+      }
+      if (task.projectId && !input.projectIds.has(task.projectId)) {
+        task.projectId = null;
+        report.projectsDetached += 1;
+        repairs.push('Removed a reference to a deleted project');
+      }
+      const retainedRunIds = task.runIds.filter((runId) => input.runIds.has(runId));
+      report.staleRunLinksRemoved += task.runIds.length - retainedRunIds.length;
+      if (retainedRunIds.length !== task.runIds.length) task.runIds = retainedRunIds;
+      for (let index = 0; index < task.activity.length; index += 1) {
+        const activity = task.activity[index];
+        if (!activity.runId || input.runIds.has(activity.runId)) continue;
+        // The prose remains useful history; only its now-unresolvable live link
+        // is removed.
+        const { runId: _runId, ...withoutRunId } = activity;
+        task.activity[index] = withoutRunId;
+        report.staleActivityRunLinksRemoved += 1;
+      }
+      if (
+        task.working
+        && !input.activeOriginIds.has(task.id)
+        && (!input.staleWorkingBefore || task.updatedAt < input.staleWorkingBefore)
+      ) {
+        task.working = false;
+        report.workingFlagsCleared += 1;
+        repairs.push('Cleared an interrupted working state');
+      }
+      if (repairs.length) {
+        task.activity.push(systemEvent(`Integrity repair: ${repairs.join('; ')}`));
+        if (task.activity.length > 200) task.activity = task.activity.slice(-200);
+        task.updatedAt = now();
+      }
+    }
+    const total = Object.values(report).reduce((sum, count) => sum + count, 0);
+    if (total > 0) await saveStore(store);
+    return report;
   });
 }

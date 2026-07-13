@@ -9,7 +9,12 @@ export async function GET() {
   const cfg = await loadConfig();
   const oauth = await getOAuthPublicStatus();
   const auth = await resolveCloudBearer(cfg);
-  const { isGoogleClientReady, bundledGoogleClient } = await import('@/lib/google-oauth');
+  const { bundledGoogleClient } = await import('@/lib/google-oauth');
+  const drive = cfg.integrations?.googledrive;
+  const driveClientReady = !!(
+    (drive?.clientId?.trim() && drive?.clientSecret?.trim())
+    || bundledGoogleClient()
+  );
   const safe = {
     ...cfg,
     // Full secrets never reach the browser: keys go out as partial
@@ -27,7 +32,7 @@ export async function GET() {
     secretKeyLocation: secretKeyLocation(),
     // Google Drive sign-in is available if a client exists (bundled env default
     // or a per-user one); `driveBundledClient` = the zero-setup env default.
-    driveClientReady: await isGoogleClientReady(),
+    driveClientReady,
     driveBundledClient: !!bundledGoogleClient(),
   };
   return NextResponse.json(safe);

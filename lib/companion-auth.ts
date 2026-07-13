@@ -559,6 +559,65 @@ export async function reconcileInterruptedCompanionVoiceActions(): Promise<{
   return { completed, resumed, failed };
 }
 
+/** Resolve non-voice idempotency receipts left pending by a stopped request. */
+export function reconcileInterruptedCompanionActions(nowMs = Date.now()): {
+  completed: number;
+  failed: number;
+} {
+  ensureCompanionSchema();
+  const db = getDb();
+  const staleBefore = new Date(nowMs - 5 * 60_000).toISOString();
+  const rows = db.prepare(`
+    SELECT * FROM companion_action_receipts
+    WHERE kind != 'voice' AND status = 'pending' AND createdAt <= ?
+    ORDER BY createdAt, id
+  `).all(staleBefore) as unknown as ActionReceiptRow[];
+  let completed = 0;
+  let failed = 0;
+  const hasTable = (name: string) => Boolean(db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get(name));
+  for (const row of rows) {
+    let proven = false;
+    const result: Record<string, unknown> = { action: row.kind, recovered: true };
+    if (row.kind === 'start_routine' && hasTable('routine_invocations')) {
+      const invocation = db.prepare(`
+        SELECT id, routineId FROM routine_invocations WHERE dedupeKey = ? LIMIT 1
+      `).get(`companion:${row.deviceId}:${row.idempotencyKey}`) as { id: string; routineId: string } | undefined;
+      if (invocation) {
+        proven = true;
+        Object.assign(result, { accepted: true, invocationId: invocation.id, routineId: invocation.routineId });
+      }
+    } else if (['approve', 'deny', 'steer', 'cancel'].includes(row.kind) && hasTable('task_commands')) {
+      const command = db.prepare(`
+        SELECT id, taskId, status FROM task_commands WHERE idempotencyKey = ? LIMIT 1
+      `).get(`companion:${row.deviceId}:${row.idempotencyKey}`) as { id: string; taskId: string; status: string } | undefined;
+      if (command && command.status === 'applied') {
+        proven = true;
+        Object.assign(result, { taskId: command.taskId, commandId: command.id });
+      }
+    } else if (row.kind === 'resolve_attention' && row.targetId && hasTable('task_attention')) {
+      const attention = db.prepare('SELECT taskId, status FROM task_attention WHERE id = ?')
+        .get(row.targetId) as { taskId: string; status: string } | undefined;
+      if (attention && attention.status !== 'open') {
+        proven = true;
+        Object.assign(result, { attentionId: row.targetId, taskId: attention.taskId });
+      }
+    }
+    const message = proven
+      ? { ok: true, ...result }
+      : { ok: false, action: row.kind, error: 'The host stopped before this action outcome could be proven. Refresh state and submit a new idempotency key if still needed.' };
+    const update = db.prepare(`
+      UPDATE companion_action_receipts SET status = ?, result = ?, completedAt = ?
+      WHERE id = ? AND status = 'pending'
+    `).run(proven ? 'completed' : 'failed', JSON.stringify(message).slice(0, 8_000), nowIso(), row.id);
+    if (Number(update.changes) !== 1) continue;
+    if (proven) completed += 1;
+    else failed += 1;
+  }
+  return { completed, failed };
+}
+
 export function finishCompanionAction(id: string, result: Record<string, unknown>, succeeded = true): void {
   ensureCompanionSchema();
   const update = getDb().prepare(`
