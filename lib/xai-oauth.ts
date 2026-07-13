@@ -538,7 +538,7 @@ export async function ensureCloudAuth(cfg?: AppConfig): Promise<string | null> {
 export async function fetchCloudWithAuth(
   url: string,
   init: RequestInit = {},
-  opts?: { keyOverride?: string; cfg?: AppConfig },
+  opts?: { keyOverride?: string; keySource?: 'api_key' | 'oauth'; cfg?: AppConfig; preferSource?: 'oauth' | 'token' },
 ): Promise<Response> {
   const override = opts?.keyOverride?.trim();
   // Request-pinned keys preserve OAuth identity. Treating every override as an
@@ -547,10 +547,11 @@ export async function fetchCloudWithAuth(
   const auth = override
     ? {
         token: override,
-        source: oauthSession?.accessToken === override ? 'oauth' as const : 'api_key' as const,
+        source: opts?.keySource
+          || (oauthSession?.accessToken === override ? 'oauth' as const : 'api_key' as const),
         hasCloudAuth: true,
       }
-    : await resolveCloudBearer(opts?.cfg);
+    : await resolveCloudBearer(opts?.cfg, opts?.preferSource);
 
   if (!auth.token) {
     throw new Error('Missing cloud credentials. Add an xAI API key or sign in with X (OAuth) in Settings.');
@@ -566,7 +567,15 @@ export async function fetchCloudWithAuth(
 
   let res = await tokenFetcher(url, { ...init, headers });
 
-  if (res.status === 401 && auth.source === 'oauth') {
+  // xAI reports an expired/rotated OAuth bearer as either 401 or a specific
+  // 403 bad-credentials response. Inspect a clone so callers still receive
+  // the original body when refresh is unavailable; never retry ordinary 403s.
+  const oauthBearerRejected = res.status === 401 || (
+    res.status === 403
+    && /unauthenticated:bad-credentials|OAuth2 access token could not be validated/i
+      .test(await res.clone().text().catch(() => ''))
+  );
+  if (oauthBearerRejected && auth.source === 'oauth') {
     const refreshed = await forceRefreshOAuthAccessToken(auth.token);
     if (refreshed) {
       setApiKey(refreshed);

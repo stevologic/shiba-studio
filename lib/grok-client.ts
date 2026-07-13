@@ -44,6 +44,8 @@ export interface GrokChatParams {
   model: string;
   /** Request-scoped cloud bearer selected for this model; never read from global mutable state. */
   cloudKey?: string;
+  /** Identity of cloudKey so a rotated OAuth bearer is never mistaken for an API key. */
+  cloudAuthSource?: 'api_key' | 'oauth';
   signal?: AbortSignal;
   messages: GrokMessage[];
   tools?: GrokTool[];
@@ -356,7 +358,11 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
           headers,
           body: JSON.stringify(body),
           signal,
-        }, { keyOverride: params.cloudKey || keyOverride || undefined });
+        }, {
+          keyOverride: params.cloudKey || keyOverride || undefined,
+          keySource: params.cloudAuthSource,
+          preferSource: ref.authSource,
+        });
       })();
 
   if (!res.ok) {

@@ -238,6 +238,81 @@ async function runUnitTests() {
     assert(getApiKey() === 'fresh-after-401', '401 refresh updates cached bearer');
     setTokenFetcher(null);
   });
+
+  await withTempDataDir(async () => {
+    await saveOAuthSession({
+      accessToken: 'stale-oauth-403',
+      refreshToken: 'rt-403',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      connectedAt: new Date().toISOString(),
+      oidcClientId: 'client',
+    });
+    let resourceCalls = 0;
+    let refreshCalls = 0;
+    const authorizations: string[] = [];
+    setTokenFetcher(async (url, init) => {
+      const body = String((init as RequestInit).body || '');
+      if (url.includes('/oauth2/token') && body.includes('refresh_token')) {
+        refreshCalls++;
+        return new Response(JSON.stringify({
+          access_token: 'fresh-after-403',
+          refresh_token: 'rt-403',
+          expires_in: 3600,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      resourceCalls++;
+      authorizations.push(new Headers((init as RequestInit).headers).get('Authorization') || '');
+      if (resourceCalls === 1) {
+        return new Response(JSON.stringify({
+          code: 'unauthenticated:bad-credentials',
+          error: 'The OAuth2 access token could not be validated.',
+        }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+
+    const cfg: AppConfig = {
+      xaiApiKey: '',
+      integrations: {},
+      defaultWorkspace: process.cwd(),
+      cloudAuthMode: 'oauth',
+    };
+    const res = await fetchCloudWithAuth('https://api.x.ai/v1/models', { method: 'GET' }, { cfg });
+    assert(res.status === 200, 'fetchCloudWithAuth retries the xAI OAuth bad-credentials 403');
+    assert(refreshCalls === 1 && resourceCalls === 2, 'bad-credentials 403 refreshes and retries exactly once');
+    assert(
+      authorizations[0] === 'Bearer stale-oauth-403' && authorizations[1] === 'Bearer fresh-after-403',
+      'bad-credentials retry replaces the rejected bearer',
+    );
+    setTokenFetcher(null);
+  });
+
+  await withTempDataDir(async () => {
+    await saveOAuthSession({
+      accessToken: 'oauth-generic-403',
+      refreshToken: 'rt-generic-403',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      connectedAt: new Date().toISOString(),
+      oidcClientId: 'client',
+    });
+    let resourceCalls = 0;
+    let refreshCalls = 0;
+    setTokenFetcher(async (url) => {
+      if (url.includes('/oauth2/token')) refreshCalls++;
+      else resourceCalls++;
+      return new Response('forbidden by policy', { status: 403 });
+    });
+    const cfg: AppConfig = {
+      xaiApiKey: '',
+      integrations: {},
+      defaultWorkspace: process.cwd(),
+      cloudAuthMode: 'oauth',
+    };
+    const res = await fetchCloudWithAuth('https://api.x.ai/v1/models', { method: 'GET' }, { cfg });
+    assert(res.status === 403, 'ordinary OAuth 403 remains a provider denial');
+    assert(resourceCalls === 1 && refreshCalls === 0, 'ordinary 403 is not refreshed or retried');
+    setTokenFetcher(null);
+  });
 }
 
 async function runApiRouteTests() {

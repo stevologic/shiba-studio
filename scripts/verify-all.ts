@@ -15,6 +15,7 @@ const CHAIN = [
   'verify-page-chrome.ts',
   'verify-release-ui.ts',
   'verify-runtime.ts',
+  'verify-agent-outcomes.ts',
   'verify-tool-dispatch.ts',
   'verify-task-ledger.ts',
   'verify-context-engine.ts',

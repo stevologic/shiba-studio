@@ -8,6 +8,8 @@ export interface GrokChatStreamParams {
   model: string;
   /** Request-scoped cloud bearer selected for this model. */
   cloudKey?: string;
+  /** Identity of cloudKey so OAuth refresh survives concurrent token rotation. */
+  cloudAuthSource?: 'api_key' | 'oauth';
   signal?: AbortSignal;
   messages: ChatMessagePayload[];
   temperature?: number;
@@ -201,7 +203,11 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
       headers,
       body: JSON.stringify(body),
       signal,
-    }, { keyOverride: params.cloudKey });
+    }, {
+      keyOverride: params.cloudKey,
+      keySource: params.cloudAuthSource,
+      preferSource: ref.authSource,
+    });
   };
 
   // Nothing has streamed yet, so a transient network failure (dead keep-alive

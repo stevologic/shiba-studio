@@ -18,6 +18,39 @@ export { postToAgentInbox, drainInbox } from './agent-inbox';
 
 const MAX_STEPS = 18;
 
+/**
+ * A successful X receipt is an irreversible commit boundary. If only the
+ * follow-up Grok auth/summary turn fails, retrying the whole run would publish
+ * a duplicate post. Preserve the confirmed outcome and surface the auth issue
+ * as a non-fatal note instead of converting the completed post into a failure.
+ */
+function completedXPostFallback(trace: TraceStep[], error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/(?:Grok API error (?:401|403)|unauthenticated:bad-credentials|OAuth2 access token could not be validated|Missing cloud credentials)/i.test(message)) {
+    return null;
+  }
+  for (let index = trace.length - 1; index >= 0; index--) {
+    const step = trace[index];
+    if (step.type !== 'result' || step.tool?.name !== 'x_post') continue;
+    const receipt = step.tool.result;
+    if (!receipt || typeof receipt !== 'object') continue;
+    const record = receipt as Record<string, unknown>;
+    if (record.ok !== true) continue;
+    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    const url = typeof record.url === 'string' && record.url.trim()
+      ? record.url.trim()
+      : id
+        ? `https://x.com/i/web/status/${encodeURIComponent(id)}`
+        : '';
+    if (!url) continue;
+    return [
+      `Posted to X: ${url}`,
+      'The post succeeded, but Grok could not generate its final summary because cloud authentication changed after the post. No duplicate post was attempted.',
+    ].join('\n\n');
+  }
+  return null;
+}
+
 // Runs whose owner asked them to stop. The generator checks this at the top of
 // each step and ends the run cleanly (persisted, slot released) at the next
 // boundary. Works for interactive and background runs alike — both go through
@@ -936,6 +969,7 @@ export type AgentRunOpts = {
   grokChatFn?: (params: {
     model: string;
     cloudKey?: string;
+    cloudAuthSource?: 'api_key' | 'oauth';
     signal?: AbortSignal;
     messages: GrokMessage[];
     tools?: GrokTool[];
@@ -999,6 +1033,13 @@ async function* agentRunGenerator(
   const { mergeAgentIntegrationCreds } = await import('./integrations');
   const integrationCreds = mergeAgentIntegrationCreds(cfg.integrations || {}, agent.integrationOverrides);
   const cloudAuth = await resolveCloudBearer(cfg, modelRef.authSource);
+  const cloudAuthForTurn = async () => {
+    // API keys are stable for the life of a run. OAuth access tokens can rotate
+    // while a run is paused for approval, so reload that bearer at every model
+    // boundary instead of reusing the token captured when the run started.
+    if (modelRef.provider !== 'cloud' || cloudAuth.source !== 'oauth') return cloudAuth;
+    return resolveCloudBearer(cfg, modelRef.authSource);
+  };
   let modelError = modelRef.provider === 'local'
     ? (!cfg.localGrokEnabled ? 'Local Grok is disabled. Enable it in Settings or switch this agent to a Cloud model.' : null)
     : modelRef.provider === 'cli'
@@ -1297,9 +1338,11 @@ async function* agentRunGenerator(
         });
       }
       const chatFn = opts.grokChatFn || grokChat;
+      const turnCloudAuth = await cloudAuthForTurn();
       const resp = await chatFn({
         model: agent.model,
-        cloudKey: cloudAuth.token || undefined,
+        cloudKey: turnCloudAuth.token || undefined,
+        cloudAuthSource: turnCloudAuth.source || undefined,
         signal: runSignal,
         messages,
         tools,
@@ -1565,9 +1608,11 @@ async function* agentRunGenerator(
       // never be a shrug.
       try {
         const chatFn = opts.grokChatFn || grokChat;
+        const turnCloudAuth = await cloudAuthForTurn();
         const resp = await chatFn({
           model: agent.model,
-          cloudKey: cloudAuth.token || undefined,
+          cloudKey: turnCloudAuth.token || undefined,
+          cloudAuthSource: turnCloudAuth.source || undefined,
           signal: runSignal,
           messages: [
             ...messages,
@@ -1607,7 +1652,20 @@ async function* agentRunGenerator(
       yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: finalOutput });
       audit('run', 'run cancelled', `${agent.name}: cancelled by user`, { runId, agentId: agent.id });
     } else {
-      yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: e instanceof Error ? e.message : String(e) });
+      const completedPost = completedXPostFallback(trace, e);
+      if (completedPost) {
+        finalOutput = completedPost;
+        yield emit({
+          id: uuidv4(), ts: new Date().toISOString(), type: 'think',
+          content: `The X post was confirmed, but its follow-up model summary failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+        yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'final', content: completedPost });
+        audit('run', 'post completed; summary unavailable', `${agent.name}: confirmed X post preserved after model auth failure`, {
+          runId, agentId: agent.id,
+        });
+      } else {
+        yield emit({ id: uuidv4(), ts: new Date().toISOString(), type: 'error', content: e instanceof Error ? e.message : String(e) });
+      }
     }
   } finally {
     await Browser.closeRunPage(runId).catch(() => {});
@@ -1641,7 +1699,13 @@ async function* agentRunGenerator(
           finalOutput,
           sideEffects,
         }, async (params) => {
-          const response = await learningChat({ ...params, cloudKey: cloudAuth.token || undefined, signal: runSignal });
+          const turnCloudAuth = await cloudAuthForTurn();
+          const response = await learningChat({
+            ...params,
+            cloudKey: turnCloudAuth.token || undefined,
+            cloudAuthSource: turnCloudAuth.source || undefined,
+            signal: runSignal,
+          });
           const { parseGrokUsage } = await import('./usage');
           learningTokens += parseGrokUsage(response?.usage)?.totalTokens ?? 0;
           return response;
