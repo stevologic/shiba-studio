@@ -2,17 +2,23 @@ import { test, expect } from '@playwright/test';
 
 /** Every primary surface loads with zero console errors. */
 const PAGES: Array<{ path: string; marker: string | RegExp }> = [
-  { path: '/', marker: /Quick Stats|agent studio/i },
+  { path: '/', marker: /Dispatch/i },
+  { path: '/attention', marker: /Attention/i },
+  { path: '/chat', marker: /Grok Chat|New chat/i },
   { path: '/agents', marker: /Agents/ },
   { path: '/memories', marker: /Memories/ },
-  { path: '/automations', marker: /Automations/ },
+  { path: '/routines', marker: /Routines/ },
+  { path: '/meetings', marker: /Meetings/ },
   { path: '/integrations', marker: /Capabilities/ },
   { path: '/usage', marker: /Usage/ },
   { path: '/logs', marker: /Logs/ },
+  { path: '/doctor', marker: /Doctor/ },
   { path: '/settings', marker: /Settings/ },
   { path: '/projects', marker: /Projects/ },
   { path: '/workspace', marker: /Workspace/ },
+  { path: '/files', marker: /Files/ },
   { path: '/board', marker: /Board/ },
+  { path: '/companion', marker: /Companion/i },
 ];
 
 for (const { path: pagePath, marker } of PAGES) {

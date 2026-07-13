@@ -94,7 +94,7 @@ function dbPath(): string {
  * Migrations run in order inside a transaction on next open, so an existing
  * ~/.shiba-studio/data/shiba-studio.db always upgrades safely.
  */
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 8;
 
 /** MIGRATIONS[n] upgrades a database at user_version n to n+1. */
 const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
@@ -193,7 +193,228 @@ const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
   // column, and both paths must converge on the same schema.
   3: addRunsWorkspaceColumn,
   4: addRunsWorkspaceColumn,
+  // v5 → v6: universal task control plane. Existing runs are projected into
+  // this ledger lazily by agent-runs-store; the schema also owns completion
+  // evidence, attention, steering commands, an event history, and the durable
+  // delivery outbox so those concerns never split into parallel stores.
+  5: createTaskControlPlane,
+  // v6 → v7: command idempotency and optimistic revision binding. Column
+  // guards keep this safe for a development database that observed an early
+  // v6 build while the control-plane slice was still landing.
+  6: hardenTaskCommands,
+  // v7 → v8: immutable, task-owned file checkpoints. Checkpoint rows bind
+  // the task state and declared workspace paths captured before a mutation;
+  // file rows also retain the sealed post-mutation state used to reject an
+  // unsafe rewind when another actor changed an owned path afterward.
+  7: createTaskCheckpoints,
 };
+
+function createTaskCheckpoints(d: DatabaseSync): void {
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS task_checkpoints (
+      id TEXT PRIMARY KEY,
+      taskId TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'open',
+      taskSnapshot TEXT NOT NULL,
+      context TEXT NOT NULL DEFAULT '{}',
+      createdAt TEXT NOT NULL,
+      sealedAt TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_checkpoints_task
+      ON task_checkpoints(taskId, createdAt DESC);
+
+    CREATE TABLE IF NOT EXISTS task_checkpoint_files (
+      checkpointId TEXT NOT NULL,
+      workspaceRootId TEXT NOT NULL,
+      workspacePath TEXT NOT NULL,
+      relativePath TEXT NOT NULL,
+      beforeExists INTEGER NOT NULL,
+      beforeHash TEXT,
+      beforeMode INTEGER,
+      beforeContent BLOB,
+      afterExists INTEGER,
+      afterHash TEXT,
+      afterMode INTEGER,
+      afterContent BLOB,
+      PRIMARY KEY (checkpointId, workspaceRootId, relativePath)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_checkpoint_files_checkpoint
+      ON task_checkpoint_files(checkpointId, workspaceRootId, relativePath);
+
+    CREATE TABLE IF NOT EXISTS task_checkpoint_restores (
+      id TEXT PRIMARY KEY,
+      checkpointId TEXT NOT NULL,
+      taskId TEXT NOT NULL,
+      status TEXT NOT NULL,
+      restoredPaths TEXT NOT NULL DEFAULT '[]',
+      conflicts TEXT NOT NULL DEFAULT '[]',
+      startedAt TEXT NOT NULL,
+      completedAt TEXT,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_checkpoint_restores_checkpoint
+      ON task_checkpoint_restores(checkpointId, startedAt DESC);
+  `);
+}
+
+function hardenTaskCommands(d: DatabaseSync): void {
+  const columns = new Set(
+    (d.prepare('PRAGMA table_info(task_commands)').all() as Array<{ name: string }>).map((row) => row.name),
+  );
+  if (!columns.has('idempotencyKey')) d.exec('ALTER TABLE task_commands ADD COLUMN idempotencyKey TEXT');
+  if (!columns.has('expectedVersion')) d.exec('ALTER TABLE task_commands ADD COLUMN expectedVersion INTEGER NOT NULL DEFAULT 1');
+  d.exec(`
+    UPDATE task_commands SET idempotencyKey = id WHERE idempotencyKey IS NULL OR idempotencyKey = '';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_task_commands_idempotency
+      ON task_commands(taskId, idempotencyKey);
+  `);
+}
+
+function createTaskControlPlane(d: DatabaseSync): void {
+  const runColumns = new Set(
+    (d.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>).map((row) => row.name),
+  );
+  if (!runColumns.has('taskId')) d.exec('ALTER TABLE runs ADD COLUMN taskId TEXT');
+  if (!runColumns.has('attemptNo')) d.exec('ALTER TABLE runs ADD COLUMN attemptNo INTEGER NOT NULL DEFAULT 1');
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      parentId TEXT,
+      originType TEXT NOT NULL,
+      originId TEXT,
+      agentId TEXT,
+      projectId TEXT,
+      runId TEXT,
+      sessionId TEXT,
+      workspaceRoots TEXT NOT NULL DEFAULT '[]',
+      plan TEXT NOT NULL DEFAULT '[]',
+      progress REAL NOT NULL DEFAULT 0,
+      currentStep TEXT,
+      nextAction TEXT,
+      retryCount INTEGER NOT NULL DEFAULT 0,
+      maxRetries INTEGER NOT NULL DEFAULT 0,
+      heartbeatAt TEXT,
+      startedAt TEXT,
+      completedAt TEXT,
+      result TEXT,
+      error TEXT,
+      contract TEXT,
+      completion TEXT,
+      checkpointId TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      version INTEGER NOT NULL DEFAULT 1,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks(kind, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parentId, createdAt ASC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_origin ON tasks(originType, originId);
+    CREATE INDEX IF NOT EXISTS idx_tasks_run ON tasks(runId);
+    CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(sessionId, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(projectId, updatedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_runs_task ON runs(taskId, attemptNo);
+
+    CREATE TABLE IF NOT EXISTS task_evidence (
+      id TEXT PRIMARY KEY,
+      taskId TEXT NOT NULL,
+      requirementId TEXT,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      label TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      uri TEXT,
+      command TEXT,
+      exitCode INTEGER,
+      scope TEXT,
+      recordedAt TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_evidence_task ON task_evidence(taskId, recordedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_task_evidence_requirement ON task_evidence(taskId, requirementId, recordedAt DESC);
+
+    CREATE TABLE IF NOT EXISTS task_attention (
+      id TEXT PRIMARY KEY,
+      taskId TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      action TEXT NOT NULL DEFAULT '{}',
+      dedupeKey TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      resolvedAt TEXT,
+      UNIQUE(taskId, dedupeKey)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_attention_status ON task_attention(status, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_task_attention_task ON task_attention(taskId, status, createdAt DESC);
+
+    CREATE TABLE IF NOT EXISTS task_commands (
+      id TEXT PRIMARY KEY,
+      taskId TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      idempotencyKey TEXT NOT NULL,
+      expectedVersion INTEGER NOT NULL,
+      createdAt TEXT NOT NULL,
+      appliedAt TEXT,
+      UNIQUE(taskId, idempotencyKey)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_commands_pending ON task_commands(taskId, status, createdAt ASC);
+
+    CREATE TABLE IF NOT EXISTS task_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      taskId TEXT NOT NULL,
+      type TEXT NOT NULL,
+      ts TEXT NOT NULL,
+      data TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(taskId, id DESC);
+
+    CREATE TABLE IF NOT EXISTS task_outbox (
+      id TEXT PRIMARY KEY,
+      taskId TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      target TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      availableAt TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      deliveredAt TEXT,
+      lastError TEXT,
+      idempotencyKey TEXT NOT NULL UNIQUE
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_outbox_pending ON task_outbox(status, availableAt, createdAt);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+      title, description, result, error,
+      content='tasks', content_rowid='rowid'
+    );
+    CREATE TRIGGER IF NOT EXISTS tasks_fts_ai AFTER INSERT ON tasks BEGIN
+      INSERT INTO tasks_fts(rowid, title, description, result, error)
+      VALUES (new.rowid, new.title, new.description, new.result, new.error);
+    END;
+    CREATE TRIGGER IF NOT EXISTS tasks_fts_ad AFTER DELETE ON tasks BEGIN
+      INSERT INTO tasks_fts(tasks_fts, rowid, title, description, result, error)
+      VALUES ('delete', old.rowid, old.title, old.description, old.result, old.error);
+    END;
+    CREATE TRIGGER IF NOT EXISTS tasks_fts_au AFTER UPDATE ON tasks BEGIN
+      INSERT INTO tasks_fts(tasks_fts, rowid, title, description, result, error)
+      VALUES ('delete', old.rowid, old.title, old.description, old.result, old.error);
+      INSERT INTO tasks_fts(rowid, title, description, result, error)
+      VALUES (new.rowid, new.title, new.description, new.result, new.error);
+    END;
+  `);
+}
 
 function addRunsWorkspaceColumn(d: DatabaseSync): void {
   const columns = new Set(

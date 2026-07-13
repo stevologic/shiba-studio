@@ -51,7 +51,9 @@ async function main() {
   // Chat background tasks: dispatch tool + result delivery back into the session.
   const bgLib = await read('lib/background-tasks.ts');
   assert(bgLib.includes('startBackgroundTask'), 'background task dispatch');
-  assert(bgLib.includes('deliverToChat'), 'background result delivery');
+  assert(bgLib.includes('processTaskOutbox'), 'background completion pumps the durable delivery outbox');
+  const taskDelivery = await read('lib/task-delivery.ts');
+  assert(taskDelivery.includes('claimOutbox') && taskDelivery.includes('appendChatMessage'), 'background result delivery is durable and idempotent');
   assert((await read('lib/chat-sessions.ts')).includes('appendChatMessage'), 'lock-protected chat append');
   const chatStream = await read('app/api/grok/stream/route.ts');
   assert(chatStream.includes("'background_task'") && chatStream.includes("'background_status'"), 'background tools wired into chat');
@@ -138,7 +140,9 @@ async function main() {
   const streamRoute = await read('app/api/grok/stream/route.ts');
   assert(streamRoute.includes('environmentFacts()'), 'chat prompts carry the current date');
   assert(streamRoute.includes('clipForModel(JSON.stringify'), 'chat tool results clip with markers');
-  assert(streamRoute.includes('HISTORY_CAP'), 'chat history caps with an explicit omission note');
+  assert(streamRoute.includes('prepareSessionContext'), 'chat history uses the bounded durable context engine');
+  const contextEngine = await read('lib/context-engine.ts');
+  assert(contextEngine.includes('Earlier turns were bounded for this request') && contextEngine.includes('deterministic compactions'), 'chat history caps with an explicit omission/compaction record');
   assert(streamRoute.includes('## Grounding'), 'chat grounding rules');
   const runtime2 = await read('lib/agent-runtime.ts');
   assert(runtime2.includes('environmentFacts()'), 'agent runs carry the current date');

@@ -10,6 +10,8 @@
 import type { NavStats } from './nav-stats-types';
 
 export const EMPTY_NAV_STATS: NavStats = {
+  tasksActive: 0,
+  attentionOpen: 0,
   chatSessions: 0,
   projects: 0,
   boardOpen: 0,
@@ -28,7 +30,9 @@ let loaded = false;
 
 function sameStats(a: NavStats, b: NavStats): boolean {
   return (
-    a.chatSessions === b.chatSessions
+    a.tasksActive === b.tasksActive
+    && a.attentionOpen === b.attentionOpen
+    && a.chatSessions === b.chatSessions
     && a.projects === b.projects
     && a.boardOpen === b.boardOpen
     && a.memories === b.memories

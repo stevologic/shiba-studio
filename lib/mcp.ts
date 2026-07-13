@@ -77,8 +77,8 @@ function sealServerSecrets(server: McpServerRecord): McpServerRecord {
   return { ...server, env };
 }
 
-async function loadStore(): Promise<McpStore> {
-  await ensureData();
+async function loadStore(options: { persistMaintenance?: boolean } = {}): Promise<McpStore> {
+  if (options.persistMaintenance !== false) await ensureData();
   try {
     const raw = await fs.readFile(MCP_FILE, 'utf8');
     const parsed = JSON.parse(raw);
@@ -120,7 +120,7 @@ async function loadStore(): Promise<McpStore> {
         }
       }
     }
-    if (changed) await saveStore(servers);
+    if (changed && options.persistMaintenance !== false) await saveStore(servers);
     return { servers };
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { servers: [] };
@@ -146,6 +146,15 @@ export function listMcpPresets() {
 export async function listMcpServers(): Promise<McpServerRecord[]> {
   return withMcpWriteLock(async () => {
     const store = await loadStore();
+    return store.servers.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  });
+}
+
+/** Read configured servers without persisting secret migration or preset drift
+ * maintenance. Diagnostics use this path so generating a report is read-only. */
+export async function listMcpServersReadOnly(): Promise<McpServerRecord[]> {
+  return withMcpWriteLock(async () => {
+    const store = await loadStore({ persistMaintenance: false });
     return store.servers.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   });
 }
@@ -263,6 +272,8 @@ export async function deleteMcpServer(id: string): Promise<void> {
 }
 
 export async function listEnabledMcpServers(): Promise<McpServerRecord[]> {
+  const { loadConfig } = await import('./persistence');
+  if ((await loadConfig()).safeMode) return [];
   const servers = await listMcpServers();
   return servers.filter((s) => s.enabled);
 }

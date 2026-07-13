@@ -25,6 +25,16 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const action = String(body.action || '');
+    if (['remember', 'recall', 'forget'].includes(action) && body.sessionId) {
+      const { getChatSession } = await import('@/lib/chat-sessions');
+      const session = await getChatSession(String(body.sessionId));
+      if (session?.ephemeral) {
+        return NextResponse.json(
+          { ok: false, error: 'Memories are disabled for ephemeral sessions.' },
+          { status: 403 },
+        );
+      }
+    }
 
     if (action === 'fetch') {
       const page = await webFetch(String(body.url || ''));

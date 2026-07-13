@@ -21,7 +21,20 @@ export async function POST(req: NextRequest) {
     messages.push({ role: 'system', content: String(body.projectContext) });
   }
   if (Array.isArray(body.messages) && body.messages.length > 0) {
-    for (const m of body.messages) {
+    let projectId: string | null = null;
+    if (body.sessionId) {
+      const { getChatSession } = await import('@/lib/chat-sessions');
+      projectId = (await getChatSession(String(body.sessionId)))?.projectId || null;
+    }
+    const { prepareSessionContext } = await import('@/lib/context-engine');
+    const prepared = prepareSessionContext({
+      sessionId: body.sessionId ? String(body.sessionId) : null,
+      projectId,
+      messages: body.messages,
+      model,
+    });
+    if (prepared.systemContext) messages.push({ role: 'system', content: prepared.systemContext });
+    for (const m of prepared.replayMessages) {
       if (!m?.role) continue;
       if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'system') continue;
       messages.push({

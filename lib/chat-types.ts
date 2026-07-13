@@ -15,6 +15,8 @@ export interface ChatAttachment {
 }
 
 export interface ChatMessagePayload {
+  /** Stable persisted id used by the context engine for citations. */
+  id?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   thinking?: string;

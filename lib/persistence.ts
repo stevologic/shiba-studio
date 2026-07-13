@@ -193,6 +193,7 @@ export async function mutateAgents<T>(mutate: (agents: Agent[]) => T | Promise<T
 
 const DEFAULT_CONFIG: AppConfig = {
   xaiApiKey: '',
+  safeMode: false,
   integrations: {},
   defaultWorkspace: projectRoot(),
   defaultGrokModel: '',
@@ -210,6 +211,11 @@ const DEFAULT_CONFIG: AppConfig = {
   disabledTools: [],
   globalInstructions: '',
   useAgentsMd: true,
+  remoteAccess: {
+    enabled: false,
+    pairingTtlMinutes: 5,
+    deviceTtlDays: 30,
+  },
 };
 
 async function syncCloudAuthCache(cfg: AppConfig): Promise<void> {
@@ -239,7 +245,17 @@ async function loadConfigUnlocked(): Promise<AppConfig> {
   await ensureData();
   try {
     const raw = await fs.readFile(configFile(), 'utf8');
-    const stored = { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as AppConfig;
+    const parsed = JSON.parse(raw) as Partial<AppConfig>;
+    const stored = {
+      ...DEFAULT_CONFIG,
+      ...parsed,
+      remoteAccess: {
+        ...DEFAULT_CONFIG.remoteAccess,
+        ...(parsed.remoteAccess || {}),
+        // Missing/legacy config must remain explicitly off.
+        enabled: parsed.remoteAccess?.enabled === true,
+      },
+    } as AppConfig;
     const { opened, hadPlaintext } = openConfigSecrets(stored);
     if (hadPlaintext) {
       // One-time migration: re-write any legacy plaintext secrets sealed.
@@ -274,7 +290,16 @@ export async function saveConfig(partial: Partial<AppConfig>) {
   return withConfigLock(async () => {
     await ensureData();
     const cur = await loadConfigUnlocked();
-    const next = { ...cur, ...partial, integrations: { ...cur.integrations, ...(partial.integrations || {}) } };
+    const next = {
+      ...cur,
+      ...partial,
+      integrations: { ...cur.integrations, ...(partial.integrations || {}) },
+      remoteAccess: {
+        ...(cur.remoteAccess || DEFAULT_CONFIG.remoteAccess),
+        ...(partial.remoteAccess || {}),
+        enabled: partial.remoteAccess?.enabled ?? cur.remoteAccess?.enabled ?? false,
+      },
+    };
     return writeConfigUnlocked(next);
   });
 }

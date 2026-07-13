@@ -21,9 +21,12 @@ export const APPROVAL_GATED_TOOLS = new Set([
   'grok_cli',
   'mcp_invoke',
   'memory_forget',
+  'delegate_task_team',
+  'native_node_action',
 ]);
 
 export function toolNeedsApproval(toolName: string, mode: ToolApprovalMode | undefined): boolean {
+  if (toolName === 'native_node_action') return true;
   return mode === 'ask' && APPROVAL_GATED_TOOLS.has(toolName);
 }
 
@@ -89,6 +92,13 @@ export function resolveToolApproval(approvalId: string, approved: boolean): bool
   if (!entry) return false;
   entry.resolve(approved);
   return true;
+}
+
+/** Resolve every pending approval for one run (used by task cancellation). */
+export function resolveRunApprovals(runId: string, approved = false): number {
+  const matches = [...pending.entries()].filter(([, entry]) => entry.meta.runId === runId);
+  for (const [, entry] of matches) entry.resolve(approved);
+  return matches.length;
 }
 
 export function getPendingApproval(approvalId: string): PendingApproval | null {

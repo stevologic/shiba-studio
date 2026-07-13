@@ -3,8 +3,11 @@ import {
   archiveChatSession,
   createChatSession,
   deleteChatSession,
+  forkChatSession,
   getChatSession,
+  groupChatSessionsByProject,
   listChatSessions,
+  markChatSessionRead,
   searchChatSessions,
   updateChatSession,
 } from '@/lib/chat-sessions';
@@ -21,7 +24,13 @@ export async function GET(req: NextRequest) {
   const sessions = q
     ? await searchChatSessions(q, { includeArchived })
     : await listChatSessions({ includeArchived });
-  return NextResponse.json({ ok: true, sessions, count: sessions.length });
+  return NextResponse.json({
+    ok: true,
+    sessions,
+    groups: groupChatSessionsByProject(sessions),
+    count: sessions.length,
+    unreadCount: sessions.reduce((sum, session) => sum + Math.max(0, Number(session.unreadCount) || 0), 0),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -34,6 +43,23 @@ export async function POST(req: NextRequest) {
 
   if (body.action === 'update') {
     const session = await updateChatSession(body.id, body.patch || {});
+    return NextResponse.json({ ok: true, session });
+  }
+
+  if (body.action === 'fork') {
+    const session = await forkChatSession(
+      String(body.parentSessionId || ''),
+      String(body.sourceMessageId || ''),
+      { title: body.title ? String(body.title) : undefined },
+    );
+    return NextResponse.json({ ok: true, session }, { status: 201 });
+  }
+
+  if (body.action === 'markRead') {
+    const session = await markChatSessionRead(
+      String(body.id || ''),
+      body.throughMessageId ? String(body.throughMessageId) : undefined,
+    );
     return NextResponse.json({ ok: true, session });
   }
 

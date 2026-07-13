@@ -22,6 +22,7 @@ import InfoHint from '@/components/info-hint';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { toast } from '@/lib/toast';
 import type { AgentMemoryEntry, MemoryKind, MemorySource, MemoryStatus } from '@/lib/agent-memory';
+import { CapabilityPacksPanel } from '@/components/capability-packs-panel';
 
 type ScopeOption = { id: string; label: string; kind: 'chat' | 'agent' };
 type Stats = { total: number; active: number; pending: number; learned: number; pinned: number };
@@ -238,6 +239,8 @@ export default function MemoriesPanel({ onDataChanged }: { onDataChanged?: () =>
           </button>
         </div>
       </div>
+
+      <CapabilityPacksPanel />
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
         {([

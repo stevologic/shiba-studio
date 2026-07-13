@@ -114,6 +114,8 @@ export async function getBoardTask(idOrKey: string): Promise<BoardTask | null> {
 }
 
 export interface CreateBoardTaskInput {
+  /** Optional internal idempotency identity (not exposed by the public route). */
+  id?: string;
   title: string;
   description?: string;
   status?: BoardStatus;
@@ -132,12 +134,18 @@ export interface CreateBoardTaskInput {
 export async function createBoardTask(input: CreateBoardTaskInput): Promise<BoardTask> {
   const title = input.title.trim();
   if (!title) throw new Error('Task title is required');
+  const internalId = input.id?.trim();
+  if (internalId && !/^[A-Za-z0-9:._-]{1,200}$/.test(internalId)) throw new Error('Invalid internal Board task id');
   return withStoreLock(async () => {
     const store = await loadStore();
+    if (internalId) {
+      const existing = store.tasks.find((task) => task.id === internalId);
+      if (existing) return existing;
+    }
     const status: BoardStatus = isBoardStatus(input.status) ? input.status : 'backlog';
     const createdAt = input.createdAt || now();
     const task: BoardTask = {
-      id: uuidv4(),
+      id: internalId || uuidv4(),
       key: `${KEY_PREFIX}-${store.nextNumber}`,
       title: title.slice(0, 300),
       description: String(input.description || '').slice(0, 20_000),

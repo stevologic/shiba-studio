@@ -15,6 +15,7 @@ import { GOAL_SCRATCH as SCRATCH } from '../lib/verify-scratch';
 import { getToolDefinitions } from '../lib/agent-runtime';
 import { filterToolsByDisabled } from '../lib/disabled-tools';
 import { parseInlineToolCall } from '../lib/inline-tool-calls';
+import { assertTaskShellCommand } from '../lib/task-workspace-policy';
 
 let failures = 0;
 function assert(cond: boolean, msg: string) {
@@ -64,6 +65,13 @@ async function main() {
   // Recovered args survive round-trip
   const recovered = parseInlineToolCall('{"name":"fs_read","arguments":{"path":"a.txt"}}', names);
   assert(!!recovered && JSON.parse(recovered.function.arguments).path === 'a.txt', 'recovered args parse back correctly');
+
+  assert(assertTaskShellCommand('npm test') === 'npm test', 'contained shell validation preserves a normal verification command');
+  for (const unsafe of ['git status ../other', 'git status child/../../other', 'git status $HOME/file', 'git reset --hard', 'cmd /c dir', 'node -e "require(\\"fs\\")"', 'npm test && whoami', 'git status C:\\\\Users']) {
+    let blocked = false;
+    try { assertTaskShellCommand(unsafe); } catch { blocked = true; }
+    assert(blocked, `task shell validation blocks escape class: ${unsafe}`);
+  }
 
   const fs = await import('fs/promises');
   await fs.mkdir(SCRATCH, { recursive: true }).catch(() => {});

@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Stethoscope, Mic
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -37,6 +37,30 @@ const FilesPanel = dynamic(() => import('@/components/files-panel'), { loading: 
 const MemoriesPanel = dynamic(() => import('@/components/memories-panel'), { loading: panelLoading });
 const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
 const ToolsCatalog = dynamic(() => import('@/components/tools-catalog'), { loading: panelLoading });
+const DispatchDashboard = dynamic(
+  () => import('@/components/dispatch-dashboard').then((module) => module.DispatchDashboard),
+  { loading: panelLoading },
+);
+const AttentionInbox = dynamic(
+  () => import('@/components/attention-inbox').then((module) => module.AttentionInbox),
+  { loading: panelLoading },
+);
+const TaskDetailPage = dynamic(
+  () => import('@/components/task-detail-page').then((module) => module.TaskDetailPage),
+  { loading: panelLoading },
+);
+const DoctorPage = dynamic(
+  () => import('@/components/doctor-page').then((module) => module.DoctorPage),
+  { loading: panelLoading },
+);
+const RoutinesPanel = dynamic(
+  () => import('@/components/routines-panel').then((module) => module.RoutinesPanel),
+  { loading: panelLoading },
+);
+const MeetingCapturePanel = dynamic(
+  () => import('@/components/meeting-capture-panel').then((module) => module.MeetingCapturePanel),
+  { loading: panelLoading },
+);
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
 const SyncModal = dynamic(() => import('@/components/sync-modal'));
 const CommandPalette = dynamic(() => import('@/components/command-palette'));
@@ -76,6 +100,7 @@ import {
   chatSessionPath,
   isKnownAppPath,
   pathToChatSessionId,
+  pathToTaskId,
   pathToTab,
   readLastChatSessionId,
   tabToPath,
@@ -125,9 +150,9 @@ type RunSummaryLite = {
 
 // One source of truth for tab display names (nav, top bar, document titles).
 const TAB_LABELS: Record<string, string> = {
-  dashboard: 'Dashboard', chat: 'Grok Chat', projects: 'Projects', board: 'Board', agents: 'Agents',
-  memories: 'Memories', workspace: 'Workspace', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
-  usage: 'Usage', logs: 'Logs', settings: 'Settings',
+  dashboard: 'Dispatch', attention: 'Attention', chat: 'Grok Chat', projects: 'Projects', board: 'Board', agents: 'Agents',
+  memories: 'Memories', workspace: 'Workspace', files: 'Files', automations: 'Routines', meetings: 'Meetings', integrations: 'Capabilities',
+  usage: 'Usage', logs: 'Logs', doctor: 'Doctor', settings: 'Settings',
 };
 
 /** Survives React remounts so chat session URL changes never re-bootstrap the shell. */
@@ -331,6 +356,7 @@ export default function ShibaStudio() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const tab = pathToTab(pathname);
+  const taskId = pathToTaskId(pathname);
   const oauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const oauthPollStartedRef = useRef<number | null>(null);
   // The sign-in popup — the opener force-closes it once tokens are stored
@@ -815,6 +841,8 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.ok) {
         const next: NavStats = {
+          tasksActive: data.tasksActive ?? 0,
+          attentionOpen: data.attentionOpen ?? 0,
           chatSessions: data.chatSessions ?? 0,
           projects: data.projects ?? 0,
           boardOpen: data.boardOpen ?? 0,
@@ -2934,13 +2962,13 @@ export default function ShibaStudio() {
       if (timers[key]) clearTimeout(timers[key]);
       timers[key] = setTimeout(() => { timers[key] = undefined; fn(); }, ms);
     };
-    const unsubscribe = subscribeLiveEvents(['runs', 'board', 'chats', 'agents'], (type) => {
+    const unsubscribe = subscribeLiveEvents(['runs', 'board', 'chats', 'agents', 'tasks', 'attention'], (type) => {
       if (type === 'runs') {
         debounced('runs', () => { void refreshRuns(); });
       } else if (type === 'agents') {
         debounced('agents', () => { void refreshAgents(); void loadNavStats(); });
       } else {
-        // board / chats → nav badges (open cards, session count).
+        // board / chats / tasks / attention → nav badges.
         debounced('nav', () => { void loadNavStats(); }, 600);
       }
     });
@@ -2964,17 +2992,20 @@ export default function ShibaStudio() {
 
   const paletteCommands = useMemo((): CommandPaletteItem[] => {
     const nav: CommandPaletteItem[] = ([
-      { id: 'dashboard', label: 'Dashboard' },
+      { id: 'dashboard', label: 'Dispatch' },
+      { id: 'attention', label: 'Attention' },
       { id: 'chat', label: 'Grok Chat' },
       { id: 'projects', label: 'Projects' },
       { id: 'board', label: 'Board' },
       { id: 'agents', label: 'Agents' },
       { id: 'memories', label: 'Memories' },
       { id: 'workspace', label: 'Workspace' },
-      { id: 'automations', label: 'Automations' },
+      { id: 'automations', label: 'Routines' },
+      { id: 'meetings', label: 'Meetings' },
       { id: 'integrations', label: 'Capabilities' },
       { id: 'usage', label: 'Usage' },
       { id: 'logs', label: 'Logs' },
+      { id: 'doctor', label: 'Doctor' },
       { id: 'settings', label: 'Settings' },
     ] as const).map((t) => ({
       id: `nav-${t.id}`,
@@ -3093,8 +3124,8 @@ export default function ShibaStudio() {
 
   // Dynamic document titles (C7) — tabs are distinguishable in the browser.
   useEffect(() => {
-    document.title = `${TAB_LABELS[tab] || 'Shiba Studio'} — Shiba Studio`;
-  }, [tab]);
+    document.title = `${taskId ? 'Task' : (TAB_LABELS[tab] || 'Shiba Studio')} — Shiba Studio`;
+  }, [tab, taskId]);
 
   return (
     <div className="app-root flex h-screen overflow-hidden bg-shell text-primary">
@@ -3164,7 +3195,8 @@ export default function ShibaStudio() {
         {/* Main menu — always fully visible, never scrolls */}
         <div className="px-2 py-3 flex-shrink-0">
           {([
-            { id: 'dashboard', label: 'Dashboard', icon: Home, stat: null as string | null },
+            { id: 'dashboard', label: 'Dispatch', icon: Home, stat: navStats.tasksActive > 0 ? String(navStats.tasksActive) : null },
+            { id: 'attention', label: 'Attention', icon: Bell, stat: navStats.attentionOpen > 0 ? String(navStats.attentionOpen) : null },
             { id: 'chat', label: 'Grok Chat', icon: MessageSquare, stat: navStats.chatSessions > 0 ? String(navStats.chatSessions) : null },
             { id: 'projects', label: 'Projects', icon: FolderKanban, stat: navStats.projects > 0 ? String(navStats.projects) : null },
             // Open = backlog + todo + in progress: the work still ahead of review.
@@ -3173,7 +3205,8 @@ export default function ShibaStudio() {
             { id: 'memories', label: 'Memories', icon: Brain, stat: navStats.memories > 0 ? String(navStats.memories) : null },
             { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
             { id: 'files', label: 'Files', icon: FileText, stat: null as string | null },
-            { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
+            { id: 'automations', label: 'Routines', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
+            { id: 'meetings', label: 'Meetings', icon: Mic, stat: null as string | null },
             { id: 'integrations', label: 'Capabilities', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
             {
               id: 'usage',
@@ -3186,10 +3219,11 @@ export default function ShibaStudio() {
                 : null,
             },
             { id: 'logs', label: 'Logs', icon: ScrollText, stat: null },
+            { id: 'doctor', label: 'Doctor', icon: Stethoscope, stat: null },
             { id: 'settings', label: 'Settings', icon: Settings, stat: null },
           ] as const).map(item => {
             const Icon = item.icon;
-            const active = tab === item.id;
+            const active = !taskId && tab === item.id;
             const linkHref = item.id === 'chat' ? chatNavHref : tabToPath(item.id as AppTab);
             return (
               <Link
@@ -3214,11 +3248,13 @@ export default function ShibaStudio() {
                 )}
                 {!navCollapsed && item.stat != null && (
                   <span className={`nav-stat-badge nav-item-meta ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
-                    item.id === 'chat' ? `${item.stat} open session(s)`
+                    item.id === 'dashboard' ? `${item.stat} active task(s)`
+                    : item.id === 'attention' ? `${item.stat} open attention item(s)`
+                    : item.id === 'chat' ? `${item.stat} open session(s)`
                     : item.id === 'projects' ? `${item.stat} project(s)`
                     : item.id === 'memories' ? `${item.stat} stored memory item(s)`
                     : item.id === 'workspace' ? `${item.stat} file(s) in workspace`
-                    : item.id === 'automations' ? `${item.stat} scheduled automation(s)`
+                    : item.id === 'automations' ? `${item.stat} scheduled routine(s)`
                     : item.id === 'integrations' ? `${item.stat} configured integration(s)`
                     : item.id === 'usage'
                       ? (navStats.usageCostSource === 'xai'
@@ -3390,7 +3426,7 @@ export default function ShibaStudio() {
             >
               <Menu size={18} />
             </button>
-            <div className="font-medium text-sm tracking-tight">{TAB_LABELS[tab] || tab}</div>
+            <div className="font-medium text-sm tracking-tight">{taskId ? 'Task detail' : (TAB_LABELS[tab] || tab)}</div>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <button
@@ -3443,8 +3479,16 @@ export default function ShibaStudio() {
               : 'flex-1 overflow-auto p-3 sm:p-5 space-y-5 relative z-[1]'
           }
         >
-          {/* DASHBOARD */}
-          {tab === 'dashboard' && (
+          {taskId && <TaskDetailPage taskId={taskId} />}
+
+          {!taskId && tab === 'dashboard' && searchParams.get('view') !== 'overview' && (
+            <DispatchDashboard initialWorkspacePath={config?.defaultWorkspace || defaultWorkspaceInput || ''} />
+          )}
+
+          {!taskId && tab === 'attention' && <AttentionInbox />}
+
+          {/* Legacy operational overview remains available at /?view=overview. */}
+          {!taskId && tab === 'dashboard' && searchParams.get('view') === 'overview' && (
             <div className="relative dashboard-page page-content">
             <div className="space-y-5 relative z-[1]">
               {/* First-run onboarding: connect → create an agent → run it.
@@ -3852,26 +3896,28 @@ export default function ShibaStudio() {
           {/* MEMORIES — cross-run knowledge, review queue, and CRUD */}
           {tab === 'memories' && <MemoriesPanel onDataChanged={() => { void loadNavStats(); }} />}
 
-          {/* AUTOMATIONS — schedules & orchestration */}
+          {/* ROUTINES — schedules & orchestration */}
           {tab === 'automations' && (
             <div className="page-content">
-              <div className="page-head-row mb-0">
+              <RoutinesPanel agents={agents} />
+
+              <div className="page-head-row mb-0 mt-10 pt-7 border-t border-default">
                 <div className="min-w-0">
-                  <div className="page-title">
-                    Automations
-                    <InfoHint text="Automations run agents on schedules with their own instructions. Create them here or from an agent’s editor. Open a run log to inspect past executions." />
+                  <div className="page-section-title">
+                    Legacy agent schedules
+                    <InfoHint text="These cron entries remain fully supported for compatibility. New automation should use durable Routines above for event triggers, retries, deduplication, and circuit breakers." />
                   </div>
-                  <div className="page-subtitle">
-                    Scheduled &amp; orchestrated agents — cron jobs with their own instructions, run logs, and one-click replay.
+                  <div className="page-section-sub">
+                    Existing agent-bound cron schedules. Migrate when you need durable one-time work, events, dependencies, or recovery controls.
                   </div>
                 </div>
                 <button
                   type="button"
                   className="grok-btn grok-btn-primary text-xs shrink-0"
                   onClick={() => openNewAutomationModal()}
-                  title="Create a new scheduled automation"
+                  title="Create a legacy agent cron schedule"
                 >
-                  <Plus size={14} /> New automation
+                  <Plus size={14} /> New legacy schedule
                 </button>
               </div>
               <div className="space-y-3">
@@ -4014,11 +4060,11 @@ export default function ShibaStudio() {
                 {agents.filter((a) => agentSchedules(a).length > 0).length === 0 && (
                   <div className="grok-card p-8 text-center text-dim text-sm">
                     <Clock size={28} className="mx-auto mb-3 opacity-40" />
-                    <div className="font-medium text-sm text-primary mb-1">No automations yet</div>
+                    <div className="font-medium text-sm text-primary mb-1">No legacy schedules</div>
                     <div className="max-w-sm mx-auto leading-relaxed mb-4">
                       {agents.length === 0
                         ? 'Create an agent first, then come back here to put it on a schedule.'
-                        : 'Schedule an agent to wake up on a timer with its own instructions — no agent-editor detour required.'}
+                        : 'Use the durable Routine editor above for new automation, or add a legacy cron schedule for compatibility.'}
                     </div>
                     {agents.length === 0 ? (
                       <button type="button" className="grok-btn grok-btn-primary text-xs" onClick={() => { openCreateAgent(); navigateToTab('agents'); }}>
@@ -4026,14 +4072,14 @@ export default function ShibaStudio() {
                       </button>
                     ) : (
                       <button type="button" className="grok-btn grok-btn-primary text-xs" onClick={() => openNewAutomationModal()}>
-                        <Plus size={13} /> New automation
+                        <Plus size={13} /> New legacy schedule
                       </button>
                     )}
                   </div>
                 )}
               </div>
               <div className="mt-6 text-xs text-dim">
-                Agents can also schedule themselves via the <span className="font-mono">schedule_task</span> tool and message peers with <span className="font-mono">send_to_peer</span>.
+                Legacy cron entries continue to run unchanged. The <span className="font-mono">schedule_task</span> tool now saves relative follow-ups as durable one-time Routines.
               </div>
 
               {showNewAutomation && (
@@ -4047,13 +4093,13 @@ export default function ShibaStudio() {
                     onClick={(e) => e.stopPropagation()}
                     role="dialog"
                     aria-modal="true"
-                    aria-label="New automation"
+                    aria-label="New legacy schedule"
                     tabIndex={-1}
                   >
                     <div className="flex items-start justify-between gap-2 mb-1">
                       <div className="text-lg font-semibold flex items-center gap-2">
                         <CalendarClock size={18} className="opacity-70" />
-                        New automation
+                        New legacy schedule
                       </div>
                       <button
                         type="button"
@@ -4066,7 +4112,7 @@ export default function ShibaStudio() {
                       </button>
                     </div>
                     <div className="text-xs text-dim mb-4">
-                      Pick an agent, when it should run, and what it should do. Pause or edit anytime from this page.
+                      Compatibility editor for an agent-bound cron entry. Prefer the durable Routine editor for new workflows.
                     </div>
 
                     {agents.length === 0 ? (
@@ -4182,7 +4228,7 @@ export default function ShibaStudio() {
                         disabled={savingAutomation || agents.length === 0}
                         onClick={() => void createAutomationFromPage()}
                       >
-                        {savingAutomation ? 'Saving…' : 'Create automation'}
+                        {savingAutomation ? 'Saving…' : 'Create legacy schedule'}
                       </button>
                     </div>
                   </div>
@@ -4195,6 +4241,8 @@ export default function ShibaStudio() {
           )}
 
           {/* CAPABILITIES — core integrations, skills, MCP servers, tools */}
+          {tab === 'meetings' && <MeetingCapturePanel agents={agents} />}
+
           {tab === 'integrations' && (
             <div className="integrations-page page-content">
               <div className="page-title">
@@ -4874,6 +4922,8 @@ export default function ShibaStudio() {
           {tab === 'logs' && (
             <LogsPanel />
           )}
+
+          {tab === 'doctor' && <DoctorPage />}
 
           {tab === 'settings' && (
             <div className="page-content settings-page">

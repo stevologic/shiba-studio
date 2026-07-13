@@ -1,6 +1,7 @@
 import path from 'path';
 import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
+import { deleteContextScope, indexProjectContext } from './context-engine';
 import {
   buildProjectContextHeader,
   normalizeProject,
@@ -122,6 +123,7 @@ export async function createProject(name: string, description = ''): Promise<Pro
   const projects = await loadStore();
   projects.push(project);
   await saveStore(projects);
+  indexProjectContext(project);
   return project;
   });
 }
@@ -140,6 +142,7 @@ export async function updateProject(
     updatedAt: new Date().toISOString(),
   };
   await saveStore(projects);
+  indexProjectContext(projects[idx]);
   return projects[idx];
   });
 }
@@ -151,6 +154,7 @@ export async function deleteProject(id: string): Promise<void> {
     if (!project) throw new Error('Project not found');
     const filesDir = projectFilesDir(project.id);
     await saveStore(projects.filter((item) => item.id !== project.id));
+    deleteContextScope('project', project.id);
     await fs.rm(path.dirname(filesDir), { recursive: true, force: true }).catch(() => {});
   });
 }
@@ -163,6 +167,7 @@ export async function saveProjectMessages(id: string, messages: ProjectChatMessa
   projects[idx].messages = messages;
   projects[idx].updatedAt = new Date().toISOString();
   await saveStore(projects);
+  indexProjectContext(projects[idx]);
   return projects[idx];
   });
 }
@@ -208,6 +213,7 @@ export async function addProjectFile(
 
   projects[idx].updatedAt = uploadedAt;
   await saveStore(projects);
+  indexProjectContext(projects[idx]);
   return fileMeta;
   });
 }
@@ -229,6 +235,7 @@ export async function deleteProjectFile(projectId: string, fileId: string): Prom
   projects[idx].files.splice(fileIdx, 1);
   projects[idx].updatedAt = new Date().toISOString();
   await saveStore(projects);
+  indexProjectContext(projects[idx]);
   return projects[idx];
   });
 }

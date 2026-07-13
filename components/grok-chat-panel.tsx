@@ -18,6 +18,7 @@ import {
 } from '@/lib/xai-tts';
 import dynamic from 'next/dynamic';
 import { toast } from '@/lib/toast';
+import { registerBrowserEphemeralSession } from '@/lib/ephemeral-chat-lifecycle';
 import ChatMarkdown from '@/components/chat-markdown-lazy';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
@@ -378,7 +379,8 @@ export default function GrokChatPanel({
   const [slashIdx, setSlashIdx] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const slashToken = input.trimStart();
-  const slashMatches = slashCommandMatches(slashToken);
+  const slashMatches = slashCommandMatches(slashToken)
+    .filter((command) => !session?.ephemeral || command.category !== 'Memory');
   const slashMenuOpen = !streaming && !slashDismissed && slashMatches.length > 0;
   const slashSelected = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
 
@@ -396,6 +398,7 @@ export default function GrokChatPanel({
   const [cliModelsLoading, setCliModelsLoading] = useState(true);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [forkingMsgId, setForkingMsgId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
 
   // Speech-to-text (Web Speech API) — Chrome/Edge; graceful no-op elsewhere.
@@ -2577,6 +2580,7 @@ export default function GrokChatPanel({
     abortRef.current = ac;
 
     const payloadMessages = history.map((m) => ({
+      id: m.id,
       role: m.role,
       content: m.content,
       attachments: m.attachments,
@@ -2835,6 +2839,12 @@ export default function GrokChatPanel({
       return true;
     }
 
+    if (session?.ephemeral && ['remember', 'recall', 'forget'].includes(parsed.name)) {
+      setInput('');
+      appendExchange('Ephemeral chat keeps no memories. Start a regular chat to save or recall durable memory.');
+      return true;
+    }
+
     const memoryAgentId = chatTarget !== 'grok' && chatTarget !== 'all' ? chatTarget : undefined;
 
     if (parsed.name === 'remember') {
@@ -2845,7 +2855,7 @@ export default function GrokChatPanel({
       if (!key?.trim() || !content) { appendExchange('Usage: `/remember <key> | <content>` — e.g. `/remember deploy-cmd | npm run deploy:prod`'); return true; }
       const res = await fetch('/api/chat-tools', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'remember', key: key.trim(), content, agentId: memoryAgentId }),
+        body: JSON.stringify({ action: 'remember', key: key.trim(), content, agentId: memoryAgentId, sessionId: session?.id }),
       }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
       appendExchange(res.ok ? `🧠 Remembered \`${res.entry.key}\` — recall it any time with \`/recall\`.` : `⚠️ ${res.error || 'Save failed'}`);
       return true;
@@ -2856,7 +2866,7 @@ export default function GrokChatPanel({
       setInput('');
       const res = await fetch('/api/chat-tools', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'recall', query: query || undefined, agentId: memoryAgentId }),
+        body: JSON.stringify({ action: 'recall', query: query || undefined, agentId: memoryAgentId, sessionId: session?.id }),
       }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
       appendExchange(res.ok
         ? (res.entries.length
@@ -2872,7 +2882,7 @@ export default function GrokChatPanel({
       if (!key) { appendExchange('Usage: `/forget <key>` — deletes one exact memory key.'); return true; }
       const res = await fetch('/api/chat-tools', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'forget', key, agentId: memoryAgentId }),
+        body: JSON.stringify({ action: 'forget', key, agentId: memoryAgentId, sessionId: session?.id }),
       }).then((response) => response.json()).catch((error) => ({ ok: false, error: String(error) }));
       appendExchange(res.ok
         ? (res.removed ? `🧠 Forgot \`${key}\`.` : `No memory named \`${key}\` in this scope.`)
@@ -3086,6 +3096,33 @@ export default function GrokChatPanel({
       setTimeout(() => setCopiedMsgId((id) => (id === m.id ? null : id)), 1600);
     } catch {
       /* clipboard unavailable */
+    }
+  }
+
+  async function forkFromMessage(messageId: string) {
+    if (!session?.id || messageId === 'welcome' || forkingMsgId) return;
+    setForkingMsgId(messageId);
+    try {
+      const response = await fetch('/api/chat-sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'fork',
+          parentSessionId: session.id,
+          sourceMessageId: messageId,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.session?.id) {
+        throw new Error(data.error || 'Could not fork chat');
+      }
+      if (data.session.ephemeral) registerBrowserEphemeralSession(String(data.session.id));
+      toast.success('Forked chat from this message');
+      router.push(`/chat/${encodeURIComponent(String(data.session.id))}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not fork chat');
+    } finally {
+      setForkingMsgId(null);
     }
   }
 
@@ -3386,6 +3423,18 @@ export default function GrokChatPanel({
                     {copiedMsgId === m.id ? <Check size={13} /> : <Copy size={13} />}
                     {copiedMsgId === m.id ? 'Copied' : 'Copy'}
                   </button>
+                  {session?.id && m.id !== 'welcome' && (
+                    <button
+                      type="button"
+                      className="grok-chat-msg-action"
+                      onClick={() => void forkFromMessage(m.id)}
+                      disabled={streaming || !!forkingMsgId}
+                      title="Fork a new chat from this exact message"
+                    >
+                      {forkingMsgId === m.id ? <RefreshCw size={13} className="animate-spin" /> : <GitBranch size={13} />}
+                      Fork
+                    </button>
+                  )}
                 </div>
               ) : null}
 
@@ -3414,6 +3463,18 @@ export default function GrokChatPanel({
                     {copiedMsgId === m.id ? <Check size={13} /> : <Copy size={13} />}
                     {copiedMsgId === m.id ? 'Copied' : 'Copy'}
                   </button>
+                  {session?.id && (
+                    <button
+                      type="button"
+                      className="grok-chat-msg-action"
+                      onClick={() => void forkFromMessage(m.id)}
+                      disabled={streaming || !!forkingMsgId}
+                      title="Fork a new chat from this exact message"
+                    >
+                      {forkingMsgId === m.id ? <RefreshCw size={13} className="animate-spin" /> : <GitBranch size={13} />}
+                      Fork
+                    </button>
+                  )}
                   {isLastAssistant && (
                     <button
                       type="button"
@@ -3571,7 +3632,8 @@ export default function GrokChatPanel({
             // prior React render. This keeps paste-then-Enter command execution
             // exact even when autocomplete state has not painted yet.
             const liveSlashToken = e.currentTarget.value.trimStart();
-            const liveSlashMatches = slashCommandMatches(liveSlashToken);
+            const liveSlashMatches = slashCommandMatches(liveSlashToken)
+              .filter((command) => !session?.ephemeral || command.category !== 'Memory');
             const liveSlashMenuOpen = !streaming && !slashDismissed && liveSlashMatches.length > 0;
             const liveSlashSelected = Math.min(slashIdx, Math.max(0, liveSlashMatches.length - 1));
             if (liveSlashMenuOpen) {
@@ -3824,7 +3886,9 @@ export default function GrokChatPanel({
             Listening… click the mic again when you&apos;re done
             {dictationInterim ? ` · “${dictationInterim.slice(0, 48)}${dictationInterim.length > 48 ? '…' : ''}”` : ''}
           </span>
-        ) : useGrokCli && grokCliInstalled
+        ) : session?.ephemeral
+          ? 'Ephemeral chat · Shiba memories and autonomous learning are disabled · deleted when this browser page closes'
+          : useGrokCli && grokCliInstalled
           ? `CLI mode — Grok CLI on this machine${grokCliVersion ? ` (${grokCliVersion})` : ''} · global uploads still included as context`
           : isSessionMode && project
           ? `Session chat · global uploads + ${project.files.length} linked project file(s) in context`

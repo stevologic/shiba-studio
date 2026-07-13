@@ -4,7 +4,16 @@
 // no page refresh, no tight polling. Registry lives on globalThis so dev HMR
 // never strands subscribers.
 
-export type AppEventType = 'runs' | 'board' | 'chats' | 'agents' | 'config';
+export type AppEventType =
+  | 'runs'
+  | 'tasks'
+  | 'attention'
+  | 'routines'
+  | 'meetings'
+  | 'board'
+  | 'chats'
+  | 'agents'
+  | 'config';
 
 export interface AppEvent {
   type: AppEventType;

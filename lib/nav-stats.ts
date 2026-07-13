@@ -114,8 +114,16 @@ export async function getNavStats(integrations: IntegrationCreds): Promise<NavSt
   }
 
   const mcpConfigured = mcpServers.filter((s) => s.enabled).length;
+  const { listAttention, listTasks } = await import('./task-ledger');
+  const tasksActive = listTasks({
+    statuses: ['queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked'],
+    limit: 1,
+  }).total;
+  const attentionOpen = listAttention({ status: 'open', limit: 1 }).total;
 
   return {
+    tasksActive,
+    attentionOpen,
     chatSessions: sessions.length,
     projects: projects.length,
     boardOpen: boardTasks.filter(

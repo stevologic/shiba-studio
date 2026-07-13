@@ -296,6 +296,14 @@ class SlackSocketListener {
     const threadTs = String(event.thread_ts || event.ts || '');
 
     setStatus('slack', { lastEventAt: new Date().toISOString() });
+    void import('./routines').then(({ emitRoutineIntegrationEvent }) => {
+      emitRoutineIntegrationEvent({
+        integration: 'slack',
+        event: 'mention',
+        dedupeKey: eventId ? `slack:${eventId}` : undefined,
+        payload: { channel, user, text, threadTs, eventId },
+      });
+    }).catch(() => {});
 
     try {
       const agent = await resolveMentionAgent('slack', this.mentionAgentId);
@@ -565,6 +573,14 @@ class DiscordGatewayListener {
     const text = stripBotMention(content, this.botUserId);
 
     setStatus('discord', { lastEventAt: new Date().toISOString() });
+    void import('./routines').then(({ emitRoutineIntegrationEvent }) => {
+      emitRoutineIntegrationEvent({
+        integration: 'discord',
+        event: 'mention',
+        dedupeKey: messageId ? `discord:${messageId}` : undefined,
+        payload: { channelId, author: authorLabel, text, messageId },
+      });
+    }).catch(() => {});
 
     try {
       // Typing indicator (best-effort)

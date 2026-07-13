@@ -7,7 +7,7 @@ import { buildCliPromptFromMessages, streamGrokCli } from '@/lib/grok-cli';
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const messages: ChatMessagePayload[] = Array.isArray(body.messages) ? body.messages : [];
+  let messages: ChatMessagePayload[] = Array.isArray(body.messages) ? body.messages : [];
 
   const systemParts: string[] = [];
   if (body.system) systemParts.push(String(body.system));
@@ -16,6 +16,23 @@ export async function POST(req: NextRequest) {
     : await (await import('@/lib/workspace')).buildGlobalUploadsChatContext();
   systemParts.push(globalUploadsContext);
   if (body.projectContext) systemParts.push(String(body.projectContext));
+
+  if (messages.length) {
+    let projectId: string | null = null;
+    if (body.sessionId) {
+      const { getChatSession } = await import('@/lib/chat-sessions');
+      projectId = (await getChatSession(String(body.sessionId)))?.projectId || null;
+    }
+    const { prepareSessionContext } = await import('@/lib/context-engine');
+    const prepared = prepareSessionContext({
+      sessionId: body.sessionId ? String(body.sessionId) : null,
+      projectId,
+      messages,
+      model: body.model ? String(body.model) : undefined,
+    });
+    messages = prepared.replayMessages;
+    if (prepared.systemContext) systemParts.push(prepared.systemContext);
+  }
 
   const chatMessages = messages
     .filter((m) => m?.role && (m.role === 'user' || m.role === 'assistant'))
