@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronRight, Loader2, Pause, Play, Plus, RefreshCw, Send, Square, Trash2, Users } from 'lucide-react';
 import { confirmDialog } from '@/components/confirm-dialog';
+import { createClientId } from '@/lib/client-id';
 import type { TeamGraphNode, TeamWorkerSpec } from '@/lib/task-teams';
 import type { TaskRecord } from '@/lib/task-types';
 
@@ -110,7 +111,7 @@ export function TaskTeamPanel({ task }: { task: TaskRecord }) {
           type: kind,
           payload: kind === 'steer' ? { instruction } : {},
           expectedVersion: node.task.version,
-          idempotencyKey: `team:${task.id}:${node.task.id}:${kind}:${crypto.randomUUID()}`,
+          idempotencyKey: `team:${task.id}:${node.task.id}:${kind}:${createClientId()}`,
         }),
       });
       const data = await response.json() as { ok?: boolean; error?: string };

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createClientId } from '@/lib/client-id';
 import styles from './companion-app.module.css';
 
 const MAX_VOICE_BYTES = 50 * 1024 * 1024;
@@ -121,7 +122,7 @@ export function CompanionVoiceRequest({ deviceKey, secureContext, requests, onAc
       recorderRef.current = recorder;
       streamRef.current = stream;
       setAudio(null);
-      setIdempotencyKey(`voice-${crypto.randomUUID()}`);
+      setIdempotencyKey(`voice-${createClientId()}`);
       setElapsed(0);
       startedAtRef.current = Date.now();
       setRecording(true);

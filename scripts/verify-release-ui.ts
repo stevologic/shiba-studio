@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import QRCode from 'qrcode';
+import { createClientId, type ClientRandomSource } from '../lib/client-id';
 import {
   listBrowserEphemeralSessions,
   registerBrowserEphemeralSession,
@@ -19,6 +20,20 @@ async function source(file: string): Promise<string> {
   return fs.readFile(path.join(root, file), 'utf8');
 }
 
+async function sourceFilesUnder(directory: string): Promise<Array<{ file: string; value: string }>> {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return sourceFilesUnder(fullPath);
+    if (!entry.isFile() || !/\.[jt]sx?$/.test(entry.name)) return [];
+    return [{
+      file: path.relative(root, fullPath).replaceAll('\\', '/'),
+      value: await fs.readFile(fullPath, 'utf8'),
+    }];
+  }));
+  return nested.flat();
+}
+
 function buttonContaining(value: string, marker: string): string {
   const markerIndex = value.indexOf(marker);
   assert.notEqual(markerIndex, -1, `Expected button marker: ${marker}`);
@@ -34,6 +49,30 @@ async function main() {
     assert.ok(condition, message);
     passed++;
   };
+
+  let randomSeed = 0;
+  const insecureContextCrypto = {
+    getRandomValues(array: Uint8Array) {
+      randomSeed += 1;
+      for (let index = 0; index < array.length; index++) array[index] = (randomSeed * 31 + index * 17) & 0xff;
+      return array;
+    },
+  } satisfies ClientRandomSource;
+  const firstClientId = createClientId(insecureContextCrypto);
+  const secondClientId = createClientId(insecureContextCrypto);
+  check(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(firstClientId)
+      && firstClientId !== secondClientId,
+    'client IDs remain valid and unique when randomUUID is unavailable on an HTTP mDNS origin',
+  );
+  const clientSources = (await Promise.all(
+    ['app', 'components', 'lib'].map((directory) => sourceFilesUnder(path.join(root, directory))),
+  )).flat().filter(({ value }) => /^\s*['"]use client['"];?/m.test(value));
+  const unsafeClientIds = clientSources.filter(({ value }) => /\bcrypto\.randomUUID\s*\(/.test(value));
+  check(
+    unsafeClientIds.length === 0,
+    `client components avoid secure-context-only crypto.randomUUID (${unsafeClientIds.map(({ file }) => file).join(', ')})`,
+  );
 
   const artifactPreview = await source('components/artifact-preview.tsx');
   const artifactStudio = await source('components/artifact-studio-panel.tsx');

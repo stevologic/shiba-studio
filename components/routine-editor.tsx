@@ -13,6 +13,7 @@ import {
   Workflow,
   X,
 } from 'lucide-react';
+import { createClientId } from '@/lib/client-id';
 import type { Agent } from '@/lib/types';
 import type {
   CreateRoutineInput,
@@ -52,7 +53,7 @@ const SCHEDULE_CHOICES = [
 ] as const;
 
 function triggerId(): string {
-  return `trigger-${crypto.randomUUID().slice(0, 8)}`;
+  return `trigger-${createClientId().slice(0, 8)}`;
 }
 
 function newTrigger(type: RoutineTriggerType): RoutineTrigger {

@@ -54,6 +54,7 @@ const SyncModal = dynamic(() => import('@/components/sync-modal'));
 const CommandPalette = dynamic(() => import('@/components/command-palette'));
 const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
 const ToolApprovalModal = dynamic(() => import('@/components/tool-approval-modal'));
+import { createClientId } from '@/lib/client-id';
 import { toast } from '@/lib/toast';
 import { getTerminalOpen, setTerminalOpen, toggleTerminalOpen, subscribeTerminalOpen } from '@/lib/terminal-ui-store';
 import {
@@ -1323,7 +1324,7 @@ export default function ShibaStudio() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            dedupeKey: `retry:${run.id}:${crypto.randomUUID()}`,
+            dedupeKey: `retry:${run.id}:${createClientId()}`,
             payload: { retryOfRunId: run.id },
           }),
         });

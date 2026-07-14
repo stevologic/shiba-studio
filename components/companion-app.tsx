@@ -10,6 +10,7 @@ import {
   saveCompanionSession,
   saveCompanionSummary,
 } from '@/lib/companion-client-cache';
+import { createClientId } from '@/lib/client-id';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { CompanionVoiceRequest, type CompanionVoiceRequestSummary } from './companion-voice-request';
 import styles from './companion-app.module.css';
@@ -220,7 +221,7 @@ export function CompanionApp() {
           Authorization: `Bearer ${session.deviceKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ ...body, idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ ...body, idempotencyKey: createClientId() }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Action failed');

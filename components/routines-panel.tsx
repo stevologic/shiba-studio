@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { emptyRoutineInput, RoutineEditor, routineToInput } from '@/components/routine-editor';
+import { createClientId } from '@/lib/client-id';
 import { subscribeLiveEvents } from '@/lib/live-events';
 import { toast } from '@/lib/toast';
 import type { Agent } from '@/lib/types';
@@ -238,7 +239,7 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
   }, [agents, loadDetail, router]);
 
   function newRoutine() {
-    setEditor({ key: `new:${crypto.randomUUID()}`, initial: emptyRoutineInput(agents[0]?.id || '') });
+    setEditor({ key: `new:${createClientId()}`, initial: emptyRoutineInput(agents[0]?.id || '') });
   }
 
   function editRoutine(routine: RoutineDefinition) {

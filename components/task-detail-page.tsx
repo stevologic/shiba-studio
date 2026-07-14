@@ -29,6 +29,7 @@ import { TaskTeamPanel } from '@/components/task-team-panel';
 import { CheckpointPanel } from '@/components/checkpoint-panel';
 import { EvidenceRecorder } from '@/components/evidence-recorder';
 import { ArtifactStudioPanel } from '@/components/artifact-studio-panel';
+import { createClientId } from '@/lib/client-id';
 import type {
   AttentionItem,
   CompletionEvaluation,
@@ -186,7 +187,7 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
         body: JSON.stringify({
           type: kind,
           payload: kind === 'steer' ? { instruction: steeringInstruction.trim() } : {},
-          idempotencyKey: `${kind}:${crypto.randomUUID()}`,
+          idempotencyKey: `${kind}:${createClientId()}`,
           expectedVersion: task.version,
         }),
       });
