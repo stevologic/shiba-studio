@@ -495,6 +495,45 @@ async function main() {
     assert.ok(trapped.attention >= 1);
     assert.equal(await pathExists(path.join(outside, 'trap-agent', 'keep.txt')), true, 'junction target is preserved');
 
+    // Git canonicalizes worktree paths on some hosts (macOS commonly expands
+    // /var to /private/var, and Windows can expand temp-directory junctions or
+    // short names). A workspace alias is a safe ancestor, but the managed
+    // .worktrees root and the candidate itself must still be real directories.
+    const aliasedWorkspace = path.join(root, 'aliased-workspace');
+    const workspaceAlias = path.join(root, 'workspace-ancestor-alias');
+    const aliasedId = 'aliased-ancestor-adoption';
+    const aliasedWorktree = path.join(aliasedWorkspace, '.worktrees', aliasedId);
+    await fs.mkdir(path.join(aliasedWorkspace, '.worktrees'), { recursive: true });
+    await fs.writeFile(path.join(aliasedWorkspace, '.gitignore'), '.worktrees/\n');
+    await fs.writeFile(path.join(aliasedWorkspace, 'README.md'), '# Alias fixture\n');
+    git(aliasedWorkspace, 'init');
+    git(aliasedWorkspace, 'branch', '-M', 'main');
+    git(aliasedWorkspace, 'config', 'user.email', 'worktree-integrity@example.invalid');
+    git(aliasedWorkspace, 'config', 'user.name', 'Worktree Integrity Verifier');
+    git(aliasedWorkspace, 'config', 'commit.gpgSign', 'false');
+    git(aliasedWorkspace, 'add', '.');
+    git(aliasedWorkspace, 'commit', '-m', 'alias baseline');
+    git(aliasedWorkspace, 'worktree', 'add', '-b', `agent-${aliasedId}`, aliasedWorktree, 'main');
+    await fs.symlink(
+      aliasedWorkspace,
+      workspaceAlias,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    const aliasAdoption = await integrity.reconcileWorktreeResources({
+      agents: [],
+      sessions: [],
+      projects: [],
+      baseWorkspaces: [workspaceAlias],
+    });
+    assert.equal(aliasAdoption.discovered, 1, 'ancestor aliases do not hide valid legacy Shiba worktrees');
+    const aliasRegistry = JSON.parse(await fs.readFile(registryPath, 'utf8')) as {
+      resources: Array<{ agentId: string; baseWorkspace: string; worktreePath: string }>;
+    };
+    const adoptedAlias = aliasRegistry.resources.find((record) => record.agentId === aliasedId);
+    assert.equal(adoptedAlias?.baseWorkspace, path.resolve(workspaceAlias));
+    assert.equal(adoptedAlias?.worktreePath, path.resolve(workspaceAlias, '.worktrees', aliasedId));
+
     console.log('Worktree ownership integrity verification passed');
   } finally {
     await (await import('../lib/integrity-coordinator')).stopDataIntegritySchedule();

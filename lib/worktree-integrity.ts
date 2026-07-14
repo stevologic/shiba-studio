@@ -69,6 +69,21 @@ function samePath(left: string, right: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+async function canonicalRealDirectory(value: string): Promise<string | null> {
+  try {
+    // realpath is intentionally called only after lstat verifies the final
+    // path component. Ancestor aliases (for example macOS /var ->
+    // /private/var or a Windows temp-directory junction) are safe to resolve,
+    // while an aliased .worktrees root or worktree itself must never grant
+    // cleanup ownership over its target.
+    const stat = await fs.lstat(value);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
+    return await fs.realpath(value);
+  } catch {
+    return null;
+  }
+}
+
 function normalizedPathKey(value: string): string {
   const resolved = path.resolve(value);
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
@@ -455,9 +470,10 @@ export async function reconcileWorktreeResources(input: {
       const listed = await git(['worktree', 'list', '--porcelain', '-z'], base);
       if (!listed.ok) continue;
       const root = path.resolve(base, '.worktrees');
+      const canonicalRoot = await canonicalRealDirectory(root);
+      if (!canonicalRoot) continue;
       for (const candidate of parseWorktreeList(listed.stdout)) {
         const candidatePath = path.resolve(candidate.worktreePath);
-        if (!samePath(path.dirname(candidatePath), root)) continue;
         const agentId = path.basename(candidatePath);
         let exact: ReturnType<typeof exactResource>;
         try {
@@ -465,10 +481,17 @@ export async function reconcileWorktreeResources(input: {
         } catch {
           continue;
         }
-        if (!samePath(candidatePath, exact.worktree)
-          || candidate.branch !== `refs/heads/agent-${exact.agentId}`) continue;
-        const stat = await fs.lstat(candidatePath).catch(() => null);
-        if (!stat?.isDirectory() || stat.isSymbolicLink()) continue;
+        if (candidate.branch !== `refs/heads/agent-${exact.agentId}`) continue;
+        const [canonicalCandidateRoot, canonicalCandidate, canonicalExact] = await Promise.all([
+          canonicalRealDirectory(path.dirname(candidatePath)),
+          canonicalRealDirectory(candidatePath),
+          canonicalRealDirectory(exact.worktree),
+        ]);
+        if (!canonicalCandidateRoot
+          || !canonicalCandidate
+          || !canonicalExact
+          || !samePath(canonicalCandidateRoot, canonicalRoot)
+          || !samePath(canonicalCandidate, canonicalExact)) continue;
         const key = resourceKey(exact.base, exact.agentId);
         if (store.resources.some((record) => (
           resourceKey(record.baseWorkspace, record.agentId) === key
