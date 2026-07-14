@@ -498,13 +498,24 @@ async function main() {
     const secondQueued = routines.triggerRoutineManually(routine.id, { kind: 'go' }, 'manual-delivery-2');
     let claimed = routines.claimRoutineInvocations(10);
     assert.equal(claimed.length, 1, 'a shared concurrency key must serialize invocations');
+    assert([first.invocation.id, secondQueued.invocation.id].includes(claimed[0].id),
+      'the concurrency claim must belong to one of the two queued deliveries');
+    // Both inserts can share the same millisecond timestamp on fast CI hosts.
+    // The queue then uses its UUID tie-breaker, so drive the retry assertions
+    // from the row that was actually claimed instead of assuming insert order.
+    const serializedSiblingId = claimed[0].id === first.invocation.id
+      ? secondQueued.invocation.id
+      : first.invocation.id;
+    const verifierClaimableAt = '2000-01-01T00:00:00.000Z';
+    const verifierBlockedAt = '2999-01-01T00:00:00.000Z';
     assert.equal(routines.claimRoutineInvocations(10).length, 0, 'an active durable lease must prevent a second process claim');
     let failed = routines.finishRoutineInvocation(claimed[0].id, { ok: false, error: 'attempt one failed' }, claimed[0].attempt);
     assert.equal(failed.status, 'pending');
     assert.equal(failed.attempt, 1);
-    db.prepare('UPDATE routine_invocations SET availableAt = ? WHERE id = ?').run(new Date(Date.now() + 60_000).toISOString(), secondQueued.invocation.id);
-    db.prepare('UPDATE routine_invocations SET availableAt = ? WHERE id = ?').run(new Date().toISOString(), failed.id);
+    db.prepare('UPDATE routine_invocations SET availableAt = ? WHERE id = ?').run(verifierBlockedAt, serializedSiblingId);
+    db.prepare('UPDATE routine_invocations SET availableAt = ? WHERE id = ?').run(verifierClaimableAt, failed.id);
     claimed = routines.claimRoutineInvocations(1);
+    assert.equal(claimed[0].id, failed.id, 'the failed delivery is the one made due for retry');
     assert.equal(claimed[0].attempt, 2);
     ledger.createTask({ id: 'routine-fail-task-1', kind: 'routine', title: 'First final failure', status: 'failed' });
     db.prepare('UPDATE routine_invocations SET taskId = ? WHERE id = ?').run('routine-fail-task-1', claimed[0].id);
@@ -512,12 +523,16 @@ async function main() {
     assert.equal(failed.status, 'failed');
     assert.equal(routines.getRoutine(routine.id)?.failureStreak, 1);
 
-    // The second queued invocation can now claim, exhaust its retry, and trip the breaker.
-    db.prepare('UPDATE routine_invocations SET availableAt = ? WHERE id = ?').run(new Date().toISOString(), secondQueued.invocation.id);
+    // The serialized sibling can now claim, exhaust its retry, and trip the breaker.
+    db.prepare('UPDATE routine_invocations SET availableAt = ? WHERE id = ?').run(verifierClaimableAt, serializedSiblingId);
     claimed = routines.claimRoutineInvocations(1);
+    assert.equal(claimed[0].id, serializedSiblingId, 'the serialized sibling runs only after the first delivery finishes');
+    assert.equal(claimed[0].attempt, 1);
     routines.finishRoutineInvocation(claimed[0].id, { ok: false, error: 'second invocation attempt one' }, claimed[0].attempt);
-    db.prepare('UPDATE routine_invocations SET availableAt = ? WHERE id = ?').run(new Date().toISOString(), claimed[0].id);
+    db.prepare('UPDATE routine_invocations SET availableAt = ? WHERE id = ?').run(verifierClaimableAt, claimed[0].id);
     claimed = routines.claimRoutineInvocations(1);
+    assert.equal(claimed[0].id, serializedSiblingId, 'the serialized sibling is retried after its first failure');
+    assert.equal(claimed[0].attempt, 2);
     ledger.createTask({ id: 'routine-fail-task-2', kind: 'routine', title: 'Second final failure', status: 'failed' });
     db.prepare('UPDATE routine_invocations SET taskId = ? WHERE id = ?').run('routine-fail-task-2', claimed[0].id);
     routines.finishRoutineInvocation(claimed[0].id, { ok: false, error: 'second invocation attempt two' }, claimed[0].attempt);
