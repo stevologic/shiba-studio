@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
-import { initScheduler } from '@/lib/scheduler';
 import { startRoutineEngine } from '@/lib/routines';
 import { startRunLeaseReconciler } from '@/lib/agent-runs-store';
 import { startTaskDeliveryPump } from '@/lib/task-delivery';
 import { startQueuedRetryDispatcher } from '@/lib/background-tasks';
+import { startBoardAssignmentProcessor } from '@/lib/board-runner';
 import { startTeamWorkerClaimReconciler } from '@/lib/task-teams';
 import { reconcileProcessingTaskCommandsAtStartup } from '@/lib/task-ledger';
 import { loadConfig } from '@/lib/persistence';
@@ -23,14 +23,13 @@ export async function GET() {
   startTeamWorkerClaimReconciler();
   await reconcileProcessingTaskCommandsAtStartup();
   startQueuedRetryDispatcher();
-  startRoutineEngine();
-  await initScheduler();
+  startBoardAssignmentProcessor();
+  await startRoutineEngine();
   // Live commit of the tree this Node process is serving (not a stale build-time bake).
   const runtime = getRuntimeVersion();
   return NextResponse.json({
     ok: true,
-    scheduler: 'running',
-    routines: 'running',
+    automations: 'running',
     delivery: 'running',
     recovery: 'running',
     version: runtime.version,

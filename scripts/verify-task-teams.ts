@@ -24,8 +24,9 @@ async function main() {
       name: 'Worker',
       model: 'cloud:grok-4',
       description: '',
+      autoAcceptBoardAssignments: false,
       workspace: { path: workspace, useWorktree: true },
-      integrations: { ...EMPTY_INTEGRATION_SCOPE }, peers: [], skills: [], schedules: [],
+      integrations: { ...EMPTY_INTEGRATION_SCOPE }, peers: [], skills: [],
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }]);
     const parent = ledger.createTask({
@@ -270,8 +271,8 @@ async function main() {
       assert.deepEqual(recoveredSource.metadata.allowedTools, ['fs_read']);
       assert.equal(ledger.getTask(retryTeamParent.id)?.status, 'running',
         'retrying a worker must return its blocked parent to coordination');
-      assert.equal(ledger.listAttention({ taskId: retryTeamParent.id, status: 'open' }).total, 0,
-        'retry recovery must resolve the stale blocked-team alert');
+      assert.equal(ledger.listAttention({ taskId: retryTeamParent.id }).total, 0,
+        'retry recovery must not add a blocked-team notification to the approval queue');
 
       const recoveredRunning = ledger.transitionTask({ taskId: retrySource.id, status: 'running' });
       ledger.recordTaskEvidence({

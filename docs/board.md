@@ -40,7 +40,11 @@ Pagination is explicit rather than silent: one run processes up to 10,000 issues
 
 Two directions, both live:
 
-**You assign work.** Pick an agent in the card's Assignee selector and hit **▶ Start work**. The agent receives the card (title, brief, labels) as a complete prompt plus board tools, runs as a normal agent run (visible on [Automations](automations.md) with a full execution trace, bounded by the run guards), posts progress notes into the card's activity feed as it goes, and the card lands in **In Review** with the outcome summarized when the run finishes. Failures stay in In Progress with the error noted.
+**You assign work.** Pick an agent in the card's Assignee selector. By default, click **▶ Start work** when the card is ready. You can instead enable **Auto-start future Board assignments** in that agent's setup; every card assigned after the toggle is enabled is accepted immediately, moves to In Progress, and waits safely for an execution slot. Existing assignments are never started retroactively.
+
+The accepted card is a durable task before execution begins, so reloads, temporary capacity limits, and server restarts do not duplicate or silently drop it. One agent accepts one Board card at a time; later assignments wait their turn. Reassignment is fenced while work is active, and cancelling the card prevents a late result from overwriting it.
+
+The agent receives the card (title, brief, labels, and linked project context) as a complete prompt plus board tools, runs as a normal agent run (visible on [Automations](automations.md) with a full execution trace, bounded by the run guards), and posts progress notes into the card's activity feed as it goes. Successful work lands in **In Review** with the outcome summarized. Failures stay in In Progress with the error noted.
 
 **You review the work.** In Review is your gate — nothing reaches Done without you. Every In Review card shows two actions (on the card and in its detail panel):
 

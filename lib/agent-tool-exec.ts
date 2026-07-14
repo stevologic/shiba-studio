@@ -17,7 +17,7 @@ function agentPath(workDir: string, rel: string): string {
 import * as Browser from './browser';
 import * as Ints from './integrations';
 import { postToAgentInbox } from './agent-inbox';
-import { scheduleFromAgentTool } from './scheduler';
+import { scheduleFromAgentTool } from './routines';
 import { detectGrokCli, runGrokCliPrompt } from './grok-cli';
 import { listEnabledMcpServers } from './mcp';
 import { invokeMcpTool } from './mcp-client';
@@ -506,7 +506,7 @@ async function executeAgentToolScoped(
         });
         return {
           result,
-          sideEffect: `read ${result.posts.length} Reddit posts${args.subreddit ? ` from r/${String(args.subreddit).replace(/^r\//i, '')}` : ''}`,
+          sideEffect: `read ${result.posts.length} Reddit posts${args.subreddit ? ` from r/${String(args.subreddit).replace(/^r\//i, '')}` : ' from the installed Devvit community'}`,
         };
       }
       case 'reddit_submit': {

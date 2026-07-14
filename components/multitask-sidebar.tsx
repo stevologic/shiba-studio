@@ -54,7 +54,7 @@ const multitaskCache: {
 } = { at: 0, projects: [], sessions: [], inflight: null };
 const MULTITASK_TTL_MS = 15_000;
 
-export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: MultitaskSidebarProps) {
+export default function MultitaskSidebar({ onNavigate, onDataChanged }: MultitaskSidebarProps) {
   const [projects, setProjects] = useState(() => multitaskCache.projects);
   const [sessions, setSessions] = useState(() => multitaskCache.sessions);
   const [loaded, setLoaded] = useState(() => multitaskCache.at > 0);
@@ -178,40 +178,6 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
     toast.success('Chat deleted');
   }
 
-  async function renameAutomation(agent: Agent) {
-    const name = await promptDialog({ title: 'Rename agent', defaultValue: agent.name, confirmLabel: 'Rename' });
-    if (!name || name === agent.name) return;
-    await fetch('/api/agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', agent: { ...agent, name } }),
-    });
-    onDataChanged?.();
-    toast.success('Agent renamed');
-  }
-
-  async function deleteAutomation(agent: Agent) {
-    const ok = await confirmDialog({
-      title: `Remove automations for ${agent.name}?`,
-      message: 'All schedules are deleted. The agent itself is kept.',
-      confirmLabel: 'Remove',
-      danger: true,
-    });
-    if (!ok) return;
-    await fetch('/api/agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', agent: { ...agent, schedules: [], schedule: undefined } }),
-    });
-    onDataChanged?.();
-    toast.success('Automations removed');
-  }
-
-  const scheduled = agents.filter((a) => {
-    const scheds = a.schedules?.length ? a.schedules : a.schedule ? [{ enabled: a.schedule.enabled }] : [];
-    return scheds.some((s) => s.enabled);
-  }).slice(0, 5);
-
   return (
     // Quick access owns the sidebar's leftover height and scrolls internally.
     <div className="multitask-sidebar px-2 py-3 border-t border-default flex-1 min-h-0 overflow-y-auto">
@@ -264,18 +230,9 @@ export default function MultitaskSidebar({ agents, onNavigate, onDataChanged }: 
         <button type="button" onClick={() => onNavigate('automations')} className="multitask-section-head">
           <Clock size={12} /> Automations <ChevronRight size={12} className="ml-auto opacity-40" />
         </button>
-        {scheduled.length === 0 ? (
-          <div className="text-[10px] text-dim px-3 py-1">None scheduled</div>
-        ) : scheduled.map((a) => (
-          <QuickItem
-            key={a.id}
-            label={a.name}
-            onOpen={() => onNavigate('automations')}
-            onRename={() => void renameAutomation(a)}
-            onDelete={() => void deleteAutomation(a)}
-            deleteTitle="Remove automations"
-          />
-        ))}
+        <button type="button" className="text-[10px] text-dim hover:text-primary px-3 py-1 text-left w-full" onClick={() => onNavigate('automations')}>
+          View and manage durable automations
+        </button>
       </div>
     </div>
   );

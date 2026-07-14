@@ -21,6 +21,9 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            devvit/reddit-bridge/package-lock.json
 
       - name: Verify tag matches package.json version
         run: |
@@ -34,10 +37,12 @@ jobs:
       - name: Install & verify
         run: |
           npm ci
+          npm ci --prefix devvit/reddit-bridge
           npm run lint || true   # non-blocking until lint debt is zero (TODO.md §4)
           npx tsc --noEmit
           npm run build
           npm test
+          npm --prefix devvit/reddit-bridge run verify
 
       - name: Extract release notes from CHANGELOG
         run: |

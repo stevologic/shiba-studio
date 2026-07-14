@@ -35,10 +35,10 @@ Settings is a card grid; each card maps to a concern:
 | `SHIBA_MDNS` | on | Set to `off` to disable mDNS advertising entirely |
 | `SHIBA_LAN` | unset | Set by `npm run dev:lan`/`start:lan`; makes mDNS advertise the machine's LAN IP (network-wide) instead of `127.0.0.1` |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | unset | A bundled Google OAuth client for Drive. When both are set, Capabilities → Google Drive becomes zero-setup — users just click **Sign in with Google**. Unset = each user adds their own client under the card's Advanced section. See [Capabilities](capabilities.md) |
-| `REDDIT_OAUTH_CLIENT_ID` / `REDDIT_OAUTH_CLIENT_SECRET` | unset | Optional bundled Reddit Data API web-app client. Its registered callback must exactly match `/api/reddit-oauth/callback` on the app origin. Saved credentials in the Reddit card override these values |
-| `REDDIT_USER_AGENT` | generated from the connected username | Identifying User-Agent sent to Reddit, e.g. `desktop:shiba-studio:v0.2.0 (by /u/yourname)` |
 
 Put these in a `.env.local` file in the project root (gitignored) or your shell environment; see `.env.example`.
+
+Reddit has no Shiba environment variables. Configure its Devvit External Endpoint origin and managed app token as one complete pair in the Reddit Devvit integration card; the token remains encrypted in Shiba's server-side credential store. Per-agent overrides likewise require both values, or neither to use the global connection.
 
 ## X MCP browser sign-in
 
@@ -79,7 +79,7 @@ enable remote access, choose device scopes, and create a short-lived one-time
 pairing URL. Pairing codes and device keys are stored only as hashes; device
 keys expire, can be revoked individually, and stop working immediately when
 remote access is disabled. The companion exposes redacted task/evidence
-summaries and the shared Attention queue, never workspace file contents,
+summaries and exact pending approvals, never workspace file contents,
 workspace roots, integration configuration, or raw command evidence.
 
 The optional `action:voice` device permission adds consent-gated microphone

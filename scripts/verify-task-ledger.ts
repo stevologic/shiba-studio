@@ -20,7 +20,7 @@ async function main() {
   try {
     const db = dbModule.getDb();
     const version = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.ok(version.user_version >= 7, 'task control-plane migrations should reach at least v7');
+    assert.ok(version.user_version >= 13, 'the approval-only Attention migration should reach at least v13');
     const runColumns = new Set((db.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>).map((row) => row.name));
     assert(runColumns.has('taskId'));
     assert(runColumns.has('attemptNo'));
@@ -165,10 +165,27 @@ async function main() {
     assert.equal(terminalReplay.result, finished.result);
     assert.equal(terminalReplay.completedAt, finished.completedAt);
     assert.equal(terminalReplay.metadata.lateReplay, undefined);
-    const attention = ledger.listAttention({ taskId: parent.id, status: 'open' });
-    assert.equal(attention.total, 1, 'terminal transition should create exactly one attention item');
+    assert.equal(ledger.listAttention({ taskId: parent.id }).total, 0,
+      'successful terminal transitions must not create Attention items');
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM task_outbox WHERE taskId = ? AND kind = 'task_terminal'")
+      .get(parent.id) as { n: number }).n, 0,
+      'standalone terminal tasks must not enqueue a delivery without a chat session');
+
+    const reclaimSession = await chats.createChatSession({ title: 'Outbox lease test' });
+    const reclaimTask = ledger.createTask({
+      id: 'chat-outbox-reclaim-task',
+      kind: 'work',
+      title: 'Reclaim one expired terminal delivery',
+      sessionId: reclaimSession.id,
+      originType: 'chat',
+      originId: reclaimSession.id,
+      status: 'running',
+    });
+    ledger.transitionTask({ taskId: reclaimTask.id, status: 'succeeded', result: 'Ready for delivery.' });
+    assert.equal(ledger.listAttention({ taskId: reclaimTask.id }).total, 0,
+      'session-backed completion still must not create Attention');
     const claimed = ledger.claimOutbox();
-    assert.equal(claimed.length, 1, 'terminal transition should atomically enqueue one delivery');
+    assert.equal(claimed.length, 1, 'a session-backed terminal transition should atomically enqueue one delivery');
     assert.equal(ledger.claimOutbox().length, 0, 'claimed delivery must not be claimed twice');
     db.prepare("UPDATE task_outbox SET availableAt = ? WHERE id = ?")
       .run(new Date(Date.now() - 1_000).toISOString(), claimed[0].id);
@@ -183,7 +200,113 @@ async function main() {
       delivered: true,
       expectedAttempts: reclaimed[0].attempts,
     });
-    assert.equal(ledger.resolveAttention(attention.items[0].id).status, 'resolved');
+
+    const approvalTask = ledger.createTask({
+      id: 'approval-queue-task',
+      kind: 'work',
+      title: 'Exercise the approval-only Attention queue',
+      runId: 'approval-queue-run',
+      status: 'waiting_for_approval',
+    });
+    const attentionValidationTriggers = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'trigger' AND tbl_name = 'task_attention' AND lower(sql) LIKE '%approval%'
+    `).all() as Array<{ name: string }>;
+    assert(attentionValidationTriggers.length > 0, 'task_attention must have an approval-only validation trigger');
+    const rawAttentionInsert = db.prepare(`
+      INSERT INTO task_attention (
+        id, taskId, kind, status, severity, title, body, action, dedupeKey,
+        createdAt, updatedAt, resolvedAt
+      ) VALUES (?, ?, ?, 'open', 'warning', 'Invalid attention row', 'Must be rejected', ?, ?, ?, ?, NULL)
+    `);
+    const rawNow = new Date().toISOString();
+    assert.throws(() => rawAttentionInsert.run(
+      'invalid-nonapproval-attention', approvalTask.id, 'failure',
+      JSON.stringify({
+        approvalId: 'raw-nonapproval',
+        toolName: 'shell_exec',
+        args: {},
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      'invalid-nonapproval', rawNow, rawNow,
+    ), /approval|constraint/i, 'the database must reject non-approval Attention rows');
+    assert.throws(() => rawAttentionInsert.run(
+      'invalid-approval-action', approvalTask.id, 'approval', '{}',
+      'invalid-approval-action', rawNow, rawNow,
+    ), /approval|constraint/i, 'the database must reject approval rows without a valid bound action');
+
+    const approvalArgs = { command: 'npm test', cwd: root };
+    const liveApproval = approvals.beginToolApproval(approvalTask.runId!, 'shell_exec', approvalArgs, 60_000);
+    const liveAttention = ledger.requestTaskApproval({
+      taskId: approvalTask.id,
+      approvalId: liveApproval.approvalId,
+      toolName: 'shell_exec',
+      args: approvalArgs,
+      title: 'Approve the exact verification command',
+      body: 'Run npm test in the bounded workspace.',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const visibleApprovals = ledger.listAttention();
+    assert.equal(visibleApprovals.total, 1, 'a valid live approval must be the sole visible Attention item');
+    assert.equal(visibleApprovals.items[0]?.id, liveAttention.id);
+    assert.equal(visibleApprovals.items[0]?.action.expiresAt,
+      approvals.getPendingApproval(liveApproval.approvalId)?.expiresAt,
+      'persisted approval expiry must be clamped to the live waiter timeout');
+    approvals.resolveToolApproval(liveApproval.approvalId, false);
+    assert.equal(await liveApproval.wait, false);
+    assert.equal(ledger.listAttention({ taskId: approvalTask.id }).total, 0,
+      'an approval whose pending waiter was resolved must be pruned from Attention');
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM task_attention WHERE id = ?')
+      .get(liveAttention.id) as { n: number }).n, 0, 'stale approval pruning must remove the durable row');
+
+    const removableApproval = approvals.beginToolApproval(approvalTask.runId!, 'fs_write', { path: 'result.txt' }, 60_000);
+    const removableAttention = ledger.requestTaskApproval({
+      taskId: approvalTask.id,
+      approvalId: removableApproval.approvalId,
+      toolName: 'fs_write',
+      args: { path: 'result.txt' },
+      title: 'Approve one exact write',
+      body: 'Write result.txt in the bounded workspace.',
+    });
+    const neighboringApproval = approvals.beginToolApproval(approvalTask.runId!, 'browser_click', { selector: '#confirm' }, 60_000);
+    const neighboringAttention = ledger.requestTaskApproval({
+      taskId: approvalTask.id,
+      approvalId: neighboringApproval.approvalId,
+      toolName: 'browser_click',
+      args: { selector: '#confirm' },
+      title: 'Approve one exact click',
+      body: 'Click the bounded confirmation control.',
+    });
+    const firstApprovalPage = ledger.listAttention({ taskId: approvalTask.id, limit: 1, offset: 0 });
+    const secondApprovalPage = ledger.listAttention({ taskId: approvalTask.id, limit: 1, offset: 1 });
+    const pastApprovalPage = ledger.listAttention({ taskId: approvalTask.id, limit: 1, offset: 2 });
+    assert.equal(firstApprovalPage.total, 2, 'paginated approval totals must describe the full result set');
+    assert.equal(firstApprovalPage.items.length, 1);
+    assert.equal(secondApprovalPage.total, 2);
+    assert.equal(secondApprovalPage.items.length, 1);
+    assert.deepEqual(
+      [firstApprovalPage.items[0]!.id, secondApprovalPage.items[0]!.id].sort(),
+      [removableAttention.id, neighboringAttention.id].sort(),
+      'stable pagination must return each live approval exactly once',
+    );
+    assert.equal(pastApprovalPage.total, 2);
+    assert.equal(pastApprovalPage.items.length, 0, 'an offset past the final approval should return an empty page');
+    ledger.removeApprovalAttention(removableAttention.id);
+    const afterExactRemoval = ledger.listAttention({ taskId: approvalTask.id });
+    assert.equal(afterExactRemoval.total, 1, 'explicit approval removal must delete exactly one queue row');
+    assert.equal(afterExactRemoval.items[0]?.id, neighboringAttention.id,
+      'removing one approval must preserve a different live approval');
+    ledger.removeApprovalAttention(neighboringAttention.id);
+    approvals.resolveToolApproval(removableApproval.approvalId, false);
+    approvals.resolveToolApproval(neighboringApproval.approvalId, false);
+    assert.equal(await removableApproval.wait, false);
+    assert.equal(await neighboringApproval.wait, false);
+    ledger.transitionTask({ taskId: approvalTask.id, status: 'cancelled' });
+    assert.equal(ledger.listAttention({ taskId: approvalTask.id }).total, 0,
+      'cancelled tasks must not create Attention items');
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM task_outbox WHERE taskId = ? AND kind = 'task_terminal'")
+      .get(approvalTask.id) as { n: number }).n, 0,
+      'standalone cancellation must not enqueue a delivery without a chat session');
 
     const session = await chats.createChatSession({ title: 'Outbox delivery test' });
     const chatTask = ledger.createTask({
@@ -361,7 +484,7 @@ async function main() {
     assert.equal(ledger.getTask(atomicParent.id)?.status, 'running', 'failed child cascade must roll back the parent transition');
     assert.equal(ledger.getTask(atomicChild.id)?.status, 'running');
     assert.equal(ledger.getTaskDetails(atomicParent.id)?.commands.find((item) => item.id === atomicCancel.id)?.status, 'rejected');
-    assert.equal(ledger.listAttention({ taskId: atomicParent.id, status: 'open' }).total, 0,
+    assert.equal(ledger.listAttention({ taskId: atomicParent.id }).total, 0,
       'rolled-back cancellation must not leak terminal attention');
     ledger.transitionTask({ taskId: atomicChild.id, status: 'cancelled' });
     ledger.transitionTask({ taskId: atomicParent.id, status: 'cancelled' });
@@ -428,6 +551,7 @@ async function main() {
       id: 'retry-command-task',
       kind: 'work',
       title: 'Retry exactly once',
+      runId: 'retry-command-run-1',
       maxRetries: 1,
     });
     const retryRunning = ledger.transitionTask({ taskId: retryTask.id, status: 'running' });
@@ -437,7 +561,8 @@ async function main() {
       expectedVersion: retryRunning.version,
       error: 'Transient failure.',
     });
-    assert.equal(ledger.listAttention({ taskId: retryTask.id, status: 'open' }).total, 1);
+    assert.equal(ledger.listAttention({ taskId: retryTask.id }).total, 0,
+      'failed terminal transitions must not create Attention items');
     const retry = ledger.enqueueTaskCommand({
       taskId: retryTask.id,
       kind: 'retry',
@@ -450,11 +575,15 @@ async function main() {
     assert.equal(replayedRetryApply.appliedNow, false, 'a replay must not report another dispatchable apply');
     assert.equal(ledger.getTask(retryTask.id)?.retryCount, 1, 'replaying a retry command must not increment twice');
     assert.equal(ledger.getTask(retryTask.id)?.status, 'queued');
-    assert.equal(ledger.listAttention({ taskId: retryTask.id, status: 'open' }).total, 0,
-      'retrying must resolve stale terminal attention');
-    const retryOutbox = db.prepare("SELECT status FROM task_outbox WHERE taskId = ? AND kind = 'task_terminal'")
-      .get(retryTask.id) as { status: string };
-    assert.equal(retryOutbox.status, 'delivered', 'retrying must supersede the stale terminal delivery');
+    assert.equal(ledger.getTask(retryTask.id)?.runId, undefined,
+      'retry must release the terminal attempt before a new run is assigned');
+    assert.equal(ledger.getTask(retryTask.id)?.heartbeatAt, undefined,
+      'retry must not retain the terminal attempt heartbeat');
+    assert.equal(ledger.listAttention({ taskId: retryTask.id }).total, 0,
+      'retrying must keep the approval-only Attention queue empty');
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM task_outbox WHERE taskId = ? AND kind = 'task_terminal'")
+      .get(retryTask.id) as { n: number }).n, 0,
+      'standalone failure and retry must not create a delivery without a chat session');
 
     const routeRetryTask = ledger.createTask({
       id: 'route-retry-recovery-task', kind: 'work', title: 'Retry through recovery', maxRetries: 1,
@@ -543,6 +672,7 @@ async function main() {
       id: 'half-applied-retry-task',
       kind: 'work',
       title: 'Repair a legacy half retry',
+      runId: 'half-applied-retry-run-1',
       maxRetries: 2,
     });
     const halfRetryRunning = ledger.transitionTask({ taskId: halfRetryTask.id, status: 'running' });
@@ -562,12 +692,20 @@ async function main() {
       UPDATE tasks SET retryCount = retryCount + 1, result = NULL, error = NULL,
         completion = NULL, version = version + 1, updatedAt = ? WHERE id = ?
     `).run(new Date().toISOString(), halfRetryTask.id);
+    assert.equal(ledger.getTask(halfRetryTask.id)?.runId, 'half-applied-retry-run-1',
+      'the legacy half-retry fixture must retain its stale run binding before recovery');
+    assert.ok(ledger.getTask(halfRetryTask.id)?.heartbeatAt,
+      'the legacy half-retry fixture must retain its stale heartbeat before recovery');
     db.prepare("UPDATE task_commands SET status = 'processing', appliedAt = ? WHERE id = ?")
       .run(new Date(Date.now() - 60_000).toISOString(), halfRetryCommand.id);
     const repairedRetry = ledger.applyTaskCommand(halfRetryCommand.id);
     assert.equal(repairedRetry.status, 'applied');
     assert.equal(ledger.getTask(halfRetryTask.id)?.status, 'queued');
     assert.equal(ledger.getTask(halfRetryTask.id)?.retryCount, 1, 'recovery must not double-increment retry count');
+    assert.equal(ledger.getTask(halfRetryTask.id)?.runId, undefined,
+      'half-applied retry recovery must preserve the released run binding');
+    assert.equal(ledger.getTask(halfRetryTask.id)?.heartbeatAt, undefined,
+      'half-applied retry recovery must preserve the cleared heartbeat');
 
     const noTerminalSignals = ledger.createTask({
       id: 'suppressed-terminal-task',
@@ -598,8 +736,8 @@ async function main() {
       metadata: { suppressFailureSignals: true },
     });
     ledger.transitionTask({ taskId: preservedSuccess.id, status: 'succeeded', result: 'Done.' });
-    assert.equal(ledger.listAttention({ taskId: preservedSuccess.id, status: 'open' }).total, 1,
-      'failure-only suppression must retain successful completion signals');
+    assert.equal(ledger.listAttention({ taskId: preservedSuccess.id }).total, 0,
+      'successful completion signals must use delivery/history rather than Attention');
 
     const heartbeatOnlyRunning = ledger.createTask({
       id: 'heartbeat-running-only',
@@ -789,8 +927,8 @@ async function main() {
       'start-gap reconciliation must fence on staleness and matching run-row absence',
     );
     assert.equal(ledger.getTask('orphaned-run-start')?.status, 'lost');
-    assert.equal(ledger.listAttention({ taskId: 'orphaned-run-start', status: 'open' }).total, 1,
-      'start-gap loss must preserve normal terminal attention');
+    assert.equal(ledger.listAttention({ taskId: 'orphaned-run-start' }).total, 0,
+      'start-gap loss must not create a non-approval Attention item');
     assert.equal(ledger.getTask('live-run-start')?.status, 'running');
     assert.equal(ledger.getTask('fresh-run-start')?.status, 'running');
     ledger.transitionTask({ taskId: 'live-run-start', status: 'cancelled' });

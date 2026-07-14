@@ -260,9 +260,31 @@ export async function repairTerminalRunTaskProjections(
     LEFT JOIN tasks t ON t.id = COALESCE(r.taskId, 'run:' || r.id)
     WHERE r.status IN ('completed', 'error')
       AND (
-        t.id IS NULL
+        (
+          t.id IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM runs newer
+            WHERE COALESCE(newer.taskId, 'run:' || newer.id) = COALESCE(r.taskId, 'run:' || r.id)
+              AND (
+                COALESCE(newer.attemptNo, 1) > COALESCE(r.attemptNo, 1)
+                OR (
+                  COALESCE(newer.attemptNo, 1) = COALESCE(r.attemptNo, 1)
+                  AND COALESCE(newer.startedAt, '') > COALESCE(r.startedAt, '')
+                )
+                OR (
+                  COALESCE(newer.attemptNo, 1) = COALESCE(r.attemptNo, 1)
+                  AND COALESCE(newer.startedAt, '') = COALESCE(r.startedAt, '')
+                  AND newer.id > r.id
+                )
+              )
+          )
+        )
         OR (
-          t.status IN ('queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked')
+          t.id IS NOT NULL
+          AND t.runId = r.id
+          AND COALESCE(r.attemptNo, 1) >= t.retryCount + 1
+          AND t.status IN ('queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked')
           AND NOT (
             r.status = 'completed'
             AND t.status = 'waiting_for_approval'
@@ -298,6 +320,23 @@ export async function repairMissingActiveRunTaskProjections(
     FROM runs r
     LEFT JOIN tasks t ON t.id = COALESCE(r.taskId, 'run:' || r.id)
     WHERE r.status = 'running' AND t.id IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM runs newer
+        WHERE COALESCE(newer.taskId, 'run:' || newer.id) = COALESCE(r.taskId, 'run:' || r.id)
+          AND (
+            COALESCE(newer.attemptNo, 1) > COALESCE(r.attemptNo, 1)
+            OR (
+              COALESCE(newer.attemptNo, 1) = COALESCE(r.attemptNo, 1)
+              AND COALESCE(newer.startedAt, '') > COALESCE(r.startedAt, '')
+            )
+            OR (
+              COALESCE(newer.attemptNo, 1) = COALESCE(r.attemptNo, 1)
+              AND COALESCE(newer.startedAt, '') = COALESCE(r.startedAt, '')
+              AND newer.id > r.id
+            )
+          )
+      )
     ORDER BY r.startedAt ASC
   `).all() as unknown as RunRow[];
   if (!rows.length) return 0;

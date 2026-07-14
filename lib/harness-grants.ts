@@ -6,7 +6,6 @@ import {
   getTaskDetails,
   publishTaskChanges,
   recordTaskEvidence,
-  requestTaskAttention,
   transitionTask,
   transitionTaskInOpenTransaction,
 } from './task-ledger';
@@ -352,20 +351,6 @@ export async function startHarnessGrant(id: string, token: string, instruction =
       // provider (including Grok) attaches explicitly and receives only this
       // bounded context plus the one-time callback grant. A compatible harness
       // must broker its own actions through the declared capability classes.
-      requestTaskAttention({
-        taskId: activeGrant.childTaskId,
-        kind: 'question',
-        severity: 'info',
-        title: `${activeGrant.provider} harness is ready to attach`,
-        body: 'Start the external harness in its own isolated environment with the one-time capability token, then post typed evidence to the callback endpoint before expiry. Shiba will not launch a host CLI with ambient HOME, MCP, or credential access.',
-        dedupeKey: `harness-manual-attach:${activeGrant.id}`,
-        action: {
-          grantId: activeGrant.id,
-          expiresAt: activeGrant.expiresAt,
-          allowedTools: activeGrant.allowedTools,
-          contextDigest: createHash('sha256').update(prompt).digest('hex'),
-        },
-      });
       recordTaskEvidence({
         taskId: activeGrant.childTaskId,
         kind: 'assertion',

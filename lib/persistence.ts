@@ -4,6 +4,7 @@ import { setIntegrationCreds } from './integrations';
 import { dataDir, projectRoot } from './data-paths';
 import { decryptSecret, encryptSecret, isEncryptedSecret } from './secure-store';
 import { randomUUID } from 'crypto';
+import { ownershipStoreFencePath, withStoreFileLock } from './store-file-lock';
 
 const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
 if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
@@ -30,9 +31,7 @@ const SENSITIVE_CONFIG_PATHS = [
   'integrations.x.accessToken',
   'integrations.x.accessTokenSecret',
   'integrations.x.clientSecret',
-  'integrations.reddit.clientSecret',
-  'integrations.reddit.accessToken',
-  'integrations.reddit.refreshToken',
+  'integrations.reddit.devvitAppToken',
   'integrations.obsidian.restApiKey',
   'integrations.vercel.token',
   'integrations.netlify.token',
@@ -111,12 +110,56 @@ const AGENT_OVERRIDE_SECRET_FIELDS: Record<string, string[]> = {
   slack: ['token', 'appToken'],
   discord: ['token'],
   x: ['apiKey', 'apiSecret', 'accessToken', 'accessTokenSecret'],
-  reddit: ['clientSecret', 'accessToken', 'refreshToken'],
+  reddit: ['devvitAppToken'],
   obsidian: ['restApiKey'],
   googledrive: ['accessToken', 'serviceAccountJson', 'clientSecret', 'refreshToken'],
   vercel: ['token'],
   netlify: ['token'],
 };
+
+const REDDIT_DEVVIT_FIELDS = new Set(['devvitEndpoint', 'devvitAppToken']);
+
+/**
+ * Reddit's former user OAuth session is not compatible with the Devvit bridge.
+ * Rebuild the provider record from the two Devvit fields so tokens, identity
+ * metadata, and any unknown legacy fields cannot survive the migration.
+ */
+function migrateRedditCreds(integrations: Record<string, unknown> | undefined): boolean {
+  if (!integrations || !Object.prototype.hasOwnProperty.call(integrations, 'reddit')) return false;
+  const raw = integrations.reddit;
+  const record = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const devvitEndpoint = typeof record.devvitEndpoint === 'string'
+    ? record.devvitEndpoint.trim()
+    : '';
+  const devvitAppToken = typeof record.devvitAppToken === 'string'
+    ? record.devvitAppToken.trim()
+    : '';
+  const reddit: NonNullable<IntegrationCreds['reddit']> = {};
+  if (devvitEndpoint) reddit.devvitEndpoint = devvitEndpoint;
+  if (devvitAppToken) reddit.devvitAppToken = devvitAppToken;
+
+  const keys = Object.keys(record);
+  const changed = raw !== record
+    || keys.some((key) => !REDDIT_DEVVIT_FIELDS.has(key))
+    || (typeof record.devvitEndpoint === 'string' && record.devvitEndpoint !== devvitEndpoint)
+    || (typeof record.devvitAppToken === 'string' && record.devvitAppToken !== devvitAppToken)
+    || keys.some((key) => REDDIT_DEVVIT_FIELDS.has(key) && typeof record[key] !== 'string')
+    || (Object.keys(reddit).length === 0 && keys.length === 0);
+
+  if (Object.keys(reddit).length) integrations.reddit = reddit;
+  else delete integrations.reddit;
+  return changed || Object.keys(reddit).length !== keys.length;
+}
+
+function migrateAgentRedditCreds(agent: Agent): boolean {
+  const overrides = agent.integrationOverrides as Record<string, unknown> | undefined;
+  if (!overrides) return false;
+  const changed = migrateRedditCreds(overrides);
+  if (Object.keys(overrides).length === 0) delete agent.integrationOverrides;
+  return changed;
+}
 
 function transformAgentOverrideSecrets(agent: Agent, fn: (v: string) => string): Agent {
   const ov = (agent as Agent & { integrationOverrides?: Record<string, Record<string, unknown>> }).integrationOverrides;
@@ -161,15 +204,15 @@ function stripUnusedAgentOverrideReferences(agent: Agent): boolean {
 }
 
 const persistenceLockGlobal = globalThis as typeof globalThis & {
-  __shibaAgentsChain?: Promise<unknown>;
   __shibaConfigChain?: Promise<unknown>;
 };
 
 function withAgentsLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = persistenceLockGlobal.__shibaAgentsChain ?? Promise.resolve();
-  const run = previous.then(fn, fn);
-  persistenceLockGlobal.__shibaAgentsChain = run.then(() => undefined, () => undefined);
-  return run;
+  const target = agentsFile();
+  return withStoreFileLock(
+    ownershipStoreFencePath(path.dirname(target)),
+    () => withStoreFileLock(target, fn),
+  );
 }
 
 async function loadAgentsUnlocked(): Promise<Agent[]> {
@@ -177,8 +220,10 @@ async function loadAgentsUnlocked(): Promise<Agent[]> {
   try {
     const raw = await fs.readFile(agentsFile(), 'utf8');
     const list = JSON.parse(raw) as unknown[];
-    const agents = list.map(normalizeAgent).map((a) => transformAgentOverrideSecrets(a, decryptSecret));
+    const normalized = list.map(normalizeAgent);
     let migrated = false;
+    for (const agent of normalized) migrated = migrateAgentRedditCreds(agent) || migrated;
+    const agents = normalized.map((a) => transformAgentOverrideSecrets(a, decryptSecret));
     for (const agent of agents) migrated = stripUnusedAgentOverrideReferences(agent) || migrated;
     if (migrated) await saveAgentsUnlocked(agents);
     return agents;
@@ -190,7 +235,10 @@ async function loadAgentsUnlocked(): Promise<Agent[]> {
 
 async function saveAgentsUnlocked(agents: Agent[]): Promise<void> {
   await ensureData();
-  for (const agent of agents) stripUnusedAgentOverrideReferences(agent);
+  for (const agent of agents) {
+    stripUnusedAgentOverrideReferences(agent);
+    migrateAgentRedditCreds(agent);
+  }
   const sealed = agents.map((a) => transformAgentOverrideSecrets(a, encryptSecret));
   const target = agentsFile();
   const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
@@ -306,8 +354,9 @@ async function loadConfigUnlocked(): Promise<AppConfig> {
       },
     } as AppConfig;
     const { opened, hadPlaintext } = openConfigSecrets(stored);
-    if (hadPlaintext) {
-      // One-time migration: re-write any legacy plaintext secrets sealed.
+    const redditMigrated = migrateRedditCreds(opened.integrations as Record<string, unknown>);
+    if (hadPlaintext || redditMigrated) {
+      // One-time migration: seal plaintext and remove obsolete Reddit OAuth data.
       const { sealed } = sealConfigSecrets(opened);
       await writeConfigFileAtomic(JSON.stringify(sealed, null, 2));
     }
@@ -324,6 +373,7 @@ async function loadConfigUnlocked(): Promise<AppConfig> {
 }
 
 async function writeConfigUnlocked(next: AppConfig): Promise<AppConfig> {
+  migrateRedditCreds(next.integrations as Record<string, unknown>);
   const { sealed } = sealConfigSecrets(next);
   await writeConfigFileAtomic(JSON.stringify(sealed, null, 2));
   setIntegrationCreds(next.integrations);

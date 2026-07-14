@@ -136,11 +136,11 @@ async function main() {
     id: 'agent-project-verify',
     name: 'Project Verify Agent',
     model: 'grok-3',
+    autoAcceptBoardAssignments: false,
     workspace: { path: process.cwd(), useWorktree: false },
     integrations: { github: false, slack: false, googledrive: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false },
     peers: [],
     skills: [],
-    schedules: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

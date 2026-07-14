@@ -33,8 +33,8 @@ interface Endpoint {
 const ENDPOINTS: Endpoint[] = [
   // --- Read / status ---
   { group: 'Status', method: 'GET', path: '/api/version', summary: 'Running commit, version, and (with checkUpdate=1) the latest GitHub release.', query: [{ name: 'checkUpdate', desc: 'Set to 1 to also probe GitHub releases', example: '1' }] },
-  { group: 'Status', method: 'GET', path: '/api/nav-stats', summary: 'Sidebar counts: chats, projects, memories, workspace files, schedules, integrations, usage cost, cloud reachability.' },
-  { group: 'Status', method: 'GET', path: '/api/boot', summary: 'Boot ping — hydrates server config and arms schedules (idempotent).' },
+  { group: 'Status', method: 'GET', path: '/api/nav-stats', summary: 'Sidebar counts: chats, projects, memories, workspace files, active Automations, integrations, usage cost, cloud reachability.' },
+  { group: 'Status', method: 'GET', path: '/api/boot', summary: 'Boot ping — hydrates server config and ensures the single durable Automation engine is running (idempotent).' },
   { group: 'Status', method: 'GET', path: '/api/health', summary: 'Lightweight liveness probe with no startup side effects.' },
   { group: 'Status', method: 'GET', path: '/api/models', summary: 'All selectable models (cloud + local) and cloud-auth flags.' },
   { group: 'Status', method: 'GET', path: '/api/tools', summary: 'The full built-in tool catalog with groups and scope requirements.' },
@@ -42,14 +42,15 @@ const ENDPOINTS: Endpoint[] = [
   // --- Config ---
   { group: 'Config', method: 'GET', path: '/api/config', summary: 'Settings (secrets masked), auth flags, secret-key location.' },
   { group: 'Config', method: 'POST', path: '/api/config', summary: 'Update settings. This example sets the daily spend budget.', mutating: true, body: JSON.stringify({ dailyBudgetUsd: 0 }, null, 2) },
-  { group: 'Config', method: 'GET', path: '/api/integrations', summary: 'Configured integration credentials (as stored) + channel-listener status.' },
-  { group: 'Config', method: 'GET', path: '/api/reddit-oauth/status', summary: 'Public Reddit OAuth status (never returns tokens or the client secret).' },
+  { group: 'Config', method: 'GET', path: '/api/integrations', summary: 'Configured integration credentials (secret fields masked) + channel-listener status.' },
 
   // --- Agents & runs ---
-  { group: 'Agents', method: 'GET', path: '/api/agents', summary: 'All agents with models, workspaces, scopes, skills, schedules.' },
-  { group: 'Agents', method: 'GET', path: '/api/runs', summary: 'Recent run summaries (no trace payloads).', query: [{ name: 'agentId', desc: 'Filter to one agent' }, { name: 'limit', desc: 'Max rows (default 50)', example: '20' }, { name: 'scheduledOnly', desc: '1 = only scheduled runs' }] },
+  { group: 'Agents', method: 'GET', path: '/api/agents', summary: 'All execution owners with models, workspaces, scopes, skills, and peers.' },
+  { group: 'Agents', method: 'GET', path: '/api/runs', summary: 'Recent run summaries (no trace payloads).', query: [{ name: 'agentId', desc: 'Filter to one execution owner' }, { name: 'limit', desc: 'Max rows (default 50)', example: '20' }, { name: 'scheduledOnly', desc: '1 = only Automation-owned runs' }] },
   { group: 'Agents', method: 'GET', path: '/api/runs', summary: 'A single run WITH its full execution trace.', query: [{ name: 'id', desc: 'Run id', example: '' }] },
-  { group: 'Agents', method: 'GET', path: '/api/scheduler', summary: 'Armed cron schedules across all agents.' },
+
+  // --- Durable Automations ---
+  { group: 'Automations', method: 'GET', path: '/api/routines', summary: 'All durable recurring, one-time, manual, webhook, event, filesystem, and health-check Automations.', query: [{ name: 'enabled', desc: 'true or false' }, { name: 'limit', desc: 'Page size', example: '50' }, { name: 'offset', desc: 'Row offset', example: '0' }] },
 
   // --- Search / logs / usage ---
   { group: 'Observability', method: 'GET', path: '/api/search', summary: 'Global search across chats, memories, runs, and the audit log.', query: [{ name: 'q', desc: 'Query (min 2 chars)', example: 'shiba' }] },
@@ -71,7 +72,7 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'CLI & Backup', method: 'GET', path: '/api/backup', summary: 'Download a full studio backup. Sensitive: the encryption key is included unless omitted.', sensitive: true, query: [{ name: 'key', desc: 'Use "omit" unless you explicitly need a portable secret-bearing backup', example: 'omit' }] },
 ];
 
-const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Observability', 'Content', 'CLI & Backup'];
+const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Automations', 'Observability', 'Content', 'CLI & Backup'];
 
 export default function ApiDocsPage() {
   const [selected, setSelected] = useState<Endpoint>(ENDPOINTS[0]);

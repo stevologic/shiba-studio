@@ -50,7 +50,6 @@ function syntheticWorker(model: string, workspaceDir: string | undefined): Agent
     integrations: {},
     peers: [],
     skills: [],
-    schedules: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
@@ -127,18 +126,30 @@ function launchTaskExecution(task: TaskRecord, agentForRun: Agent, runId: string
   void (async () => {
     try {
       const { audit } = await import('./audit-log');
-      audit('run', 'background task dispatched', `${agentForRun.name}: ${task.description.slice(0, 120)}`, {
+      const boardTask = task.kind === 'board';
+      audit('run', boardTask ? 'board card dispatched' : 'background task dispatched', boardTask
+        ? `${String(task.metadata.boardKey || task.title)}: ${task.title.slice(0, 100)}`
+        : `${agentForRun.name}: ${task.description.slice(0, 120)}`, {
         taskId: task.id, runId, sessionId: task.sessionId || null,
       });
     } catch { /* audit is derived bookkeeping */ }
 
     try {
       const { runAgentOnce } = await import('./agent-runtime');
-      const run = await runAgentOnce(agentForRun, task.description, {
+      const runOptions: Parameters<typeof runAgentOnce>[2] = {
         taskId: task.id,
         runId,
         attemptNo: task.retryCount + 1,
-      });
+      };
+      if (task.kind === 'board' && task.projectId) {
+        runOptions.projectId = task.projectId;
+        runOptions.workspacePathOverride = task.workspaceRoots.find((root) => root.permission === 'write')?.path
+          || task.workspaceRoots[0]?.path;
+        if (typeof task.metadata.projectContext === 'string' && task.metadata.projectContext.trim()) {
+          runOptions.projectContext = task.metadata.projectContext;
+        }
+      }
+      const run = await runAgentOnce(agentForRun, task.description, runOptions);
       if (run.status === 'error' && /Concurrent-run limit reached/i.test(run.finalOutput || '')) {
         deferTaskForCapacity(task.id);
       }
@@ -162,6 +173,14 @@ function launchTaskExecution(task: TaskRecord, agentForRun: Agent, runId: string
           taskId: task.id, runId, sessionId: task.sessionId || null,
         });
       } catch { /* audit is best-effort */ }
+    }
+    if (task.kind === 'board') {
+      try {
+        const { processBoardAssignmentsOnce } = await import('./board-runner');
+        await processBoardAssignmentsOnce({ dispatch: false });
+      } catch {
+        // The periodic Board processor projects the same terminal state.
+      }
     }
     try {
       const { processTaskOutbox } = await import('./task-delivery');
@@ -191,6 +210,29 @@ export async function dispatchExistingTask(taskId: string): Promise<BackgroundTa
     await dispatchReadyTeamWorkers(task.parentId);
     return toInfo(getTask(task.id) || task);
   }
+  if (task.kind === 'board') {
+    const { getBoardTask } = await import('./board');
+    const card = task.originId ? await getBoardTask(task.originId) : null;
+    const claim = card?.activeWork;
+    if (
+      !card
+      || !claim
+      || claim.taskId !== task.id
+      || claim.agentId !== task.agentId
+      || !!claim.cancelRequestedAt
+      || card.assigneeAgentId !== task.agentId
+      || card.status === 'done'
+      || card.status === 'cancelled'
+    ) {
+      transitionTask({
+        taskId: task.id,
+        status: 'cancelled',
+        expectedVersion: task.version,
+        error: 'Board assignment changed or was cancelled before execution began.',
+      });
+      throw new Error('Board work claim is no longer active');
+    }
+  }
 
   const [{ loadAgents, loadConfig }] = await Promise.all([import('./persistence')]);
   const [agents, config] = await Promise.all([loadAgents(), loadConfig()]);
@@ -215,8 +257,18 @@ export async function dispatchExistingTask(taskId: string): Promise<BackgroundTa
     throw new Error(`Assigned agent no longer exists: ${task.agentId}`);
   }
   const worker = configured || syntheticWorker(model, workspaceDir);
+  const preserveBoardWorktree = task.kind === 'board'
+    && !task.projectId
+    && configured?.workspace.useWorktree === true;
   const agentForRun: Agent = workspaceDir
-    ? { ...worker, workspace: { ...worker.workspace, path: workspaceDir, useWorktree: false } }
+    ? {
+        ...worker,
+        workspace: {
+          ...worker.workspace,
+          path: workspaceDir,
+          useWorktree: preserveBoardWorktree,
+        },
+      }
     : worker;
   // Every dispatch attempt gets a new run row while the durable task identity
   // remains stable; reusing the prior run id would overwrite history on retry.

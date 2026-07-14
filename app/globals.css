@@ -2899,27 +2899,6 @@ body::before {
   border-color: var(--accent-2);
 }
 
-/* Automations page */
-.automation-card {
-  min-width: 0;
-}
-
-.automation-status-tag {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-  white-space: nowrap;
-}
-
-.automation-status-tag:hover {
-  filter: brightness(1.1);
-}
-
 /* Run-details modal section labels */
 .run-detail-label {
   font-size: 10px;
@@ -2928,24 +2907,6 @@ body::before {
   letter-spacing: 0.06em;
   color: var(--text-dim);
   margin-bottom: 6px;
-}
-
-/* Run log icon badge on automation card header */
-.automation-runlog-badge {
-  position: absolute;
-  top: 1px;
-  right: 0;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #0b0d12;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 14px;
-  text-align: center;
-  pointer-events: none;
 }
 
 /* Run log rows — agent run-history modal */
@@ -3205,22 +3166,6 @@ body::before {
   background: rgba(34, 197, 94, 0.08);
 }
 
-.automation-status-active {
-  border-color: var(--success);
-  color: var(--success);
-  background: rgba(34, 197, 94, 0.1);
-}
-
-.automation-status-paused {
-  border-color: var(--border-light);
-  color: var(--text-dim);
-  background: var(--bg-elev);
-}
-
-.schedule-section-focus .grok-label {
-  color: var(--accent);
-}
-
 /* Workspace uploads */
 .workspace-dropzone {
   border: 2px dashed var(--border-light);
@@ -3318,13 +3263,7 @@ body::before {
   resize: vertical;
 }
 
-.schedule-entry-highlight {
-  border-color: var(--accent) !important;
-  background: rgba(255, 255, 255, 0.04);
-  animation: schedule-highlight-pulse 1.2s ease-in-out 2;
-}
-
-/* ── Agent editor: sections, skills, automations ── */
+/* ── Agent editor: sections and skills ── */
 .agent-form-section {
   border: 1px solid var(--border);
   border-radius: var(--radius, 10px);
@@ -3540,93 +3479,6 @@ body::before {
   border-color: var(--accent);
   background: var(--accent);
   color: #0b0d12;
-}
-
-.agent-schedule-empty {
-  text-align: center;
-  padding: 1.4rem 1rem;
-  border: 1px dashed var(--border-light, var(--border));
-  border-radius: var(--radius-sm, 8px);
-  background: color-mix(in srgb, var(--bg-shell) 40%, transparent);
-}
-.agent-schedule-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 8px);
-  padding: 0.75rem 0.85rem;
-  background: var(--bg-shell, transparent);
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-  transition: border-color 0.12s;
-}
-.agent-schedule-card.is-active {
-  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
-}
-.agent-schedule-card.is-paused {
-  opacity: 0.88;
-}
-.agent-schedule-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.agent-schedule-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.35rem;
-  height: 1.35rem;
-  border-radius: 6px;
-  font-size: 0.65rem;
-  font-weight: 700;
-  background: rgba(163, 163, 163, 0.14);
-  color: #a3a3a3;
-  border: 1px solid rgba(163, 163, 163, 0.28);
-  flex-shrink: 0;
-}
-.agent-schedule-freq-label {
-  font-size: 0.62rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-dim, #8b92a5);
-  margin-bottom: 0.35rem;
-}
-.agent-schedule-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-.agent-schedule-preset {
-  padding: 0.28rem 0.55rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-dim, #8b92a5);
-  font-size: 0.65rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-.agent-schedule-preset:hover {
-  border-color: rgba(163, 163, 163, 0.45);
-  color: #d4d4d4;
-  background: rgba(163, 163, 163, 0.08);
-}
-.agent-schedule-preset.active {
-  border-color: rgba(163, 163, 163, 0.55);
-  background: rgba(163, 163, 163, 0.18);
-  color: #d4d4d4;
-}
-
-@keyframes schedule-highlight-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
-  }
-  50% {
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.18);
-  }
 }
 
 /* Agent alien avatars */
@@ -7519,26 +7371,6 @@ body::before {
   .kb-head-actions .grok-btn { flex: 1; }
   .kb-sync-directions { grid-template-columns: 1fr; }
 }
-
-.automation-running-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--warning);
-  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
-  background: color-mix(in srgb, var(--warning) 10%, transparent);
-  border-radius: 999px;
-  padding: 1px 8px;
-  white-space: nowrap;
-}
-
-/* Clickable variant — opens the live status/trace modal. */
-.automation-running-chip-btn { cursor: pointer; transition: filter 0.12s ease; }
-.automation-running-chip-btn:hover { filter: brightness(1.2); }
 
 /* Inputs with a leading icon: Tailwind pl-* loses to .grok-input's own
    padding by cascade order, leaving the icon on top of the placeholder.

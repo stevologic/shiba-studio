@@ -2,6 +2,7 @@
 // the IDs loaded from the JSON-backed stores, but this module never reads or
 // writes those stores itself.
 
+import { randomUUID } from 'node:crypto';
 import { getDb } from './db';
 import { transitionTaskInOpenTransaction } from './task-ledger';
 
@@ -144,6 +145,29 @@ function reconcileCoreTaskOwnership(db: Db, objects: ReadonlySet<string>, report
     changed(db, report.deleted, table, `
       DELETE FROM ${table}
       WHERE NOT EXISTS (SELECT 1 FROM tasks owner WHERE owner.id = ${table}.taskId)
+    `);
+  }
+
+  if (objects.has('task_attention')) {
+    changed(db, report.deleted, 'task_attention.invalid', `
+      DELETE FROM task_attention
+      WHERE kind <> 'approval'
+         OR status <> 'open'
+         OR CASE
+           WHEN json_valid(action) = 0 THEN 1
+           WHEN COALESCE(json_type(action, '$.approvalId'), '') <> 'text' THEN 1
+           WHEN COALESCE(TRIM(CAST(json_extract(action, '$.approvalId') AS TEXT)), '') = '' THEN 1
+           WHEN COALESCE(json_type(action, '$.toolName'), '') <> 'text' THEN 1
+           WHEN COALESCE(TRIM(CAST(json_extract(action, '$.toolName') AS TEXT)), '') = '' THEN 1
+           WHEN COALESCE(json_type(action, '$.args'), '') <> 'object' THEN 1
+           WHEN COALESCE(json_type(action, '$.expiresAt'), '') <> 'text' THEN 1
+           ELSE 0
+         END = 1
+    `);
+  }
+  if (objects.has('task_outbox')) {
+    changed(db, report.deleted, 'task_outbox.legacy-attention', `
+      DELETE FROM task_outbox WHERE target = 'attention'
     `);
   }
 
@@ -554,32 +578,6 @@ function reconcileOptionalRelations(db: Db, objects: ReadonlySet<string>, report
     `, [report.startedAt]);
   }
 
-  if (objects.has('schedule_execution_intents')) {
-    if (objects.has('runs')) {
-      changed(db, report.detached, 'terminalScheduleIntents.runId', `
-        UPDATE schedule_execution_intents SET runId = NULL, updatedAt = ?
-        WHERE runId IS NOT NULL AND status NOT IN ('pending', 'processing')
-          AND NOT EXISTS (SELECT 1 FROM runs owner WHERE owner.id = schedule_execution_intents.runId)
-      `, [report.startedAt]);
-      add(report.deferred, 'activeScheduleIntents.missingRun', scalarCount(db, `
-        SELECT COUNT(*) AS count FROM schedule_execution_intents
-        WHERE runId IS NOT NULL AND status IN ('pending', 'processing')
-          AND NOT EXISTS (SELECT 1 FROM runs owner WHERE owner.id = schedule_execution_intents.runId)
-      `));
-    }
-    if (objects.has('tasks')) {
-      changed(db, report.detached, 'terminalScheduleIntents.taskId', `
-        UPDATE schedule_execution_intents SET taskId = NULL, updatedAt = ?
-        WHERE taskId IS NOT NULL AND status NOT IN ('pending', 'processing')
-          AND NOT EXISTS (SELECT 1 FROM tasks owner WHERE owner.id = schedule_execution_intents.taskId)
-      `, [report.startedAt]);
-      add(report.deferred, 'activeScheduleIntents.missingTask', scalarCount(db, `
-        SELECT COUNT(*) AS count FROM schedule_execution_intents
-        WHERE taskId IS NOT NULL AND status IN ('pending', 'processing')
-          AND NOT EXISTS (SELECT 1 FROM tasks owner WHERE owner.id = schedule_execution_intents.taskId)
-      `));
-    }
-  }
 }
 
 function reconcileContext(db: Db, objects: ReadonlySet<string>, report: DataIntegrityReport, options: {
@@ -691,7 +689,7 @@ function reconcileCrossStoreIds(db: Db, objects: ReadonlySet<string>, report: Da
 }): void {
   if (objects.has('tasks')) {
     const rows = db.prepare(`
-      SELECT id, version, agentId, projectId, sessionId, originType, originId, metadata FROM tasks
+      SELECT id, version, agentId, projectId, runId, sessionId, originType, originId, metadata FROM tasks
       WHERE status IN (${ACTIVE_TASK_SQL})
       ORDER BY createdAt ASC
     `).all(...ACTIVE_TASK_STATUSES) as Array<{
@@ -699,6 +697,7 @@ function reconcileCrossStoreIds(db: Db, objects: ReadonlySet<string>, report: Da
       version: number;
       agentId: string | null;
       projectId: string | null;
+      runId: string | null;
       sessionId: string | null;
       originType: string;
       originId: string | null;
@@ -769,22 +768,59 @@ function reconcileCrossStoreIds(db: Db, objects: ReadonlySet<string>, report: Da
           detachBoardOrigin ? 'Board card' : '',
           missingAgent ? 'assigned agent' : '',
         ].filter(Boolean).join(' and ');
+        const cancellationVersion = version;
         transitionTaskInOpenTransaction({
           taskId: row.id,
-          status: 'lost',
-          expectedVersion: version,
+          status: 'cancelled',
+          expectedVersion: cancellationVersion,
           currentStep: `${missing} no longer available`,
           nextAction: null,
-          error: `${missing} no longer exists.`,
+          error: `${missing} no longer exists; active work was cancelled.`,
           metadata: {
             integrityReconciled: true,
             ...(missingAgent ? { missingAgentId: row.agentId } : {}),
             ...(detachBoardOrigin ? { orphanedBoardOriginId: row.originId } : {}),
           },
         });
+        // Record the same durable cancellation signal used by normal task
+        // commands. This transaction therefore cannot leave a deleted agent's
+        // runtime executing after its ledger row has been terminalized.
+        const commandId = randomUUID();
+        const commandKey = `integrity-owner-cancel:${row.id}:${cancellationVersion}:${randomUUID()}`;
+        db.prepare(`
+          INSERT INTO task_commands (
+            id, taskId, kind, status, payload, idempotencyKey, expectedVersion,
+            createdAt, appliedAt
+          ) VALUES (?, ?, 'cancel', 'applied', ?, ?, ?, ?, ?)
+        `).run(
+          commandId,
+          row.id,
+          JSON.stringify({ reason: `${missing} no longer exists.` }),
+          commandKey,
+          cancellationVersion,
+          report.startedAt,
+          report.startedAt,
+        );
+        if (objects.has('task_events')) {
+          db.prepare(`
+            INSERT INTO task_events (taskId, type, ts, data)
+            VALUES (?, 'command_applied', ?, ?)
+          `).run(row.id, report.startedAt, JSON.stringify({ commandId, kind: 'cancel', source: 'data_integrity' }));
+        }
+        const runExists = !row.runId
+          ? false
+          : !objects.has('runs') || Boolean(db.prepare('SELECT 1 FROM runs WHERE id = ?').get(row.runId));
+        if (row.runId && runExists && objects.has('task_run_controls')) {
+          db.prepare(`
+            INSERT OR IGNORE INTO task_run_controls (
+              id, commandId, taskId, runId, kind, instruction, status, attempts,
+              availableAt, consumerId, leaseUntil, lastError, createdAt, acknowledgedAt
+            ) VALUES (?, ?, ?, ?, 'cancel', NULL, 'pending', 0, ?, NULL, NULL, NULL, ?, NULL)
+          `).run(randomUUID(), commandId, row.id, row.runId, report.startedAt, report.startedAt);
+        }
         add(report.stateTransitions, detachBoardOrigin
-          ? 'activeTasks.lostMissingBoard'
-          : 'activeTasks.lostMissingAgent', 1);
+          ? 'activeTasks.cancelledMissingBoard'
+          : 'activeTasks.cancelledMissingAgent', 1);
       }
     }
 
@@ -955,20 +991,6 @@ function reconcileCrossStoreIds(db: Db, objects: ReadonlySet<string>, report: Da
     }
   }
 
-  if (options.validAgents !== undefined && objects.has('schedule_execution_intents')) {
-    changed(db, report.stateTransitions, 'scheduleIntents.skippedMissingAgent', `
-      UPDATE schedule_execution_intents SET status = 'skipped',
-        error = 'The assigned agent no longer exists.', result = NULL,
-        leaseOwner = NULL, leaseExpiresAt = NULL, updatedAt = ?, completedAt = ?
-      WHERE status = 'pending'
-        AND NOT EXISTS (SELECT 1 FROM integrity_valid_agents owner WHERE owner.id = schedule_execution_intents.agentId)
-    `, [report.startedAt, report.startedAt]);
-    add(report.deferred, 'processingScheduleIntents.missingAgent', scalarCount(db, `
-      SELECT COUNT(*) AS count FROM schedule_execution_intents
-      WHERE status = 'processing'
-        AND NOT EXISTS (SELECT 1 FROM integrity_valid_agents owner WHERE owner.id = schedule_execution_intents.agentId)
-    `));
-  }
 }
 
 function quoteIdentifier(value: string): string {
@@ -1050,6 +1072,31 @@ function installCoreOwnershipConstraints(db: Db, objects: ReadonlySet<string>, r
       BEFORE UPDATE OF taskId ON ${table}
       WHEN NOT EXISTS (SELECT 1 FROM tasks owner WHERE owner.id = NEW.taskId)
       BEGIN SELECT RAISE(ABORT, '${table} requires an existing task'); END
+    `);
+  }
+
+  if (objects.has('task_attention')) {
+    installTrigger(db, report, 'task_attention_approval_only_bi', `
+      CREATE TRIGGER task_attention_approval_only_bi
+      BEFORE INSERT ON task_attention
+      WHEN NEW.kind <> 'approval'
+        OR NEW.status <> 'open'
+        OR CASE
+          WHEN json_valid(NEW.action) = 0 THEN 1
+          WHEN COALESCE(json_type(NEW.action, '$.approvalId'), '') <> 'text' THEN 1
+          WHEN COALESCE(TRIM(CAST(json_extract(NEW.action, '$.approvalId') AS TEXT)), '') = '' THEN 1
+          WHEN COALESCE(json_type(NEW.action, '$.toolName'), '') <> 'text' THEN 1
+          WHEN COALESCE(TRIM(CAST(json_extract(NEW.action, '$.toolName') AS TEXT)), '') = '' THEN 1
+          WHEN COALESCE(json_type(NEW.action, '$.args'), '') <> 'object' THEN 1
+          WHEN COALESCE(json_type(NEW.action, '$.expiresAt'), '') <> 'text' THEN 1
+          ELSE 0
+        END = 1
+      BEGIN SELECT RAISE(ABORT, 'task_attention accepts only exact pending approvals'); END
+    `);
+    installTrigger(db, report, 'task_attention_immutable_bu', `
+      CREATE TRIGGER task_attention_immutable_bu
+      BEFORE UPDATE ON task_attention
+      BEGIN SELECT RAISE(ABORT, 'task_attention approvals are immutable; delete after a decision'); END
     `);
   }
 
@@ -1514,9 +1561,6 @@ function installOptionalOwnershipConstraints(db: Db, objects: ReadonlySet<string
         ? `UPDATE routine_invocations SET taskId = NULL, updatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE taskId = OLD.id;`
         : '',
       objects.has('meeting_outputs') ? 'UPDATE meeting_outputs SET taskId = NULL WHERE taskId = OLD.id;' : '',
-      objects.has('schedule_execution_intents')
-        ? `UPDATE schedule_execution_intents SET taskId = NULL, updatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE taskId = OLD.id;`
-        : '',
     ].filter(Boolean).join('\n');
     if (statements) {
       installTrigger(db, report, 'integrity_tasks_optional_refs_ad', `
@@ -1653,8 +1697,6 @@ function installOptionalOwnershipConstraints(db: Db, objects: ReadonlySet<string
         WHERE runId = OLD.id;` : '',
       objects.has('capability_packs') ? `UPDATE capability_packs SET lastSuccessRunId = NULL,
         updatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE lastSuccessRunId = OLD.id;` : '',
-      objects.has('schedule_execution_intents') ? `UPDATE schedule_execution_intents SET runId = NULL,
-        updatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE runId = OLD.id;` : '',
     ].filter(Boolean).join('\n');
     if (statements) {
       installTrigger(db, report, 'integrity_runs_optional_refs_ad', `

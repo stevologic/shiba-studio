@@ -13,16 +13,21 @@ async function main() {
   const chats = await import('../lib/chat-sessions');
   const context = await import('../lib/context-engine');
   const liveChats = await import('../lib/chat-live-runs');
+  const projects = await import('../lib/projects');
   const chatToolsApi = await import('../app/api/chat-tools/route');
   const chatSessionsApi = await import('../app/api/chat-sessions/route');
 
   try {
     const now = new Date().toISOString();
+    const projectGroupA = await projects.createProject('Session group A');
     const parent = await chats.createChatSession({
       title: 'Parent session',
-      projectId: 'project-group-a',
+      projectId: projectGroupA.id,
       chatModel: 'cloud:test',
     });
+    assert.equal(parent.toolsEnabled, true, 'new and legacy-compatible chats default tools on');
+    const toolsOffParent = await chats.updateChatSession(parent.id, { toolsEnabled: false });
+    assert.equal(toolsOffParent.toolsEnabled, false, 'per-chat tools-off setting persists');
     const userMessage = { id: 'user-1', role: 'user' as const, content: 'Keep the parent immutable.', createdAt: now };
     const streamingAssistant = {
       id: 'assistant-1', role: 'assistant' as const, content: 'Working…', streaming: true, createdAt: now,
@@ -81,7 +86,8 @@ async function main() {
     assert.equal(child.branch?.sourceMessageId, completedAssistant.id);
     assert.equal(child.branch?.sourceMessageOrdinal, 1);
     assert.equal(child.branch?.kind, 'checkpoint-branch-v1');
-    assert.equal(child.projectId, 'project-group-a');
+    assert.equal(child.projectId, projectGroupA.id);
+    assert.equal(child.toolsEnabled, false, 'forks inherit the parent tool mode');
     assert.equal(child.unreadCount, 0);
 
     const tampered = await chats.updateChatSession(child.id, {
@@ -137,7 +143,7 @@ async function main() {
     );
 
     const projectGroup = chats.groupChatSessionsByProject(await chats.listChatSessions())
-      .find((group) => group.projectId === 'project-group-a');
+      .find((group) => group.projectId === projectGroupA.id);
     assert(projectGroup);
     assert.equal(projectGroup.sessions.length, 3);
     assert.equal(projectGroup.unreadCount, 1);
@@ -157,7 +163,7 @@ async function main() {
     assert.equal(apiFork.session.messages.length, 1);
     const listResponse = await chatSessionsApi.GET(new NextRequest('http://localhost/api/chat-sessions'));
     const listPayload = await listResponse.json();
-    assert(listPayload.groups.some((group: { projectId: string }) => group.projectId === 'project-group-a'));
+    assert(listPayload.groups.some((group: { projectId: string }) => group.projectId === projectGroupA.id));
     assert.equal(listPayload.unreadCount, 1);
 
     const ephemeral = await chats.createChatSession({ title: 'Incognito', ephemeral: true });

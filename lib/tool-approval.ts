@@ -37,6 +37,7 @@ export interface PendingApproval {
   toolName: string;
   args: Record<string, unknown>;
   createdAt: string;
+  expiresAt: string;
 }
 
 type ApprovalResolver = (approved: boolean) => void;
@@ -62,19 +63,22 @@ export function beginToolApproval(
   timeoutMs = 5 * 60_000,
 ): { approvalId: string; wait: Promise<boolean> } {
   const id = uuidv4();
+  const createdAt = new Date();
+  const boundedTimeoutMs = Math.max(1, Math.min(5 * 60_000, Number(timeoutMs) || 5 * 60_000));
   const meta: PendingApproval = {
     id,
     runId,
     toolName,
     args,
-    createdAt: new Date().toISOString(),
+    createdAt: createdAt.toISOString(),
+    expiresAt: new Date(createdAt.getTime() + boundedTimeoutMs).toISOString(),
   };
 
   const wait = new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       resolve(false);
-    }, timeoutMs);
+    }, boundedTimeoutMs);
 
     pending.set(id, {
       meta,

@@ -92,6 +92,38 @@ export interface BoardSyncState {
   errors: number;
 }
 
+/**
+ * Durable reaction to one assignee change. A new id is minted every time the
+ * card is assigned to a different agent, so a reload can resume the reaction
+ * without ever accepting the same assignment twice.
+ */
+export interface BoardAutoAssignment {
+  id: string;
+  agentId: string;
+  status: 'pending' | 'disabled' | 'accepted';
+  requestedAt: string;
+  updatedAt: string;
+}
+
+/** The exact durable task currently executing this card. */
+export interface BoardWorkClaim {
+  id: string;
+  taskId: string;
+  agentId: string;
+  mode: 'manual' | 'automatic' | 'refinement';
+  assignmentId?: string;
+  feedback?: string;
+  requestedAt: string;
+  /**
+   * Cancellation is a durable two-phase handoff. The Board retains this
+   * claim (and therefore the agent-wide busy fence) until the task ledger has
+   * accepted the cancellation and projected a terminal state back here.
+   */
+  cancelRequestId?: string;
+  cancelRequestedAt?: string;
+  cancelReason?: string;
+}
+
 export interface BoardTask {
   id: string;
   /** Human key like SHIB-12 — stable, never reused. */
@@ -113,6 +145,10 @@ export interface BoardTask {
   runIds: string[];
   /** True while a dispatched run is executing. */
   working?: boolean;
+  /** Pending/settled reaction for the current assignee generation. */
+  autoAssignment?: BoardAutoAssignment;
+  /** Fences run completion to the exact accepted work generation. */
+  activeWork?: BoardWorkClaim;
   /** Changes only when a provider-syncable field changes. */
   syncUpdatedAt?: string;
   /** A card can be mirrored to Linear, Jira, or both. */

@@ -133,8 +133,7 @@ async function runAgentReply(opts: {
   );
 
   const run = await runAgentOnce(opts.agent, prompt, {
-    scheduled: true,
-    scheduleInstructions: `${opts.platform} @mention from ${opts.authorLabel}`,
+    autonomous: true,
   });
 
   const out = (run.finalOutput || '').trim();

@@ -15,6 +15,7 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = [
   { id: 'clear', syntax: '/clear', insert: '/clear', description: 'Clear this conversation after confirmation', category: 'Session' },
   { id: 'agent', syntax: '/agent <name|grok|all>', insert: '/agent ', description: 'Switch who answers this chat', category: 'Session' },
   { id: 'model', syntax: '/model <name>', insert: '/model ', description: 'Switch the session model', category: 'Session' },
+  { id: 'tools', syntax: '/tools on|off', insert: '/tools ', description: 'Enable or disable automatic tool calls for this chat', category: 'Session' },
   { id: 'project', syntax: '/project <name|off>', insert: '/project ', description: 'Link or unlink a project context', category: 'Session' },
 
   { id: 'workspace', syntax: '/workspace [path|off]', insert: '/workspace ', description: 'Bind, pick, or detach a workspace folder', category: 'Workspace' },

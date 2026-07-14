@@ -21,7 +21,7 @@ export interface DoctorCheck {
 
 export type DoctorRepairAction =
   | 'reconcile_interrupted_work'
-  | 'resync_scheduler'
+  | 'resync_automations'
   | 'requeue_stale_delivery'
   | 'enable_safe_mode'
   | 'disable_safe_mode';
@@ -35,7 +35,7 @@ export interface DoctorReport {
 
 const REPAIR_DESCRIPTIONS: Record<DoctorRepairAction, string> = {
   reconcile_interrupted_work: 'Mark orphaned running tasks and agent runs as interrupted/lost. No files are changed.',
-  resync_scheduler: 'Stop and re-arm configured schedules from the current agent records.',
+  resync_automations: 'Re-arm schedule triggers from the current durable Automation definitions.',
   requeue_stale_delivery: 'Return expired task outbox delivery leases to the retry queue.',
   enable_safe_mode: 'Disable optional listeners and extension packs on the next server start while preserving all data.',
   disable_safe_mode: 'Re-enable normal startup of optional listeners and extension packs on the next server start.',
@@ -304,14 +304,15 @@ async function runtimeChecks(): Promise<DoctorCheck[]> {
     staleDeliveries ? `${staleDeliveries} expired delivery lease${staleDeliveries === 1 ? '' : 's'} can be requeued.` : 'No expired task-delivery leases were found.',
     { data: { stale: staleDeliveries }, ...(staleDeliveries ? { repairAction: 'requeue_stale_delivery' as const } : {}) },
   ));
-  const agents = await loadAgents();
-  const expectedSchedules = agents.reduce((count, agent) => count + (agent.schedules || []).filter((entry) => entry.enabled).length, 0);
-  const { listScheduled } = await import('./scheduler');
-  const armed = listScheduled().length;
+  const { getRoutineEngineStatus } = await import('./routines');
+  const automationEngine = getRoutineEngineStatus();
+  const schedulerHealthy = automationEngine.running && automationEngine.armedSchedules === automationEngine.expectedSchedules;
   result.push(check(
-    'scheduler', 'runtime', 'Routine scheduler', armed === expectedSchedules ? 'ok' : 'warning',
-    `${armed} schedule${armed === 1 ? '' : 's'} armed; ${expectedSchedules} enabled in agent configuration.`,
-    { data: { armed, expected: expectedSchedules }, ...(armed === expectedSchedules ? {} : { repairAction: 'resync_scheduler' as const }) },
+    'automations', 'runtime', 'Automation engine', schedulerHealthy ? 'ok' : 'warning',
+    automationEngine.running
+      ? `${automationEngine.armedSchedules} schedule trigger${automationEngine.armedSchedules === 1 ? '' : 's'} armed; ${automationEngine.expectedSchedules} enabled in durable Automations.`
+      : 'The durable Automation engine is not running.',
+    { data: automationEngine, ...(schedulerHealthy ? {} : { repairAction: 'resync_automations' as const }) },
   ));
   const { getTerminalServerInfo } = await import('./terminal-server');
   const terminal = getTerminalServerInfo();
@@ -352,10 +353,11 @@ export async function applyDoctorRepair(action: DoctorRepairAction, confirmation
     const { reconcileOrphanedTasks } = await import('./task-ledger');
     const runs = reconcileExpiredRunLeases();
     result = { runs: runs.count, tasks: reconcileOrphanedTasks(runs.runIds), runIds: runs.runIds };
-  } else if (action === 'resync_scheduler') {
-    const { loadAndScheduleAll, listScheduled } = await import('./scheduler');
-    await loadAndScheduleAll();
-    result = { armed: listScheduled().length };
+  } else if (action === 'resync_automations') {
+    const { getRoutineEngineStatus, startRoutineEngine, syncRoutineSchedules } = await import('./routines');
+    await startRoutineEngine();
+    await syncRoutineSchedules();
+    result = getRoutineEngineStatus();
   } else if (action === 'requeue_stale_delivery') {
     const changes = getDb().prepare(`
       UPDATE task_outbox SET status = 'failed', availableAt = ?, lastError = 'Lease expired; requeued by Shiba Doctor'

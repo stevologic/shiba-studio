@@ -209,15 +209,10 @@ export interface TaskCheckpointRestore {
   error?: string;
 }
 
-export type AttentionKind =
-  | 'question'
-  | 'approval'
-  | 'failure'
-  | 'completion'
-  | 'budget'
-  | 'warning';
+/** The Attention inbox is an actionable queue, not a notification history. */
+export type AttentionKind = 'approval';
 
-export type AttentionStatus = 'open' | 'resolved' | 'dismissed';
+export type AttentionStatus = 'open';
 
 export interface AttentionItem {
   id: string;
@@ -231,7 +226,6 @@ export interface AttentionItem {
   dedupeKey: string;
   createdAt: string;
   updatedAt: string;
-  resolvedAt?: string;
 }
 
 export type TaskCommandKind =

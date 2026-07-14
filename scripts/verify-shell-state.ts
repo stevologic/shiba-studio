@@ -58,7 +58,6 @@ async function main() {
         peers: [],
         skills: [],
         chatSkill: '',
-        schedules: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       } as unknown as import('../lib/types').Agent,

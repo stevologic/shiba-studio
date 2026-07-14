@@ -10,15 +10,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
-  Bot, CalendarClock, ChevronRight, ChevronsUp, Cloud, CloudDownload, CloudUpload,
+  Bot, ChevronRight, ChevronsUp, Cloud, CloudDownload, CloudUpload,
   ExternalLink, FileCode, FileText, Folder, FolderOpen, GitBranch, HardDrive, MessageSquare,
   RefreshCw, Save, Search, Trash2, Upload, X,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { Agent } from '@/lib/types';
-import type { ChatSession } from '@/lib/chat-session-types';
-import { loadClientJson } from '@/lib/client-json';
 
 const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
 
@@ -45,6 +43,8 @@ interface WorktreeEntry {
   path: string;
   branch?: string;
   exists: boolean;
+  mappedAgent?: boolean;
+  chatConsumers?: Array<{ id: string; title: string; archived?: boolean }>;
 }
 
 interface ExplorerIntent {
@@ -83,11 +83,6 @@ function pathSegments(p: string): string[] {
   return parts;
 }
 
-function joinPath(base: string, name: string): string {
-  const sep = base.includes('\\') && !base.includes('/') ? '\\' : '/';
-  return base.replace(/[/\\]+$/, '') + sep + name;
-}
-
 function parentOf(p: string): string | null {
   const norm = p.replace(/\\/g, '/');
   const i = norm.lastIndexOf('/');
@@ -113,7 +108,6 @@ export default function WorkspacePage({
   const [fileBinary, setFileBinary] = useState(false);
   const [explorerLoading, setExplorerLoading] = useState(false);
   const [fileCtxMenu, setFileCtxMenu] = useState<{ x: number; y: number; path: string; name: string } | null>(null);
-  const [pathInput, setPathInput] = useState(defaultWorkspace || '');
   const [showFolderBrowse, setShowFolderBrowse] = useState(false);
   const [treeFilter, setTreeFilter] = useState('');
 
@@ -128,7 +122,6 @@ export default function WorkspacePage({
   const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
   const [isGitRepo, setIsGitRepo] = useState(false);
   const [wtLoading, setWtLoading] = useState(false);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
   /** Once the user Browse… / navigates, stop overriding with Settings default. */
   const userPickedPathRef = useRef(false);
   const wsPathRef = useRef(wsPath);
@@ -152,7 +145,6 @@ export default function WorkspacePage({
     const next = (defaultWorkspace || '').trim();
     if (!next || userPickedPathRef.current) return;
     setWsPath(next);
-    setPathInput(next);
   }, [defaultWorkspace]);
 
   const loadUploads = useCallback(async (force = false): Promise<string> => {
@@ -181,17 +173,6 @@ export default function WorkspacePage({
     } finally {
       if (uploadsLoadRef.current === run) uploadsLoadRef.current = null;
     }
-  }, []);
-
-  const loadSessions = useCallback(async () => {
-    try {
-      const data = await loadClientJson<{ ok?: boolean; sessions?: ChatSession[] } | ChatSession[]>(
-        '/api/chat-sessions',
-        { maxAgeMs: 15_000 },
-      );
-      if (!Array.isArray(data) && data.ok && Array.isArray(data.sessions)) setSessions(data.sessions);
-      else if (Array.isArray(data)) setSessions(data);
-    } catch { /* ignore */ }
   }, []);
 
   const loadWorktrees = useCallback(async () => {
@@ -257,11 +238,9 @@ export default function WorkspacePage({
         const resolved = String(data.resolved);
         wsPathRef.current = resolved;
         setWsPath(resolved);
-        setPathInput(resolved);
       } else {
         wsPathRef.current = p;
         setWsPath(p);
-        setPathInput(p);
       }
     } catch (e: unknown) {
       if (controller.signal.aborted || requestId !== explorerRequestRef.current) return;
@@ -292,14 +271,14 @@ export default function WorkspacePage({
     enterExplorer(undefined, opts);
   }, [enterExplorer]);
 
-  useEffect(() => {
-    void loadUploads();
-    void loadSessions();
-  }, [loadUploads, loadSessions]);
+  const openWorktrees = useCallback(() => {
+    setView('worktrees');
+    void loadWorktrees();
+  }, [loadWorktrees]);
 
   useEffect(() => {
-    if (view === 'worktrees') void loadWorktrees();
-  }, [view, loadWorktrees]);
+    void loadUploads();
+  }, [loadUploads]);
 
   // Entering Explorer has one loading owner. The intent and view transition
   // batch into this effect, avoiding the former manual load + enter-view load
@@ -545,22 +524,11 @@ export default function WorkspacePage({
     return m;
   }, [agents]);
 
-  /** Who is using each worktree path (agents, chat sessions, automations). */
+  /** Who is directly mapped to each worktree path. Automations use their agent's mapping. */
   function consumersFor(wt: WorktreeEntry) {
-    const agent = agentById.get(wt.agentId);
-    const chats = sessions.filter((s) => {
-      const d = s.workspaceDir?.trim();
-      if (!d) return false;
-      const a = d.replace(/\\/g, '/').toLowerCase();
-      const b = wt.path.replace(/\\/g, '/').toLowerCase();
-      return a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
-    });
-    const schedCount = agent
-      ? (agent.schedules?.length
-        ? agent.schedules.filter((s) => s.enabled).length
-        : agent.schedule?.enabled ? 1 : 0)
-      : 0;
-    return { agent, chats, schedCount };
+    const agent = wt.mappedAgent ? agentById.get(wt.agentId) : undefined;
+    const chats = wt.chatConsumers || [];
+    return { agent, chats };
   }
 
   const filteredFiles = useMemo(() => {
@@ -616,6 +584,7 @@ export default function WorkspacePage({
                 aria-current={active ? 'page' : undefined}
                 onClick={() => {
                   if (item.id === 'explorer') openExplorer();
+                  else if (item.id === 'worktrees') openWorktrees();
                   else setView(item.id);
                 }}
               >
@@ -772,7 +741,7 @@ export default function WorkspacePage({
               ) : (
                 <div className="ws-wt-list">
                   {worktrees.map((wt) => {
-                    const { agent, chats, schedCount } = consumersFor(wt);
+                    const { agent, chats } = consumersFor(wt);
                     return (
                       <article key={wt.agentId} className={`ws-wt-card ${wt.exists ? '' : 'ws-wt-card-missing'}`}>
                         <div className="ws-wt-card-top">
@@ -841,22 +810,17 @@ export default function WorkspacePage({
                               >
                                 <Bot size={12} /> {agent.name}
                               </button>
-                            ) : (
+                            ) : wt.mappedAgent ? (
                               <span className="ws-usage-pill ws-usage-pill-muted">
                                 <Bot size={12} /> Unknown agent
                               </span>
-                            )}
-                            {schedCount > 0 && (
-                              <span className="ws-usage-pill" title="Enabled automations on this agent">
-                                <CalendarClock size={12} /> {schedCount} automation{schedCount === 1 ? '' : 's'}
-                              </span>
-                            )}
+                            ) : null}
                             {chats.map((s) => (
-                              <span key={s.id} className="ws-usage-pill" title={`Chat session · ${s.title}`}>
-                                <MessageSquare size={12} /> {s.title || 'Chat'}
+                              <span key={s.id} className="ws-usage-pill" title={`Chat session · ${s.title}${s.archived ? ' (archived)' : ''}`}>
+                                <MessageSquare size={12} /> {s.title || 'Chat'}{s.archived ? ' (archived)' : ''}
                               </span>
                             ))}
-                            {!agent && chats.length === 0 && schedCount === 0 && (
+                            {!wt.mappedAgent && chats.length === 0 && (
                               <span className="text-[11px] text-dim">No linked agent or chat found</span>
                             )}
                           </div>
@@ -867,12 +831,16 @@ export default function WorkspacePage({
                 </div>
               )}
 
-              {isGitRepo && agents.filter((a) => a.workspace?.useWorktree).length > 0 && (
+              {isGitRepo && worktrees.some((worktree) => worktree.mappedAgent) && (
                 <div className="ws-wt-create mt-4">
                   <div className="text-xs font-medium text-muted mb-2">Create worktree for agent</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {agents
-                      .filter((a) => a.workspace?.useWorktree)
+                    {worktrees
+                      .filter((worktree) => worktree.mappedAgent)
+                      .flatMap((worktree) => {
+                        const mapped = agentById.get(worktree.agentId);
+                        return mapped ? [mapped] : [];
+                      })
                       .map((a) => (
                         <button
                           key={a.id}

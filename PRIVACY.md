@@ -25,9 +25,14 @@ than the one running on your own machine.
   generate responses. If you use a **local model server** instead, that
   traffic stays on your machine.
 - **Integrations you connect** — GitHub, Slack, Google Drive, Discord, X,
-  Obsidian, Vercel, Netlify, Linear, and Jira calls go directly from your
-  machine to those services using the credentials you provided. No proxy in
-  between.
+  Reddit, Obsidian, Vercel, Netlify, Linear, and Jira calls go directly from
+  your machine to those services using the credentials you provided. Reddit
+  requests go through the Devvit companion endpoint you deploy; Shiba sends
+  listing parameters or post content to that endpoint with its managed app
+  token, and published posts are authored by the Devvit app account. No Shiba
+  proxy sits in between. Posts returned by the companion can be included in
+  the active model turn when an agent reads Reddit; durable tool traces retain
+  only bounded listing metadata rather than post bodies or authors.
 - **Linear/Jira Board sync (optional)** — a sync sends card title,
   description, priority, and labels to the selected service; **Tasks +
   columns** also sends mapped workflow status. Pulling brings those same

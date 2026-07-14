@@ -13,7 +13,7 @@ import path from 'node:path';
 import { audit } from './audit-log';
 import { dataDir } from './data-paths';
 import { getDb } from './db';
-import { createTask, requestTaskAttention } from './task-ledger';
+import { createTask } from './task-ledger';
 import { verifyNativeNodeRelease } from './native-node-release';
 
 export const NATIVE_NODE_PROTOCOL_VERSION = 1;
@@ -982,14 +982,6 @@ export function recordNativeNodeEvent(auth: NativeNodeAuth, payloadBase64: strin
     originType: 'integration',
     originId: auth.node.id,
     metadata: { nativeNodeId: auth.node.id, nativeEventId: eventId, type, paths, securityScan: scan },
-  });
-  requestTaskAttention({
-    taskId: task.id,
-    kind: 'question',
-    title: task.title,
-    body: text || `${paths.length} file path(s) were shared from ${auth.node.name}.`,
-    dedupeKey: `native-event:${eventId}`,
-    action: { taskId: task.id },
   });
   audit('run', 'native node quick entry', type, {
     nodeId: auth.node.id, eventId, taskId: task.id, pathCount: paths.length, injectionRisk: scan.risk,

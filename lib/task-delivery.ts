@@ -18,12 +18,6 @@ function staleClaim(error: unknown): boolean {
 }
 
 async function deliverOne(item: ReturnType<typeof claimOutbox>[number]): Promise<void> {
-  if (item.target === 'attention') {
-    // The terminal transition inserted the Attention row in the same
-    // transaction as this outbox item. Nothing external remains to write.
-    finishOutbox(item.id, { delivered: true, expectedAttempts: item.attempts });
-    return;
-  }
   if (item.target.startsWith('chat:')) {
     const sessionId = item.target.slice('chat:'.length);
     const { appendChatMessage } = await import('./chat-sessions');
@@ -46,8 +40,8 @@ async function deliverOne(item: ReturnType<typeof claimOutbox>[number]): Promise
       createdAt: new Date().toISOString(),
     });
     if (!saved) {
-      // The Attention row and task result remain durable. A deleted originating
-      // chat is a terminal destination, not a transient error worth retrying.
+      // The task result remains durable. A deleted originating chat is a
+      // terminal destination, not a transient error worth retrying.
       try {
         const { audit } = await import('./audit-log');
         audit('run', 'background delivery skipped', 'Originating chat session no longer exists', {

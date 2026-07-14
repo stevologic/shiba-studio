@@ -50,7 +50,7 @@ Studio labels captured accessibility, clipboard, and quick-entry text as untrust
 
 ## Quick entry
 
-While the helper is running, **Ctrl+Shift+Space** opens a small quick-entry window. Text or files dragged into it create a durable Shiba task and Attention item. File drops send bounded path metadata, not file contents. Duplicate signed event ids are rejected.
+While the helper is running, **Ctrl+Shift+Space** opens a small quick-entry window. Text or files dragged into it create a durable Shiba task. File drops send bounded path metadata, not file contents. Duplicate signed event ids are rejected.
 
 ## Operations
 

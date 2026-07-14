@@ -25,6 +25,8 @@ export interface ChatSession {
   chatModel: string;
   projectId: string | null;
   useGrokCli: boolean;
+  /** Per-chat automatic model tool calls. Missing on older sessions means enabled. */
+  toolsEnabled?: boolean;
   /** Model used when routing through the local Grok CLI (limited to the CLI's own model list). */
   cliModel?: string;
   reasoningEffort: ReasoningEffort;

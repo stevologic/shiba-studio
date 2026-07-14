@@ -54,7 +54,15 @@ async function main(): Promise<void> {
       agentId: 'gone-agent',
       projectId: 'gone-project',
       sessionId: 'gone-session',
+      runId: 'missing-agent-run',
     });
+    db.prepare(`
+      INSERT INTO runs (
+        id, agentId, agentName, model, status, prompt, startedAt, completedAt,
+        finalOutput, sideEffects, trace, taskId, attemptNo
+      ) VALUES ('missing-agent-run', 'gone-agent', 'Gone Agent', 'test', 'running',
+        'cancel me', ?, NULL, NULL, '[]', '[]', 'active-missing-agent', 1)
+    `).run(now);
     ledger.createTask({
       id: 'active-missing-project-session',
       kind: 'work',
@@ -465,10 +473,17 @@ async function main(): Promise<void> {
       { status: 'succeeded', grantId: null, grantRevision: null },
     );
 
-    const lost = ledger.getTask('active-missing-agent')!;
-    assert.equal(lost.status, 'lost');
-    assert.equal(lost.projectId, undefined);
-    assert.equal(lost.sessionId, undefined);
+    const cancelled = ledger.getTask('active-missing-agent')!;
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(cancelled.projectId, undefined);
+    assert.equal(cancelled.sessionId, undefined);
+    assert.equal(
+      (db.prepare(`
+        SELECT kind FROM task_run_controls
+        WHERE taskId = 'active-missing-agent' AND runId = 'missing-agent-run'
+      `).get() as { kind: string } | undefined)?.kind,
+      'cancel',
+    );
     const detached = ledger.getTask('active-missing-project-session')!;
     assert.equal(detached.status, 'queued');
     assert.equal(detached.projectId, undefined);
@@ -478,10 +493,10 @@ async function main(): Promise<void> {
     assert.equal(historical.projectId, 'gone-project');
     assert.equal(historical.sessionId, 'gone-session');
     assert.equal(ledger.getTask('ephemeral-background-task')!.status, 'queued');
-    const boardLost = ledger.getTask('active-missing-board')!;
-    assert.equal(boardLost.status, 'lost');
-    assert.equal(boardLost.originId, undefined);
-    assert.equal(boardLost.metadata.orphanedBoardOriginId, 'gone-card');
+    const boardCancelled = ledger.getTask('active-missing-board')!;
+    assert.equal(boardCancelled.status, 'cancelled');
+    assert.equal(boardCancelled.originId, undefined);
+    assert.equal(boardCancelled.metadata.orphanedBoardOriginId, 'gone-card');
     const boardHistorical = ledger.getTask('terminal-missing-board')!;
     assert.equal(boardHistorical.originId, undefined);
     assert.equal(boardHistorical.metadata.orphanedBoardOriginId, 'gone-card');

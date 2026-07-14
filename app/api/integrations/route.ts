@@ -54,14 +54,6 @@ export async function POST(req: NextRequest) {
   if (body.action === 'delete') {
     const which = body.which as string | undefined;
     if (!which) return NextResponse.json({ error: 'which is required' }, { status: 400 });
-    // Revoke Reddit's permanent refresh token before deleting the local app
-    // credentials. Remote revoke is best-effort; local deletion always wins.
-    if (which === 'reddit') {
-      try {
-        const { disconnectReddit } = await import('@/lib/reddit-oauth');
-        await disconnectReddit();
-      } catch { /* continue with guaranteed local deletion */ }
-    }
     // The saved OAuth 2 client may also own an auto-configured X MCP server
     // and its isolated xurl token home. Remove only the exact matching client;
     // independently configured X MCP profiles remain intact.
@@ -104,19 +96,6 @@ export async function POST(req: NextRequest) {
     Ints.setIntegrationCreds(next.integrations || {});
     audit('integration', 'Google Drive disconnected', '');
     return NextResponse.json({ ok: true, integrations: maskIntegrationCreds(next.integrations || {}) });
-  }
-
-  if (body.action === 'disconnect-reddit') {
-    const { disconnectReddit } = await import('@/lib/reddit-oauth');
-    const result = await disconnectReddit();
-    const next = await loadConfig();
-    Ints.setIntegrationCreds(next.integrations || {});
-    audit('integration', 'Reddit disconnected', result.warning || '');
-    return NextResponse.json({
-      ok: true,
-      warning: result.warning,
-      integrations: maskIntegrationCreds(next.integrations || {}),
-    });
   }
 
   if (body.action === 'test') {

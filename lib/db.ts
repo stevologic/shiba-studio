@@ -13,7 +13,6 @@ interface DbGlobalState {
   handle: DatabaseSync | null;
   maintenanceToken: symbol | null;
 }
-
 const dbGlobals = globalThis as typeof globalThis & {
   __shibaDbState?: DbGlobalState;
 };
@@ -75,7 +74,6 @@ function migrateRunsFromJson(database: DatabaseSync): void {
     try { database.exec('ROLLBACK'); } catch { /* no txn open */ }
   }
 }
-
 /** Pre-rebrand databases were named grokdesk.db — rename (with WAL sidecars)
  *  before opening so run history and the audit log survive the upgrade. */
 function dbPath(): string {
@@ -103,7 +101,7 @@ function dbPath(): string {
  * Migrations run in order inside a transaction on next open, so an existing
  * ~/.shiba-studio/data/shiba-studio.db always upgrades safely.
  */
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 14;
 
 /** MIGRATIONS[n] upgrades a database at user_version n to n+1. */
 const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
@@ -236,7 +234,92 @@ const MIGRATIONS: Record<number, (database: DatabaseSync) => void> = {
       d.exec('ALTER TABLE task_checkpoint_restores ADD COLUMN conversationSnapshot TEXT');
     }
   },
+  // v12 -> v13: Attention is an ephemeral, approval-only action queue. Task
+  // outcomes remain in tasks/events (and chat delivery where applicable), so
+  // carrying terminal notifications here only creates badge noise. Pending
+  // approval waiters are process-local and cannot survive the restart that
+  // runs this migration, making a full queue reset the only truthful repair.
+  12: restrictAttentionToApprovals,
+  // v13 -> v14: retire the separate per-agent scheduler. Pending legacy
+  // executions move into a short-lived migration inbox that the durable
+  // Automation engine consumes idempotently on startup; historical runs stay.
+  13: retireLegacySchedulerStorage,
 };
+
+function retireLegacySchedulerStorage(d: DatabaseSync): void {
+  const hasIntents = Boolean(d.prepare(`
+    SELECT 1 AS found FROM sqlite_master
+    WHERE type = 'table' AND name = 'schedule_execution_intents'
+  `).get());
+  if (hasIntents) {
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS automation_legacy_intents (
+        id TEXT PRIMARY KEY,
+        scheduleKey TEXT NOT NULL,
+        tick TEXT NOT NULL,
+        agentId TEXT NOT NULL,
+        agentName TEXT NOT NULL,
+        scheduleId TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        instructions TEXT NOT NULL,
+        status TEXT NOT NULL,
+        availableAt TEXT NOT NULL,
+        runId TEXT,
+        taskId TEXT,
+        createdAt TEXT NOT NULL
+      );
+
+      INSERT OR IGNORE INTO automation_legacy_intents (
+        id, scheduleKey, tick, agentId, agentName, scheduleId, cron,
+        instructions, status, availableAt, runId, taskId, createdAt
+      )
+      SELECT id, scheduleKey, tick, agentId, agentName, scheduleId, cron,
+        instructions, status, availableAt, runId, taskId, createdAt
+      FROM schedule_execution_intents
+      WHERE status IN ('pending', 'processing');
+
+      DROP TRIGGER IF EXISTS integrity_tasks_optional_refs_ad;
+      DROP TRIGGER IF EXISTS integrity_runs_optional_refs_ad;
+    `);
+  }
+  d.exec(`
+    DROP TABLE IF EXISTS schedule_execution_intents;
+    DROP TABLE IF EXISTS schedule_ticks;
+  `);
+}
+
+function restrictAttentionToApprovals(d: DatabaseSync): void {
+  d.exec(`
+    DELETE FROM task_attention;
+    DELETE FROM task_outbox WHERE target = 'attention';
+
+    DROP TRIGGER IF EXISTS task_attention_approval_only_bi;
+    CREATE TRIGGER task_attention_approval_only_bi
+    BEFORE INSERT ON task_attention
+    WHEN NEW.kind <> 'approval'
+      OR NEW.status <> 'open'
+      OR CASE
+        WHEN json_valid(NEW.action) = 0 THEN 1
+        WHEN COALESCE(json_type(NEW.action, '$.approvalId'), '') <> 'text' THEN 1
+        WHEN COALESCE(TRIM(CAST(json_extract(NEW.action, '$.approvalId') AS TEXT)), '') = '' THEN 1
+        WHEN COALESCE(json_type(NEW.action, '$.toolName'), '') <> 'text' THEN 1
+        WHEN COALESCE(TRIM(CAST(json_extract(NEW.action, '$.toolName') AS TEXT)), '') = '' THEN 1
+        WHEN COALESCE(json_type(NEW.action, '$.args'), '') <> 'object' THEN 1
+        WHEN COALESCE(json_type(NEW.action, '$.expiresAt'), '') <> 'text' THEN 1
+        ELSE 0
+      END = 1
+    BEGIN
+      SELECT RAISE(ABORT, 'task_attention accepts only exact pending approvals');
+    END;
+
+    DROP TRIGGER IF EXISTS task_attention_immutable_bu;
+    CREATE TRIGGER task_attention_immutable_bu
+    BEFORE UPDATE ON task_attention
+    BEGIN
+      SELECT RAISE(ABORT, 'task_attention approvals are immutable; delete after a decision');
+    END;
+  `);
+}
 
 function addBackgroundMaintenanceIndexes(d: DatabaseSync): void {
   d.exec(`
@@ -550,7 +633,7 @@ export function getDb(): DatabaseSync {
     }
     candidate.exec('PRAGMA journal_mode = WAL');
     // A second server graph/process can briefly hold SQLite's write lock while
-    // claiming an automation tick or task lease. Let those normal short writes
+    // claiming an automation invocation or task lease. Let those normal short writes
     // serialize instead of surfacing SQLITE_BUSY as a missed automation.
     candidate.exec('PRAGMA busy_timeout = 5000');
     const existingVersion = schemaVersion(candidate);
@@ -589,15 +672,22 @@ export function getDb(): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_log(category, ts DESC);
-
-    CREATE TABLE IF NOT EXISTS schedule_ticks (
-      scheduleKey TEXT NOT NULL,
-      tick TEXT NOT NULL,
-      claimedAt TEXT NOT NULL,
-      PRIMARY KEY (scheduleKey, tick)
-    );
   `);
     runMigrations(candidate);
+    if (schemaVersion(candidate) >= 14) {
+      // A stale module graph or interim v14 build can leave the retired tables
+      // behind after the version stamp has advanced. Converge them through the
+      // same lossless inbox used by the v13 migration instead of deleting
+      // pending work solely because user_version is already current.
+      candidate.exec('BEGIN IMMEDIATE');
+      try {
+        retireLegacySchedulerStorage(candidate);
+        candidate.exec('COMMIT');
+      } catch (error) {
+        try { candidate.exec('ROLLBACK'); } catch { /* no transaction */ }
+        throw error;
+      }
+    }
     migrateRunsFromJson(candidate);
     dbState.handle = candidate;
     return candidate;
@@ -666,7 +756,7 @@ export function validateDatabaseFile(file: string): void {
     );
     // v0 is a supported legacy starting point only when it is recognizably a
     // Shiba database. This rejects empty/arbitrary quick_check-clean SQLite.
-    for (const required of ['runs', 'audit_log', 'schedule_ticks']) {
+    for (const required of ['runs', 'audit_log']) {
       if (!originalTables.has(required)) {
         throw new Error(`Backup is not a Shiba Studio database (missing ${required}).`);
       }
@@ -681,7 +771,7 @@ export function validateDatabaseFile(file: string): void {
         .map((entry) => entry.name),
     );
     for (const required of [
-      'runs', 'audit_log', 'schedule_ticks', 'tasks', 'task_commands', 'task_outbox', 'runs_fts', 'tasks_fts',
+      'runs', 'audit_log', 'tasks', 'task_commands', 'task_outbox', 'runs_fts', 'tasks_fts',
     ]) {
       if (!migratedTables.has(required)) {
         throw new Error(`Backup database schema is incomplete (missing ${required}).`);
@@ -702,36 +792,4 @@ export function validateDatabaseFile(file: string): void {
   } finally {
     candidate.close();
   }
-}
-
-/**
- * Atomically claim one cron tick for a schedule (tick = UTC minute). Cron
- * fires can be duplicated — extra module copies of the scheduler, or a second
- * server process on the same data dir — and every duplicate lands here; the
- * PRIMARY KEY guarantees exactly one caller wins the minute.
- */
-export function claimScheduleTick(scheduleKey: string, tick: string): boolean {
-  const database = getDb();
-  try {
-    database
-      .prepare('INSERT INTO schedule_ticks (scheduleKey, tick, claimedAt) VALUES (?, ?, ?)')
-      .run(scheduleKey, tick, new Date().toISOString());
-  } catch (error) {
-    const code = String((error as { code?: unknown })?.code || '');
-    const message = error instanceof Error ? error.message : String(error);
-    // Only the primary-key race means another scheduler won this tick. Disk,
-    // schema, lock-timeout, and maintenance failures must be visible to the
-    // caller so they can be audited instead of silently dropping work.
-    if (code.startsWith('SQLITE_CONSTRAINT') || /UNIQUE constraint failed:\s*schedule_ticks/i.test(message)) {
-      return false;
-    }
-    throw error;
-  }
-  // Opportunistic cleanup — claims are meaningless after the minute passes.
-  try {
-    database
-      .prepare('DELETE FROM schedule_ticks WHERE claimedAt < ?')
-      .run(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
-  } catch { /* cleanup is best-effort */ }
-  return true;
 }

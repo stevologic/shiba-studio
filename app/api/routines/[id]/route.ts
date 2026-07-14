@@ -3,7 +3,7 @@ import {
   getRoutine,
   listRoutineInvocations,
   resetRoutineCircuit,
-  updateRoutine,
+  updateOwnedRoutine,
 } from '@/lib/routines';
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +25,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     }
     const routine = body.action === 'reset_circuit'
       ? resetRoutineCircuit(id, expectedVersion)
-      : updateRoutine(id, body, expectedVersion);
+      : await updateOwnedRoutine(id, body, expectedVersion);
     return Response.json({ ok: true, routine });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Routine update failed';

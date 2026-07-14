@@ -266,7 +266,6 @@ async function main() {
       integrations: { ...EMPTY_INTEGRATION_SCOPE, netlify: true },
       peers: [],
       skills: [],
-      schedules: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

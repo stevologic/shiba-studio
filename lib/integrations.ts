@@ -52,24 +52,14 @@ export function mergeAgentIntegrationCreds(
     }
     if (!Object.keys(filled).length) continue;
     if (svc === 'reddit') {
-      // A Reddit OAuth client pair and token session are account boundaries.
-      // Never combine half an agent's client pair, or one account's access
-      // token with the global account's refresh/session metadata.
-      const base = { ...(global.reddit || {}) } as Record<string, unknown>;
-      const hasClientOverride = ['clientId', 'clientSecret'].some((key) => key in filled);
-      const hasSessionOverride = [
-        'accessToken', 'refreshToken', 'tokenExpiry', 'username', 'userId', 'scopes',
-      ].some((key) => key in filled);
-      if (hasClientOverride) {
-        delete base.clientId;
-        delete base.clientSecret;
-      }
-      if (hasClientOverride || hasSessionOverride) {
-        for (const key of ['accessToken', 'refreshToken', 'tokenExpiry', 'username', 'userId', 'scopes']) {
-          delete base[key];
-        }
-      }
-      merged.reddit = { ...base, ...filled } as IntegrationCreds['reddit'];
+      // The endpoint and managed token identify one Devvit app installation.
+      // If an agent overrides either field, do not borrow the other half from
+      // the global integration and accidentally cross an app boundary.
+      const hasDevvitOverride = ['devvitEndpoint', 'devvitAppToken'].some((key) => key in filled);
+      merged.reddit = {
+        ...(hasDevvitOverride ? {} : (global.reddit || {})),
+        ...filled,
+      } as IntegrationCreds['reddit'];
       continue;
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -432,7 +422,7 @@ export async function xPostTweet(text: string) {
   return { ok: true, id, url: id ? `https://x.com/i/web/status/${id}` : undefined };
 }
 
-/** Reddit uses OAuth 2.0 user authorization and refreshes its bearer lazily. */
+/** Reddit is accessed through the installed Devvit companion app. */
 export async function testReddit() {
   const { testReddit: test } = await import('./reddit');
   return test({ reddit: creds.reddit });

@@ -7,11 +7,8 @@ import {
   createTaskInOpenTransaction,
   getTask,
   getTaskDetails,
-  listAttention,
   publishTaskChanges,
   recordTaskEvidence,
-  requestTaskAttention,
-  resolveAttention,
   transitionTask,
   transitionTaskInOpenTransaction,
 } from './task-ledger';
@@ -518,9 +515,6 @@ export async function dispatchReadyTeamWorkers(parentTaskId: string): Promise<st
       error: null,
       currentStep: 'Coordinating retried specialist workers',
     });
-    for (const item of listAttention({ taskId: parentTask.id, status: 'open' }).items) {
-      if (item.dedupeKey === 'team-workers-blocked') resolveAttention(item.id);
-    }
   }
   for (const node of graph) {
     if (node.task.status !== 'blocked' || !dependenciesReady(node)) continue;
@@ -574,14 +568,6 @@ export async function dispatchReadyTeamWorkers(parentTaskId: string): Promise<st
     if (parent && !['succeeded', 'failed', 'cancelled', 'lost'].includes(parent.status)) {
       if (failed.length) {
         transitionTask({ taskId: parent.id, status: 'blocked', error: `${failed.length} required worker${failed.length === 1 ? '' : 's'} did not succeed.` });
-        requestTaskAttention({
-          taskId: parent.id,
-          kind: 'failure',
-          severity: 'critical',
-          title: `${parent.title} has blocked workers`,
-          body: failed.map((node) => `${node.key}: ${node.task.status}`).join('\n'),
-          dedupeKey: 'team-workers-blocked',
-        });
       } else {
         const evaluation = (await import('./task-ledger')).evaluateTaskCompletion(parent.id, true);
         if (evaluation.complete) transitionTask({
@@ -589,7 +575,7 @@ export async function dispatchReadyTeamWorkers(parentTaskId: string): Promise<st
           status: 'succeeded',
           result: `All required workers completed with evidence.${optionalFailed.length ? ` ${optionalFailed.length} optional worker${optionalFailed.length === 1 ? '' : 's'} did not complete.` : ''}`,
         });
-        else transitionTask({ taskId: parent.id, status: 'waiting_for_approval', currentStep: 'Worker results collected', nextAction: 'Review remaining completion-contract evidence' });
+        else transitionTask({ taskId: parent.id, status: 'blocked', currentStep: 'Worker results collected', nextAction: 'Record remaining completion-contract evidence' });
       }
     }
   }

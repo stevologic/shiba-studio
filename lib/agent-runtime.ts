@@ -532,11 +532,11 @@ export function getToolDefinitions(
       type: 'function',
       function: {
         name: 'reddit_read_posts',
-        description: 'Read posts from the signed-in Reddit home feed or a specific subreddit. Returns normalized posts and a pagination cursor.',
+        description: 'Read posts from the community where the configured Devvit app is installed. Returns normalized posts and a pagination cursor.',
         parameters: {
           type: 'object',
           properties: {
-            subreddit: { type: 'string', description: 'Subreddit name without r/. Omit for the signed-in home feed.' },
+            subreddit: { type: 'string', description: 'Installed subreddit name without r/. Omit to use the installed community; other communities are rejected.' },
             sort: { type: 'string', enum: ['hot', 'new', 'top', 'rising'], description: 'Listing order (default hot).' },
             time: { type: 'string', enum: ['hour', 'day', 'week', 'month', 'year', 'all'], description: 'Time window for top listings.' },
             limit: { type: 'number', description: 'Posts to return (1-25, default 10).' },
@@ -549,11 +549,11 @@ export function getToolDefinitions(
       type: 'function',
       function: {
         name: 'reddit_submit',
-        description: 'Publish a text or link post to a subreddit. This is irreversible: Ask mode requires exact approval, while autonomous or YOLO execution requires the user task to explicitly name Reddit as the destination.',
+        description: 'Publish a text or link post as the Devvit app account in its installed community. This is irreversible: Ask mode requires exact approval, while autonomous or YOLO execution requires the user task to explicitly name Reddit as the destination.',
         parameters: {
           type: 'object',
           properties: {
-            subreddit: { type: 'string', description: 'Target subreddit name without r/.' },
+            subreddit: { type: 'string', description: 'Installed subreddit name without r/. Other communities are rejected by Devvit.' },
             title: { type: 'string', description: 'Post title.' },
             kind: { type: 'string', enum: ['self', 'link'], description: 'Text post (self, default) or link post.' },
             text: { type: 'string', description: 'Markdown body for a self post.' },
@@ -808,8 +808,8 @@ export function getToolDefinitions(
     type: 'function',
     function: {
       name: 'schedule_task',
-      description: 'Ask to schedule a follow-up task for this same agent (or self). The orchestrator will honor.',
-      parameters: { type: 'object', properties: { when: { type: 'string', description: 'e.g. "in 30m" or cron' }, prompt: { type: 'string' } }, required: ['when', 'prompt'] },
+      description: 'Create a durable Automation for this agent. Use a relative or date-like time for one run, or a standard five-field cron expression for recurring work.',
+      parameters: { type: 'object', properties: { when: { type: 'string', description: 'For example "in 30m", "tomorrow at 9am", an ISO date, or "0 9 * * 1-5"' }, prompt: { type: 'string' } }, required: ['when', 'prompt'] },
     },
   });
   tools.push({
@@ -1885,24 +1885,18 @@ async function* agentRunGenerator(
                 nextAction: 'Approve or deny the exact tool action',
               });
             }
-            taskAttentionId = ledger.requestTaskAttention({
+            taskAttentionId = ledger.requestTaskApproval({
               taskId,
-              kind: 'approval',
               severity: 'warning',
+              approvalId,
+              toolName: fn.name,
+              args,
               title: taskDispatchPolicy.requiresLiveApproval
                 ? `${agent.name} requests contained host-shell access`
                 : `${agent.name} requests approval`,
               body: taskDispatchPolicy.requiresLiveApproval
                 ? `Exact command: ${String(args.command || '').slice(0, 1_500)}\n\nThe cwd is constrained to a writable task root and source changes are checkpointed, but this runtime is not an OS filesystem sandbox.`
                 : `${fn.name}(${JSON.stringify(args).slice(0, 1_500)})`,
-              dedupeKey: `tool-approval:${approvalId}`,
-              action: {
-                taskId,
-                approvalId,
-                toolName: fn.name,
-                args,
-                expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-              },
             }).id;
           } catch {
             /* the interactive approval still works if task projection is unavailable */
@@ -1918,7 +1912,7 @@ async function* agentRunGenerator(
           const approved = await wait;
           try {
             const ledger = await import('./task-ledger');
-            if (taskAttentionId) ledger.resolveAttention(taskAttentionId, 'resolved');
+            if (taskAttentionId) ledger.removeApprovalAttention(taskAttentionId);
             const task = ledger.getTask(taskId);
             if (task?.status === 'waiting_for_approval') {
               ledger.transitionTask({

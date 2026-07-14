@@ -31,7 +31,6 @@ function fixtureAgent(id: string): Agent {
     integrations: {},
     peers: [],
     skills: [],
-    schedules: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   } as unknown as Agent;

@@ -829,8 +829,8 @@ export async function instantiateCapabilityPackRoutine(packId: string, templateI
   if (!template) throw new Error('Routine template not found');
   const allowed = allowedPermissionIds(pack);
   if (!(template.permissionIds || []).every((permission) => allowed.has(permission))) throw new Error('Routine template permissions are not approved');
-  const { createRoutine } = await import('./routines');
-  return createRoutine({ ...template.definition, id: `pack-${pack.id}-${template.id}-${randomUUID().slice(0, 8)}`, agentId });
+  const { createOwnedRoutine } = await import('./routines');
+  return createOwnedRoutine({ ...template.definition, id: `pack-${pack.id}-${template.id}-${randomUUID().slice(0, 8)}`, agentId });
 }
 
 export function exportCapabilityPack(packId: string, version?: string): CapabilityPackManifest {

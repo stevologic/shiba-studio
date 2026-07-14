@@ -64,6 +64,13 @@ interface CompanionData {
   voiceRequests: CompanionVoiceRequestSummary[];
 }
 
+type CompanionAttention = CompanionData['attention'][number];
+type CompanionApprovalAttention = CompanionAttention & { approval: ApprovalSummary };
+
+function isApprovalAttention(item: CompanionAttention): item is CompanionApprovalAttention {
+  return Boolean(item.approval);
+}
+
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked']);
 
 export function CompanionApp() {
@@ -103,7 +110,7 @@ export function CompanionApp() {
       setEnabled(statusResponse ? statusResponse.enabled === true : null);
       setSession(savedSession);
       if (cached && Date.now() - Date.parse(cached.syncedAt) <= 7 * 86_400_000) {
-        setData(cached);
+        setData({ ...cached, attention: cached.attention.filter(isApprovalAttention) });
         setOffline(true);
       }
     };
@@ -137,7 +144,8 @@ export function CompanionApp() {
         }
         throw new Error(payload.error || 'Companion sync failed');
       }
-      const next = payload as CompanionData;
+      const payloadData = payload as CompanionData;
+      const next = { ...payloadData, attention: payloadData.attention.filter(isApprovalAttention) };
       const previous = seenAttention.current;
       if (previous.size > 0 && 'Notification' in window && Notification.permission === 'granted' && 'serviceWorker' in navigator) {
         const registration = await navigator.serviceWorker.ready;
@@ -155,7 +163,9 @@ export function CompanionApp() {
       if (controller.signal.aborted || sequence !== refreshSequenceRef.current) return;
       const cached = await loadCompanionSummary<CompanionData>().catch(() => null);
       if (sequence !== refreshSequenceRef.current) return;
-      if (cached && Date.now() - Date.parse(cached.syncedAt) <= 7 * 86_400_000) setData(cached);
+      if (cached && Date.now() - Date.parse(cached.syncedAt) <= 7 * 86_400_000) {
+        setData({ ...cached, attention: cached.attention.filter(isApprovalAttention) });
+      }
       setOffline(true);
       setError(refreshError instanceof Error ? refreshError.message : 'Companion is offline');
     } finally {
@@ -241,6 +251,8 @@ export function CompanionApp() {
     if (confirmed) await perform({ action: 'cancel', taskId: task.id, expectedVersion: task.version });
   };
 
+  const approvals = data?.attention.filter(isApprovalAttention) || [];
+
   return (
     <div className={styles.shell}>
       <main className={styles.main}>
@@ -306,31 +318,23 @@ export function CompanionApp() {
               <section className={`${styles.section} ${styles.sectionWide}`} aria-labelledby="attention-title">
                 <div className={`${styles.sectionHeader} ${styles.between}`}>
                   <h2 className={styles.sectionTitle} id="attention-title">Attention</h2>
-                  <span className={styles.badge}>{data?.attention.length || 0} open</span>
+                  <span className={styles.badge}>{approvals.length} pending</span>
                 </div>
                 <div className={styles.list}>
-                  {!data?.attention.length ? <p className={styles.empty}>Nothing needs you right now.</p> : data.attention.map((item) => (
+                  {!approvals.length ? <p className={styles.empty}>No approvals are waiting.</p> : approvals.map((item) => (
                     <article className={styles.card} key={item.id}>
                       <div className={styles.between}>
                         <h3 className={styles.cardTitle}>{item.title}</h3>
                         <span className={item.severity === 'critical' ? styles.severity : styles.badge}>{item.kind}</span>
                       </div>
                       <p className={styles.meta}>{new Date(item.createdAt).toLocaleString()}</p>
-                      {item.approval ? (
-                        <>
-                          <p className={styles.muted}>Exact action: {item.approval.toolName}</p>
-                          <pre className={styles.arguments}>{JSON.stringify(item.approval.arguments, null, 2)}</pre>
-                          <p className={styles.meta}>Expires {new Date(item.approval.expiresAt).toLocaleTimeString()}</p>
-                          <div className={styles.actions}>
-                            <button className={styles.button} type="button" disabled={!can('action:attention') || !!busy} onClick={() => void perform({ action: 'approve', attentionId: item.id, taskId: item.approval?.taskId, expectedVersion: item.approval?.taskVersion, actionDigest: item.approval?.actionDigest, expiresAt: item.approval?.expiresAt })}>Approve exact action</button>
-                            <button className={styles.danger} type="button" disabled={!can('action:attention') || !!busy} onClick={() => void perform({ action: 'deny', attentionId: item.id, taskId: item.approval?.taskId, expectedVersion: item.approval?.taskVersion, actionDigest: item.approval?.actionDigest, expiresAt: item.approval?.expiresAt })}>Deny</button>
-                          </div>
-                        </>
-                      ) : can('action:attention') ? (
-                        <div className={styles.actions}>
-                          <button className={styles.secondary} type="button" disabled={!!busy} onClick={() => void perform({ action: 'resolve_attention', attentionId: item.id, updatedAt: item.updatedAt })}>Mark handled</button>
-                        </div>
-                      ) : null}
+                      <p className={styles.muted}>Exact action: {item.approval.toolName}</p>
+                      <pre className={styles.arguments}>{JSON.stringify(item.approval.arguments, null, 2)}</pre>
+                      <p className={styles.meta}>Expires {new Date(item.approval.expiresAt).toLocaleTimeString()}</p>
+                      <div className={styles.actions}>
+                        <button className={styles.button} type="button" disabled={!can('action:attention') || !!busy} onClick={() => void perform({ action: 'approve', attentionId: item.id, taskId: item.approval.taskId, expectedVersion: item.approval.taskVersion, actionDigest: item.approval.actionDigest, expiresAt: item.approval.expiresAt })}>Approve exact action</button>
+                        <button className={styles.danger} type="button" disabled={!can('action:attention') || !!busy} onClick={() => void perform({ action: 'deny', attentionId: item.id, taskId: item.approval.taskId, expectedVersion: item.approval.taskVersion, actionDigest: item.approval.actionDigest, expiresAt: item.approval.expiresAt })}>Deny</button>
+                      </div>
                     </article>
                   ))}
                 </div>

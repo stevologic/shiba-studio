@@ -8,7 +8,7 @@
 ## Executive recommendation
 
 Shiba Studio is not missing the basic pieces of an agent product. It already has
-workspace-aware chat, local and cloud agents, background work, schedules,
+workspace-aware chat, local and cloud agents, background work, durable Automations,
 worktrees, browser automation, a shared Board, voice, reviewed memory learning,
 MCP, custom skills, integrations, approvals, sandboxes, diffs, audit history,
 cost controls, and backup/restore.
@@ -20,10 +20,10 @@ see proof that it is done, and rewind safely if it is not.
 
 The highest-leverage sequence is:
 
-1. Build a durable task ledger and one attention inbox.
+1. Build a durable task ledger and one exact-approval inbox.
 2. Add completion contracts, verification evidence, and safe rewind.
 3. Fix long-session context scaling and add session forks.
-4. Expand cron into event-driven routines.
+4. Keep expanding the durable Automation engine beyond time-based triggers.
 5. Put a secure remote companion on top of that substrate.
 
 Everything else becomes easier and safer once those foundations exist.
@@ -36,17 +36,17 @@ name:
 | Capability | Current Shiba surface |
 | --- | --- |
 | Workspace-aware chat and coding | Folder-bound chat, file tools, shell, Git commands, background tasks, and diffs ([Chat](docs/chat.md)) |
-| Autonomous agents | Per-agent model, workspace, worktree, integrations, skills, peers, schedules, sandbox, and memory ([Agents](docs/agents.md)) |
+| Autonomous agents | Per-agent model, workspace, worktree, integrations, skills, peers, sandbox, and memory ([Agents](docs/agents.md)) |
 | Parallel answers | "All agents" parallel fan-out with a synthesized response |
 | Browser work | Controlled Chrome plus the annotation sub-browser and screenshot evidence |
-| Automation | Process-safe cron schedules, overlap suppression, traces, and run history ([Automations](docs/automations.md)) |
+| Automation | One durable engine for recurring, one-time, monitored, and event-driven work, with overlap suppression, traces, and run history ([Automations](docs/automations.md)) |
 | Shared work queue | Kanban Board with agent execution and Linear/Jira synchronization ([Board](docs/board.md)) |
 | Memory and learning | Scoped recall plus reviewed or automatic post-run learning ([Memories](docs/memories.md)) |
 | Extensibility | Custom skills, stdio MCP servers, 40+ built-in tools, and service integrations ([Capabilities](docs/capabilities.md)) |
 | Safety and operations | Ask-before-act, audit log, encrypted credentials, spend limits, concurrency limits, isolated containers, backup/restore |
 | Voice | Dictation, spoken replies, group voice, and acoustic barge-in |
 
-This baseline matters. For example, another generic Kanban, cron editor, MCP
+This baseline matters. For example, another generic Kanban, second automation editor, MCP
 catalog, browser, or static multi-agent answer mode would add less value than
 making the existing versions durable, steerable, and recoverable.
 
@@ -95,7 +95,7 @@ raw tool counts.
 
 #### 1. Shiba Dispatch: mode-aware routing plus a durable task ledger
 
-**Problem:** Chat, background tasks, agent runs, schedules, Board work, and
+**Problem:** Chat, background tasks, agent runs, Automation invocations, Board work, and
 integration-triggered work exist, but they do not yet feel like one task system.
 The user has to choose the surface and mentally track where results or approval
 requests will appear.
@@ -109,13 +109,13 @@ requests will appear.
 
 Every non-trivial request should create the same durable task record with:
 
-- parent task, originating chat/card/schedule, and child worker links;
+- parent task, originating chat/card/Automation invocation, and child worker links;
 - `queued`, `running`, `waiting_for_input`, `waiting_for_approval`, `blocked`,
   `succeeded`, `failed`, `cancelled`, and `lost` states;
 - current plan, active step, next action, progress, retry count, and heartbeat;
 - idempotent completion delivery through a transactional outbox;
 - pause, cancel, retry, resume, and append-instruction controls;
-- one **Attention inbox** for questions, approvals, failures, and finished work.
+- one **Attention inbox** reserved for live, exact approvals; task outcomes stay in task/run history and originating chats.
 
 A project capsule should be able to attach multiple repositories or workspace
 roots, each with its own permission boundary and Git state, so cross-repository
@@ -243,15 +243,15 @@ OpenClaw's session operations in
 [v2026.7.1-beta.5](https://github.com/openclaw/openclaw/releases/tag/v2026.7.1-beta.5),
 and [Claude incognito chats](https://support.claude.com/en/articles/12260368-use-incognito-chats).
 
-#### 5. Event-driven Routines, not cron alone
+#### 5. Keep Automations event-driven, not cron-only
 
 **Problem:** Exact schedules are useful, but much valuable work begins when
 something changes, a promise becomes due, or a health condition fails. Shiba's
-current `schedule_task` already accepts cron and relative requests such as “in
-30m,” but relative timers are in-memory and do not survive a restart.
+`schedule_task` creates a durable Automation for both five-field cron and relative
+or date-like one-time requests, so every follow-up survives a restart and remains
+visible on the same Automations surface.
 
-**Proposal:** Make those existing follow-ups durable, broaden natural-language
-scheduling, and evolve Automations into Routines with composable triggers:
+**Proposal:** Keep broadening the single Automation strategy with composable triggers:
 
 - durable one-time reminders and natural-language schedules;
 - GitHub push, issue, PR, review, and failed-check events;
@@ -266,13 +266,13 @@ Add conditions, template parameters, retry/backoff, timeout, concurrency key,
 catch-up policy, circuit breaker, and dependent steps. Start with a form plus
 JSON/YAML export; a full visual workflow canvas can wait.
 
-**Implementation seams:** `lib/scheduler.ts`, `lib/channel-listeners.ts`,
-`lib/board-runner.ts`, integration clients, `/api/scheduler`, and the new task
-ledger.
+**Implementation seams:** `lib/routines.ts`, `lib/automation-cron.ts`,
+`lib/channel-listeners.ts`, `lib/board-runner.ts`, integration clients,
+`/api/routines`, and the task ledger.
 
 **Success criteria:** the same routine can be run manually, on a schedule, or by
 an event; duplicate webhook delivery cannot duplicate side effects; repeated
-failure opens one attention item and trips a visible circuit breaker.
+failure trips a visible circuit breaker and remains in task/run history without adding approval-inbox noise.
 
 Inspired by [OpenClaw's automation model](https://docs.openclaw.ai/cron-vs-heartbeat),
 [Hermes automation blueprints](https://hermes-agent.nousresearch.com/docs/reference/automation-blueprints-catalog),
@@ -280,13 +280,13 @@ and [Claude Code routines](https://code.claude.com/docs/en/web-scheduled-tasks).
 
 ### P1 — major capability multipliers
 
-#### 6. Secure remote companion for the Attention inbox
+#### 6. Secure remote companion for tasks and exact approvals
 
 Keep execution and secrets on the Shiba host, but let a paired phone, tablet, or
 browser:
 
 - see task state and recent evidence;
-- receive completion, question, approval, failure, and budget notifications;
+- receive exact pending-approval notifications and inspect durable task state;
 - approve one exact action, deny it, or grant a bounded rule;
 - append steering instructions or cancel a task;
 - start a saved routine or a voice request;
@@ -296,14 +296,14 @@ Shiba already exposes its full web app through explicit `dev:lan` / `start:lan`
 and `shiba.local`. The gap is a paired, scoped, mobile-focused client with push,
 offline summaries, and safe approvals—not generic remote browser access. Start
 as an installable PWA over LAN/Tailscale with QR pairing. This is only a remote
-view of the P0 Attention inbox and task ledger, never a second queue or store.
+view of the P0 approval inbox and task ledger, never a second queue or store.
 Use a scoped, revocable device key, short approval TTLs, and an explicit
 remote-access toggle. Do not begin with a public relay or a dozen messaging
 channels.
 
 **Success criteria:** no workspace file or integration secret is copied to the
 companion; every remote action is attributable and revocable; a user can clear
-the attention queue without opening the main desktop browser.
+the pending approval queue without opening the main desktop browser.
 
 Inspired by [OpenClaw remote access](https://docs.openclaw.ai/gateway/remote),
 [ChatGPT remote connections](https://learn.chatgpt.com/docs/remote-connections),
@@ -311,7 +311,7 @@ and [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control)
 
 #### 7. Capability Packs and a governed Skill Workshop
 
-Shiba's skills, MCP servers, integrations, agents, and schedules are currently
+Shiba's skills, MCP servers, integrations, agents, and Automations are currently
 configured separately. Add a versioned **Capability Pack** that can bundle:
 
 - skills and slash commands;
@@ -429,7 +429,7 @@ by separately approved repairs. Checks should cover:
 - X/Google OAuth refresh and callback configuration;
 - MCP process startup and tool discovery;
 - Chrome/Chromium availability and browser health;
-- scheduler heartbeat, stuck runs, and lost task detection;
+- Automation-engine heartbeat, stuck runs, and lost task detection;
 - SQLite integrity, migrations, encryption key, backup freshness, and disk space;
 - orphaned worktrees, ports, terminal bridge, firewall/origin, and LAN exposure;
 - plugin/pack compatibility and missing dependencies.
@@ -506,7 +506,7 @@ Inspired by [ChatGPT Record](https://help.openai.com/en/articles/11487532-chatgp
 
 | Increment | Deliverable | Why this order |
 | --- | --- | --- |
-| **A** | Universal task state machine, parent/child links, heartbeat, outbox, Attention inbox, OS/browser notifications | Makes every existing background feature more reliable immediately |
+| **A** | Universal task state machine, parent/child links, heartbeat, outbox, exact-approval inbox, OS/browser notifications | Makes every existing background feature more reliable immediately |
 | **B** | Completion contracts, evidence ledger, pre-mutation checkpoint, fork/rewind | Builds trust before increasing autonomy |
 | **C** | Context meter, pinned context, compaction, grounded session search, fork/grouping/ephemeral mode | Removes a concrete latency/cost ceiling and improves long projects while preserving existing archive/export |
 | **D** | One-time schedules, signed webhooks, GitHub events, retries, circuit breakers, natural-language Routine creation | Expands useful automation on a durable base |

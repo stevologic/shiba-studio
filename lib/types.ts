@@ -27,24 +27,6 @@ export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
   netlify: false,
 };
 
-export interface ScheduleConfig {
-  enabled: boolean;
-  // Simple cron or interval based (e.g. "*/15 * * * *" or "every:10m")
-  cron: string;
-  description?: string;
-}
-
-// New: per-schedule entry with dedicated instructions (prompt) for that scheduled run
-export interface ScheduleEntry {
-  id: string;
-  enabled: boolean;
-  // Cron expression for this specific schedule
-  cron: string;
-  // The exact instructions/prompt to use when this scheduled entry fires
-  instructions: string;
-  description?: string;
-}
-
 export type AgentLearningMode = 'off' | 'review' | 'auto';
 
 export interface AgentLearningConfig {
@@ -63,6 +45,11 @@ export interface Agent {
   avatar?: string;
   model: GrokModel;
   description?: string;
+  /**
+   * When true, Board cards manually assigned to this agent after opt-in start
+   * automatically. Existing assignments are never retroactively dispatched.
+   */
+  autoAcceptBoardAssignments: boolean;
   workspace: {
     path: string;            // absolute or relative path to local workspace
     useWorktree: boolean;    // if true, create/use isolated git worktree for this agent
@@ -92,10 +79,6 @@ export interface Agent {
   voiceId?: string;
   /** Local, per-agent learning and recall policy. */
   learning?: AgentLearningConfig;
-  // New multi-schedule support: each entry can have its own instructions
-  schedules: ScheduleEntry[];
-  // Legacy single schedule for backward compatibility (will be normalized in loads)
-  schedule?: ScheduleConfig;
   createdAt: string;
   updatedAt: string;
 }
@@ -192,19 +175,10 @@ export interface IntegrationCreds {
     clientSecret?: string;
   };
   reddit?: {
-    /** Reddit OAuth web-app credentials. A saved client overrides env defaults. */
-    clientId?: string;
-    clientSecret?: string;
-    /** Short-lived OAuth bearer plus the permanent refresh token. */
-    accessToken?: string;
-    refreshToken?: string;
-    tokenExpiry?: string;
-    /** Public account metadata captured from /api/v1/me after consent. */
-    username?: string;
-    userId?: string;
-    scopes?: string[];
-    /** Optional explicit Reddit API User-Agent; generated from username when absent. */
-    userAgent?: string;
+    /** Exact origin of the app's managed Devvit External Endpoint. */
+    devvitEndpoint?: string;
+    /** Managed Devvit app token used to authenticate External Endpoint calls. */
+    devvitAppToken?: string;
   };
   obsidian?: {
     /** Local vault on disk, or remote REST API (cloud). */
@@ -366,15 +340,6 @@ export interface InterAgentMessage {
   ts: string;
 }
 
-export interface ScheduledTask {
-  id: string;
-  agentId: string;
-  cron: string;
-  lastRun?: string;
-  nextRun?: string;
-  enabled: boolean;
-}
-
 // For workspace
 export interface FileEntry {
   name: string;
@@ -383,18 +348,10 @@ export interface FileEntry {
   size?: number;
 }
 
-/** Loose shape of schedule entries as they appear in legacy on-disk JSON. */
-type LegacyScheduleEntry = {
-  id?: string;
-  enabled?: unknown;
-  cron?: string;
-  instructions?: string;
-  description?: string;
-};
-
 /**
- * Normalize legacy agent (single schedule) to new shape with schedules[] + skills.
- * Used for backward compat during load/seed.
+ * Normalize agent records loaded from disk or older snapshots. Unknown fields
+ * remain intact so one-time migrations can consume them before persistence
+ * removes them deliberately.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- input is untyped legacy JSON from disk; every field is normalized below
 export function normalizeAgent(agent: any): Agent {
@@ -402,6 +359,9 @@ export function normalizeAgent(agent: any): Agent {
   // Agents stored before the local/cloud split was removed may carry an
   // `origin` field — drop it; every agent runs on this machine.
   delete base.origin;
+  // Assignment acceptance is an explicit capability opt-in. Legacy data and
+  // non-boolean inputs must stay off rather than relying on truthiness.
+  base.autoAcceptBoardAssignments = base.autoAcceptBoardAssignments === true;
   if (!base.skills) base.skills = [];
   if (base.chatSkill === undefined || base.chatSkill === null) base.chatSkill = '';
   const rawLearning = base.learning && typeof base.learning === 'object' ? base.learning : {};
@@ -417,27 +377,6 @@ export function normalizeAgent(agent: any): Agent {
   } else {
     delete base.voiceId;
   }
-  if (!base.schedules || !Array.isArray(base.schedules)) {
-    if (base.schedule) {
-      base.schedules = [{
-        id: 'legacy-' + Date.now(),
-        enabled: !!base.schedule.enabled,
-        cron: base.schedule.cron || '*/30 * * * *',
-        instructions: base.schedule.description || base.description || 'Perform scheduled task.',
-        description: base.schedule.description
-      }];
-    } else {
-      base.schedules = [];
-    }
-  }
-  // Ensure every schedule entry has id and instructions; filter 'manual' pollution
-  base.schedules = (base.schedules || []).filter((s: LegacyScheduleEntry) => s.cron && !String(s.cron).includes('manual')).map((s: LegacyScheduleEntry, i: number) => ({
-    id: s.id || `sch-${i}-${Date.now()}`,
-    enabled: !!s.enabled,
-    cron: s.cron || '*/30 * * * *',
-    instructions: s.instructions || s.description || 'Perform scheduled task.',
-    description: s.description
-  }));
   base.integrations = {
     ...EMPTY_INTEGRATION_SCOPE,
     ...(base.integrations || {}),

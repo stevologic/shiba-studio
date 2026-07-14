@@ -234,26 +234,6 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
     }
   }
 
-  async function resolveAttention(item: AttentionItem) {
-    if (resolvingAttentionId) return;
-    setResolvingAttentionId(item.id);
-    setError(null);
-    try {
-      const response = await fetch(`/api/attention/${encodeURIComponent(item.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'resolved' }),
-      });
-      const data = await response.json() as { ok?: boolean; error?: string };
-      if (!response.ok || !data.ok) throw new Error(data.error || 'Could not resolve the attention item');
-      await loadTask();
-    } catch (attentionError) {
-      setError(attentionError instanceof Error ? attentionError.message : 'Could not resolve the attention item');
-    } finally {
-      setResolvingAttentionId(null);
-    }
-  }
-
   async function decideApproval(item: AttentionItem, approved: boolean) {
     if (!task || resolvingAttentionId) return;
     const approvalId = typeof item.action.approvalId === 'string' ? item.action.approvalId : '';
@@ -311,7 +291,11 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
   const canPause = task.status === 'running';
   const canResume = task.status === 'paused';
   const canSteer = ['running', 'paused', 'waiting_for_input', 'waiting_for_approval'].includes(task.status);
-  const openAttention = task.attention.filter((item) => item.status === 'open');
+  const openApprovals = task.attention.filter((item) => (
+    item.status === 'open'
+    && item.kind === 'approval'
+    && typeof item.action.approvalId === 'string'
+  ));
   const linkedRoutineId = typeof task.metadata.routineId === 'string' ? task.metadata.routineId : '';
 
   return (
@@ -428,30 +412,23 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
         </div>
       </section>
 
-      {openAttention.length > 0 && (
+      {openApprovals.length > 0 && (
         <section className="grok-card p-5" aria-labelledby="task-attention-heading">
-          <h2 id="task-attention-heading" className="text-base font-semibold mb-3">Needs attention</h2>
+          <h2 id="task-attention-heading" className="text-base font-semibold mb-3">Approval required</h2>
           <ul className="space-y-3">
-            {openAttention.map((item) => (
+            {openApprovals.map((item) => (
               <li key={item.id} className="p-3 rounded-md border border-default flex flex-wrap items-start gap-3">
                 <AlertCircle size={16} className={item.severity === 'critical' ? 'text-error' : 'text-warning'} aria-hidden="true" />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">{item.title}</div>
                   <p className="text-xs text-muted mt-1 whitespace-pre-wrap">{item.body}</p>
                 </div>
-                {item.kind === 'approval' && typeof item.action.approvalId === 'string' ? (
-                  <span className="flex gap-1">
-                    <button type="button" className="grok-btn grok-btn-primary" disabled={Boolean(resolvingAttentionId)} onClick={() => void decideApproval(item, true)}>
-                      {resolvingAttentionId === item.id ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />} Approve exact action
-                    </button>
-                    <button type="button" className="grok-btn grok-btn-danger" disabled={Boolean(resolvingAttentionId)} onClick={() => void decideApproval(item, false)}><XCircle size={13} /> Deny</button>
-                  </span>
-                ) : (
-                  <button type="button" className="grok-btn grok-btn-secondary" disabled={Boolean(resolvingAttentionId)} onClick={() => void resolveAttention(item)}>
-                    {resolvingAttentionId === item.id ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}
-                    Resolve
+                <span className="flex gap-1">
+                  <button type="button" className="grok-btn grok-btn-primary" disabled={Boolean(resolvingAttentionId)} onClick={() => void decideApproval(item, true)}>
+                    {resolvingAttentionId === item.id ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Check size={13} aria-hidden="true" />} Approve exact action
                   </button>
-                )}
+                  <button type="button" className="grok-btn grok-btn-danger" disabled={Boolean(resolvingAttentionId)} onClick={() => void decideApproval(item, false)}><XCircle size={13} /> Deny</button>
+                </span>
               </li>
             ))}
           </ul>

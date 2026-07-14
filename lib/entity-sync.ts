@@ -3,8 +3,9 @@
 // Each entity kind is serialized as one JSON snapshot file so any Shiba Studio install
 // connected to the same xAI account can pull it down.
 
-import { loadAgents, mutateAgents, loadConfig, saveConfig } from './persistence';
-import { normalizeAgent, type Agent, type ScheduleEntry } from './types';
+import { createHash } from 'node:crypto';
+import { loadAgents, mutateAgents, loadConfig, saveConfig, withAgentOwnershipSnapshot } from './persistence';
+import { normalizeAgent, type Agent } from './types';
 import { listProjects, updateProject, createProject } from './projects';
 import { listChatSessions, createChatSession, updateChatSession, type ChatSession } from './chat-sessions';
 import { syncUploadToCloud, syncDownloadFromCloud } from './cloud-sync';
@@ -17,6 +18,15 @@ import {
   uploadOwnedXaiEntitySnapshot,
   type OwnedXaiAuthSource,
 } from './external-resource-integrity';
+import { isSupportedAutomationCron } from './automation-cron';
+import {
+  createRoutine,
+  getRoutine,
+  listRoutines,
+  migrateLegacyAgentSchedules,
+  updateRoutine,
+} from './routines';
+import type { CreateRoutineInput, RoutineDefinition } from './routine-types';
 
 export type SyncKind = 'agents' | 'automations' | 'projects' | 'chats' | 'workspace' | 'models';
 
@@ -32,6 +42,50 @@ export interface SyncKindResult {
 const SNAPSHOT_PREFIX = 'shiba-sync-';
 // Snapshots pushed before the rebrand still sit in xAI storage under this name.
 const LEGACY_SNAPSHOT_PREFIX = 'grokdesk-sync-';
+const AUTOMATION_SNAPSHOT_SCHEMA = 'shiba.automations/v1' as const;
+const AUTOMATION_SNAPSHOT_VERSION = 1 as const;
+const REDACTED_SECRET = '••••••••';
+
+interface AutomationRoutineSnapshot extends CreateRoutineInput {
+  id: string;
+  sourceVersion: number;
+  updatedAt: string;
+}
+
+interface AutomationSnapshot {
+  schema: typeof AUTOMATION_SNAPSHOT_SCHEMA;
+  version: typeof AUTOMATION_SNAPSHOT_VERSION;
+  exportedAt: string;
+  routines: AutomationRoutineSnapshot[];
+}
+
+interface LegacyScheduleEntry {
+  id?: unknown;
+  enabled?: unknown;
+  cron?: unknown;
+  instructions?: unknown;
+  description?: unknown;
+}
+
+interface LegacyScheduleGroup {
+  agentId: string;
+  agentName?: string;
+  schedules: LegacyScheduleEntry[];
+}
+
+interface LegacyMigrationResult {
+  created: number;
+  existing: number;
+  invalid: number;
+  skipped: number;
+}
+
+interface RoutineApplyResult {
+  created: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+}
 
 function snapshotName(kind: SyncKind): string {
   return `${SNAPSHOT_PREFIX}${kind}.json`;
@@ -94,13 +148,294 @@ function newer(a?: string, b?: string): boolean {
   return new Date(a || 0).getTime() > new Date(b || 0).getTime();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function cleanText(value: unknown, max: number): string {
+  return String(value ?? '').trim().slice(0, max);
+}
+
+function legacyScheduleEntries(value: unknown): LegacyScheduleEntry[] {
+  if (!isRecord(value)) return [];
+  if (Array.isArray(value.schedules) && value.schedules.length > 0) {
+    return value.schedules.filter(isRecord);
+  }
+  return isRecord(value.schedule) ? [value.schedule] : [];
+}
+
+function hasLegacyScheduleFields(value: unknown): boolean {
+  return isRecord(value)
+    && (Object.prototype.hasOwnProperty.call(value, 'schedules')
+      || Object.prototype.hasOwnProperty.call(value, 'schedule'));
+}
+
+function stripLegacyAgentScheduleFields(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const sanitized = { ...value };
+  delete sanitized.schedules;
+  delete sanitized.schedule;
+  return sanitized;
+}
+
+function legacyScheduleGroupsFromAgents(value: unknown): LegacyScheduleGroup[] {
+  if (!Array.isArray(value)) return [];
+  const groups: LegacyScheduleGroup[] = [];
+  for (const agent of value) {
+    if (!hasLegacyScheduleFields(agent)) continue;
+    const record = agent as Record<string, unknown>;
+    const agentName = cleanText(record.name, 300);
+    groups.push({
+      agentId: cleanText(record.id, 160),
+      ...(agentName ? { agentName } : {}),
+      schedules: legacyScheduleEntries(record),
+    });
+  }
+  return groups;
+}
+
+function legacyScheduleGroupsFromSnapshot(value: unknown[]): LegacyScheduleGroup[] {
+  const groups: LegacyScheduleGroup[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const agentName = cleanText(item.agentName, 300);
+    groups.push({
+      agentId: cleanText(item.agentId, 160),
+      ...(agentName ? { agentName } : {}),
+      schedules: legacyScheduleEntries(item),
+    });
+  }
+  return groups;
+}
+
+function legacyScheduleRoutineId(agentId: string, entry: LegacyScheduleEntry, index: number): string {
+  const fingerprint = createHash('sha256').update(JSON.stringify({
+    agentId,
+    index,
+    id: entry.id,
+    cron: entry.cron,
+    instructions: entry.instructions,
+    description: entry.description,
+  })).digest('hex').slice(0, 32);
+  return `legacy-agent-schedule:${fingerprint}`;
+}
+
+async function migrateLegacyScheduleGroups(
+  groups: LegacyScheduleGroup[],
+  agents: Agent[],
+): Promise<LegacyMigrationResult> {
+  const knownAgents = new Map(agents.map((agent) => [agent.id, agent]));
+  const result: LegacyMigrationResult = { created: 0, existing: 0, invalid: 0, skipped: 0 };
+
+  return withAgentOwnershipSnapshot(async (currentAgentIds) => {
+  for (const group of groups) {
+    const agent = knownAgents.get(group.agentId);
+    if (!agent || !currentAgentIds.has(group.agentId)) {
+      result.skipped += group.schedules.length;
+      continue;
+    }
+
+    for (const [index, entry] of group.schedules.entries()) {
+      const cronExpression = typeof entry.cron === 'string' ? entry.cron.trim() : '';
+      const prompt = cleanText(
+        typeof entry.instructions === 'string' ? entry.instructions : entry.description,
+        20_000,
+      ) || 'Perform the scheduled task.';
+      const legacyDescription = cleanText(entry.description, 5_000);
+      const id = legacyScheduleRoutineId(agent.id, entry, index);
+      const validCron = isSupportedAutomationCron(cronExpression);
+      if (!validCron) result.invalid++;
+
+      if (getRoutine(id)) {
+        result.existing++;
+        continue;
+      }
+
+      try {
+        createRoutine({
+          id,
+          name: cleanText(legacyDescription || prompt, 100) || `${agent.name} automation`,
+          description: validCron
+            ? `Migrated from an agent schedule.${legacyDescription ? ` ${legacyDescription}` : ''}`
+            : `Migrated from an agent schedule with an invalid cron expression (${cronExpression || 'empty'}). Review the trigger and enable this Automation.${legacyDescription ? ` ${legacyDescription}` : ''}`,
+          enabled: validCron && entry.enabled === true,
+          agentId: agent.id,
+          prompt,
+          triggers: validCron
+            ? [{ id: 'schedule', type: 'schedule', enabled: true, cron: cronExpression }]
+            : [{ id: 'manual', type: 'manual', enabled: true }],
+          parameters: {
+            migratedFrom: 'agent_schedule',
+            ...(typeof entry.id === 'string' && entry.id ? { legacyScheduleId: entry.id } : {}),
+            ...(cronExpression ? { legacyCron: cronExpression } : {}),
+          },
+          retryPolicy: { maxAttempts: 3, baseDelayMs: 1_000, multiplier: 2, maxDelayMs: 60_000 },
+          catchUpPolicy: 'run_once',
+          circuitBreaker: { failureThreshold: 3, cooldownSeconds: 900 },
+        });
+        result.created++;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/already exists/i.test(message)) result.existing++;
+        else throw error;
+      }
+    }
+  }
+
+  return result;
+  });
+}
+
+function routineToSnapshot(routine: RoutineDefinition): AutomationRoutineSnapshot {
+  return {
+    id: routine.id,
+    sourceVersion: routine.version,
+    updatedAt: routine.updatedAt,
+    name: routine.name,
+    description: routine.description,
+    enabled: routine.enabled,
+    agentId: routine.agentId,
+    prompt: routine.prompt,
+    triggers: routine.triggers,
+    conditions: routine.conditions,
+    parameters: routine.parameters,
+    retryPolicy: routine.retryPolicy,
+    timeoutMs: routine.timeoutMs,
+    concurrencyKey: routine.concurrencyKey,
+    catchUpPolicy: routine.catchUpPolicy,
+    circuitBreaker: routine.circuitBreaker,
+    steps: routine.steps,
+  };
+}
+
+function routineInput(snapshot: AutomationRoutineSnapshot): CreateRoutineInput {
+  return {
+    id: snapshot.id,
+    name: snapshot.name,
+    description: snapshot.description,
+    enabled: snapshot.enabled,
+    agentId: snapshot.agentId,
+    prompt: snapshot.prompt,
+    triggers: snapshot.triggers,
+    conditions: snapshot.conditions,
+    parameters: snapshot.parameters,
+    retryPolicy: snapshot.retryPolicy,
+    timeoutMs: snapshot.timeoutMs,
+    concurrencyKey: snapshot.concurrencyKey,
+    catchUpPolicy: snapshot.catchUpPolicy,
+    circuitBreaker: snapshot.circuitBreaker,
+    steps: snapshot.steps,
+  };
+}
+
+function automationSnapshotFromUnknown(value: unknown): AutomationSnapshot {
+  if (!isRecord(value)) throw new Error('Cloud Automations snapshot is malformed');
+  if (value.schema !== AUTOMATION_SNAPSHOT_SCHEMA) {
+    throw new Error(`Unsupported cloud Automations snapshot schema: ${cleanText(value.schema, 100) || 'missing'}`);
+  }
+  if (value.version !== AUTOMATION_SNAPSHOT_VERSION) {
+    throw new Error(`Unsupported cloud Automations snapshot version: ${String(value.version ?? 'missing')}`);
+  }
+  if (!Array.isArray(value.routines)) throw new Error('Cloud Automations snapshot has no routines list');
+  for (const routine of value.routines) {
+    if (!isRecord(routine)
+      || typeof routine.id !== 'string'
+      || typeof routine.agentId !== 'string'
+      || typeof routine.name !== 'string'
+      || typeof routine.prompt !== 'string'
+      || typeof routine.updatedAt !== 'string'
+      || !Array.isArray(routine.triggers)) {
+      throw new Error('Cloud Automations snapshot contains a malformed Routine');
+    }
+  }
+  return value as unknown as AutomationSnapshot;
+}
+
+function unresolvedRedactedWebhook(snapshot: AutomationRoutineSnapshot, existing: RoutineDefinition | null): boolean {
+  const existingById = new Map((existing?.triggers || []).map((trigger) => [trigger.id, trigger]));
+  return snapshot.triggers.some((trigger) => trigger.type === 'webhook'
+    && trigger.secret === REDACTED_SECRET
+    && existingById.get(trigger.id)?.type !== 'webhook');
+}
+
+async function applyRoutineSnapshots(
+  snapshots: AutomationRoutineSnapshot[],
+  agents: Agent[],
+): Promise<RoutineApplyResult> {
+  const knownAgentIds = new Set(agents.map((agent) => agent.id));
+  const result: RoutineApplyResult = { created: 0, updated: 0, unchanged: 0, skipped: 0 };
+
+  return withAgentOwnershipSnapshot(async (currentAgentIds) => {
+  for (const snapshot of snapshots) {
+    if (!knownAgentIds.has(snapshot.agentId) || !currentAgentIds.has(snapshot.agentId)) {
+      result.skipped++;
+      continue;
+    }
+    let existing = getRoutine(snapshot.id);
+    if (unresolvedRedactedWebhook(snapshot, existing)) {
+      result.skipped++;
+      continue;
+    }
+    if (!existing) {
+      try {
+        createRoutine(routineInput(snapshot));
+        result.created++;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/already exists/i.test(message)) throw error;
+        result.skipped++;
+      }
+      continue;
+    }
+    if (!newer(snapshot.updatedAt, existing.updatedAt)) {
+      result.unchanged++;
+      continue;
+    }
+
+    try {
+      updateRoutine(snapshot.id, routineInput(snapshot), existing.version);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/changed concurrently/i.test(message)) throw error;
+      existing = getRoutine(snapshot.id);
+      if (!existing || !newer(snapshot.updatedAt, existing.updatedAt)) {
+        result.unchanged++;
+        continue;
+      }
+      if (unresolvedRedactedWebhook(snapshot, existing)) {
+        result.skipped++;
+        continue;
+      }
+      updateRoutine(snapshot.id, routineInput(snapshot), existing.version);
+    }
+    result.updated++;
+  }
+
+  return result;
+  });
+}
+
+function listAllRoutines(): RoutineDefinition[] {
+  const routines: RoutineDefinition[] = [];
+  const limit = 500;
+  let offset = 0;
+  while (true) {
+    const page = listRoutines({ limit, offset });
+    routines.push(...page.routines);
+    offset += page.routines.length;
+    if (offset >= page.total || page.routines.length === 0) return routines;
+  }
+}
+
 /** Merge cloud agents into local by id — newest updatedAt wins; unseen agents are added. */
-function mergeAgents(local: Agent[], cloud: Agent[]): { merged: Agent[]; added: number; updated: number } {
+function mergeAgents(local: Agent[], cloud: unknown[]): { merged: Agent[]; added: number; updated: number } {
   const byId = new Map(local.map((a) => [a.id, a]));
   let added = 0;
   let updated = 0;
   for (const raw of cloud) {
+    if (!isRecord(raw)) continue;
     const incoming = normalizeAgent(raw);
+    if (!cleanText(incoming.id, 160)) continue;
     const existing = byId.get(incoming.id);
     if (!existing) {
       byId.set(incoming.id, incoming);
@@ -128,19 +463,23 @@ export async function pushKind(kind: SyncKind): Promise<SyncKindResult> {
     }
 
     if (kind === 'agents') {
+      await migrateLegacyAgentSchedules();
       const agents = await loadAgents();
-      await pushSnapshot(kind, agents, auth);
+      await pushSnapshot(kind, agents.map(stripLegacyAgentScheduleFields), auth);
       return { kind, ok: true, detail: `${agents.length} agent(s) pushed` };
     }
 
     if (kind === 'automations') {
-      const agents = await loadAgents();
-      const automations = agents
-        .filter((a) => (a.schedules || []).length > 0)
-        .map((a) => ({ agentId: a.id, agentName: a.name, schedules: a.schedules }));
-      await pushSnapshot(kind, automations, auth);
-      const count = automations.reduce((n, a) => n + a.schedules.length, 0);
-      return { kind, ok: true, detail: `${count} schedule(s) across ${automations.length} agent(s) pushed` };
+      await migrateLegacyAgentSchedules();
+      const routines = listAllRoutines();
+      const snapshot: AutomationSnapshot = {
+        schema: AUTOMATION_SNAPSHOT_SCHEMA,
+        version: AUTOMATION_SNAPSHOT_VERSION,
+        exportedAt: new Date().toISOString(),
+        routines: routines.map(routineToSnapshot),
+      };
+      await pushSnapshot(kind, snapshot, auth);
+      return { kind, ok: true, detail: `${routines.length} Automation(s) pushed` };
     }
 
     if (kind === 'projects') {
@@ -189,33 +528,50 @@ export async function pullKind(kind: SyncKind): Promise<SyncKindResult> {
     }
 
     if (kind === 'agents') {
-      const cloud = await pullSnapshot<Agent[]>(kind);
+      const cloud = await pullSnapshot<unknown>(kind);
       if (!cloud) return { kind, ok: true, detail: 'No cloud snapshot yet — push first' };
+      await migrateLegacyAgentSchedules();
+      if (!Array.isArray(cloud)) throw new Error('Cloud agents snapshot is malformed');
+      const legacyGroups = legacyScheduleGroupsFromAgents(cloud);
+      const sanitizedCloud = cloud.map(stripLegacyAgentScheduleFields);
       let added = 0;
       let updated = 0;
+      // Establish every referenced agent before creating its Routine so a
+      // partial pull cannot leave an orphan. The cloud snapshot remains the
+      // durable migration source, and content-derived ids make retries safe.
       await mutateAgents((local) => {
-        const merged = mergeAgents(local, cloud);
+        const merged = mergeAgents(local, sanitizedCloud);
         added = merged.added;
         updated = merged.updated;
         local.splice(0, local.length, ...merged.merged);
       });
-      return { kind, ok: true, detail: `${added} added, ${updated} updated from cloud` };
+      const migration = await migrateLegacyScheduleGroups(legacyGroups, await loadAgents());
+      const migrationDetail = legacyGroups.length > 0
+        ? `; legacy Automations: ${migration.created} created, ${migration.existing} already present, ${migration.invalid} need review, ${migration.skipped} skipped`
+        : '';
+      return { kind, ok: true, detail: `${added} added, ${updated} updated from cloud${migrationDetail}` };
     }
 
     if (kind === 'automations') {
-      const cloud = await pullSnapshot<Array<{ agentId: string; schedules: ScheduleEntry[] }>>(kind);
+      const cloud = await pullSnapshot<unknown>(kind);
       if (!cloud) return { kind, ok: true, detail: 'No cloud snapshot yet — push first' };
-      let applied = 0;
-      await mutateAgents((agents) => {
-        for (const entry of cloud) {
-          const agent = agents.find((a) => a.id === entry.agentId);
-          if (agent && Array.isArray(entry.schedules)) {
-            agent.schedules = entry.schedules;
-            applied++;
-          }
-        }
-      });
-      return { kind, ok: true, detail: `Schedules applied to ${applied} agent(s)` };
+      await migrateLegacyAgentSchedules();
+      const agents = await loadAgents();
+      if (Array.isArray(cloud)) {
+        const migration = await migrateLegacyScheduleGroups(legacyScheduleGroupsFromSnapshot(cloud), agents);
+        return {
+          kind,
+          ok: true,
+          detail: `Legacy Automations migrated: ${migration.created} created, ${migration.existing} already present, ${migration.invalid} need review, ${migration.skipped} skipped`,
+        };
+      }
+      const snapshot = automationSnapshotFromUnknown(cloud);
+      const applied = await applyRoutineSnapshots(snapshot.routines, agents);
+      return {
+        kind,
+        ok: true,
+        detail: `${applied.created} created, ${applied.updated} updated, ${applied.unchanged} already current, ${applied.skipped} skipped`,
+      };
     }
 
     if (kind === 'projects') {
@@ -304,7 +660,7 @@ export async function getSyncOverview(): Promise<SyncOverview> {
     hasCloudAuth: auth.hasCloudAuth,
     counts: {
       agents: agents.length,
-      automations: agents.reduce((n, a) => n + (a.schedules || []).filter((s) => s.enabled).length, 0),
+      automations: listRoutines({ limit: 1 }).total,
       projects: projects.length,
       chats: chats.length,
       workspace: uploads.length,

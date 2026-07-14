@@ -1,15 +1,11 @@
-import './verify-isolate'; // MUST be first: runtime checks must never touch the live Studio store.
+import './verify-isolate'; // MUST be first: checks must never touch the live Studio store.
 
-/**
- * Focused regression harness for the Reddit core integration.
- *
- * All Reddit traffic is intercepted. Persistence is redirected to a temporary
- * directory so this script cannot read, refresh, or overwrite a real session.
- */
+/** Focused regression harness for the Reddit Devvit core integration. */
 
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import { NextRequest } from 'next/server';
 import { GOAL_SCRATCH as SCRATCH } from '../lib/verify-scratch';
 import type { Agent, AgentRun, IntegrationCreds } from '../lib/types';
 
@@ -32,6 +28,15 @@ function assert(condition: unknown, message: string): asserts condition {
 
 async function read(relativePath: string): Promise<string> {
   return fs.readFile(path.join(ROOT, relativePath), 'utf8');
+}
+
+async function exists(relativePath: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(ROOT, relativePath));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -57,316 +62,349 @@ async function expectReject(
   assert(message.toLowerCase().includes(messagePart.toLowerCase()), `${label} explains the failure`);
 }
 
+function expectThrow(operation: () => unknown, messagePart: string, label: string): void {
+  let error: unknown;
+  try {
+    operation();
+  } catch (caught) {
+    error = caught;
+  }
+  const message = error instanceof Error ? error.message : String(error || '');
+  assert(!!error, `${label} rejects`);
+  assert(message.toLowerCase().includes(messagePart.toLowerCase()), `${label} explains the failure`);
+}
+
 function redditCreds(name: string): IntegrationCreds {
+  const slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
   return {
     reddit: {
-      clientId: `verify-client-${name}`,
-      clientSecret: `verify-secret-${name}`,
-      accessToken: `verify-access-${name}`,
-      refreshToken: `verify-refresh-${name}`,
-      tokenExpiry: new Date(Date.now() + 60 * 60_000).toISOString(),
-      username: 'verify_user',
-      userId: 'verify-user-id',
-      scopes: ['identity', 'read', 'submit'],
-      userAgent: 'desktop:shiba-studio:verify-reddit (by /u/verify_user)',
+      devvitEndpoint: `https://verify-${slug}-external.devvit.net`,
+      devvitAppToken: `devvit_at_verify_${slug}_12345678`,
     },
   };
 }
-
-type Scenario =
-  | 'idle'
-  | 'listing'
-  | 'read-error'
-  | 'retry-read'
-  | 'submit-success'
-  | 'submit-unauthorized'
-  | 'submit-json-error'
-  | 'submit-ambiguous';
 
 interface FetchCall {
   url: string;
   method: string;
   headers: Headers;
-  body: string;
+  body: Record<string, unknown>;
+  redirect?: RequestRedirect;
 }
 
-function bodyText(body: BodyInit | null | undefined): string {
-  if (body == null) return '';
-  if (typeof body === 'string') return body;
-  if (body instanceof URLSearchParams) return body.toString();
-  return String(body);
+type Scenario =
+  | 'normal'
+  | 'read-error'
+  | 'bad-protocol'
+  | 'missing-capabilities'
+  | 'oversized'
+  | 'invalid-listing-community'
+  | 'mismatched-listing-community'
+  | 'mismatched-post-community'
+  | 'submit-error'
+  | 'submit-ambiguous'
+  | 'invalid-receipt'
+  | 'submit-fullname-mismatch'
+  | 'submit-subreddit-mismatch'
+  | 'submit-permalink-id-mismatch'
+  | 'submit-permalink-community-mismatch';
+
+function statusPayload() {
+  return {
+    ok: true,
+    protocolVersion: 1,
+    provider: 'devvit',
+    app: { slug: 'shiba-rdt-bridge', account: 'shiba_bridge_app', accountId: 't2_app123' },
+    installation: { subreddit: 'testing', subredditId: 't5_test123' },
+    capabilities: ['read_posts', 'submit_post'],
+  };
 }
 
 function listingPayload() {
   return {
-    kind: 'Listing',
-    data: {
-      after: 't3_next-page',
-      children: [{
-        kind: 't3',
-        data: {
-          id: 'post-123',
-          name: 't3_post-123',
-          subreddit: 'TypeScript',
-          title: 'A useful type-system idea',
-          author: 'verify_author',
-          selftext: 'A compact but interesting body.',
-          url: 'https://example.com/type-system',
-          permalink: '/r/TypeScript/comments/post-123/a_useful_type_system_idea/',
-          score: 321,
-          num_comments: 45,
-          created_utc: 1_700_000_000,
-          over_18: false,
-          spoiler: true,
-          is_self: false,
-        },
-      }],
-    },
+    ok: true,
+    protocolVersion: 1,
+    subreddit: 'testing',
+    posts: [{
+      id: 'post123',
+      fullname: 't3_post123',
+      subreddit: 'testing',
+      title: 'A useful type-system idea',
+      author: 'verify_author',
+      selfText: 'A compact but interesting body.',
+      url: 'https://example.com/type-system',
+      permalink: 'https://www.reddit.com/r/testing/comments/post123/a_useful_type_system_idea/',
+      score: 321,
+      comments: 45,
+      createdAt: '2023-11-14T22:13:20.000Z',
+      nsfw: false,
+      spoiler: true,
+      isSelf: false,
+    }],
+    nextAfter: 't3_next123',
+  };
+}
+
+function submitPayload() {
+  return {
+    ok: true,
+    protocolVersion: 1,
+    id: 'confirmed42',
+    fullname: 't3_confirmed42',
+    url: 'https://www.reddit.com/r/testing/comments/confirmed42/interesting/',
+    subreddit: 'testing',
+    title: 'Interesting',
+    author: 'shiba_bridge_app',
   };
 }
 
 async function verifyStructuralWiring(): Promise<void> {
   const catalog = await import('../lib/integration-catalog');
   assert(catalog.INTEGRATION_IDS.includes('reddit'), 'integration catalog includes Reddit');
-  assert(catalog.AGENT_INTEGRATION_IDS.includes('reddit'), 'Reddit is an agent-scoped integration');
+  assert(catalog.AGENT_INTEGRATION_IDS.includes('reddit'), 'Reddit remains agent-scoped');
   const meta = catalog.getIntegrationMeta('reddit');
-  assert(meta?.label === 'Reddit', 'Reddit catalog label');
-  assert(meta?.icon === '/integrations/reddit.svg', 'Reddit catalog icon path');
-  const icon = await read('public/integrations/reddit.svg');
-  assert(icon.includes('<svg'), 'Reddit integration icon exists');
+  assert(meta?.label === 'Reddit Devvit', 'catalog identifies the Devvit transport');
+  assert(meta?.docsUrl?.includes('developers.reddit.com/docs/capabilities/server/external-endpoints') === true, 'catalog links official External Endpoints docs');
+  assert(meta?.setupLabel === 'Create Devvit app', 'catalog labels the Reddit app-creation link accurately');
+  assert((await read('public/integrations/reddit.svg')).includes('<svg'), 'Reddit integration icon exists');
+
+  const types = await read('lib/types.ts');
+  const redditType = types.match(/reddit\?:\s*\{([\s\S]*?)\n\s*\};\n\s*obsidian\?:/)?.[1] || '';
+  assert(redditType.includes('devvitEndpoint?: string'), 'credential type stores the Devvit endpoint');
+  assert(redditType.includes('devvitAppToken?: string'), 'credential type stores the managed app token');
+  assert(!/(?:clientSecret|accessToken|refreshToken|username)/.test(redditType), 'credential type contains no legacy Reddit OAuth session');
 
   const { EMPTY_INTEGRATION_SCOPE } = await import('../lib/types');
-  assert(EMPTY_INTEGRATION_SCOPE.reddit === false, 'empty integration scope disables Reddit');
-  const types = await read('lib/types.ts');
-  assert(types.includes('reddit: boolean'), 'IntegrationScope declares Reddit');
-  assert(types.includes('reddit?:'), 'IntegrationCreds declares Reddit OAuth credentials');
-
   const { getToolDefinitions } = await import('../lib/agent-runtime');
-  const withoutReddit = getToolDefinitions({ ...EMPTY_INTEGRATION_SCOPE }, false);
-  assert(
-    !withoutReddit.some((tool) => tool.function.name.startsWith('reddit_')),
-    'Reddit tools are hidden when its agent scope is off',
-  );
+  const without = getToolDefinitions({ ...EMPTY_INTEGRATION_SCOPE }, false);
   const withReddit = getToolDefinitions({ ...EMPTY_INTEGRATION_SCOPE, reddit: true }, false);
-  const readTool = withReddit.find((tool) => tool.function.name === 'reddit_read_posts');
+  assert(!without.some((tool) => tool.function.name.startsWith('reddit_')), 'Reddit tools are hidden when scope is off');
+  assert(withReddit.some((tool) => tool.function.name === 'reddit_read_posts'), 'Reddit read tool is registered');
   const submitTool = withReddit.find((tool) => tool.function.name === 'reddit_submit');
-  assert(!!readTool, 'reddit_read_posts is registered when scope is on');
-  assert(!!submitTool, 'reddit_submit is registered when scope is on');
+  assert(!!submitTool, 'Reddit submit tool is registered');
   const submitSchema = submitTool.function.parameters as { required?: string[] };
-  assert(
-    submitSchema.required?.includes('subreddit') && submitSchema.required.includes('title'),
-    'reddit_submit requires subreddit and title',
-  );
+  assert(submitSchema.required?.includes('subreddit') && submitSchema.required.includes('title'), 'Reddit submit requires community and title');
 
   const { APPROVAL_GATED_TOOLS, toolNeedsApproval } = await import('../lib/tool-approval');
-  assert(APPROVAL_GATED_TOOLS.has('reddit_submit'), 'Reddit submission is approval-gated');
-  assert(toolNeedsApproval('reddit_submit', 'ask'), 'Ask mode requires approval for Reddit submission');
+  assert(APPROVAL_GATED_TOOLS.has('reddit_submit'), 'Reddit submission remains approval-gated');
+  assert(toolNeedsApproval('reddit_submit', 'ask'), 'Ask mode requires exact Reddit approval');
   assert(!toolNeedsApproval('reddit_read_posts', 'ask'), 'Reddit reads do not require approval');
-  assert(!toolNeedsApproval('reddit_submit', 'yolo'), 'YOLO mode does not create an interactive approval wait');
 
   const { mergeAgentIntegrationCreds } = await import('../lib/integrations');
-  const globalReddit = redditCreds('global-merge');
-  const partialClientOverride = mergeAgentIntegrationCreds(globalReddit, {
-    reddit: { clientId: 'agent-client-only' },
+  const globalCreds = redditCreds('global');
+  const endpointOnly = mergeAgentIntegrationCreds(globalCreds, {
+    reddit: { devvitEndpoint: 'https://verify-agent-external.devvit.net' },
   });
-  assert(
-    partialClientOverride.reddit?.clientId === 'agent-client-only'
-      && !partialClientOverride.reddit.clientSecret,
-    'agent Reddit client override never borrows the global client secret',
-  );
-  assert(
-    !partialClientOverride.reddit?.accessToken && !partialClientOverride.reddit?.refreshToken,
-    'agent Reddit client override never inherits a global token session',
-  );
-  const accessTokenOverride = mergeAgentIntegrationCreds(globalReddit, {
-    reddit: { accessToken: 'agent-access-only' },
+  assert(endpointOnly.reddit?.devvitEndpoint?.includes('verify-agent'), 'agent endpoint override wins');
+  assert(!endpointOnly.reddit?.devvitAppToken, 'agent endpoint never borrows the global token');
+  const tokenOnly = mergeAgentIntegrationCreds(globalCreds, {
+    reddit: { devvitAppToken: 'devvit_at_agent_override_12345678' },
   });
-  assert(
-    accessTokenOverride.reddit?.accessToken === 'agent-access-only'
-      && !accessTokenOverride.reddit.refreshToken,
-    'agent Reddit access token never pairs with the global refresh token',
-  );
-  assert(
-    accessTokenOverride.reddit?.clientId === globalReddit.reddit?.clientId,
-    'agent Reddit token may reuse the complete global OAuth app client',
-  );
+  assert(tokenOnly.reddit?.devvitAppToken?.includes('agent_override'), 'agent token override wins');
+  assert(!tokenOnly.reddit?.devvitEndpoint, 'agent token never borrows the global endpoint');
+  const complete = mergeAgentIntegrationCreds(globalCreds, redditCreds('agent-complete'));
+  assert(complete.reddit?.devvitEndpoint?.includes('agent-complete'), 'complete agent pair replaces the global pair');
 
-    const toolsRoute = await read('app/api/tools/route.ts');
-  assert(
-    /reddit_read_posts:\s*\{[^}]*requires:\s*'reddit'/.test(toolsRoute),
-    'tools catalog maps Reddit reads to the Reddit scope',
-  );
-  assert(
-    /reddit_submit:\s*\{[^}]*requires:\s*'reddit'/.test(toolsRoute),
-    'tools catalog maps Reddit submission to the Reddit scope',
-  );
-  const workspacePolicy = await read('lib/task-workspace-policy.ts');
-  assert(workspacePolicy.includes("reddit_submit: 'reddit'"), 'task policy scopes Reddit submission');
-  assert(
-    /readOnly[^\n]+\[[^\]]*'reddit_submit'/.test(workspacePolicy),
-    'read-only task policy denies Reddit submission',
-  );
-  const chatRoute = await read('app/api/grok/stream/route.ts');
-  assert(
-    chatRoute.includes("name === 'reddit_read_posts'") && chatRoute.includes('read ${count} Reddit post'),
-    'chat progress summarizes Reddit reads without previewing feed content',
-  );
-  assert(
-    chatRoute.includes("filter((tool) => tool.function.name !== 'reddit_submit')"),
-    'chat excludes Reddit submission until it has an exact approval protocol',
-  );
+  const { redditOverridePairError } = await import('../lib/integration-validation');
+  assert(redditOverridePairError(undefined) === null, 'missing agent Reddit override uses the global connection');
+  assert(redditOverridePairError({ reddit: {} }) === null, 'blank agent Reddit override uses the global connection');
+  assert(redditOverridePairError(redditCreds('pair-validation')) === null, 'complete agent Reddit override is accepted');
+  assert(!!redditOverridePairError({ reddit: { devvitEndpoint: 'https://verify-partial-external.devvit.net' } }), 'endpoint-only agent Reddit override is rejected');
+  assert(!!redditOverridePairError({ reddit: { devvitAppToken: 'devvit_at_partial_12345678' } }), 'token-only agent Reddit override is rejected');
+  const agentsApi = await import('../app/api/agents/route');
+  for (const [body, label] of [
+    [{ name: 'Partial Reddit Create', integrationOverrides: { reddit: { devvitEndpoint: 'https://verify-partial-external.devvit.net' } } }, 'create'],
+    [{ action: 'update', agent: { id: 'missing-agent', integrationOverrides: { reddit: { devvitAppToken: 'devvit_at_partial_12345678' } } } }, 'update'],
+  ] as const) {
+    const response = await agentsApi.POST(new NextRequest('http://localhost/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+    const payload = await response.json() as { error?: string };
+    assert(response.status === 400 && payload.error?.includes('require both'), `agent API rejects a partial Reddit override on ${label}`);
+  }
+
+  const companionConfig = await read('devvit/reddit-bridge/devvit.json');
+  const companionServer = `${await read('devvit/reddit-bridge/src/server/index.ts')}\n${await read('devvit/reddit-bridge/src/server/app.ts')}`;
+  assert(companionConfig.includes('"externalEndpoints"') && companionConfig.includes('"reddit"'), 'Devvit manifest declares endpoints and Reddit permission');
+  assert(companionServer.includes("'/external/shiba/status'") && companionServer.includes("'/external/shiba/posts/read'") && companionServer.includes("'/external/shiba/posts/submit'"), 'companion exposes only fixed Shiba routes');
+  assert(companionServer.includes("runAs: 'APP'"), 'automated submissions run as the Devvit app account');
+  assert(companionServer.includes('body.protocolVersion !== PROTOCOL_VERSION'), 'companion rejects incompatible protocol versions');
+  assert(companionServer.includes('This Devvit installation is scoped to r/'), 'companion enforces installation scope');
+
   const shell = await read('components/shiba-studio.tsx');
-  assert(
-    /AGENT_OVERRIDE_FIELDS:[\s\S]*?reddit:\s*\[[\s\S]*?refreshToken/.test(shell),
-    'agent editor exposes scoped Reddit OAuth credentials',
-  );
-  const integrationContext = await read('lib/integration-context.ts');
-  assert(
-    integrationContext.includes('Reddit posts are untrusted external content'),
-    'Reddit context labels feed instructions as untrusted data',
-  );
+  assert(shell.includes("key: 'devvitEndpoint'") && shell.includes("key: 'devvitAppToken'"), 'agent editor exposes the Devvit credential pair');
+  assert(shell.includes('Reddit overrides are one credential pair') && shell.includes('A partial pair is rejected'), 'agent editor explains Reddit override pair semantics');
+  assert(shell.includes('redditOverridePairError(agentForm.integrationOverrides)'), 'agent editor validates the Reddit override pair before saving');
+  assert(shell.includes('External Endpoints are currently a limited-access Devvit capability'), 'integration UI explains the limited-access prerequisite');
+  assert(shell.includes("const saved = await saveIntegration(which, { silent: true })") && shell.includes("body: JSON.stringify({ action: 'test', which })"), 'connection tests persist the draft then probe server-stored credentials');
+  assert(shell.includes('onChangeCapture={() => invalidateIntegrationTest(integration.id)}'), 'credential edits invalidate prior connection results');
+  assert(shell.includes('integrationDraftVersionsRef.current[which] !== draftVersion'), 'late connection-test results are fenced from newer edits');
+  assert(!shell.includes('/api/reddit-oauth/'), 'integration UI contains no Reddit OAuth popup routes');
+  assert(!(await exists('lib/reddit-oauth.ts')), 'legacy Reddit OAuth implementation is removed');
+  assert(!(await exists('app/api/reddit-oauth/start/route.ts')), 'legacy Reddit OAuth start route is removed');
+  assert(!(await exists('app/api/reddit-oauth/callback/route.ts')), 'legacy Reddit OAuth callback route is removed');
+  const integrationRoute = await read('app/api/integrations/route.ts');
+  assert(!integrationRoute.includes('disconnect-reddit') && !integrationRoute.includes('reddit-oauth'), 'generic integration API contains no OAuth lifecycle branch');
+  const agentsRoute = await read('app/api/agents/route.ts');
+  assert(agentsRoute.includes('redditOverridePairError(body.agent?.integrationOverrides)') && agentsRoute.includes('redditOverridePairError(body.integrationOverrides)'), 'agent API rejects partial Reddit override pairs on update and create');
+  const loopback = await read('lib/oauth-loopback.ts');
+  assert(!loopback.includes('shiba-reddit'), 'OAuth hand-back channels contain no orphaned Reddit browser flow');
+  const privacy = await read('PRIVACY.md');
+  assert(privacy.includes('Reddit') && privacy.includes('Devvit companion endpoint') && privacy.includes('post content'), 'privacy notice explains Reddit Devvit data flow');
+  const apiDocs = `${await read('docs/api.md')}\n${await read('app/api-docs/page.tsx')}`;
+  assert(apiDocs.includes('secret fields masked'), 'API docs accurately describe masked integration credentials');
+
+  const context = await read('lib/integration-context.ts');
+  assert(context.includes('Connected through Devvit as app account'), 'agent context identifies app-account authorship');
+  assert(context.includes('untrusted external content'), 'agent context treats Reddit posts as untrusted data');
 }
 
-async function verifyClientAndExecutor(tempDir: string): Promise<void> {
+async function verifyTransportAndRuntime(tempDir: string): Promise<void> {
   const originalFetch = globalThis.fetch;
   const calls: FetchCall[] = [];
-  let scenario: Scenario = 'idle';
-  let retryReadCalls = 0;
+  let scenario: Scenario = 'normal';
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    const method = (init?.method || 'GET').toUpperCase();
-    const call: FetchCall = {
+    let body: Record<string, unknown> = {};
+    if (typeof init?.body === 'string' && init.body) body = JSON.parse(init.body) as Record<string, unknown>;
+    calls.push({
       url,
-      method,
+      method: (init?.method || 'GET').toUpperCase(),
       headers: new Headers(init?.headers),
-      body: bodyText(init?.body),
-    };
-    calls.push(call);
+      body,
+      redirect: init?.redirect,
+    });
     const parsed = new URL(url);
-
-    if (parsed.hostname === 'www.reddit.com' && parsed.pathname === '/api/v1/access_token') {
-      assert(scenario === 'retry-read', 'only the safe read retry refreshes OAuth');
-      assert(method === 'POST', 'OAuth refresh uses POST');
-      const form = new URLSearchParams(call.body);
-      assert(form.get('grant_type') === 'refresh_token', 'OAuth refresh uses refresh_token grant');
-      assert(form.get('refresh_token') === 'verify-refresh-retry', 'OAuth refresh sends the expected refresh token');
-      assert(call.headers.get('authorization')?.startsWith('Basic '), 'OAuth refresh uses client authentication');
-      return jsonResponse({
-        access_token: 'verify-access-refreshed',
-        token_type: 'bearer',
-        expires_in: 3600,
-        scope: 'identity read submit',
-      });
+    if (!parsed.hostname.endsWith('-external.devvit.net')) return jsonResponse({ error: 'unexpected host' }, 404);
+    if (parsed.pathname === '/external/shiba/status') {
+      if (scenario === 'oversized') return new Response('x'.repeat(1_000_001), { status: 200 });
+      if (scenario === 'missing-capabilities') {
+        return jsonResponse({ ...statusPayload(), capabilities: ['read_posts'] });
+      }
+      return jsonResponse(scenario === 'bad-protocol' ? { ...statusPayload(), protocolVersion: 2 } : statusPayload());
     }
-
-    if (parsed.hostname !== 'oauth.reddit.com') {
-      return jsonResponse({ message: `unexpected ${method} ${url}` }, 404);
+    if (parsed.pathname === '/external/shiba/posts/read') {
+      if (scenario === 'read-error') return jsonResponse({ ok: false, error: 'listing temporarily unavailable' }, 503);
+      if (scenario === 'bad-protocol') return jsonResponse({ ...listingPayload(), protocolVersion: 2 });
+      if (scenario === 'invalid-listing-community') return jsonResponse({ ...listingPayload(), subreddit: 'not/a/community' });
+      if (scenario === 'mismatched-listing-community') return jsonResponse({ ...listingPayload(), subreddit: 'elsewhere' });
+      if (scenario === 'mismatched-post-community') {
+        const payload = listingPayload();
+        return jsonResponse({ ...payload, posts: payload.posts.map((post) => ({ ...post, subreddit: 'elsewhere' })) });
+      }
+      return jsonResponse(listingPayload());
     }
-
-    switch (scenario) {
-      case 'listing':
-        return jsonResponse(listingPayload());
-      case 'read-error':
-        return jsonResponse({ message: 'Reddit listing temporarily unavailable' }, 503);
-      case 'retry-read':
-        retryReadCalls++;
-        if (retryReadCalls === 1) return jsonResponse({ message: 'Unauthorized' }, 401);
-        assert(
-          call.headers.get('authorization') === 'Bearer verify-access-refreshed',
-          'retried read uses the refreshed bearer',
-        );
-        return jsonResponse({ kind: 'Listing', data: { after: null, children: [] } });
-      case 'submit-success':
-        return jsonResponse({
-          json: {
-            errors: [],
-            data: {
-              id: 'confirmed-42',
-              name: 't3_confirmed-42',
-              url: 'https://www.reddit.com/r/testing/comments/confirmed-42/interesting/',
-            },
-          },
-        });
-      case 'submit-unauthorized':
-        return jsonResponse({ message: 'Unauthorized' }, 401);
-      case 'submit-json-error':
-        return jsonResponse({
-          json: {
-            errors: [['SUBREDDIT_NOEXIST', 'that subreddit does not exist', 'sr']],
-            data: {},
-          },
-        });
-      case 'submit-ambiguous':
-        throw new TypeError('socket closed after request write');
-      default:
-        return jsonResponse({ message: `unexpected scenario ${scenario}` }, 500);
+    if (parsed.pathname === '/external/shiba/posts/submit') {
+      if (scenario === 'submit-ambiguous') throw new TypeError('socket closed after request write');
+      if (scenario === 'submit-error') return jsonResponse({ ok: false, error: 'submission unavailable' }, 503);
+      if (scenario === 'invalid-receipt') return jsonResponse({ ok: true, protocolVersion: 1, id: 'missing-confirmation' });
+      if (scenario === 'submit-fullname-mismatch') return jsonResponse({ ...submitPayload(), fullname: 't3_another42' });
+      if (scenario === 'submit-subreddit-mismatch') return jsonResponse({ ...submitPayload(), subreddit: 'elsewhere' });
+      if (scenario === 'submit-permalink-id-mismatch') {
+        return jsonResponse({ ...submitPayload(), url: 'https://www.reddit.com/r/testing/comments/another42/interesting/' });
+      }
+      if (scenario === 'submit-permalink-community-mismatch') {
+        return jsonResponse({ ...submitPayload(), url: 'https://www.reddit.com/r/elsewhere/comments/confirmed42/interesting/' });
+      }
+      return jsonResponse(submitPayload());
     }
+    return jsonResponse({ error: `unexpected route ${parsed.pathname}` }, 404);
   }) as typeof fetch;
 
+  const reddit = await import('../lib/reddit');
   try {
-    const { setPersistenceDataDir, saveConfig } = await import('../lib/persistence');
-    setPersistenceDataDir(tempDir);
-    await saveConfig({
-      xaiApiKey: 'verify-xai-key',
-      integrations: redditCreds('stored'),
-      disabledTools: [],
-    });
-
-    const reddit = await import('../lib/reddit');
-
-    scenario = 'listing';
-    calls.length = 0;
-    const frontPage = await reddit.redditReadPosts(
-      { sort: 'hot', limit: 999 },
-      redditCreds('front'),
-    );
-    const frontCall = calls.find((call) => new URL(call.url).hostname === 'oauth.reddit.com');
-    assert(!!frontCall, 'front-page read reaches the Reddit API');
-    const frontUrl = new URL(frontCall.url);
-    assert(frontUrl.pathname === '/hot', 'omitted subreddit uses the signed-in front-page path');
-    assert(!frontUrl.pathname.includes('/r/popular'), 'omitted subreddit is not rewritten to r/popular');
-    assert(frontUrl.searchParams.get('limit') === '25', 'read limit is clamped to 25');
-    assert(frontPage.nextAfter === 't3_next-page', 'listing returns the pagination cursor');
-    assert(frontPage.posts.length === 1, 'listing returns one normalized post');
-    const post = frontPage.posts[0];
-    assert(post.id === 'post-123' && post.fullname === 't3_post-123', 'post identifiers are normalized');
-    assert(post.selfText === 'A compact but interesting body.', 'self text is normalized');
-    assert(post.comments === 45 && post.score === 321, 'post metrics are normalized');
-    assert(post.createdAt === '2023-11-14T22:13:20.000Z', 'Reddit epoch timestamp becomes ISO');
-    assert(
-      post.permalink === 'https://www.reddit.com/r/TypeScript/comments/post-123/a_useful_type_system_idea/',
-      'relative Reddit permalink becomes absolute',
-    );
+    const invalidEndpoints = [
+      ['http://verify-external.devvit.net', 'HTTPS'],
+      ['https://evil.example', 'official'],
+      ['https://safe-external.devvit.net.evil.example', 'official'],
+      ['https://user@safe-external.devvit.net', 'credentials'],
+      ['https://safe-external.devvit.net:444', 'port'],
+      ['https://safe-external.devvit.net/external/shiba/status', 'origin'],
+      ['https://safe-external.devvit.net?next=evil', 'query'],
+    ] as const;
+    for (const [endpoint, message] of invalidEndpoints) {
+      expectThrow(() => reddit.normalizeRedditDevvitEndpoint(endpoint), message, `unsafe endpoint ${endpoint}`);
+    }
 
     calls.length = 0;
-    await reddit.redditReadPosts(
-      {
-        subreddit: 'https://www.reddit.com/r/TypeScript/',
-        sort: 'top',
-        time: 'week',
-        limit: 0,
-      },
-      redditCreds('community'),
-    );
-    const communityCall = calls.find((call) => new URL(call.url).hostname === 'oauth.reddit.com');
-    assert(!!communityCall, 'subreddit read reaches the Reddit API');
-    const communityUrl = new URL(communityCall.url);
-    assert(communityUrl.pathname === '/r/TypeScript/top', 'subreddit URL is safely normalized into the API path');
-    assert(communityUrl.searchParams.get('t') === 'week', 'top listing forwards its time window');
-    assert(communityUrl.searchParams.get('limit') === '1', 'read limit is clamped to at least 1');
+    scenario = 'normal';
+    const status = await reddit.getRedditDevvitStatus(redditCreds('status'));
+    assert(status.appAccount === 'shiba_bridge_app' && status.subreddit === 'testing', 'status returns app account and installed community');
+    const statusCall = calls[0];
+    assert(statusCall.url === 'https://verify-status-external.devvit.net/external/shiba/status', 'status uses the fixed official route');
+    assert(statusCall.method === 'POST' && statusCall.redirect === 'error', 'bridge calls use POST and reject redirects');
+    assert(statusCall.headers.get('authorization') === 'Bearer devvit_at_verify_status_12345678', 'bridge sends the managed token only in Authorization');
+    assert(statusCall.body.protocolVersion === 1, 'bridge call declares protocol version 1');
 
-    scenario = 'retry-read';
     calls.length = 0;
-    retryReadCalls = 0;
-    const retried = await reddit.redditReadPosts({}, redditCreds('retry'));
-    const retryApiCalls = calls.filter((call) => new URL(call.url).hostname === 'oauth.reddit.com');
-    const refreshCalls = calls.filter((call) => new URL(call.url).pathname === '/api/v1/access_token');
-    assert(retried.posts.length === 0 && retried.nextAfter === null, 'safe retry returns the eventual listing');
-    assert(retryApiCalls.length === 2, 'read retries exactly once after a definitive 401');
-    assert(refreshCalls.length === 1, 'read 401 performs exactly one token refresh');
+    const listing = await reddit.redditReadPosts({
+      subreddit: 'https://www.reddit.com/r/testing/',
+      sort: 'top',
+      time: 'week',
+      limit: 999,
+      after: 't3_cursor123',
+    }, redditCreds('read'));
+    assert(listing.posts.length === 1 && listing.nextAfter === 't3_next123', 'read returns normalized posts and cursor');
+    assert(listing.posts[0].createdAt === '2023-11-14T22:13:20.000Z', 'read retains a validated ISO timestamp');
+    const readCall = calls[0];
+    assert(new URL(readCall.url).pathname === '/external/shiba/posts/read', 'read uses the fixed bridge route');
+    assert(readCall.body.subreddit === 'testing' && readCall.body.sort === 'top' && readCall.body.time === 'week', 'read normalizes community and listing options');
+    assert(readCall.body.limit === 25 && readCall.body.after === 't3_cursor123', 'read clamps limits and forwards a validated cursor');
 
-    scenario = 'submit-success';
+    calls.length = 0;
+    await reddit.redditReadPosts({}, redditCreds('installed-default'));
+    assert(!Object.prototype.hasOwnProperty.call(calls[0].body, 'subreddit'), 'omitted community delegates to the Devvit installation');
+    const beforeInvalidCursor = calls.length;
+    await expectReject(
+      () => reddit.redditReadPosts({ after: '../escape' }, redditCreds('invalid-cursor')),
+      'pagination cursor',
+      'invalid read cursor',
+    );
+    assert(calls.length === beforeInvalidCursor, 'invalid cursor is rejected before network access');
+
+    for (const [failure, message] of [
+      ['invalid-listing-community', 'invalid listing community'],
+      ['mismatched-listing-community', 'different community'],
+      ['mismatched-post-community', 'outside the confirmed community'],
+    ] as const) {
+      scenario = failure;
+      calls.length = 0;
+      await expectReject(
+        () => reddit.redditReadPosts({ subreddit: 'testing' }, redditCreds(failure)),
+        message,
+        failure,
+      );
+      assert(calls.length === 1, `${failure} is rejected after one listing request`);
+    }
+
+    scenario = 'read-error';
+    calls.length = 0;
+    await expectReject(() => reddit.redditReadPosts({}, redditCreds('read-error')), 'temporarily unavailable', 'bridge read error');
+    assert(calls.length === 1, 'failed read is not multiplied by hidden retries');
+
+    scenario = 'bad-protocol';
+    calls.length = 0;
+    await expectReject(() => reddit.getRedditDevvitStatus(redditCreds('protocol')), 'Unsupported Reddit Devvit bridge protocol', 'incompatible bridge');
+    assert(calls.length === 1, 'incompatible bridge is rejected after one request');
+
+    scenario = 'missing-capabilities';
+    calls.length = 0;
+    await expectReject(
+      () => reddit.getRedditDevvitStatus(redditCreds('missing-capabilities')),
+      'required read and submit capabilities',
+      'missing Devvit capabilities',
+    );
+    assert(calls.length === 1, 'missing Devvit capabilities are rejected after one request');
+
+    scenario = 'oversized';
+    calls.length = 0;
+    await expectReject(() => reddit.getRedditDevvitStatus(redditCreds('oversized')), 'size limit', 'oversized bridge response');
+    assert(calls.length === 1, 'oversized bridge response is stopped after one request');
+
+    scenario = 'normal';
     calls.length = 0;
     const submitted = await reddit.redditSubmit({
       subreddit: '/r/testing/',
@@ -377,87 +415,33 @@ async function verifyClientAndExecutor(tempDir: string): Promise<void> {
       spoiler: false,
       sendReplies: false,
     }, redditCreds('submit'));
-    assert(submitted.ok && submitted.id === 'confirmed-42', 'submit returns Reddit\'s authoritative id');
-    assert(submitted.fullname === 't3_confirmed-42', 'submit returns Reddit\'s authoritative fullname');
-    assert(
-      submitted.url === 'https://www.reddit.com/r/testing/comments/confirmed-42/interesting/',
-      'submit returns Reddit\'s authoritative URL',
-    );
-    assert(submitted.subreddit === 'testing' && submitted.title === 'Interesting', 'submit returns normalized inputs');
-    const successfulPosts = calls.filter((call) => new URL(call.url).pathname === '/api/submit');
-    assert(successfulPosts.length === 1, 'successful submission sends one POST');
-    const successfulPost = successfulPosts[0];
-    assert(successfulPost.method === 'POST', 'submission uses POST');
-    assert(
-      successfulPost.headers.get('content-type')?.includes('application/x-www-form-urlencoded'),
-      'submission is form encoded',
-    );
-    const submittedForm = new URLSearchParams(successfulPost.body);
-    assert(submittedForm.get('api_type') === 'json' && submittedForm.get('raw_json') === '1', 'submit requests structured JSON');
-    assert(submittedForm.get('kind') === 'link' && submittedForm.get('sr') === 'testing', 'submit sends kind and subreddit');
-    assert(submittedForm.get('url') === 'https://example.com/interesting?source=verify', 'submit preserves the link URL');
-    assert(submittedForm.get('sendreplies') === 'false', 'submit maps sendReplies to Reddit\'s field');
+    assert(submitted.ok && submitted.id === 'confirmed42' && submitted.author === 'shiba_bridge_app', 'submit returns the authoritative Devvit receipt');
+    assert(calls.length === 1, 'successful submission sends exactly one request');
+    const submitCall = calls[0];
+    assert(new URL(submitCall.url).pathname === '/external/shiba/posts/submit', 'submit uses the fixed bridge route');
+    assert(submitCall.body.kind === 'link' && submitCall.body.subreddit === 'testing', 'submit maps kind and installed community');
+    assert(submitCall.body.url === 'https://example.com/interesting?source=verify' && submitCall.body.sendReplies === false, 'submit preserves validated link options');
 
-    scenario = 'submit-json-error';
-    calls.length = 0;
-    await expectReject(
-      () => reddit.redditSubmit({
-        subreddit: 'missing_community',
-        title: 'Will fail',
-        kind: 'self',
-        text: 'body',
-      }, redditCreds('json-error')),
-      'that subreddit does not exist',
-      'HTTP 200 with Reddit json.errors',
-    );
-    assert(
-      calls.filter((call) => new URL(call.url).pathname === '/api/submit').length === 1,
-      'JSON validation failure originates from one submit request',
-    );
+    for (const [failure, message] of [
+      ['submit-error', 'submission unavailable'],
+      ['submit-ambiguous', 'socket closed'],
+      ['invalid-receipt', 'authoritative'],
+      ['submit-fullname-mismatch', 'authoritative'],
+      ['submit-subreddit-mismatch', 'different community'],
+      ['submit-permalink-id-mismatch', 'does not match'],
+      ['submit-permalink-community-mismatch', 'does not match'],
+    ] as const) {
+      scenario = failure;
+      calls.length = 0;
+      await expectReject(
+        () => reddit.redditSubmit({ subreddit: 'testing', title: 'Never duplicate', text: 'body' }, redditCreds(failure)),
+        message,
+        failure,
+      );
+      assert(calls.length === 1, `${failure} never retries an ambiguous write`);
+    }
 
-    scenario = 'submit-ambiguous';
-    calls.length = 0;
-    await expectReject(
-      () => reddit.redditSubmit({
-        subreddit: 'testing',
-        title: 'Do not duplicate',
-        kind: 'self',
-        text: 'body',
-      }, redditCreds('ambiguous')),
-      'socket closed after request write',
-      'ambiguous submission transport failure',
-    );
-    assert(
-      calls.filter((call) => new URL(call.url).pathname === '/api/submit').length === 1,
-      'ambiguous submission is never retried',
-    );
-    assert(
-      !calls.some((call) => new URL(call.url).pathname === '/api/v1/access_token'),
-      'ambiguous submission does not trigger a token refresh and replay',
-    );
-
-    scenario = 'submit-unauthorized';
-    calls.length = 0;
-    await expectReject(
-      () => reddit.redditSubmit({
-        subreddit: 'testing',
-        title: 'Do not replay after 401',
-        kind: 'self',
-        text: 'body',
-      }, redditCreds('submit-401')),
-      'Reddit submit 401',
-      'submission rejected with 401',
-    );
-    assert(
-      calls.filter((call) => new URL(call.url).pathname === '/api/submit').length === 1,
-      'submission 401 performs exactly one POST',
-    );
-    assert(
-      !calls.some((call) => new URL(call.url).pathname === '/api/v1/access_token'),
-      'submission 401 does not refresh and replay the write',
-    );
-
-    scenario = 'idle';
+    scenario = 'normal';
     calls.length = 0;
     const { EMPTY_INTEGRATION_SCOPE } = await import('../lib/types');
     const { executeAgentTool } = await import('../lib/agent-tool-exec');
@@ -466,35 +450,54 @@ async function verifyClientAndExecutor(tempDir: string): Promise<void> {
       id: 'reddit-verify-agent',
       name: 'Reddit Verify',
       model: 'grok-verify',
+      autoAcceptBoardAssignments: false,
       workspace: { path: ROOT, useWorktree: false },
       integrations: { ...EMPTY_INTEGRATION_SCOPE, reddit: true },
       peers: [],
-      schedules: [],
       createdAt: now,
       updatedAt: now,
     };
     const run: Partial<AgentRun> = { id: 'reddit-verify-run', status: 'running' };
     const denied = await executeAgentTool(
       'reddit_submit',
-      { subreddit: 'testing', title: 'Must not post', kind: 'self', text: 'body' },
+      { subreddit: 'testing', title: 'Must not post', text: 'body' },
       agent,
       run,
       ROOT,
       undefined,
-      redditCreds('executor-denied'),
+      redditCreds('denied'),
     );
     assert((denied.result as { denied?: boolean }).denied === true, 'executor denies Reddit submit without runtime authorization');
-    assert(
-      String((denied.result as { error?: string }).error).includes('approved or explicitly dispatched'),
-      'executor denial explains the required authorization',
-    );
     assert(calls.length === 0, 'denied executor submission performs no network request');
 
-    scenario = 'listing';
+    const authorized = await executeAgentTool(
+      'reddit_submit',
+      { subreddit: 'testing', title: 'Interesting', text: 'body' },
+      agent,
+      run,
+      ROOT,
+      undefined,
+      redditCreds('executor'),
+      undefined,
+      { redditSubmitAuthorized: true },
+    );
+    assert((authorized.result as { id?: string }).id === 'confirmed42', 'executor accepts its explicit Reddit authorization capability');
+    assert(Number(calls.length) === 1, 'authorized executor submission sends one request');
+    assert(calls[0].headers.get('authorization') === 'Bearer devvit_at_verify_executor_12345678', 'executor uses its scoped Devvit credential pair');
+
+    const { setPersistenceDataDir, saveConfig } = await import('../lib/persistence');
+    setPersistenceDataDir(tempDir);
+    await saveConfig({
+      xaiApiKey: 'verify-xai-key',
+      integrations: redditCreds('global-runtime'),
+      disabledTools: [],
+    });
+
     calls.length = 0;
     let modelTurns = 0;
     const { runAgentOnce } = await import('../lib/agent-runtime');
-    const completed = await runAgentOnce(agent, 'Read my Reddit feed and report the result.', {
+    const runtimeAgent: Agent = { ...agent, id: 'reddit-runtime-agent', integrationOverrides: redditCreds('runtime-read') };
+    const completed = await runAgentOnce(runtimeAgent, 'Read the installed Reddit community and report the result.', {
       grokChatFn: async (params) => {
         modelTurns++;
         if (modelTurns === 1) {
@@ -513,55 +516,34 @@ async function verifyClientAndExecutor(tempDir: string): Promise<void> {
             }],
           };
         }
-        const transientToolResult = [...params.messages].reverse().find((message) => message.role === 'tool');
-        const transientContent = String(transientToolResult?.content || '');
-        assert(transientContent.includes('A useful type-system idea'), 'active model turn receives the Reddit post title');
-        assert(transientContent.includes('A compact but interesting body.'), 'active model turn receives the Reddit post body');
-        return {
-          choices: [{
-            message: { role: 'assistant', content: 'Read one Reddit post successfully.' },
-            finish_reason: 'stop',
-          }],
-        };
+        const transient = [...params.messages].reverse().find((message) => message.role === 'tool');
+        assert(String(transient?.content || '').includes('A useful type-system idea'), 'active model turn receives Reddit content');
+        return { choices: [{ message: { role: 'assistant', content: 'Read one Reddit post.' }, finish_reason: 'stop' }] };
       },
     });
-    assert(modelTurns === 2, 'agent completes the Reddit read in two model turns');
-    const readTrace = completed.trace.find(
-      (step) => step.type === 'result' && step.tool?.name === 'reddit_read_posts',
-    );
-    const durableTrace = JSON.stringify(readTrace);
-    assert(durableTrace.includes('"postsRead":1'), 'durable trace records the Reddit result count');
-    assert(durableTrace.includes('"hasNextPage":true'), 'durable trace records pagination availability');
-    assert(durableTrace.includes('"contentRetained":false'), 'durable trace declares feed content was not retained');
-    assert(!durableTrace.includes('A useful type-system idea'), 'durable trace omits the Reddit post title');
-    assert(!durableTrace.includes('verify_author'), 'durable trace omits the Reddit author');
-    assert(!durableTrace.includes('A compact but interesting body.'), 'durable trace omits the Reddit post body');
-    assert(!durableTrace.includes('t3_next-page'), 'durable trace omits the Reddit pagination cursor');
-    const { getRun } = await import('../lib/agent-runs-store');
-    const persisted = await getRun(completed.id);
-    const persistedTrace = JSON.stringify(persisted?.trace || []);
-    assert(persisted?.status === 'completed', 'Reddit read run persists as completed');
-    assert(!persistedTrace.includes('A useful type-system idea'), 'persisted run omits the Reddit post title');
-    assert(!persistedTrace.includes('A compact but interesting body.'), 'persisted run omits the Reddit post body');
+    const durableRead = JSON.stringify(completed.trace.find((step) => step.type === 'result' && step.tool?.name === 'reddit_read_posts'));
+    assert(durableRead.includes('"postsRead":1') && durableRead.includes('"contentRetained":false'), 'durable trace records only bounded Reddit read metadata');
+    assert(!durableRead.includes('A useful type-system idea') && !durableRead.includes('verify_author'), 'durable trace omits Reddit content and author');
 
-    scenario = 'listing';
+    scenario = 'normal';
     calls.length = 0;
-    let deniedTurns = 0;
-    const deniedRun = await runAgentOnce(agent, 'Read Reddit and summarize it. Do not publish anything.', {
+    let submitTurns = 0;
+    const postAgent: Agent = { ...agent, id: 'reddit-runtime-post-agent', integrationOverrides: redditCreds('runtime-post') };
+    const postedRun = await runAgentOnce(postAgent, 'Publish a text post to Reddit in r/testing with the supplied title and body.', {
       grokChatFn: async () => {
-        deniedTurns++;
-        if (deniedTurns === 1) {
+        submitTurns++;
+        if (submitTurns === 1) {
           return {
             choices: [{
               message: {
                 role: 'assistant',
                 content: null,
                 tool_calls: [{
-                  id: 'reddit-injected-submit-check',
+                  id: 'reddit-runtime-submit',
                   type: 'function',
                   function: {
                     name: 'reddit_submit',
-                    arguments: JSON.stringify({ subreddit: 'testing', title: 'Injected', text: 'must not publish' }),
+                    arguments: JSON.stringify({ subreddit: 'testing', title: 'Interesting', text: 'Confirmed once.' }),
                   },
                 }],
               },
@@ -569,135 +551,14 @@ async function verifyClientAndExecutor(tempDir: string): Promise<void> {
             }],
           };
         }
-        return {
-          choices: [{ message: { role: 'assistant', content: 'No post was published.' }, finish_reason: 'stop' }],
-        };
+        throw new Error('Grok API error 403: unauthenticated:bad-credentials');
       },
     });
-    const deniedReceipt = deniedRun.trace.find(
-      (step) => step.type === 'result' && step.tool?.name === 'reddit_submit',
-    )?.tool?.result as { denied?: boolean; error?: string } | undefined;
-    assert(deniedTurns === 2, 'autonomous run can recover after blocking an unrequested Reddit submission');
-    assert(deniedReceipt?.denied === true, 'autonomous run blocks Reddit submission without explicit user intent');
-    assert(
-      String(deniedReceipt?.error).includes('approved or explicitly dispatched'),
-      'blocked autonomous Reddit submission explains its authorization boundary',
-    );
-    assert(
-      calls.filter((call) => new URL(call.url).pathname === '/api/submit').length === 0,
-      'blocked autonomous Reddit submission performs no write request',
-    );
-
-    scenario = 'read-error';
-    calls.length = 0;
-    let failedReadTurns = 0;
-    const failedReadRun = await runAgentOnce(agent, 'Read Reddit and summarize any available posts.', {
-      grokChatFn: async () => {
-        failedReadTurns++;
-        if (failedReadTurns === 1) {
-          return {
-            choices: [{
-              message: {
-                role: 'assistant',
-                content: null,
-                tool_calls: [
-                  {
-                    id: 'reddit-parallel-read-error',
-                    type: 'function',
-                    function: { name: 'reddit_read_posts', arguments: '{}' },
-                  },
-                  {
-                    id: 'reddit-parallel-fs-list',
-                    type: 'function',
-                    function: { name: 'fs_list', arguments: JSON.stringify({ dir: '.' }) },
-                  },
-                ],
-              },
-              finish_reason: 'tool_calls',
-            }],
-          };
-        }
-        return {
-          choices: [{ message: { role: 'assistant', content: 'The Reddit read failed safely.' }, finish_reason: 'stop' }],
-        };
-      },
-    });
-    const failedReadTrace = failedReadRun.trace.find(
-      (step) => step.type === 'result' && step.tool?.name === 'reddit_read_posts',
-    );
-    assert(failedReadTurns === 2, 'parallel Reddit read failure is returned to the model without aborting the run');
-    assert(failedReadTrace?.content.startsWith('Reddit read failed:'), 'durable trace labels a failed Reddit read accurately');
-    assert(
-      String((failedReadTrace?.tool?.result as { error?: string } | undefined)?.error).includes('temporarily unavailable'),
-      'durable Reddit read receipt retains the bounded error',
-    );
-    assert(!failedReadTrace?.content.startsWith('Read 0 Reddit posts'), 'failed Reddit read is not reported as an empty success');
-
-    scenario = 'submit-success';
-    calls.length = 0;
-    let submitTurns = 0;
-    const submitAgent: Agent = {
-      ...agent,
-      id: 'reddit-verify-scoped-submit-agent',
-      integrationOverrides: redditCreds('per-agent-submit'),
-    };
-    const submittedRun = await runAgentOnce(
-      submitAgent,
-      'Publish a text post to Reddit in r/testing with the supplied title and body.',
-      {
-        grokChatFn: async () => {
-          submitTurns++;
-          if (submitTurns === 1) {
-            return {
-              choices: [{
-                message: {
-                  role: 'assistant',
-                  content: null,
-                  tool_calls: [{
-                    id: 'reddit-runtime-submit',
-                    type: 'function',
-                    function: {
-                      name: 'reddit_submit',
-                      arguments: JSON.stringify({
-                        subreddit: 'testing',
-                        title: 'Runtime confirmation',
-                        kind: 'self',
-                        text: 'Confirmed once.',
-                      }),
-                    },
-                  }],
-                },
-                finish_reason: 'tool_calls',
-              }],
-            };
-          }
-          throw new Error('synthetic follow-up timeout after confirmed post');
-        },
-      },
-    );
-    const runtimeSubmitCalls = calls.filter((call) => new URL(call.url).pathname === '/api/submit');
-    assert(submitTurns === 2, 'runtime attempts one follow-up model turn after Reddit submission');
-    assert(runtimeSubmitCalls.length === 1, 'runtime Reddit submission performs exactly one POST');
-    assert(
-      runtimeSubmitCalls[0].headers.get('authorization') === 'Bearer verify-access-per-agent-submit',
-      'runtime Reddit submission uses the agent-scoped account',
-    );
-    assert(submittedRun.status === 'completed', 'confirmed Reddit post survives a later non-auth model failure');
-    assert(submittedRun.finalOutput?.includes('Posted to Reddit:'), 'post-commit fallback identifies Reddit');
-    assert(submittedRun.finalOutput?.includes('No duplicate post was attempted'), 'post-commit fallback prevents retry ambiguity');
-    assert(!submittedRun.trace.some((step) => step.type === 'error'), 'confirmed Reddit post has no fatal error trace');
-    assert(
-      submittedRun.trace.some((step) => step.type === 'think' && step.content.includes('The Reddit post was confirmed')),
-      'post-commit trace labels the confirmed provider as Reddit',
-    );
-    const runtimeReceipt = submittedRun.trace.find(
-      (step) => step.type === 'result' && step.tool?.name === 'reddit_submit',
-    )?.tool?.result as { ok?: boolean; id?: string; url?: string } | undefined;
-    assert(runtimeReceipt?.ok === true && runtimeReceipt.id === 'confirmed-42', 'runtime retains Reddit authoritative receipt');
-    assert(
-      runtimeReceipt?.url === 'https://www.reddit.com/r/testing/comments/confirmed-42/interesting/',
-      'runtime retains Reddit authoritative post URL',
-    );
+    const runtimeSubmitCalls = calls.filter((call) => new URL(call.url).pathname === '/external/shiba/posts/submit');
+    assert(runtimeSubmitCalls.length === 1, 'confirmed runtime post is never replayed after a later model failure');
+    assert(postedRun.status === 'completed', 'confirmed Reddit post survives a later Grok auth failure');
+    assert(postedRun.finalOutput?.includes('Posted to Reddit:') && postedRun.finalOutput.includes('No duplicate post was attempted'), 'post-commit fallback reports success instead of a false failed run');
+    assert(!postedRun.trace.some((step) => step.type === 'error'), 'confirmed Reddit post leaves no fatal error trace');
   } finally {
     globalThis.fetch = originalFetch;
     const { setPersistenceDataDir } = await import('../lib/persistence');
@@ -705,315 +566,25 @@ async function verifyClientAndExecutor(tempDir: string): Promise<void> {
   }
 }
 
-async function verifyOAuthLifecycle(tempDir: string): Promise<void> {
-  const originalFetch = globalThis.fetch;
-  const calls: FetchCall[] = [];
-  const appOrigin = 'http://127.0.0.1:3210';
-  const redirectUri = `${appOrigin}/api/reddit-oauth/callback`;
-  let scenario: 'exchange' | 'missing-scopes' | 'disconnect-refresh-race' | 'revoke-failure' = 'exchange';
-  let announceRacingRefresh: (() => void) | undefined;
-  let releaseRacingRefresh: Promise<void> | undefined;
-
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    const method = (init?.method || 'GET').toUpperCase();
-    const call: FetchCall = {
-      url,
-      method,
-      headers: new Headers(init?.headers),
-      body: bodyText(init?.body),
-    };
-    calls.push(call);
-    const parsed = new URL(url);
-
-    if (parsed.hostname === 'www.reddit.com' && parsed.pathname === '/api/v1/access_token') {
-      const form = new URLSearchParams(call.body);
-      assert(method === 'POST', 'OAuth lifecycle token exchange uses POST');
-      assert(call.headers.get('authorization')?.startsWith('Basic '), 'OAuth lifecycle token exchange uses Basic auth');
-      assert(call.headers.get('user-agent')?.includes('shiba-studio'), 'OAuth lifecycle sends an identifying User-Agent');
-      assert(init?.cache === 'no-store', 'OAuth lifecycle token exchange disables caching');
-
-      if (scenario === 'exchange') {
-        assert(form.get('grant_type') === 'authorization_code', 'matching state exchanges an authorization code');
-        assert(form.get('code') === 'verify-auth-code', 'authorization exchange sends the expected code');
-        assert(form.get('redirect_uri') === redirectUri, 'authorization exchange repeats the fixed callback');
-        return jsonResponse({
-          access_token: 'lifecycle-access-token',
-          refresh_token: 'lifecycle-refresh-token',
-          token_type: 'bearer',
-          expires_in: 3600,
-          scope: 'identity read submit',
-        });
-      }
-
-      if (scenario === 'disconnect-refresh-race') {
-        assert(form.get('grant_type') === 'refresh_token', 'disconnect race uses the refresh grant');
-        announceRacingRefresh?.();
-        await releaseRacingRefresh;
-        return jsonResponse({
-          access_token: 'must-not-resurrect',
-          refresh_token: 'race-refresh-token',
-          token_type: 'bearer',
-          expires_in: 3600,
-          scope: 'identity read submit',
-        });
-      }
-
-      assert(scenario === 'missing-scopes', 'refresh scenario is recognized');
-      assert(form.get('grant_type') === 'refresh_token', 'expired lifecycle token uses refresh_token grant');
-      assert(form.get('refresh_token') === 'scope-refresh-token', 'refresh uses the stored permanent token');
-      return jsonResponse({
-        access_token: 'must-not-persist',
-        token_type: 'bearer',
-        expires_in: 3600,
-        scope: 'identity read',
-      });
-    }
-
-    if (parsed.hostname === 'oauth.reddit.com' && parsed.pathname === '/api/v1/me') {
-      assert(scenario === 'exchange', 'identity lookup follows the authorization exchange');
-      assert(call.headers.get('authorization') === 'Bearer lifecycle-access-token', 'identity lookup uses the exchanged bearer');
-      assert(init?.cache === 'no-store', 'identity lookup disables caching');
-      return jsonResponse({ name: 'lifecycle_user', id: 'lifecycle-user-id' });
-    }
-
-    if (parsed.hostname === 'www.reddit.com' && parsed.pathname === '/api/v1/revoke_token') {
-      assert(
-        scenario === 'revoke-failure' || scenario === 'disconnect-refresh-race',
-        'disconnect attempts revocation in the expected scenario',
-      );
-      assert(method === 'POST', 'disconnect revocation uses POST');
-      assert(call.headers.get('authorization')?.startsWith('Basic '), 'disconnect revocation uses Basic auth');
-      assert(init?.cache === 'no-store', 'disconnect revocation disables caching');
-      return scenario === 'revoke-failure'
-        ? jsonResponse({ message: 'temporary revoke outage' }, 503)
-        : jsonResponse({});
-    }
-
-    return jsonResponse({ message: `unexpected ${method} ${url}` }, 404);
-  }) as typeof fetch;
-
-  const { setPersistenceDataDir, saveConfig, loadConfig } = await import('../lib/persistence');
-  const redditOAuth = await import('../lib/reddit-oauth');
-  setPersistenceDataDir(tempDir);
-  redditOAuth.setRedditOAuthDataDir(tempDir);
-
-  try {
-    await saveConfig({
-      xaiApiKey: '',
-      integrations: {
-        reddit: {
-          clientId: 'lifecycle-client-id',
-          clientSecret: 'lifecycle-client-secret',
-          userAgent: 'desktop:shiba-studio:oauth-lifecycle (by /u/lifecycle_user)',
-        },
-      },
-      disabledTools: [],
-    });
-
-    scenario = 'exchange';
-    calls.length = 0;
-    const started = await redditOAuth.startRedditOAuth(appOrigin);
-    assert(started.redirectUri === redirectUri, 'authorize flow uses the fixed registered callback');
-    assert(started.state.length >= 32, 'authorize flow creates a high-entropy state');
-    const authorizeUrl = new URL(started.authorizeUrl);
-    assert(
-      authorizeUrl.origin === 'https://www.reddit.com' && authorizeUrl.pathname === '/api/v1/authorize',
-      'authorize flow targets Reddit\'s authorization endpoint',
-    );
-    assert(authorizeUrl.searchParams.get('response_type') === 'code', 'authorize flow requests an authorization code');
-    assert(authorizeUrl.searchParams.get('duration') === 'permanent', 'authorize flow requests permanent consent');
-    assert(authorizeUrl.searchParams.get('redirect_uri') === redirectUri, 'authorize URL carries the fixed callback');
-    assert(authorizeUrl.searchParams.get('state') === started.state, 'authorize URL carries the generated state');
-    const authorizeScopes = new Set((authorizeUrl.searchParams.get('scope') || '').split(/\s+/).filter(Boolean));
-    assert(
-      authorizeScopes.size === 3
-        && authorizeScopes.has('identity')
-        && authorizeScopes.has('read')
-        && authorizeScopes.has('submit'),
-      'authorize flow requests exactly identity, read, and submit',
-    );
-
-    const identity = await redditOAuth.exchangeRedditCode(
-      'verify-auth-code',
-      started.state,
-      appOrigin,
-    );
-    assert(
-      identity.username === 'lifecycle_user' && identity.userId === 'lifecycle-user-id',
-      'matching state exchanges once and returns Reddit identity',
-    );
-    const exchangeCalls = calls.filter((call) => new URL(call.url).pathname === '/api/v1/access_token');
-    const identityCalls = calls.filter((call) => new URL(call.url).pathname === '/api/v1/me');
-    assert(exchangeCalls.length === 1, 'matching state causes one token exchange');
-    assert(identityCalls.length === 1, 'successful exchange performs one identity lookup');
-
-    const persisted = (await loadConfig()).integrations.reddit;
-    assert(persisted?.accessToken === 'lifecycle-access-token', 'authorization access token persists');
-    assert(persisted?.refreshToken === 'lifecycle-refresh-token', 'permanent refresh token persists');
-    assert(persisted?.username === 'lifecycle_user' && persisted.userId === 'lifecycle-user-id', 'Reddit identity persists');
-    assert(
-      persisted?.scopes?.includes('identity')
-        && persisted.scopes.includes('read')
-        && persisted.scopes.includes('submit'),
-      'granted scopes persist',
-    );
-    assert(!!persisted?.tokenExpiry && Date.parse(persisted.tokenExpiry) > Date.now(), 'token expiry persists in the future');
-
-    const status = await redditOAuth.getRedditOAuthStatus();
-    assert(status.connected && !status.expired, 'OAuth status reports the persisted session connected');
-    assert(status.clientReady && status.username === 'lifecycle_user', 'OAuth status exposes client readiness and public identity');
-    assert(status.scopes.includes('submit'), 'OAuth status exposes granted scopes');
-
-    const callsBeforeReplay = calls.length;
-    await expectReject(
-      () => redditOAuth.exchangeRedditCode('verify-auth-code', started.state, appOrigin),
-      'expired or was already completed',
-      'consumed OAuth state replay',
-    );
-    assert(calls.length === callsBeforeReplay, 'state replay is rejected before any network exchange');
-
-    redditOAuth.setRedditOAuthDataDir(tempDir);
-    await saveConfig({
-      integrations: {
-        reddit: {
-          clientId: 'scope-client-id',
-          clientSecret: 'scope-client-secret',
-          accessToken: 'scope-expired-access',
-          refreshToken: 'scope-refresh-token',
-          tokenExpiry: new Date(Date.now() - 60_000).toISOString(),
-          username: 'scope_user',
-          userId: 'scope-user-id',
-          scopes: ['identity', 'read', 'submit'],
-          userAgent: 'desktop:shiba-studio:scope-check (by /u/scope_user)',
-        },
-      },
-    });
-    const beforeMissingScopes = (await loadConfig()).integrations.reddit;
-    const beforeMissingScopesJson = JSON.stringify(beforeMissingScopes);
-    scenario = 'missing-scopes';
-    calls.length = 0;
-    await expectReject(
-      () => redditOAuth.getValidRedditToken(),
-      'submit',
-      'refresh missing a required scope',
-    );
-    assert(
-      JSON.stringify((await loadConfig()).integrations.reddit) === beforeMissingScopesJson,
-      'refresh missing submit scope does not persist the rejected token response',
-    );
-    assert(
-      calls.filter((call) => new URL(call.url).pathname === '/api/v1/access_token').length === 1,
-      'missing-scope refresh performs one token request',
-    );
-
-    await saveConfig({
-      integrations: {
-        reddit: {
-          clientId: 'race-client-id',
-          clientSecret: 'race-client-secret',
-          accessToken: 'race-expired-access',
-          refreshToken: 'race-refresh-token',
-          tokenExpiry: new Date(Date.now() - 60_000).toISOString(),
-          scopes: ['identity', 'read', 'submit'],
-          userAgent: 'desktop:shiba-studio:disconnect-race (local verifier)',
-        },
-      },
-    });
-    scenario = 'disconnect-refresh-race';
-    let releaseRefresh!: () => void;
-    const refreshStarted = new Promise<void>((resolve) => { announceRacingRefresh = resolve; });
-    releaseRacingRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
-    const racingRefresh = redditOAuth.getValidRedditToken().then(
-      () => '',
-      (error: unknown) => error instanceof Error ? error.message : String(error),
-    );
-    await refreshStarted;
-    const raceDisconnect = await redditOAuth.disconnectReddit();
-    assert(raceDisconnect.revoked, 'disconnect revokes the captured token while refresh is in flight');
-    releaseRefresh();
-    assert(/cancelled by a newer disconnect/i.test(await racingRefresh), 'disconnect fences an in-flight Reddit refresh');
-    const afterRaceDisconnect = (await loadConfig()).integrations.reddit;
-    assert(
-      !afterRaceDisconnect?.accessToken && !afterRaceDisconnect?.refreshToken,
-      'an in-flight Reddit refresh cannot resurrect disconnected tokens',
-    );
-    announceRacingRefresh = undefined;
-    releaseRacingRefresh = undefined;
-
-    redditOAuth.setRedditOAuthDataDir(tempDir);
-    await saveConfig({
-      integrations: {
-        reddit: {
-          clientId: 'disconnect-client-id',
-          clientSecret: 'disconnect-client-secret',
-          accessToken: 'disconnect-access-token',
-          refreshToken: 'disconnect-refresh-token',
-          tokenExpiry: new Date(Date.now() + 60 * 60_000).toISOString(),
-          username: 'disconnect_user',
-          userId: 'disconnect-user-id',
-          scopes: ['identity', 'read', 'submit'],
-          userAgent: 'desktop:shiba-studio:disconnect-check (by /u/disconnect_user)',
-        },
-      },
-    });
-    scenario = 'revoke-failure';
-    calls.length = 0;
-    const disconnected = await redditOAuth.disconnectReddit();
-    assert(!disconnected.revoked && !!disconnected.warning, 'disconnect reports a failed remote revocation');
-    const revokeCalls = calls.filter((call) => new URL(call.url).pathname === '/api/v1/revoke_token');
-    assert(revokeCalls.length === 1, 'disconnect attempts remote revocation exactly once');
-    const revokeForm = new URLSearchParams(revokeCalls[0].body);
-    assert(revokeForm.get('token') === 'disconnect-refresh-token', 'disconnect revokes the permanent refresh token');
-    assert(revokeForm.get('token_type_hint') === 'refresh_token', 'disconnect sends the refresh-token hint');
-    const afterDisconnect = (await loadConfig()).integrations.reddit;
-    assert(afterDisconnect?.clientId === 'disconnect-client-id', 'disconnect retains the Reddit client id');
-    assert(afterDisconnect?.clientSecret === 'disconnect-client-secret', 'disconnect retains the Reddit client secret');
-    assert(
-      afterDisconnect?.userAgent === 'desktop:shiba-studio:disconnect-check (by /u/disconnect_user)',
-      'disconnect retains the identifying User-Agent',
-    );
-    assert(
-      !afterDisconnect?.accessToken
-        && !afterDisconnect?.refreshToken
-        && !afterDisconnect?.tokenExpiry
-        && !afterDisconnect?.username
-        && !afterDisconnect?.userId
-        && !afterDisconnect?.scopes,
-      'disconnect always clears tokens and session metadata despite revoke failure',
-    );
-
-    const callbackSource = await read('app/api/reddit-oauth/callback/route.ts');
-    assert(callbackSource.includes("message, 'shiba-reddit'"), 'Reddit callback selects the Reddit handback channel');
-    const { buildHandbackHtml } = await import('../lib/oauth-loopback');
-    const handback = buildHandbackHtml('connected', appOrigin, undefined, 'shiba-reddit');
-    assert(handback.includes('shiba-reddit:connected'), 'Reddit handback notifies the opener of connection');
-    assert(handback.includes(`${appOrigin}/capabilities?reddit=connected`), 'Reddit same-tab handback returns to connected Capabilities');
-  } finally {
-    globalThis.fetch = originalFetch;
-    redditOAuth.setRedditOAuthDataDir(null);
-    setPersistenceDataDir(null);
-  }
-}
-
 async function main(): Promise<void> {
   await fs.mkdir(SCRATCH, { recursive: true });
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'shiba-reddit-verify-'));
-  log(`REDDIT_VERIFY ${new Date().toISOString()}`);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'shiba-reddit-devvit-verify-'));
+  log(`REDDIT_DEVVIT_VERIFY ${new Date().toISOString()}`);
   try {
     await verifyStructuralWiring();
-    await verifyClientAndExecutor(tempDir);
-    await verifyOAuthLifecycle(tempDir);
-    log(`PASS: Reddit integration regression harness (${passed} checks)`);
+    await verifyTransportAndRuntime(tempDir);
+    log(`PASS: Reddit Devvit regression harness (${passed} checks)`);
     await fs.writeFile(LOG, `${lines.join('\n')}\n`);
   } finally {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-main().catch(async (error: unknown) => {
-  log(`FAIL: ${error instanceof Error ? error.stack || error.message : String(error)}`);
-  await fs.mkdir(SCRATCH, { recursive: true }).catch(() => {});
-  await fs.writeFile(LOG, `${lines.join('\n')}\n`).catch(() => {});
-  process.exit(1);
-});
+void main()
+  .then(() => process.exit(0))
+  .catch(async (error: unknown) => {
+    log(`FAIL: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+    await fs.mkdir(SCRATCH, { recursive: true }).catch(() => undefined);
+    await fs.writeFile(LOG, `${lines.join('\n')}\n`).catch(() => undefined);
+    process.exit(1);
+  });

@@ -11,6 +11,7 @@ import { beginAutomationMaintenance } from './automation-maintenance';
 import { dataDir } from './data-paths';
 import { beginDbMaintenance, databasePath, getDb, validateDatabaseFile } from './db';
 import { exportSecretKeyHex, importSecretKeyHex } from './secure-store';
+import { ownershipStoreFencePath, withStoreFileLock } from './store-file-lock';
 
 export const BACKUP_FORMAT = 'shiba-studio-backup';
 export const BACKUP_VERSION = 1;
@@ -42,7 +43,12 @@ export interface BackupBundle {
   /** Machine encryption key (64 hex chars) — needed to open sealed secrets. */
   secretKeyHex?: string;
 }
-export async function buildBackup(opts: { includeKey?: boolean } = {}): Promise<BackupBundle> {
+
+function withOwnershipStoreFence<T>(operation: () => Promise<T>): Promise<T> {
+  return withStoreFileLock(ownershipStoreFencePath(dataDir()), operation);
+}
+
+async function buildBackupUnlocked(opts: { includeKey?: boolean } = {}): Promise<BackupBundle> {
   const stores: Record<string, string> = {};
   for (const name of JSON_STORES) {
     try {
@@ -77,6 +83,10 @@ export async function buildBackup(opts: { includeKey?: boolean } = {}): Promise<
   };
   audit('system', 'backup exported', `stores: ${Object.keys(stores).length}, sqlite: ${sqliteBase64 ? 'yes' : 'no'}, key: ${bundle.secretKeyHex ? 'included' : 'omitted'}`);
   return bundle;
+}
+
+export function buildBackup(opts: { includeKey?: boolean } = {}): Promise<BackupBundle> {
+  return withOwnershipStoreFence(() => buildBackupUnlocked(opts));
 }
 
 export interface RestoreResult {
@@ -376,7 +386,7 @@ async function completeCommittedRestoreJournal(journal: RestoreJournal): Promise
  * schedulers or request handling. An uncommitted journal rolls back; a journal
  * whose semantic validation committed is completed by removing old copies.
  */
-export async function recoverInterruptedBackupRestore(): Promise<BackupRestoreRecoveryResult> {
+async function recoverInterruptedBackupRestoreUnlocked(): Promise<BackupRestoreRecoveryResult> {
   const journal = await loadRestoreJournal();
   if (!journal) return { recovered: false, action: 'none' };
   if (journal.phase === 'committed') {
@@ -391,6 +401,10 @@ export async function recoverInterruptedBackupRestore(): Promise<BackupRestoreRe
   }
   getDb();
   return { recovered: true, action: 'rolled_back', restoreId: journal.restoreId };
+}
+
+export function recoverInterruptedBackupRestore(): Promise<BackupRestoreRecoveryResult> {
+  return withOwnershipStoreFence(recoverInterruptedBackupRestoreUnlocked);
 }
 
 function countActiveBackgroundWork(): { runs: number; tasks: number; routines: number } {
@@ -415,6 +429,8 @@ function activeWorkError(active: { runs: number; tasks: number; routines: number
 async function stopAutomationControlPlane(): Promise<void> {
   const { stopDataIntegritySchedule } = await import('./integrity-coordinator');
   await stopDataIntegritySchedule();
+  const { stopBoardAssignmentProcessor } = await import('./board-runner');
+  await stopBoardAssignmentProcessor();
   const { stopQueuedRetryDispatcher } = await import('./background-tasks');
   await stopQueuedRetryDispatcher();
   const { stopTaskCommandReconciler } = await import('./task-ledger');
@@ -427,8 +443,6 @@ async function stopAutomationControlPlane(): Promise<void> {
   await stopRunLeaseReconciler();
   const { stopRoutineEngine } = await import('./routines');
   await stopRoutineEngine();
-  const { stopAllScheduledTasks } = await import('./scheduler');
-  await stopAllScheduledTasks();
 }
 
 async function startAutomationControlPlane(): Promise<void> {
@@ -444,9 +458,7 @@ async function startAutomationControlPlane(): Promise<void> {
   const { startTaskDeliveryPump } = await import('./task-delivery');
   startTaskDeliveryPump();
   const { startRoutineEngine } = await import('./routines');
-  startRoutineEngine();
-  const { initScheduler } = await import('./scheduler');
-  await initScheduler();
+  await startRoutineEngine();
 }
 
 async function removeFiles(paths: Array<string | undefined>): Promise<void> {
@@ -461,7 +473,14 @@ async function removeFiles(paths: Array<string | undefined>): Promise<void> {
  * fenced while JSON and SQLite are swapped. Any failure restores every live
  * component, preventing a mixed-generation "successful" restore.
  */
-export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
+interface RestoreFenceState {
+  intentionallyStopped: boolean;
+}
+
+async function restoreBackupUnlocked(
+  raw: unknown,
+  fenceState: RestoreFenceState,
+): Promise<RestoreResult> {
   if (!isBundle(raw)) {
     return { ok: false, restored: [], warnings: [], error: 'Not a Shiba Studio backup file' };
   }
@@ -517,17 +536,13 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
     };
   }
 
-  let releaseAutomation: (() => void) | undefined;
   let releaseDatabase: (() => void) | undefined;
-  let restartControlPlane = false;
   let integrityFailed = false;
   let restoreJournal: RestoreJournal | undefined;
   let restoreCommitted = false;
   let interruptedRecoveryPending = false;
 
   try {
-    releaseAutomation = beginAutomationMaintenance('backup restore');
-
     // A prior process may have exited between atomic rename phases. Recover it
     // before inspecting live work or starting another restore transaction.
     let interrupted: RestoreJournal | null;
@@ -540,10 +555,8 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
     }
     if (interrupted) {
       interruptedRecoveryPending = true;
-      restartControlPlane = true;
-      await stopAutomationControlPlane();
       try {
-        await recoverInterruptedBackupRestore();
+        await recoverInterruptedBackupRestoreUnlocked();
         interruptedRecoveryPending = false;
       } catch (recoveryError) {
         integrityFailed = true;
@@ -565,10 +578,6 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
       };
     }
 
-    if (!restartControlPlane) {
-      restartControlPlane = true;
-      await stopAutomationControlPlane();
-    }
     const active = countActiveBackgroundWork();
     if (active.runs || active.tasks || active.routines) {
       return { ok: false, restored: [], warnings, error: activeWorkError(active) };
@@ -646,7 +655,7 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
     // This pass may repair the restored JSON/SQLite generation, but deliberately
     // excludes external storage and Docker. Those side effects cannot be
     // atomically undone with this bundle and therefore run only after commit.
-    const { reconcileAllDataIntegrity, startDataIntegritySchedule } = await import('./integrity-coordinator');
+    const { reconcileAllDataIntegrity } = await import('./integrity-coordinator');
     const semanticIntegrity = await reconcileAllDataIntegrity({
       reason: 'backup restore semantic validation',
       includeStorage: false,
@@ -692,9 +701,7 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
               ...(storageIntegrity.binaryStorage?.errors || []),
             ].join('; '));
       }
-      startDataIntegritySchedule();
     } catch (error) {
-      restartControlPlane = false;
       integrityFailed = true;
       warnings.push(`Post-restore storage reconciliation did not finish; background work remains stopped - restart the server (${errorMessage(error)})`);
     }
@@ -748,29 +755,109 @@ export async function restoreBackup(raw: unknown): Promise<RestoreResult> {
       error: `Backup restore failed: ${errorMessage(error)} ${recovery}`,
     };
   } finally {
+    fenceState.intentionallyStopped = integrityFailed;
     releaseDatabase?.();
     // Never erase evidence needed by an incomplete journal. Staging created
     // before journal persistence is safe to discard.
     if (!restoreJournal) {
       await removeFiles([stagedDatabase, ...stagedStores.map((store) => store.staged)]);
     }
-    if (restartControlPlane && !integrityFailed) {
-      try {
-        const { startDataIntegritySchedule } = await import('./integrity-coordinator');
-        startDataIntegritySchedule();
-      } catch (error) {
-        restartControlPlane = false;
-        integrityFailed = true;
-        warnings.push(`Post-restore integrity repair did not finish; background work remains stopped - restart the server (${errorMessage(error)})`);
-      }
-    }
-    if (!integrityFailed) releaseAutomation?.();
-    if (restartControlPlane && !integrityFailed) {
-      try {
-        await startAutomationControlPlane();
-      } catch {
-        warnings.push('Automations did not restart automatically — restart the server');
-      }
-    }
   }
+}
+
+export function restoreBackup(raw: unknown): Promise<RestoreResult> {
+  const fenceState: RestoreFenceState = { intentionallyStopped: false };
+  if (!isBundle(raw) || raw.version > BACKUP_VERSION) {
+    return restoreBackupUnlocked(raw, fenceState);
+  }
+  return (async () => {
+    // Refuse active work before joining the control plane. A paused Routine
+    // can remain intentionally unsettled, and stopRoutineEngine waits for its
+    // execution promise; stopping first would make this request hang forever.
+    const initialPreflight = countActiveBackgroundWork();
+    if (initialPreflight.runs || initialPreflight.tasks || initialPreflight.routines) {
+      return { ok: false, restored: [], warnings: [], error: activeWorkError(initialPreflight) };
+    }
+
+    const boardRunner = await import('./board-runner');
+    const boardWasRunning = boardRunner.isBoardAssignmentProcessorRunning();
+    const releaseFenceMaintenance = beginAutomationMaintenance('backup restore ownership fence');
+    let fenceReleased = false;
+    const releaseFence = () => {
+      if (fenceReleased) return;
+      fenceReleased = true;
+      releaseFenceMaintenance();
+    };
+    let result: RestoreResult | undefined;
+    let controlPlaneStopStarted = false;
+    try {
+      // Close the check-to-fence race before awaiting any worker. New Routine
+      // dispatch is blocked by maintenance now; restoreBackupUnlocked performs
+      // another check after every control-plane loop has fully joined.
+      const fencedPreflight = countActiveBackgroundWork();
+      if (fencedPreflight.runs || fencedPreflight.tasks || fencedPreflight.routines) {
+        return { ok: false, restored: [], warnings: [], error: activeWorkError(fencedPreflight) };
+      }
+
+      // Stop and join every control-plane pass before taking the ownership
+      // store fence. Otherwise restore could hold the fence while awaiting a
+      // worker that is itself queued behind that same fence.
+      controlPlaneStopStarted = true;
+      await stopAutomationControlPlane();
+      result = await withOwnershipStoreFence(() => restoreBackupUnlocked(raw, fenceState));
+      if (!fenceState.intentionallyStopped) {
+        // Engine startup performs lossless legacy-automation migration and
+        // must run after the dispatch fence is released. This request still
+        // owns the restore transaction until all services have restarted.
+        releaseFence();
+        const restartErrors: string[] = [];
+        try {
+          const { startDataIntegritySchedule } = await import('./integrity-coordinator');
+          startDataIntegritySchedule();
+        } catch (error) {
+          restartErrors.push(`data-integrity schedule: ${errorMessage(error)}`);
+        }
+        try {
+          await startAutomationControlPlane();
+        } catch (error) {
+          restartErrors.push(`automation control plane: ${errorMessage(error)}`);
+        }
+        if (boardWasRunning) {
+          try {
+            boardRunner.startBoardAssignmentProcessor();
+          } catch (error) {
+            restartErrors.push(`Board assignment processor: ${errorMessage(error)}`);
+          }
+        }
+        if (restartErrors.length) {
+          result.warnings.push(`Background services did not all restart automatically — restart the server (${restartErrors.join('; ')})`);
+        }
+      }
+      return result;
+    } catch (error) {
+      if (!fenceState.intentionallyStopped && controlPlaneStopStarted) {
+        try {
+          releaseFence();
+          const { startDataIntegritySchedule } = await import('./integrity-coordinator');
+          startDataIntegritySchedule();
+          await startAutomationControlPlane();
+          if (boardWasRunning) boardRunner.startBoardAssignmentProcessor();
+        } catch {
+          // The structured error below tells the operator to restart. Keep the
+          // original failure as the primary diagnostic.
+        }
+      }
+      return result ?? {
+        ok: false,
+        restored: [],
+        warnings: ['Background services may need a server restart.'],
+        error: `Backup restore could not enter its maintenance transaction: ${errorMessage(error)}`,
+      };
+    } finally {
+      // An incomplete rollback intentionally leaves the process fenced, just
+      // by retaining this maintenance token until process restart. A clean
+      // success/failure restarts the control plane before requests are admitted.
+      if (!fenceState.intentionallyStopped) releaseFence();
+    }
+  })();
 }

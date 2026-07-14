@@ -1,7 +1,7 @@
 import { countChatSessions } from './chat-sessions';
 import { listMcpServersReadOnly } from './mcp';
 import { countProjects } from './projects';
-import { loadAgents, loadConfig } from './persistence';
+import { loadConfig } from './persistence';
 import { countGlobalUploadFiles } from './workspace';
 import { getUsageSummary } from './usage';
 import type { AppConfig, IntegrationCreds } from './types';
@@ -17,7 +17,7 @@ function countConfiguredIntegrations(creds: IntegrationCreds): number {
   if (creds.googledrive?.accessToken?.trim() || creds.googledrive?.serviceAccountJson?.trim()) n++;
   if (creds.discord?.token?.trim()) n++;
   if (creds.x?.accessToken?.trim() && creds.x?.apiKey?.trim()) n++;
-  if (creds.reddit?.refreshToken?.trim() || creds.reddit?.accessToken?.trim()) n++;
+  if (creds.reddit?.devvitEndpoint?.trim() && creds.reddit?.devvitAppToken?.trim()) n++;
   if (creds.obsidian?.vaultPath?.trim() || (creds.obsidian?.restApiUrl?.trim() && creds.obsidian?.restApiKey?.trim())) n++;
   if (creds.vercel?.token?.trim()) n++;
   if (creds.netlify?.token?.trim()) n++;
@@ -93,11 +93,10 @@ export async function getNavUsageBadge(): Promise<{
 export async function getNavStats(cfg: AppConfig): Promise<NavStats> {
   const { cloudReachable } = await import('./run-guards');
   const { listBoardTasks } = await import('./board');
-  const [sessionCount, projectCount, uploadCount, agents, mcpServers, usage, reach, boardTasks] = await Promise.all([
+  const [sessionCount, projectCount, uploadCount, mcpServers, usage, reach, boardTasks] = await Promise.all([
     countChatSessions(),
     countProjects(),
     countGlobalUploadFiles(cfg.defaultWorkspace),
-    loadAgents(),
     listMcpServersReadOnly(),
     getCachedUsageCost(cfg),
     cloudReachable(),
@@ -105,20 +104,11 @@ export async function getNavStats(cfg: AppConfig): Promise<NavStats> {
   ]);
 
   let automationsScheduled = 0;
-  for (const agent of agents) {
-    const scheds = agent.schedules?.length
-      ? agent.schedules
-      : agent.schedule
-        ? [{ ...agent.schedule, id: 'legacy', instructions: '' }]
-        : [];
-    automationsScheduled += scheds.filter((s) => s.enabled).length;
-  }
   try {
     const { listRoutines } = await import('./routines');
-    automationsScheduled += listRoutines({ enabled: true, limit: 1 }).total;
+    automationsScheduled = listRoutines({ enabled: true, limit: 1 }).total;
   } catch {
-    // Keep navigation usable while the durable automation schema is being
-    // initialized or repaired; legacy schedules above remain accurate.
+    // Keep navigation usable while the Automation schema is initialized or repaired.
   }
 
   const mcpConfigured = mcpServers.filter((s) => s.enabled).length;
@@ -127,7 +117,7 @@ export async function getNavStats(cfg: AppConfig): Promise<NavStats> {
     statuses: ['queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked'],
     limit: 1,
   }).total;
-  const attentionOpen = listAttention({ status: 'open', limit: 1 }).total;
+  const attentionOpen = listAttention({ limit: 1 }).total;
 
   return {
     tasksActive,

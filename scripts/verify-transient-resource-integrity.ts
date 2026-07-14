@@ -33,12 +33,10 @@ async function main(): Promise<void> {
   const companion = await import('../lib/companion-auth');
   const native = await import('../lib/native-nodes');
   const xaiOAuth = await import('../lib/xai-oauth');
-  const redditOAuth = await import('../lib/reddit-oauth');
   const transient = await import('../lib/transient-resource-integrity');
   const coordinator = await import('../lib/integrity-coordinator');
 
   xaiOAuth.setOAuthDataDir(data);
-  redditOAuth.setRedditOAuthDataDir(data);
   try {
     const custom = await skills.createCustomSkill({
       name: 'Transient ownership verifier',
@@ -54,7 +52,6 @@ async function main(): Promise<void> {
       integrations: {},
       peers: [],
       skills: [builtInId, custom.id],
-      schedules: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -166,14 +163,13 @@ async function main(): Promise<void> {
       temporaryRoot,
     });
     assert.equal(freshReport.xaiOAuthPendingRemoved, 0, 'fresh xAI challenge remains live');
-    assert.equal(freshReport.redditOAuthPendingRemoved, 0, 'fresh Reddit challenge remains live');
+    assert.equal(freshReport.redditOAuthPendingRemoved, 1, 'obsolete Reddit OAuth state is removed regardless of age');
     assert.equal(await exists(path.join(data, 'xai-oauth-pending.json')), true);
-    assert.equal(await exists(path.join(data, 'reddit-oauth-pending.json')), true);
+    assert.equal(await exists(path.join(data, 'reddit-oauth-pending.json')), false);
 
     console.log('transient resource integrity verification passed');
   } finally {
     xaiOAuth.setOAuthDataDir(null);
-    redditOAuth.setRedditOAuthDataDir(null);
     await coordinator.stopDataIntegritySchedule();
     dbModule.closeDb();
     await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);

@@ -12,9 +12,6 @@ async function main() {
   const guards = await import('../lib/run-guards');
   try {
     assert.equal((db.getDb().prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout, 5_000);
-    assert.equal(db.claimScheduleTick('agent:schedule', '2026-07-13T12:00'), true);
-    assert.equal(db.claimScheduleTick('agent:schedule', '2026-07-13T12:00'), false,
-      'only the schedule tick primary-key race is reported as a duplicate');
 
     const config = { maxConcurrentRuns: 3 } as Parameters<typeof guards.tryAcquireRunSlot>[0];
     assert.equal(guards.tryAcquireRunSlot(config, 'unique-run', 'agent-1', 'Verifier'), null);
@@ -30,16 +27,16 @@ async function main() {
     const release = db.beginDbMaintenance();
     try {
       assert.throws(
-        () => db.claimScheduleTick('agent:schedule', '2026-07-13T12:01'),
+        () => db.getDb(),
         /maintenance in progress/i,
-        'database failures must surface instead of masquerading as duplicate ticks',
+        'database access is fenced during maintenance',
       );
     } finally {
       release();
     }
 
     const routines = await import('../lib/routines');
-    routines.startRoutineEngine();
+    await routines.startRoutineEngine();
     const routineRuntime = globalThis as unknown as {
       __shibaRoutineCronSync?: Promise<void>;
       __shibaRoutinePoll?: ReturnType<typeof setInterval>;
@@ -48,7 +45,7 @@ async function main() {
     const firstSync = routineRuntime.__shibaRoutineCronSync;
     const firstPoll = routineRuntime.__shibaRoutinePoll;
     const firstPump = routineRuntime.__shibaRoutinePump;
-    routines.startRoutineEngine();
+    await routines.startRoutineEngine();
     assert.equal(routineRuntime.__shibaRoutineCronSync, firstSync,
       'a second routine-engine start does not rescan and re-arm schedules');
     assert.equal(routineRuntime.__shibaRoutinePoll, firstPoll,

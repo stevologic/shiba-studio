@@ -61,6 +61,7 @@ import {
   slashCommandMatches,
   type ChatCommandDefinition,
 } from '@/lib/chat-commands';
+import { parseChatToolsSetting } from '@/lib/chat-tool-mode';
 import { v4 as uuidv4 } from 'uuid';
 import { createPortal } from 'react-dom';
 import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
@@ -294,6 +295,7 @@ function sessionToInitialState(
       target,
       messages: projectMessagesToUi(session.messages),
       useGrokCli,
+      toolsEnabled: session?.toolsEnabled !== false,
       cliModel: session.cliModel || '',
       reasoningEffort: session.reasoningEffort || 'low' as ReasoningEffort,
       workspaceDir: session.workspaceDir || null,
@@ -303,6 +305,7 @@ function sessionToInitialState(
     target,
     messages: initialMessages(project, target, agents),
     useGrokCli,
+    toolsEnabled: session?.toolsEnabled !== false,
     cliModel: session?.cliModel || '',
     reasoningEffort: (session?.reasoningEffort || 'low') as ReasoningEffort,
     workspaceDir: session?.workspaceDir || null,
@@ -346,6 +349,7 @@ export default function GrokChatPanel({
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(init.reasoningEffort);
+  const [toolsEnabled, setToolsEnabled] = useState(init.toolsEnabled);
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -2012,8 +2016,9 @@ export default function GrokChatPanel({
       getStickyChatTarget() as ChatTarget,
     );
     if (sessionIdChanged) {
-      // Workspace / reasoning / CLI are per-session; agent picker is not.
+      // Workspace / reasoning / tools / CLI are per-session; agent picker is not.
       setUseGrokCli(next.useGrokCli);
+      setToolsEnabled(next.toolsEnabled);
       setReasoningEffort(next.reasoningEffort);
       setWorkspaceDir(next.workspaceDir);
       // Re-bind local state to sticky on remount paths (key=session.id).
@@ -2066,12 +2071,16 @@ export default function GrokChatPanel({
     }
   }
 
-  async function persistSessionMessages(msgs: UiMessage[], opts?: { running?: boolean }) {
+  async function persistSessionMessages(
+    msgs: UiMessage[],
+    opts?: { running?: boolean; extraPatch?: Record<string, unknown> },
+  ) {
     if (!session) return;
     const saved = uiToProjectMessages(msgs);
     const wasUntitled = !session.title || session.title === 'New chat';
     const running = opts?.running ?? saved.some((m) => m.streaming);
     await patchSession({
+      ...opts?.extraPatch,
       messages: saved,
       running,
       title: deriveSessionTitle(saved, session.title),
@@ -2773,6 +2782,7 @@ export default function GrokChatPanel({
         reasoningEffort: useCli
           ? reasoningEffort
           : (modelSupportsReasoning(useModel) ? reasoningEffort : undefined),
+        toolsEnabled,
       };
       if (!isMulti && selectedAgent) {
         body.system = buildAgentChatSystem(selectedAgent);
@@ -2850,12 +2860,12 @@ export default function GrokChatPanel({
     const parsed = parseSlashCommand(trimmed);
     if (!parsed) return false;
 
-    const appendExchange = (result: string) => {
+    const appendExchange = (result: string, extraPatch?: Record<string, unknown>) => {
       const userMsg: UiMessage = { id: uuidv4(), role: 'user', content: trimmed };
       const resultMsg: UiMessage = { id: uuidv4(), role: 'assistant', content: result };
       setMessages((prev) => {
         const next = [...prev.filter((m) => m.id !== 'welcome'), userMsg, resultMsg];
-        if (isSessionMode) void persistSessionMessages(next);
+        if (isSessionMode) void persistSessionMessages(next, { extraPatch });
         else if (project) void persistProjectChat(next);
         return next;
       });
@@ -2874,6 +2884,31 @@ export default function GrokChatPanel({
     if (parsed.name === 'clear') {
       setInput('');
       await clearChatContext();
+      return true;
+    }
+
+    if (parsed.name === 'tools') {
+      const arg = parsed.args.trim();
+      setInput('');
+      if (!arg) {
+        appendExchange(
+          `Automatic model tools are currently **${toolsEnabled ? 'on' : 'off'}** for this chat. `
+          + 'Usage: `/tools on|off`.',
+        );
+        return true;
+      }
+      const next = parseChatToolsSetting(arg);
+      if (next === null) {
+        appendExchange('Usage: `/tools on|off` — controls automatic model tool calls for this chat.');
+        return true;
+      }
+      setToolsEnabled(next);
+      appendExchange(
+        next
+          ? 'Automatic model tools are now **on** for this chat. Grok may use available web, terminal, workspace, integration, and background-task tools when needed.'
+          : 'Automatic model tools are now **off** for this chat. Grok will answer from the conversation and supplied context without calling tools. Explicit slash commands still work.',
+        { toolsEnabled: next },
+      );
       return true;
     }
 

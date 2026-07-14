@@ -29,6 +29,7 @@ function testAgent(): Agent {
     id: 'verify-agent-x-outcome',
     name: 'X outcome verifier',
     model: 'cloud:grok-test',
+    autoAcceptBoardAssignments: false,
     workspace: { path: process.cwd(), useWorktree: false },
     integrations: {
       github: false,
@@ -51,7 +52,6 @@ function testAgent(): Agent {
     },
     peers: [],
     skills: [],
-    schedules: [],
     learning: { mode: 'off', autoRecall: false, maxMemories: 20 },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

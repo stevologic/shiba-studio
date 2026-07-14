@@ -4,18 +4,15 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dataDir } from './data-paths';
 import { getDb } from './db';
+import { ownershipStoreFencePath, withStoreFileLock } from './store-file-lock';
 
 const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
 if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
 const fs = builtinFs.promises;
 const execFileAsync = promisify(execFile);
 const STORE = dataDir('worktree-resources.json');
-const STORE_LOCK = `${STORE}.lock`;
-const STORE_LOCK_TIMEOUT_MS = 30_000;
-// A healthy writer fills the lock file immediately after exclusive creation.
-// A still-malformed file after this window is a crash artifact.
-const ABANDONED_MALFORMED_LOCK_MS = 5_000;
-const storeGlobals = globalThis as typeof globalThis & { __shibaWorktreeResourceChain?: Promise<unknown> };
+const AUTOMATIC_DELETE_GRACE_MS = 30_000;
+const CREATION_LEASE_MS = 5 * 60_000;
 
 export interface WorktreeResourceRecord {
   id: string;
@@ -36,91 +33,17 @@ export interface WorktreeIntegrityReport {
   tracked: number;
   discovered: number;
   removed: number;
+  pending: number;
+  projectMappingsDetached: number;
   attention: number;
   errors: string[];
 }
 
-function processIsAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code === 'EPERM';
-  }
-}
-
-async function acquireStoreFileLock(): Promise<() => Promise<void>> {
-  await fs.mkdir(path.dirname(STORE_LOCK), { recursive: true });
-  const deadline = Date.now() + STORE_LOCK_TIMEOUT_MS;
-  const token = randomUUID();
-  while (true) {
-    try {
-      const handle = await fs.open(STORE_LOCK, 'wx', 0o600);
-      try {
-        await handle.writeFile(`${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString() })}\n`);
-        await handle.sync();
-      } catch (error) {
-        await handle.close().catch(() => undefined);
-        await fs.rm(STORE_LOCK, { force: true }).catch(() => undefined);
-        throw error;
-      }
-      return async () => {
-        await handle.close().catch(() => undefined);
-        try {
-          const current = JSON.parse(await fs.readFile(STORE_LOCK, 'utf8')) as { token?: string };
-          if (current.token === token) await fs.rm(STORE_LOCK, { force: true });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
-        }
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error;
-    }
-
-    let abandonedSnapshot: string | undefined;
-    try {
-      const [raw, stat] = await Promise.all([
-        fs.readFile(STORE_LOCK, 'utf8'),
-        fs.stat(STORE_LOCK),
-      ]);
-      try {
-        const owner = JSON.parse(raw) as { pid?: number };
-        if (typeof owner.pid === 'number' && !processIsAlive(owner.pid)) abandonedSnapshot = raw;
-      } catch {
-        if (Date.now() - stat.mtimeMs >= ABANDONED_MALFORMED_LOCK_MS) abandonedSnapshot = raw;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
-      throw error;
-    }
-    if (abandonedSnapshot !== undefined) {
-      const current = await fs.readFile(STORE_LOCK, 'utf8').catch(() => undefined);
-      if (current === abandonedSnapshot) {
-        await fs.rm(STORE_LOCK, { force: true }).catch(() => undefined);
-      }
-      continue;
-    }
-    if (Date.now() >= deadline) {
-      throw new Error('Timed out waiting for the worktree resource registry lock');
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25 + Math.floor(Math.random() * 25)));
-  }
-}
-
 function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = storeGlobals.__shibaWorktreeResourceChain ?? Promise.resolve();
-  const execute = async () => {
-    const release = await acquireStoreFileLock();
-    try {
-      return await fn();
-    } finally {
-      await release();
-    }
-  };
-  const run = previous.then(execute, execute);
-  storeGlobals.__shibaWorktreeResourceChain = run.then(() => undefined, () => undefined);
-  return run;
+  return withStoreFileLock(
+    ownershipStoreFencePath(path.dirname(STORE)),
+    () => withStoreFileLock(STORE, fn),
+  );
 }
 
 function exactResource(baseWorkspace: string, agentId: string): { base: string; agentId: string; worktree: string } {
@@ -146,10 +69,30 @@ function samePath(left: string, right: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+function pathIsAtOrInside(candidate: string, root: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === ''
+    || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 function resourceKey(baseWorkspace: string, agentId: string): string {
   const exact = exactResource(baseWorkspace, agentId);
-  const base = process.platform === 'win32' ? exact.base.toLowerCase() : exact.base;
-  return `${base}\0${exact.agentId}`;
+  return process.platform === 'win32' ? exact.worktree.toLowerCase() : exact.worktree;
+}
+
+/** No-follow existence check for API cleanup confirmation. */
+export async function worktreeResourcePathExists(
+  baseWorkspace: string,
+  agentId: string,
+): Promise<boolean> {
+  const exact = exactResource(baseWorkspace, agentId);
+  try {
+    await fs.lstat(exact.worktree);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 async function loadStore(): Promise<WorktreeResourceStore> {
@@ -303,6 +246,18 @@ async function safelyRemove(record: WorktreeResourceRecord): Promise<{ removed: 
   if (!samePath(exact.worktree, record.worktreePath)) {
     return { removed: false, attention: 'Stored worktree path failed ownership validation.' };
   }
+  const root = path.dirname(exact.worktree);
+  const rootStat = await fs.lstat(root).catch((error) => {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!rootStat) {
+    await git(['worktree', 'prune'], exact.base).catch(() => undefined);
+    return { removed: true };
+  }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    return { removed: false, attention: 'Worktree root is not a real app-owned directory and was preserved.' };
+  }
   let stat: Awaited<ReturnType<typeof fs.lstat>> | null;
   try {
     stat = await fs.lstat(exact.worktree);
@@ -328,9 +283,20 @@ async function safelyRemove(record: WorktreeResourceRecord): Promise<{ removed: 
     await fs.rmdir(exact.worktree);
     return { removed: true };
   }
-  const dirty = await git(['status', '--porcelain', '--untracked-files=all'], exact.worktree);
+  const dirty = await git([
+    'status',
+    '--porcelain',
+    '--untracked-files=all',
+    '--ignored=matching',
+    '--ignore-submodules=none',
+  ], exact.worktree);
   if (!dirty.ok || dirty.stdout.trim()) {
-    return { removed: false, attention: dirty.ok ? 'Worktree has uncommitted files and was preserved.' : `Could not verify worktree cleanliness: ${dirty.error}` };
+    return {
+      removed: false,
+      attention: dirty.ok
+        ? 'Worktree has uncommitted, untracked, or ignored files and was preserved.'
+        : `Could not verify worktree cleanliness: ${dirty.error}`,
+    };
   }
   const upstream = await git(['rev-list', '--count', '@{u}..HEAD'], exact.worktree);
   if (upstream.ok) {
@@ -348,25 +314,96 @@ async function safelyRemove(record: WorktreeResourceRecord): Promise<{ removed: 
 }
 
 export async function reconcileWorktreeResources(input: {
-  agents: ReadonlyArray<{ id: string; workspace?: { path?: string; useWorktree?: boolean } }>;
-}): Promise<WorktreeIntegrityReport> {
-  const report: WorktreeIntegrityReport = { tracked: 0, discovered: 0, removed: 0, attention: 0, errors: [] };
+  agents?: ReadonlyArray<{ id: string; workspace?: { path?: string; useWorktree?: boolean } }>;
+  sessions?: ReadonlyArray<{ workspaceDir?: unknown; projectId?: unknown; archived?: unknown }>;
+  projects?: ReadonlyArray<{ id: string; workspacePath?: unknown; updatedAt?: unknown }>;
+} = {}): Promise<WorktreeIntegrityReport> {
+  const report: WorktreeIntegrityReport = {
+    tracked: 0,
+    discovered: 0,
+    removed: 0,
+    pending: 0,
+    projectMappingsDetached: 0,
+    attention: 0,
+    errors: [],
+  };
   return withStoreLock(async () => {
+    // Load the authoritative ownership stores while holding their shared
+    // fence. A chat/agent attach cannot race the deletion decision in another
+    // Next process, and tests may inject explicit snapshots in isolation.
+    const agents: ReadonlyArray<{
+      id: string;
+      workspace?: { path?: string; useWorktree?: boolean };
+    }> = input.agents ?? await import('./persistence').then((module) => module.loadAgents());
+    const sessions: ReadonlyArray<{ workspaceDir?: unknown; projectId?: unknown; archived?: unknown }> = input.sessions
+      ?? await import('./chat-sessions')
+      .then((module) => module.listChatSessions({ includeArchived: true }));
+    const projects: ReadonlyArray<{ id: string; workspacePath?: unknown; updatedAt?: unknown }> = input.projects
+      ?? await import('./projects').then((module) => module.listProjects());
+    const projectWorkspaces = new Map(projects.flatMap((project) => (
+      typeof project.id === 'string'
+      && typeof project.workspacePath === 'string'
+      && project.workspacePath.trim()
+        ? [[project.id, project.workspacePath.trim()] as const]
+        : []
+    )));
+    const chatWorkspacePaths = sessions.flatMap((session) => {
+      if (typeof session.workspaceDir === 'string' && session.workspaceDir.trim()) {
+        return [session.workspaceDir.trim()];
+      }
+      return typeof session.projectId === 'string' && projectWorkspaces.has(session.projectId)
+        ? [projectWorkspaces.get(session.projectId)!]
+        : [];
+    });
+    const detachProjectMappings = async (record: WorktreeResourceRecord): Promise<void> => {
+      // Injected snapshots are verifier-only and have no backing store to
+      // mutate. Production snapshots are protected by the ownership fence.
+      if (input.projects !== undefined) return;
+      const references = projects.filter((project) => {
+        if (typeof project.workspacePath !== 'string'
+          || !project.workspacePath.trim()
+          || typeof project.updatedAt !== 'string') return false;
+        try {
+          return pathIsAtOrInside(project.workspacePath.trim(), record.worktreePath);
+        } catch {
+          return false;
+        }
+      });
+      if (!references.length) return;
+      const { clearProjectWorkspaceIfMatches } = await import('./projects');
+      for (const project of references) {
+        if (await clearProjectWorkspaceIfMatches(
+          project.id,
+          String(project.workspacePath),
+          String(project.updatedAt),
+        )) report.projectMappingsDetached += 1;
+      }
+    };
     const store = await loadStore();
     const initialStore = JSON.stringify(store);
     const now = new Date().toISOString();
     const configuredOwners = new Set<string>();
     const activeTaskRows = getDb().prepare(`
-      SELECT id, agentId FROM tasks
+      SELECT id, workspaceRoots FROM tasks
       WHERE status IN ('queued','running','paused','waiting_for_input','waiting_for_approval','blocked')
-    `).all() as Array<{ id: string; agentId: string | null }>;
+    `).all() as Array<{ id: string; workspaceRoots: string }>;
     const activeTasks = new Set(activeTaskRows.map((row) => row.id));
-    // One agent worktree can be shared by overlapping tasks. The most recent
-    // registration stores one task id, so preserve conservatively for any
-    // active task assigned to that agent as well.
-    const agentsWithActiveTasks = new Set(activeTaskRows.flatMap((row) => row.agentId ? [row.agentId] : []));
+    // One agent worktree can be shared by overlapping tasks. The registry's
+    // latest taskId is not enough, so retain any worktree explicitly present
+    // in an active task's workspace roots without conflating equal agent IDs
+    // across different repositories.
+    const activeTaskWorkspacePaths = activeTaskRows.flatMap((row) => {
+      try {
+        const roots = JSON.parse(row.workspaceRoots) as Array<{ path?: unknown }>;
+        return Array.isArray(roots)
+          ? roots.flatMap((root) => typeof root?.path === 'string' && root.path.trim() ? [root.path.trim()] : [])
+          : [];
+      } catch {
+        return [];
+      }
+    });
 
-    for (const agent of input.agents) {
+    for (const agent of agents) {
       if (!agent.workspace?.useWorktree || !agent.workspace.path) continue;
       try {
         const exact = exactResource(agent.workspace.path, agent.id);
@@ -412,9 +449,34 @@ export async function reconcileWorktreeResources(input: {
           continue;
         }
       }
+      if (
+        record.taskId
+        && !activeTasks.has(record.taskId)
+        && Date.parse(record.createdAt) > Date.now() - CREATION_LEASE_MS
+      ) {
+        // Agent runtime registers its task id before `git worktree add`, then
+        // creates the durable task row. Preserve that handoff lease even if a
+        // concurrent agent deletion has already requested cleanup.
+        report.pending += 1;
+        retained.push(record);
+        continue;
+      }
       if (!exists) {
+        if (
+          record.state === 'creating'
+          && !record.deleteRequestedAt
+          && Date.parse(record.createdAt) > Date.now() - CREATION_LEASE_MS
+        ) {
+          // ensureWorktree registers before `git worktree add`. Preserve that
+          // live creation lease so a concurrent integrity pass cannot erase
+          // the registry just before the directory becomes visible.
+          report.pending += 1;
+          retained.push(record);
+          continue;
+        }
         try {
           await safelyRemove(record);
+          await detachProjectMappings(record);
           report.removed += 1;
           continue;
         } catch (error) {
@@ -432,26 +494,69 @@ export async function reconcileWorktreeResources(input: {
       }
 
       const configuredOwner = configuredOwners.has(resourceKey(record.baseWorkspace, record.agentId));
-      const activeTaskOwner = agentsWithActiveTasks.has(record.agentId)
-        || Boolean(record.taskId && activeTasks.has(record.taskId));
-      if (activeTaskOwner || configuredOwner) {
+      const chatOwner = chatWorkspacePaths.some((workspaceDir) => {
+        try {
+          return pathIsAtOrInside(workspaceDir, record.worktreePath);
+        } catch {
+          return false;
+        }
+      });
+      const activeTaskOwner = Boolean(record.taskId && activeTasks.has(record.taskId))
+        || activeTaskWorkspacePaths.some((workspacePath) => {
+          try {
+            return pathIsAtOrInside(workspacePath, record.worktreePath);
+          } catch {
+            return false;
+          }
+        });
+      if (configuredOwner || chatOwner) {
+        if (record.state !== 'active' || record.deleteRequestedAt || record.attention) {
+          record.state = 'active';
+          record.deleteRequestedAt = undefined;
+          record.attention = undefined;
+          record.updatedAt = now;
+        }
         retained.push(record);
         continue;
       }
-      if (!record.deleteRequestedAt && Date.parse(record.createdAt) > Date.now() - 5 * 60_000) {
+      if (activeTaskOwner) {
+        if (!record.deleteRequestedAt) {
+          record.deleteRequestedAt = now;
+          record.state = 'delete_requested';
+          record.updatedAt = now;
+        }
+        retained.push(record);
+        continue;
+      }
+      if (!record.deleteRequestedAt && Date.parse(record.createdAt) > Date.now() - CREATION_LEASE_MS) {
         // A worktree can register just after the coordinator's agent snapshot.
         // Give that creator one pass to become visible; explicit deletion
         // tombstones bypass the grace period.
+        report.pending += 1;
         retained.push(record);
         continue;
       }
       if (!record.deleteRequestedAt) {
         record.deleteRequestedAt = now;
+        record.state = 'delete_requested';
         record.updatedAt = now;
+        report.pending += 1;
+        retained.push(record);
+        continue;
+      }
+      if (!record.attention
+        && Date.parse(record.deleteRequestedAt) > Date.now() - AUTOMATIC_DELETE_GRACE_MS) {
+        // Automatic ownership loss is two-phase. This gives a project-save →
+        // chat-create sequence (and any concurrent attach) time to publish its
+        // new owner before irreversible cleanup.
+        report.pending += 1;
+        retained.push(record);
+        continue;
       }
       try {
         const outcome = await safelyRemove(record);
         if (outcome.removed) {
+          await detachProjectMappings(record);
           report.removed += 1;
           continue;
         }

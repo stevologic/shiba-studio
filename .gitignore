@@ -47,6 +47,8 @@ next-env.d.ts
 /terminals/
 /.worktrees/
 /mcps/
+/devvit/reddit-bridge/node_modules/
+/devvit/reddit-bridge/dist/
 
 # runtime logs and automation artifacts
 *.log

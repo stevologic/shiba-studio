@@ -12,6 +12,7 @@ function agent(id: string, workspace: string): Agent {
     id,
     name: id,
     model: 'test-model',
+    autoAcceptBoardAssignments: false,
     workspace: { path: workspace, useWorktree: false },
     integrations: {
       github: false,
@@ -26,7 +27,6 @@ function agent(id: string, workspace: string): Agent {
     },
     peers: [],
     skills: [],
-    schedules: [],
     createdAt: now,
     updatedAt: now,
   };

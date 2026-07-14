@@ -27,6 +27,7 @@ export interface IntegrationMeta {
   /** Optional secondary setup guide (e.g. OAuth app creation). */
   setupUrl?: string;
   docsLabel?: string;
+  setupLabel?: string;
   /** False for app-level integrations that should not appear as agent tool scopes. */
   agentScoped?: boolean;
 }
@@ -84,13 +85,14 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
   },
   {
     id: 'reddit',
-    label: 'Reddit',
+    label: 'Reddit Devvit',
     shortLabel: 'Reddit',
     icon: '/integrations/reddit.svg',
-    description: 'Read communities and publish posts',
-    docsUrl: 'https://www.reddit.com/dev/api/',
-    setupUrl: 'https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki',
-    docsLabel: 'Reddit Data API',
+    description: 'Read and publish in an installed community with Devvit',
+    docsUrl: 'https://developers.reddit.com/docs/capabilities/server/external-endpoints',
+    setupUrl: 'https://developers.reddit.com/new',
+    docsLabel: 'Devvit External Endpoints',
+    setupLabel: 'Create Devvit app',
   },
   {
     id: 'obsidian',

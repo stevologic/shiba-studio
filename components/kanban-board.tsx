@@ -345,10 +345,9 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   }
 
   async function startWork(task: BoardTask) {
-    const res = await post({ action: 'startWork', id: task.id });
-    if (res !== null || true) {
-      // Optimistic: the server moved it to in_progress + working.
-      await refresh();
+    const accepted = await post({ action: 'startWork', id: task.id });
+    if (accepted) {
+      setTasks((prev) => prev.map((candidate) => candidate.id === task.id ? accepted : candidate));
     }
   }
 
@@ -547,7 +546,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
             </span>
           </div>
           <div className="page-subtitle">
-            Shared Kanban every agent can work from — assign a card, hit <span className="kb-inline-key">▶ Start work</span>, then <span className="kb-inline-key">✓ Validate</span> reviewed work into Done or send it back with feedback — or <Link href="/automations" className="kb-subtitle-link">create an Automation</Link> to have an agent do it for you!
+            Assign a card and start it manually, or let an opted-in agent accept it automatically. Successful work lands in Review for you to validate or send back with feedback. <Link href="/agents" className="kb-subtitle-link">Configure agents</Link>
           </div>
         </div>
         <div className="kb-head-actions">
@@ -820,9 +819,15 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                   className="grok-select kb-prop-input"
                   value={selected.assigneeAgentId || ''}
                   onChange={(e) => void patchCard(selected.id, { assigneeAgentId: e.target.value || null })}
+                  disabled={!!selected.working}
+                  title={selected.working ? 'Cancel active work before changing the assignee' : 'Assign this card to an agent'}
                 >
                   <option value="">Unassigned</option>
-                  {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  {agents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}{a.autoAcceptBoardAssignments ? ' · auto-start' : ''}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="kb-prop">
@@ -870,7 +875,9 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
               {selected.assigneeAgentId && (
                 <span className="kb-workrow-hint">
                   <AgentAvatar agent={agentById.get(selected.assigneeAgentId)} size={16} />
-                  {agentById.get(selected.assigneeAgentId)?.name || 'Unknown agent'} runs this card as a traced agent run.
+                  {agentById.get(selected.assigneeAgentId)?.autoAcceptBoardAssignments
+                    ? `${agentById.get(selected.assigneeAgentId)?.name || 'This agent'} automatically accepts newly assigned cards.`
+                    : `${agentById.get(selected.assigneeAgentId)?.name || 'Unknown agent'} runs this card as a traced agent run.`}
                 </span>
               )}
             </div>

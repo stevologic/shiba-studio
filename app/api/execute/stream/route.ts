@@ -7,17 +7,21 @@ import { isAutomationMaintenanceActive } from '@/lib/automation-maintenance';
 import { resolveProjectRunScope } from '@/lib/project-run';
 
 export async function POST(req: NextRequest) {
+  const body = await req.json();
   const {
     agentId,
     prompt,
-    scheduled,
-    scheduleId,
-    scheduleInstructions,
     projectId,
     projectContext,
-  } = await req.json();
+  } = body;
   if (!agentId || !prompt) {
     return new Response(JSON.stringify({ error: 'agentId + prompt required' }), { status: 400 });
+  }
+  if (['scheduled', 'scheduleId', 'scheduleInstructions'].some((key) => Object.prototype.hasOwnProperty.call(body, key))) {
+    return new Response(JSON.stringify({ error: 'Scheduled provenance is internal to Automations. Run an Automation through /api/routines.' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
   if (isAutomationMaintenanceActive()) {
     return new Response(JSON.stringify({
@@ -53,9 +57,6 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(encodeAgentSseEvent({ type: 'run_started', runId })));
         for await (const event of runAgentStream(agent, effectivePrompt, {
           runId,
-          scheduled: !!scheduled,
-          scheduleId: scheduleId || undefined,
-          scheduleInstructions: scheduleInstructions || undefined,
           projectContext: resolvedProjectContext,
           workspacePathOverride: resolvedWorkspace,
           projectId: projectId ? String(projectId) : undefined,

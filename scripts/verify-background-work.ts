@@ -38,7 +38,7 @@ async function main() {
   try {
     const db = dbModule.getDb();
     const version = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(version.user_version, 12, 'background-work migrations should be current');
+    assert.equal(version.user_version, 14, 'background-work migrations should be current');
     const runColumns = new Set(
       (db.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>).map((row) => row.name),
     );
@@ -384,6 +384,203 @@ async function main() {
       sideEffects: [],
     });
 
+    // A historical terminal run must never overwrite a newer retry that owns
+    // the same durable task id. Both the recovery query and direct projection
+    // helper independently fence on run identity and attempt number.
+    const staleRetryRunOneStartedAt = new Date(Date.now() - 10_000).toISOString();
+    ledger.createTask({
+      id: 'stale-terminal-retry-task',
+      kind: 'board',
+      title: 'Keep the current retry authoritative',
+      description: 'The first attempt fails and must stay historical.',
+      status: 'queued',
+      originType: 'board',
+      agentId: 'lease-agent',
+      runId: 'stale-terminal-retry-run-1',
+      maxRetries: 2,
+    });
+    await runs.persistAgentRun({
+      id: 'stale-terminal-retry-run-1',
+      taskId: 'stale-terminal-retry-task',
+      attemptNo: 1,
+      agentId: 'lease-agent',
+      agentName: 'Lease Agent',
+      model: 'local:test',
+      status: 'running',
+      prompt: 'First attempt fails.',
+      startedAt: staleRetryRunOneStartedAt,
+      trace: [],
+      sideEffects: [],
+    });
+    await runs.persistAgentRun({
+      id: 'stale-terminal-retry-run-1',
+      taskId: 'stale-terminal-retry-task',
+      attemptNo: 1,
+      agentId: 'lease-agent',
+      agentName: 'Lease Agent',
+      model: 'local:test',
+      status: 'error',
+      prompt: 'First attempt fails.',
+      startedAt: staleRetryRunOneStartedAt,
+      completedAt: new Date(Date.now() - 5_000).toISOString(),
+      finalOutput: 'Historical attempt failure.',
+      trace: [],
+      sideEffects: [],
+    });
+    const staleRetryFailed = ledger.getTask('stale-terminal-retry-task')!;
+    assert.equal(staleRetryFailed.status, 'failed');
+    const staleRetryCommand = ledger.enqueueTaskCommand({
+      taskId: staleRetryFailed.id,
+      kind: 'retry',
+      idempotencyKey: 'stale-terminal-retry-once',
+      expectedVersion: staleRetryFailed.version,
+    });
+    ledger.applyTaskCommand(staleRetryCommand.id);
+    const staleRetryQueued = ledger.getTask(staleRetryFailed.id)!;
+    assert.equal(staleRetryQueued.status, 'queued');
+    assert.equal(staleRetryQueued.retryCount, 1);
+    assert.equal(staleRetryQueued.runId, undefined, 'retry must clear the historical run binding');
+    assert.equal(staleRetryQueued.heartbeatAt, undefined, 'retry must clear the historical heartbeat');
+
+    const staleRetryAssigned = ledger.assignTaskExecution({
+      taskId: staleRetryQueued.id,
+      runId: 'stale-terminal-retry-run-2',
+      agentId: 'lease-agent',
+      expectedVersion: staleRetryQueued.version,
+    });
+    ledger.transitionTask({
+      taskId: staleRetryAssigned.id,
+      status: 'running',
+      expectedVersion: staleRetryAssigned.version,
+    });
+    const staleRetryRunTwoStartedAt = new Date().toISOString();
+    await runs.persistAgentRun({
+      id: 'stale-terminal-retry-run-2',
+      taskId: 'stale-terminal-retry-task',
+      attemptNo: 2,
+      agentId: 'lease-agent',
+      agentName: 'Lease Agent',
+      model: 'local:test',
+      status: 'running',
+      prompt: 'Second attempt remains authoritative.',
+      startedAt: staleRetryRunTwoStartedAt,
+      trace: [],
+      sideEffects: [],
+    });
+    const staleRepairWorkspace = path.join(process.env.SHIBA_DATA_DIR!, 'must-not-project-from-old-run');
+    db.prepare('UPDATE runs SET workspaceSnapshot = ? WHERE id = ?')
+      .run(staleRepairWorkspace, 'stale-terminal-retry-run-1');
+    const beforeStaleRepair = ledger.getTask('stale-terminal-retry-task')!;
+    assert.equal(await runs.repairTerminalRunTaskProjections(), 0,
+      'terminal repair must not select a run that no longer owns its task');
+    const afterStaleRepair = ledger.getTask('stale-terminal-retry-task')!;
+    assert.equal(afterStaleRepair.version, beforeStaleRepair.version);
+    assert.equal(afterStaleRepair.status, 'running');
+    assert.equal(afterStaleRepair.runId, 'stale-terminal-retry-run-2');
+    assert.equal(afterStaleRepair.error, undefined);
+    assert.equal(afterStaleRepair.workspaceRoots.some((root) => root.path === staleRepairWorkspace), false);
+
+    const staleDirectWorkspace = path.join(process.env.SHIBA_DATA_DIR!, 'must-not-project-directly');
+    const staleDirectProjection = ledger.syncTaskFromRun({
+      id: 'stale-terminal-retry-run-1',
+      taskId: 'stale-terminal-retry-task',
+      attemptNo: 1,
+      agentId: 'lease-agent',
+      agentName: 'Lease Agent',
+      model: 'local:test',
+      status: 'error',
+      prompt: 'First attempt fails.',
+      startedAt: staleRetryRunOneStartedAt,
+      completedAt: new Date().toISOString(),
+      finalOutput: 'A direct stale projection must also be ignored.',
+      workspaceSnapshot: staleDirectWorkspace,
+      trace: [],
+      sideEffects: [],
+    });
+    assert.equal(staleDirectProjection.version, beforeStaleRepair.version,
+      'the defensive projection fence must return without mutating the task');
+    assert.equal(staleDirectProjection.workspaceRoots.some((root) => root.path === staleDirectWorkspace), false);
+    await runs.persistAgentRun({
+      id: 'stale-terminal-retry-run-2',
+      taskId: 'stale-terminal-retry-task',
+      attemptNo: 2,
+      agentId: 'lease-agent',
+      agentName: 'Lease Agent',
+      model: 'local:test',
+      status: 'completed',
+      prompt: 'Second attempt remains authoritative.',
+      startedAt: staleRetryRunTwoStartedAt,
+      completedAt: new Date().toISOString(),
+      finalOutput: 'Current retry completed successfully.',
+      trace: [],
+      sideEffects: [],
+    });
+    assert.equal(ledger.getTask('stale-terminal-retry-task')?.status, 'succeeded');
+    assert.equal(ledger.getTask('stale-terminal-retry-task')?.result, 'Current retry completed successfully.');
+
+    // If the projection itself is missing, only the newest attempt may
+    // recreate it; otherwise iteration order could bind the task to history.
+    db.exec(`
+      CREATE TRIGGER fail_latest_missing_projection
+      BEFORE INSERT ON tasks
+      WHEN NEW.id = 'latest-missing-run-task'
+      BEGIN
+        SELECT RAISE(ABORT, 'synthetic latest projection failure');
+      END;
+    `);
+    const latestProjectionErrors: string[] = [];
+    const originalLatestConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      if (String(args[0] || '').includes('task projection failed for latest-missing-run-')) {
+        latestProjectionErrors.push(String(args[0]));
+        return;
+      }
+      originalLatestConsoleError(...args);
+    };
+    try {
+      await runs.persistAgentRun({
+        id: 'latest-missing-run-1',
+        taskId: 'latest-missing-run-task',
+        attemptNo: 1,
+        agentId: 'lease-agent',
+        agentName: 'Lease Agent',
+        model: 'local:test',
+        status: 'error',
+        prompt: 'Older missing projection.',
+        startedAt: new Date(Date.now() - 2_000).toISOString(),
+        completedAt: new Date(Date.now() - 1_500).toISOString(),
+        finalOutput: 'Older missing failure.',
+        trace: [],
+        sideEffects: [],
+      });
+      await runs.persistAgentRun({
+        id: 'latest-missing-run-2',
+        taskId: 'latest-missing-run-task',
+        attemptNo: 2,
+        agentId: 'lease-agent',
+        agentName: 'Lease Agent',
+        model: 'local:test',
+        status: 'completed',
+        prompt: 'Newest missing projection.',
+        startedAt: new Date(Date.now() - 1_000).toISOString(),
+        completedAt: new Date().toISOString(),
+        finalOutput: 'Newest missing completion.',
+        trace: [],
+        sideEffects: [],
+      });
+    } finally {
+      console.error = originalLatestConsoleError;
+      db.exec('DROP TRIGGER IF EXISTS fail_latest_missing_projection');
+    }
+    assert.equal(latestProjectionErrors.length, 2);
+    assert.equal(ledger.getTask('latest-missing-run-task'), null);
+    assert.equal(await runs.repairTerminalRunTaskProjections(), 1,
+      'one latest terminal attempt should recreate a missing task projection');
+    const latestMissingProjection = ledger.getTask('latest-missing-run-task')!;
+    assert.equal(latestMissingProjection.runId, 'latest-missing-run-2');
+    assert.equal(latestMissingProjection.status, 'succeeded');
+    assert.equal(latestMissingProjection.result, 'Newest missing completion.');
+
     await runs.persistAgentRun({
       id: 'stolen-run',
       taskId: 'stolen-task',
@@ -427,7 +624,6 @@ async function main() {
       integrations: {},
       peers: [],
       skills: [],
-      schedules: [],
       learning: { mode: 'off', autoRecall: false, maxMemories: 20 },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

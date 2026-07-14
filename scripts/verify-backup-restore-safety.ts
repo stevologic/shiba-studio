@@ -4,6 +4,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+process.env.SHIBA_DISABLE_BOARD_DISPATCH = '1';
+
 async function assertMissing(file: string, message: string): Promise<void> {
   await assert.rejects(
     fs.access(file),
@@ -14,13 +16,13 @@ async function assertMissing(file: string, message: string): Promise<void> {
 
 async function stopBackgroundWork(): Promise<void> {
   await (await import('../lib/integrity-coordinator')).stopDataIntegritySchedule();
+  await (await import('../lib/board-runner')).stopBoardAssignmentProcessor();
   await (await import('../lib/background-tasks')).stopQueuedRetryDispatcher();
   await (await import('../lib/task-ledger')).stopTaskCommandReconciler();
   await (await import('../lib/task-teams')).stopTeamWorkerClaimReconciler();
   await (await import('../lib/task-delivery')).stopTaskDeliveryPump();
   await (await import('../lib/agent-runs-store')).stopRunLeaseReconciler();
   await (await import('../lib/routines')).stopRoutineEngine();
-  await (await import('../lib/scheduler')).stopAllScheduledTasks();
 }
 
 async function main() {
@@ -36,6 +38,13 @@ async function main() {
   const journalPath = path.join(data, 'backup-restore-journal.json');
 
   try {
+    const backupSource = await fs.readFile(path.join(process.cwd(), 'lib', 'backup.ts'), 'utf8');
+    assert.match(
+      backupSource,
+      /stopBoardAssignmentProcessor[\s\S]*startBoardAssignmentProcessor/,
+      'backup restore must fence and restart the Board assignment processor with the rest of the control plane',
+    );
+
     // Export must distinguish an absent optional store from an unreadable one.
     await fs.mkdir(configPath);
     await assert.rejects(
@@ -136,6 +145,74 @@ async function main() {
     await fs.rm(journalPath);
     database.getDb();
 
+    // A paused/waiting Automation owns a promise that intentionally may not
+    // settle until a person acts. Restore must reject from durable active-work
+    // state before stopRoutineEngine attempts to join that promise.
+    const routines = await import('../lib/routines');
+    const blockedRoutine = routines.createRoutine({
+      id: 'backup-preflight-blocked-routine',
+      name: 'Backup preflight blocker',
+      agentId: 'backup-preflight-agent',
+      prompt: 'Wait for a person',
+      triggers: [{ id: 'manual', type: 'manual', enabled: true }],
+    });
+    const blockedInvocation = routines.triggerRoutineManually(
+      blockedRoutine.id,
+      {},
+      'backup-preflight-blocker',
+    ).invocation;
+    let settleBlockedExecution!: () => void;
+    const blockedExecution = new Promise<void>((resolve) => { settleBlockedExecution = resolve; });
+    const routineGlobals = globalThis as unknown as {
+      __shibaActiveRoutineExecutions?: Map<string, {
+        routineId: string;
+        agentId: string;
+        promise: Promise<void>;
+      }>;
+    };
+    const activeRoutineExecutions = routineGlobals.__shibaActiveRoutineExecutions;
+    assert(activeRoutineExecutions, 'Routine worker registry must be initialized');
+    activeRoutineExecutions.set(blockedInvocation.id, {
+      routineId: blockedRoutine.id,
+      agentId: blockedRoutine.agentId,
+      promise: blockedExecution,
+    });
+    const timeout = Symbol('restore-timeout');
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const raced = await Promise.race([
+        backup.restoreBackup({
+          format: backup.BACKUP_FORMAT,
+          version: backup.BACKUP_VERSION,
+          exportedAt: new Date().toISOString(),
+          stores: { 'config.json': JSON.stringify({ preflightProbe: true }) },
+        }),
+        new Promise<typeof timeout>((resolve) => {
+          timeoutHandle = setTimeout(() => resolve(timeout), 750);
+          timeoutHandle.unref?.();
+        }),
+      ]);
+      assert.notEqual(raced, timeout,
+        'restore must not wait for a paused Automation execution before reporting active work');
+      assert.notEqual(typeof raced, 'symbol');
+      if (typeof raced === 'symbol') throw new Error('restore preflight timed out');
+      assert.equal(raced.ok, false);
+      assert.match(raced.error || '', /background work is active/i);
+      assert.match(raced.error || '', /1 routine invocation/i);
+      assert.equal((await import('../lib/automation-maintenance')).isAutomationMaintenanceActive(), false,
+        'a preflight rejection must not enter or strand maintenance');
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      activeRoutineExecutions.delete(blockedInvocation.id);
+      settleBlockedExecution();
+      const cleanupAt = new Date().toISOString();
+      database.getDb().prepare(`
+        UPDATE routine_invocations
+        SET status = 'skipped', error = 'verification cleanup', updatedAt = ?, completedAt = ?
+        WHERE id = ? AND status IN ('pending', 'processing')
+      `).run(cleanupAt, cleanupAt, blockedInvocation.id);
+    }
+
     // Syntactic JSON is not sufficient: if the restored stores fail the
     // semantic integrity pass, the complete JSON + SQLite generation comes
     // back instead of leaving a cross-store split brain.
@@ -187,6 +264,9 @@ async function main() {
       }],
       syncState: {},
     });
+    const boardRunner = await import('../lib/board-runner');
+    boardRunner.startBoardAssignmentProcessor(250);
+    assert.equal(boardRunner.isBoardAssignmentProcessorRunning(), true);
     const failedRestore = await backup.restoreBackup({
       format: backup.BACKUP_FORMAT,
       version: backup.BACKUP_VERSION,
@@ -196,6 +276,11 @@ async function main() {
       secretKeyHex: process.env.SHIBA_SECRET_KEY,
     });
     assert.equal(failedRestore.ok, false, 'semantic validation failure must fail the restore');
+    assert.equal(
+      boardRunner.isBoardAssignmentProcessorRunning(),
+      true,
+      'a cleanly rolled-back restore restarts a Board processor that was running before the fence',
+    );
     assert.match(failedRestore.error || '', /failed|filter|pre-restore state/i);
     assert.equal(
       await fs.readFile(boardPath, 'utf8'),

@@ -1,10 +1,10 @@
 # Automations
 
-The **Automations** page at `/automations` is where durable recurring, one-time, monitored, and event-driven work lives. Existing per-agent cron schedules remain available in the same primary surface, while durable Automations share the universal task ledger, Attention inbox, evidence, retries, and delivery system.
+The **Automations** page at `/automations` is the single home for durable recurring, one-time, monitored, event-driven, and manually started work. Agents are execution owners selected by an Automation; they do not carry a separate schedule configuration.
 
-<img src="images/automations.png" alt="Automations: scheduled agents with Active/Paused states, per-schedule Run/Edit/Delete, and run-log access" width="880" />
+<img src="images/automations.png" alt="Automations: durable trigger-based work with Active/Paused states, Run/Edit/Delete controls, and run-history access" width="880" />
 
-## Durable Automations
+## Define an Automation
 
 An Automation can be run manually or activated by one or more triggers:
 
@@ -13,33 +13,31 @@ An Automation can be run manually or activated by one or more triggers:
 - GitHub, Linear, Jira, Slack, Discord, or other normalized integration events;
 - bounded filesystem changes and local URL/process health checks.
 
-Definitions support template parameters, conditions, dependent steps, exponential retry/backoff, timeouts, concurrency keys, catch-up policies, and a circuit breaker. Repeated failures open one Attention item instead of creating notification noise. Each invocation and step uses durable leases/checkpoints, so duplicate webhook delivery or a restart cannot silently duplicate a side effect. Definitions can be exported as JSON or YAML.
+Definitions support template parameters, conditions, dependent steps, exponential retry/backoff, timeouts, concurrency keys, catch-up policies, and a circuit breaker. Repeated failures open the Automation's visible circuit breaker and remain available in its task/run history; they do not create Attention noise. Each invocation and step uses durable leases/checkpoints, so duplicate webhook delivery or a restart cannot silently duplicate a side effect. Definitions can be exported as JSON or YAML.
 
 The stable API and persisted model call these definitions **Routines** (`/api/routines`). That technical terminology remains for compatibility, while the Studio presents them as Automations.
 
 Starting from a successful run or reviewed Capability Pack remains proposal-first: a user must activate the resulting Automation before it can fire.
 
-## Schedules
+Each Automation selects one agent as its **execution owner**. The owner supplies the model, workspace, tools, integration scopes, skills, and memory used by its steps. The Automation owns the prompt, triggers, enabled state, retry and concurrency policy, and workflow definition.
 
-Each agent can have multiple schedule entries, each with:
+## Manage work in one place
 
-- a **cron expression** (with human-readable presets — hourly, daily, weekdays, …),
-- its **own instructions** — the prompt used for that scheduled run,
-- its own row on the automation card, with an **Active/Paused pill** and **edit/delete** controls right next to the cron.
+Create, edit, activate, pause, run, and delete Automations from `/automations`. Each card shows its owner, trigger summary, Active/Paused state, last invocation, and direct access to run history. **Run now** uses the saved definition through the same durable invocation path as every automatic trigger.
 
-Add a schedule with the card's calendar button (or Agents → Edit → Schedules); pause, edit, or delete any individual automation from its row. Only agents that actually have schedules appear on the page.
+Cron is one trigger type, not a separate management system. Scheduled triggers use a standard five-field expression and optional timezone; one-time triggers accept an exact future time. A single Automation may contain multiple triggers while retaining one definition and history.
 
 ## Headless operation
 
-Schedules fire **as long as the server is running — no browser needed**. Cron arms at server start (`instrumentation.ts` → the scheduler), so `npm run start` on a box in the closet is a fully functional automation host. Every arm/fire/retire is recorded in the audit log.
+Automations fire **as long as the server is running — no browser needed**. `/api/boot` ensures that one process-global Automation engine is active, and server instrumentation eagerly invokes the same idempotent initializer for headless startup. This is one engine: a page load does not create another engine or stop and re-arm existing work. `npm run start` on a box in the closet is therefore a fully functional automation host.
 
-If an agent is deleted, its schedule **retires itself** at the next fire attempt instead of running an orphan — you'll find a `schedule retired` entry in Logs.
+Every trigger claim, invocation lease, retry, completion, and circuit state is durable. Duplicate webhooks or trigger ticks are deduplicated, expired workers are recovered within the retry policy, and a one-time trigger is consumed exactly once. If an execution owner is removed, integrity cleanup safely retires its Automations and skips pending work instead of leaving an orphaned invocation.
 
-**Overlap & cost safety.** If a scheduled run is still going when its next tick fires, the tick is **skipped** (recorded in Logs) rather than stacking a second run. Cloud-model schedules also skip while `api.x.ai` is unreachable. A schedule that would fire more than ~24×/day shows a ⚠ warning on its row, and the global concurrent-run limit and monthly/daily spend caps (Settings → Cost & safety) apply to scheduled runs too.
+**Overlap & cost safety.** A concurrency key can suppress overlapping invocations instead of stacking duplicate work. Cloud-model Automations respect connectivity checks, and the global concurrent-run limit plus monthly/daily spend caps (Settings → Cost & safety) apply to every invocation. Scheduled triggers accept only validated five-field cron expressions.
 
-## Run log
+## Run history
 
-Each automation card shows its last scheduled executions — status, time, and instructions — and every entry opens the full trace. Each schedule row has its own **Run now** (▶) that fires that automation's instructions immediately.
+Each Automation card shows recent invocations with status, trigger, time, and instructions, and every entry opens the full trace. **Run now** fires the saved Automation immediately without creating a second execution path.
 
 ## Execution Trace
 
@@ -56,7 +54,7 @@ Runs started anywhere (dashboard, agent history, Logs deep links `/automations?r
 
 Agents can manage themselves and each other:
 
-- `schedule_task(when, prompt)` — an agent schedules its own follow-up ("in 30m" or cron).
+- `schedule_task(when, prompt)` — creates a durable Automation assigned to the calling agent. Relative/date-like input creates a one-time trigger; a standard five-field cron expression creates recurring work.
 - `send_to_peer(agentId, message)` — queue a message for a peer agent's next run.
 
-Everything is scoped per agent and audited.
+Execution remains scoped to the selected owner and every definition change, trigger, invocation, and side effect is audited.

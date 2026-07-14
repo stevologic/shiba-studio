@@ -25,7 +25,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 - [x] **DB schema versioning** — `PRAGMA user_version` ladder in `lib/db.ts` (v1 baseline, v2 adds FTS5 search tables); migrations run transactionally on open.
 - [x] **Backup/export & import** — Settings → Backup & restore: one-file export of config + agents + chats + projects + runs + audit log (+ the encryption key, so a new machine can decrypt); `.pre-restore` safety copies on import. Round-trip verified across isolated data dirs, including cross-machine key adoption.
 - [x] **Cost guardrails** — monthly *and* daily budgets with a hard stop (blocks new cloud runs/chats at the limit; local models never blocked; warn-only toggle), per-run token caps enforced in the run loop, and a ⚠ chip on automations firing >24×/day. All in Settings → Cost & safety. Guard behavior covered by functional tests.
-- [x] **Runaway-agent protection** — global concurrent-run limit (default 3, atomic slot claim) + schedule-overlap suppression (tick skipped with an audit entry while the previous run of that schedule is live), on top of MAX_STEPS and `schedule_ticks` dedupe.
+- [x] **Runaway-agent protection** — global concurrent-run limit (default 3, atomic slot claim) plus durable Automation invocation dedupe and concurrency keys, on top of MAX_STEPS.
 - [x] **Graceful degradation offline** — cached api.x.ai reachability probe; shell banner with retry when unreachable; scheduled cloud runs skip their tick with an audit entry; interactive runs refuse before spending.
 
 ## 4. CI, tests & platforms

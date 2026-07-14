@@ -9,7 +9,7 @@ import { fetchCloudWithAuth } from './xai-oauth';
 import { grokChat } from './grok-client';
 import { loadConfig } from './persistence';
 import { createBoardTask } from './board';
-import { createRoutine, getRoutine } from './routines';
+import { createOwnedRoutine, getRoutine } from './routines';
 import {
   createTask,
   createTaskInOpenTransaction,
@@ -1025,7 +1025,7 @@ export async function createMeetingOutputs(input: {
           externalId = card.id;
         } else {
           const routineId = `meeting-routine-${outputKey}`;
-          const routine = getRoutine(routineId) || createRoutine({
+          const routine = getRoutine(routineId) || await createOwnedRoutine({
             id: routineId,
             name: item.text.slice(0, 100),
             description: `Confirmed action from ${meeting.title}. ${citation}`,

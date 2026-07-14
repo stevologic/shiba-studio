@@ -4,7 +4,7 @@
 
 ## Stack
 
-Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 with built-in `node:sqlite` · puppeteer for browser control · node-cron for schedules. No native modules anywhere — the repo builds identically on Windows, macOS, and Linux.
+Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 with built-in `node:sqlite` · puppeteer for browser control · node-cron inside the durable Automation engine. No native modules anywhere — the repo builds identically on Windows, macOS, and Linux.
 
 ## Repo layout
 
@@ -20,7 +20,8 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 wi
 | `lib/agent-power-tools.ts` | Web search/fetch, workspace grep, persistent memory, image generation |
 | `lib/git-actions.ts`, `lib/browser.ts`, `lib/grok-cli.ts` | Git ops, puppeteer control, CLI detection/execution |
 | `lib/db.ts`, `lib/agent-runs-store.ts`, `lib/audit-log.ts` | SQLite schema (`user_version` migrations + FTS5), run persistence, audit trail |
-| `lib/scheduler.ts` + `instrumentation.ts` | Cron scheduling, armed at server start; also starts the terminal bridge, retention pruning, channel listeners, and the mDNS responder |
+| `lib/routines.ts`, `lib/automation-cron.ts` | The single durable Automation engine: definitions, trigger claims, invocations, retries, leases, cron validation, and headless execution |
+| `instrumentation.ts`, `app/api/boot/route.ts` | Start the same process-global Automation engine idempotently; instrumentation also starts the terminal bridge, retention pruning, channel listeners, and the mDNS responder |
 | `lib/mdns.ts` | Multicast-DNS responder advertising `shiba.local` (dependency-free) |
 | `lib/secure-store.ts`, `lib/persistence.ts` | AES-256-GCM sealing and config/agent stores |
 | `lib/run-guards.ts`, `lib/cron-estimate.ts` | Concurrency/spend/token-cap guards, offline probe, cron-frequency estimate |

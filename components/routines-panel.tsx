@@ -7,7 +7,6 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronRight,
-  CircleDashed,
   Code2,
   Download,
   FileJson,
@@ -48,19 +47,28 @@ interface RoutineDetailResponse {
   error?: string;
 }
 
+const SCHEDULE_LABELS: Record<string, string> = {
+  '0 * * * *': 'Every hour',
+  '0 9 * * *': 'Daily at 9:00 AM',
+  '0 9 * * 1-5': 'Weekdays at 9:00 AM',
+  '*/15 * * * *': 'Every 15 minutes',
+};
+
 function formatDate(value?: string): string {
   if (!value) return '—';
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
 function triggerLabel(trigger: RoutineTrigger): string {
-  if (trigger.type === 'schedule') return trigger.cron;
-  if (trigger.type === 'one_time') return `once ${formatDate(trigger.at)}`;
-  if (trigger.type === 'webhook') return 'signed webhook';
-  if (trigger.type === 'health') return trigger.url ? `health ${trigger.url}` : `process ${trigger.processPid}`;
-  if (trigger.type === 'filesystem') return `watch ${trigger.path}`;
-  if (trigger.type === 'integration_event') return `${trigger.integration}:${trigger.event}`;
-  return 'manual';
+  if (trigger.type === 'schedule') {
+    return SCHEDULE_LABELS[trigger.cron] || `Schedule: ${trigger.cron}`;
+  }
+  if (trigger.type === 'one_time') return `Once on ${formatDate(trigger.at)}`;
+  if (trigger.type === 'webhook') return 'When its signed webhook is called';
+  if (trigger.type === 'health') return trigger.url ? `Watch ${trigger.url}` : `Watch process ${trigger.processPid}`;
+  if (trigger.type === 'filesystem') return `When ${trigger.path} changes`;
+  if (trigger.type === 'integration_event') return `When ${trigger.integration} sends ${trigger.event}`;
+  return 'Only when you run it';
 }
 
 function triggerIcon(trigger: RoutineTrigger) {
@@ -69,6 +77,16 @@ function triggerIcon(trigger: RoutineTrigger) {
   if (trigger.type === 'integration_event') return Braces;
   if (trigger.type === 'filesystem') return Code2;
   return Workflow;
+}
+
+function triggerTypeLabel(type: RoutineInvocation['triggerType']): string {
+  if (type === 'one_time') return 'One-time';
+  if (type === 'integration_event') return 'Integration event';
+  if (type === 'filesystem') return 'File change';
+  if (type === 'health') return 'Health check';
+  if (type === 'webhook') return 'Webhook';
+  if (type === 'schedule') return 'Schedule';
+  return 'Manual';
 }
 
 function invocationTone(status: RoutineInvocation['status']): string {
@@ -89,13 +107,15 @@ function RoutineCard({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const activeTriggers = routine.triggers.filter((trigger) => trigger.enabled);
   return (
     <button
       type="button"
       className="grok-card grok-card-interactive p-4 w-full text-left"
       style={selected ? { borderColor: 'var(--accent)' } : undefined}
       onClick={onSelect}
-      aria-pressed={selected}
+      aria-expanded={selected}
+      aria-controls={`automation-${routine.id}-details`}
     >
       <div className="flex items-start gap-3">
         <div className="rounded-md p-2 bg-[var(--bg-elev)] text-muted"><Workflow size={16} aria-hidden="true" /></div>
@@ -105,12 +125,14 @@ function RoutineCard({
             <span className={`status-pill ${routine.enabled ? 'text-success' : 'text-dim'}`}>{routine.enabled ? 'active' : 'paused'}</span>
             {routine.circuitState === 'open' && <span className="status-pill text-error">breaker open</span>}
           </span>
-          <span className="block text-xs text-dim mt-1">{agentName} · {routine.triggers.length} trigger{routine.triggers.length === 1 ? '' : 's'} · {routine.steps.length || 1} step{routine.steps.length === 1 ? '' : 's'}</span>
+          <span className="block text-xs text-dim mt-1">{routine.description || `Runs with ${agentName}`}</span>
           <span className="flex flex-wrap gap-1.5 mt-2">
-            {routine.triggers.filter((trigger) => trigger.enabled).slice(0, 4).map((trigger) => <span key={trigger.id} className="status-pill text-muted font-mono max-w-full truncate">{triggerLabel(trigger)}</span>)}
+            {activeTriggers.slice(0, 2).map((trigger) => <span key={trigger.id} className="status-pill text-muted max-w-full truncate">{triggerLabel(trigger)}</span>)}
+            {activeTriggers.length > 2 && <span className="status-pill text-dim">+{activeTriggers.length - 2} more</span>}
+            {activeTriggers.length === 0 && <span className="status-pill text-dim">No active triggers</span>}
           </span>
         </span>
-        <ChevronRight size={15} className="text-dim shrink-0 mt-1" aria-hidden="true" />
+        <ChevronDown size={15} className={`text-dim shrink-0 mt-1 transition-transform ${selected ? 'rotate-180' : ''}`} aria-hidden="true" />
       </div>
     </button>
   );
@@ -327,15 +349,32 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
     }
   }
 
+  function toggleRoutine(routineId: string) {
+    if (selectedId === routineId) {
+      detailRequest.current += 1;
+      setSelectedId(null);
+      setSelected(null);
+      setInvocations([]);
+      setDetailLoading(false);
+      router.replace('/automations');
+      return;
+    }
+    setSelectedId(routineId);
+    setSelected(null);
+    setInvocations([]);
+    void loadDetail(routineId);
+    router.replace(`/automations?routine=${encodeURIComponent(routineId)}`);
+  }
+
   return (
     <section className="space-y-5" aria-labelledby="durable-automations-heading">
       <header className="page-head-row mb-0">
         <div className="min-w-0">
-          <div className="text-[11px] uppercase tracking-[0.16em] text-dim mb-1">Event-driven automation</div>
+          <div className="text-[11px] uppercase tracking-[0.16em] text-dim mb-1">Repeatable work</div>
           <h1 id="durable-automations-heading" className="page-title">Automations</h1>
-          <p className="page-subtitle">Run the same governed workflow manually, on a schedule, from a signed webhook, or when local and connected systems change.</p>
+          <p className="page-subtitle">Choose what should happen and when. Shiba handles the runs, retries, and recovery.</p>
         </div>
-        <button type="button" className="grok-btn grok-btn-primary shrink-0" onClick={newRoutine}><Plus size={14} /> New automation</button>
+        <button type="button" className="grok-btn grok-btn-primary shrink-0" onClick={newRoutine} disabled={agents.length === 0}><Plus size={14} /> New automation</button>
       </header>
 
       {error && <div className="grok-card p-3 text-sm text-error" role="alert">{error}</div>}
@@ -346,84 +385,112 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
         <div className="grok-card p-10 text-center">
           <Workflow size={30} className="mx-auto text-muted mb-3" aria-hidden="true" />
           <div className="font-medium">Create your first automation</div>
-          <p className="text-sm text-dim mt-1 max-w-lg mx-auto">Triggers are deduplicated, retries survive restarts, and repeated failures open one visible circuit breaker.</p>
+          <p className="text-sm text-dim mt-1 max-w-lg mx-auto">Tell Shiba what to do, then choose whether it runs manually, on a schedule, or when something changes.</p>
           <button type="button" className="grok-btn grok-btn-primary mt-4" onClick={newRoutine} disabled={agents.length === 0}><Plus size={14} /> New automation</button>
           {agents.length === 0 && <p className="text-xs text-warning mt-3">Create an agent first so the automation has an execution owner.</p>}
         </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.5fr)] items-start">
-          <div className="space-y-3">
-            {routines.map((routine) => (
-              <RoutineCard key={routine.id} routine={routine} agentName={agents.find((agent) => agent.id === routine.agentId)?.name || routine.agentId} selected={selectedId === routine.id} onSelect={() => void loadDetail(routine.id)} />
-            ))}
+        <div className="max-w-5xl space-y-3">
+          <div className="flex items-center justify-between gap-3 text-xs text-dim">
+            <span>{routines.filter((routine) => routine.enabled).length} active · {routines.length} total</span>
+            <button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={() => void loadRoutines()} aria-label="Refresh automations"><RefreshCw size={13} aria-hidden="true" /></button>
           </div>
-          <div className="grok-card p-5 min-h-64 lg:sticky lg:top-4">
-            {detailLoading && !selected ? (
-              <div className="text-sm text-dim flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading automation…</div>
-            ) : !selected ? (
-              <div className="text-center text-sm text-dim py-12"><CircleDashed size={24} className="mx-auto mb-3 opacity-50" />Select an automation to inspect its contract and invocation state.</div>
-            ) : (
-              <div className="space-y-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{selected.name}</h2><span className={`status-pill ${selected.enabled ? 'text-success' : 'text-dim'}`}>{selected.enabled ? 'active' : 'paused'}</span></div><p className="text-xs text-dim mt-1">Revision {selected.version} · updated {formatDate(selected.updatedAt)}</p></div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <button type="button" className="grok-btn grok-btn-primary" onClick={() => void runRoutine(selected)} disabled={Boolean(action)}>{action === `run:${selected.id}` ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Run now</button>
-                    <button type="button" className="grok-btn grok-btn-secondary" onClick={() => editRoutine(selected)}><Pencil size={13} /> Edit</button>
-                    <a className="grok-btn grok-btn-ghost" href={`/api/routines/${encodeURIComponent(selected.id)}/export?format=json`}><FileJson size={13} /> JSON</a>
-                    <a className="grok-btn grok-btn-ghost" href={`/api/routines/${encodeURIComponent(selected.id)}/export?format=yaml`}><Download size={13} /> YAML</a>
-                    <button type="button" className="grok-btn grok-btn-ghost text-error" onClick={() => void deleteRoutine(selected)} disabled={Boolean(action)} aria-label={`Delete ${selected.name}`}><Trash2 size={13} /></button>
-                  </div>
-                </div>
-
-                {selected.circuitState === 'open' && (
-                  <div className="border border-[var(--error)] rounded-md p-3 text-sm text-error">
-                    <div className="flex items-center gap-2 font-medium"><ShieldAlert size={15} /> Circuit breaker open</div>
-                    <p className="text-xs mt-1">{selected.failureStreak} consecutive failures. Automatic claims pause until {formatDate(selected.circuitOpenUntil)}.</p>
-                    <button type="button" className="grok-btn grok-btn-secondary mt-2" onClick={() => void resetCircuit(selected)} disabled={Boolean(action)}>{action === `reset:${selected.id}` ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />} Reset breaker</button>
-                  </div>
-                )}
-
-                <div>
-                  <h3 className="text-xs uppercase tracking-wider text-dim mb-2">Triggers</h3>
-                  <ul className="space-y-2">
-                    {selected.triggers.map((trigger) => {
-                      const Icon = triggerIcon(trigger);
-                      return <li key={trigger.id} className="flex items-center gap-2 text-sm"><Icon size={14} className="text-muted shrink-0" /><span className="font-mono text-xs break-all">{trigger.type === 'webhook' ? `/api/routines/${selected.id}/webhook` : triggerLabel(trigger)}</span><span className="status-pill text-dim font-mono">{trigger.id}</span><span className={`status-pill ml-auto ${trigger.enabled ? 'text-success' : 'text-dim'}`}>{trigger.enabled ? 'on' : 'off'}</span></li>;
-                    })}
-                  </ul>
-                </div>
-
-                <dl className="grid gap-3 sm:grid-cols-2 text-xs">
-                  <div><dt className="text-dim">Concurrency</dt><dd className="font-mono mt-0.5 break-all">{selected.concurrencyKey}</dd></div>
-                  <div><dt className="text-dim">Retry</dt><dd className="mt-0.5">{selected.retryPolicy.maxAttempts} attempts · {selected.retryPolicy.baseDelayMs} ms × {selected.retryPolicy.multiplier}</dd></div>
-                  <div><dt className="text-dim">Timeout</dt><dd className="mt-0.5">{Math.round(selected.timeoutMs / 1_000)} seconds total</dd></div>
-                  <div><dt className="text-dim">Catch-up</dt><dd className="mt-0.5">{selected.catchUpPolicy === 'run_once' ? 'Run once after missed trigger' : 'Skip missed triggers'}</dd></div>
-                </dl>
-
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-2"><h3 className="text-xs uppercase tracking-wider text-dim">Recent invocations</h3><button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={() => void loadDetail(selected.id)} aria-label="Refresh invocation state"><RefreshCw size={12} /></button></div>
-                  {invocations.length === 0 ? <p className="text-sm text-dim">No invocations yet. Run it manually or wait for a trigger.</p> : (
-                    <div className="border border-default rounded-md divide-y divide-default max-h-80 overflow-y-auto">
-                      {invocations.slice(0, 30).map((invocation) => (
-                        <div key={invocation.id} className="p-3 text-xs">
-                          <div className="flex flex-wrap items-center gap-2"><span className={`status-pill ${invocationTone(invocation.status)}`}>{invocation.status}</span><span className="font-mono">{invocation.triggerType}</span><span className="text-dim">attempt {invocation.attempt}/{invocation.maxAttempts}</span><span className="text-dim ml-auto">{formatDate(invocation.updatedAt)}</span></div>
-                          {invocation.error && <p className="text-error mt-1.5 whitespace-pre-wrap">{invocation.error}</p>}
-                          {invocation.taskId && <button type="button" className="inline-flex items-center gap-1 text-muted underline mt-1.5" onClick={() => router.push(`/tasks/${encodeURIComponent(invocation.taskId!)}`)}>Open task <ChevronRight size={11} /></button>}
+          {routines.map((routine) => {
+            const agentName = agents.find((agent) => agent.id === routine.agentId)?.name || routine.agentId;
+            const details = selected?.id === routine.id ? selected : null;
+            return (
+              <div key={routine.id} className="space-y-2">
+                <RoutineCard routine={routine} agentName={agentName} selected={selectedId === routine.id} onSelect={() => toggleRoutine(routine.id)} />
+                {selectedId === routine.id && (
+                  <section id={`automation-${routine.id}-details`} className="rounded-lg border border-default bg-[var(--bg-elev)] p-4 sm:p-5" aria-label={`${routine.name} details`}>
+                    {detailLoading && !details ? (
+                      <div className="text-sm text-dim flex items-center gap-2 py-4"><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Loading automation…</div>
+                    ) : !details ? (
+                      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-error"><span>Could not load this automation.</span><button type="button" className="grok-btn grok-btn-secondary" onClick={() => void loadDetail(routine.id)}>Try again</button></div>
+                    ) : (
+                      <div className="space-y-5">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm text-muted">Runs with {agentName} · updated {formatDate(details.updatedAt)}</p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button type="button" className="grok-btn grok-btn-primary" onClick={() => void runRoutine(details)} disabled={Boolean(action)}>{action === `run:${details.id}` ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Play size={13} aria-hidden="true" />} Run now</button>
+                            <button type="button" className="grok-btn grok-btn-secondary" onClick={() => editRoutine(details)}><Pencil size={13} aria-hidden="true" /> Edit</button>
+                            <details className="relative">
+                              <summary className="grok-btn grok-btn-ghost cursor-pointer list-none">More <ChevronDown size={13} aria-hidden="true" /></summary>
+                              <div className="absolute right-0 top-full z-20 mt-1 min-w-44 rounded-lg border border-default bg-[var(--bg-elev)] p-1.5 shadow-xl">
+                                <a className="grok-btn grok-btn-ghost w-full justify-start" href={`/api/routines/${encodeURIComponent(details.id)}/export?format=json`}><FileJson size={13} aria-hidden="true" /> Export JSON</a>
+                                <a className="grok-btn grok-btn-ghost w-full justify-start" href={`/api/routines/${encodeURIComponent(details.id)}/export?format=yaml`}><Download size={13} aria-hidden="true" /> Export YAML</a>
+                                <button type="button" className="grok-btn grok-btn-ghost text-error w-full justify-start" onClick={() => void deleteRoutine(details)} disabled={Boolean(action)}><Trash2 size={13} aria-hidden="true" /> Delete</button>
+                              </div>
+                            </details>
+                          </div>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+
+                        {details.circuitState === 'open' && (
+                          <div className="border border-[var(--error)] rounded-md p-3 text-sm text-error">
+                            <div className="flex items-center gap-2 font-medium"><ShieldAlert size={15} aria-hidden="true" /> Runs paused after repeated failures</div>
+                            <p className="text-xs mt-1">{details.failureStreak} consecutive failures. Automatic runs resume after {formatDate(details.circuitOpenUntil)}.</p>
+                            <button type="button" className="grok-btn grok-btn-secondary mt-2" onClick={() => void resetCircuit(details)} disabled={Boolean(action)}>{action === `reset:${details.id}` ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <RotateCcw size={13} aria-hidden="true" />} Resume now</button>
+                          </div>
+                        )}
+
+                        <div>
+                          <h3 className="text-xs uppercase tracking-wider text-dim mb-2">What it does</h3>
+                          <p className="text-sm whitespace-pre-wrap max-h-32 overflow-y-auto">{details.prompt}</p>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-2"><h3 className="text-xs uppercase tracking-wider text-dim">Recent runs</h3><button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={() => void loadDetail(details.id)} aria-label="Refresh recent runs"><RefreshCw size={12} aria-hidden="true" /></button></div>
+                          {invocations.length === 0 ? <p className="text-sm text-dim">No runs yet. Start one now or wait for a trigger.</p> : (
+                            <div className="border border-default rounded-md divide-y divide-default max-h-80 overflow-y-auto">
+                              {invocations.slice(0, 30).map((invocation) => (
+                                <div key={invocation.id} className="p-3 text-xs">
+                                  <div className="flex flex-wrap items-center gap-2"><span className={`status-pill ${invocationTone(invocation.status)}`}>{invocation.status}</span><span>{triggerTypeLabel(invocation.triggerType)}</span><span className="text-dim">attempt {invocation.attempt}/{invocation.maxAttempts}</span><span className="text-dim ml-auto">{formatDate(invocation.updatedAt)}</span></div>
+                                  {invocation.error && <p className="text-error mt-1.5 whitespace-pre-wrap">{invocation.error}</p>}
+                                  {invocation.taskId && <button type="button" className="inline-flex items-center gap-1 text-muted underline mt-1.5" onClick={() => router.push(`/tasks/${encodeURIComponent(invocation.taskId!)}`)}>Open task <ChevronRight size={11} aria-hidden="true" /></button>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <details className="border-t border-default pt-4">
+                          <summary className="cursor-pointer inline-flex items-center gap-2 text-sm font-medium text-muted"><ChevronDown size={13} aria-hidden="true" /> Advanced details</summary>
+                          <div className="mt-4 space-y-4">
+                            <div>
+                              <h3 className="text-xs uppercase tracking-wider text-dim mb-2">When it runs</h3>
+                              <ul className="space-y-2">
+                                {details.triggers.map((trigger) => {
+                                  const Icon = triggerIcon(trigger);
+                                  return <li key={trigger.id} className="flex flex-wrap items-center gap-2 text-sm"><Icon size={14} className="text-muted shrink-0" aria-hidden="true" /><span>{trigger.type === 'webhook' ? `Webhook: /api/routines/${details.id}/webhook` : triggerLabel(trigger)}</span><span className="status-pill text-dim font-mono">{trigger.id}</span><span className={`status-pill ml-auto ${trigger.enabled ? 'text-success' : 'text-dim'}`}>{trigger.enabled ? 'on' : 'off'}</span></li>;
+                                })}
+                              </ul>
+                            </div>
+                            <dl className="grid gap-3 sm:grid-cols-2 text-xs">
+                              <div><dt className="text-dim">Workflow</dt><dd className="mt-0.5">{details.steps.length ? `${details.steps.length} configured step${details.steps.length === 1 ? '' : 's'}` : 'Main instructions run as one step'}</dd></div>
+                              <div><dt className="text-dim">Retries</dt><dd className="mt-0.5">Up to {details.retryPolicy.maxAttempts} attempts with backoff</dd></div>
+                              <div><dt className="text-dim">Active-run timeout</dt><dd className="mt-0.5">{Math.round(details.timeoutMs / 1_000)} seconds (pauses while waiting for you)</dd></div>
+                              <div><dt className="text-dim">Missed schedules</dt><dd className="mt-0.5">{details.catchUpPolicy === 'run_once' ? 'Run once after a missed trigger' : 'Skip missed triggers'}</dd></div>
+                              <div className="sm:col-span-2"><dt className="text-dim">Concurrency key</dt><dd className="font-mono mt-0.5 break-all">{details.concurrencyKey}</dd></div>
+                            </dl>
+                            {details.triggers.some((trigger) => trigger.type === 'webhook') && (
+                              <div className="rounded-md border border-default p-3 text-xs text-dim">
+                                <div className="font-medium text-muted mb-2">Signed webhook headers</div>
+                                <div className="space-y-1 font-mono"><div>x-shiba-timestamp: Unix seconds</div><div>x-shiba-signature: sha256=HMAC(secret, timestamp + &quot;.&quot; + rawBody)</div><div>x-shiba-delivery: stable provider delivery ID</div><div>x-shiba-trigger: trigger ID (only needed with multiple webhooks)</div></div>
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      </div>
+                    )}
+                  </section>
+                )}
               </div>
-            )}
-          </div>
+            );
+          })}
         </div>
       )}
-
-      <details className="grok-card p-4 text-xs text-dim">
-        <summary className="cursor-pointer inline-flex items-center gap-2 font-medium text-muted"><ChevronDown size={13} /> Signed webhook headers</summary>
-        <div className="mt-3 space-y-1 font-mono"><div>x-shiba-timestamp: Unix seconds</div><div>x-shiba-signature: sha256=HMAC(secret, timestamp + &quot;.&quot; + rawBody)</div><div>x-shiba-delivery: stable provider delivery ID</div><div>x-shiba-trigger: trigger ID (optional when there is one webhook)</div></div>
-      </details>
 
       {editor && <RoutineEditor key={editor.key} agents={agents} initial={editor.initial} title={editor.routine ? `Edit ${editor.routine.name}` : editor.sourceTaskId ? 'Configure automation draft' : 'New automation'} saving={saving} onCancel={() => !saving && setEditor(null)} onSave={saveRoutine} />}
     </section>

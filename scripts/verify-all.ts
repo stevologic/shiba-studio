@@ -56,6 +56,8 @@ const CHAIN = [
   'verify-xai-oauth.ts',
   'verify-competitor-features.ts',
   'verify-backlog-features.ts',
+  'verify-board-concurrency.ts',
+  'verify-board-auto-assign.ts',
   'verify-project-builder.ts',
   'verify-netlify.ts',
   'verify-board-sync.ts',

@@ -14,8 +14,21 @@ async function main() {
   const meetings = await import('../lib/meetings');
   const ledger = await import('../lib/task-ledger');
   const routines = await import('../lib/routines');
+  const types = await import('../lib/types');
   try {
     await persistence.saveConfig({ xaiApiKey: 'xai-verifier-key', cloudAuthMode: 'api_key', defaultGrokModel: 'cloud:grok-4' });
+    const agentCreatedAt = new Date().toISOString();
+    await persistence.saveAgents([types.normalizeAgent({
+      id: 'agent-verifier',
+      name: 'Meeting verifier',
+      model: 'cloud:grok-4',
+      workspace: { path: root, useWorktree: false },
+      integrations: {},
+      peers: [],
+      skills: [],
+      createdAt: agentCreatedAt,
+      updatedAt: agentCreatedAt,
+    })]);
     const db = dbModule.getDb();
     meetings.ensureMeetingSchema();
     let sttCalls = 0;

@@ -31,7 +31,7 @@ async function main() {
   try {
     const db = dbModule.getDb();
     const version = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert.equal(version.user_version, 12);
+    assert.equal(version.user_version, 14);
     for (const table of ['task_checkpoints', 'task_checkpoint_files', 'task_checkpoint_restores']) {
       assert.equal(
         (db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { n: number }).n,

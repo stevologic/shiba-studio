@@ -1,11 +1,11 @@
-// Full direct invocation of SHIPPED runtime, tools, scheduler, integrations wiring.
+// Full direct invocation of SHIPPED runtime, tools, Automations, and integrations wiring.
 // Uses controlled grokChat double to drive multi-step tool calling + side effects WITHOUT real key.
 // Produces real persisted runs + screenshots + traces. Also exercises schedule_task.
 
 import './verify-isolate'; // MUST be first: sandbox the data dir on direct runs
+import assert from 'node:assert/strict';
 import { setApiKey, type GrokChatResponse } from '../lib/grok-client';
 import { runAgentOnce, loadRuns } from '../lib/agent-runtime';
-import * as Sched from '../lib/scheduler';
 import { Agent } from '../lib/types';
 import { loadAgents, saveAgents } from '../lib/persistence';
 import * as fs from 'fs/promises';
@@ -174,20 +174,17 @@ async function main() {
     console.log('REAL_GROK_API_CALL_EVIDENCE (network attempted)', msg);
   }
 
-  // Prepare a dedicated test agent WITH scoped integrations + skills + multi-schedules-with-instructions (new features)
+  // Prepare a dedicated test agent with scoped integrations and skills.
   const testAgent: Agent = {
     id: 'verify-agent-' + Date.now(),
     name: 'Verify Runner',
     model: 'grok-3',
     description: 'Verification agent exercising full paths',
+    autoAcceptBoardAssignments: false,
     workspace: { path: process.cwd(), useWorktree: false },
     integrations: { github: true, slack: true, googledrive: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false },
     peers: [],
     skills: ['research', 'coder', 'browser-automation'],
-    schedules: [
-      { id: 'sch1', enabled: true, cron: '*/30 * * * *', instructions: 'List files then use browser to verify connectivity.' },
-      { id: 'sch2', enabled: false, cron: '0 * * * *', instructions: 'Daily summary task using skills.' }
-    ],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -228,29 +225,28 @@ async function main() {
     console.log('Copied screenshot artifacts');
   } catch {}
 
-  // Exercise scheduler paths directly (shipped)
-  const schedRes = await Sched.scheduleFromAgentTool(testAgent.id, 'in 1m', 'Scheduled by verify script');
-  console.log('scheduleFromAgentTool result:', schedRes);
-
-  await Sched.loadAndScheduleAll();
-  console.log('loadAndScheduleAll OK, scheduled count approx:', Sched.listScheduled().length);
-
-  // Check a scheduled run used the specific instructions (for verification) -- strict assert per AC3
-  const loadedRuns = await (await import('../lib/agent-runtime')).loadRuns(testAgent.id);
-  const schedRun = loadedRuns.find((r) => r.scheduleInstructions);
-  if (schedRun) {
-    const matches = schedRun.prompt === schedRun.scheduleInstructions;
-    console.log('Scheduled run used specific instructions prompt check (strict):', matches);
-    if (!matches) {
-      console.error('STRICT ASSERT FAILED: prompt !== scheduleInstructions');
-      // do not throw to allow other evidence, but log
-    }
-  }
-  // Also exercise scheduleAgentNow to make it reachable
-  try {
-    const nowRun = await (await import('../lib/scheduler')).scheduleAgentNow(testAgent);
-    console.log('scheduleAgentNow exercised, prompt used:', nowRun.prompt && nowRun.prompt.slice(0,60));
-  } catch(e){ console.log('scheduleAgentNow note', e); }
+  // The schedule_task tool and direct cron path both create durable Routines;
+  // neither may reintroduce schedule fields on the Agent record.
+  const routines = await import('../lib/routines');
+  const toolRoutine = routines.listRoutines({ limit: 100 }).routines.find(
+    (routine) => routine.agentId === testAgent.id && routine.prompt === 'Follow-up verification scheduled run',
+  );
+  assert(toolRoutine, 'schedule_task must persist a durable Automation');
+  assert.equal(toolRoutine.triggers[0].type, 'one_time');
+  const cronResult = await routines.scheduleFromAgentTool(
+    testAgent.id,
+    '*/30 * * * *',
+    'Scheduled by verify script',
+  );
+  assert.equal(cronResult.ok, true);
+  assert.equal(cronResult.type, 'cron');
+  const cronRoutine = routines.getRoutine(String(cronResult.routineId));
+  assert.equal(cronRoutine?.triggers[0].type, 'schedule');
+  assert.equal(cronRoutine?.prompt, 'Scheduled by verify script');
+  const persistedTestAgent = (await loadAgents()).find((agent) => agent.id === testAgent.id);
+  assert(persistedTestAgent);
+  assert(!Object.hasOwn(persistedTestAgent, 'schedule') && !Object.hasOwn(persistedTestAgent, 'schedules'),
+    'Automation creation must not mutate Agent schedule fields');
 
   // Direct executeTool smoke (via dynamic to avoid private)
   // We already exercised via the run above.
@@ -268,7 +264,7 @@ async function main() {
     timestamp: new Date().toISOString()
   }, null, 2));
 
-  Sched.stopAllScheduledTasks();
+  await routines.stopRoutineEngine();
   console.log('=== VERIFICATION COMPLETE. Artifacts in', EVIDENCE);
   process.exit(0);
 }

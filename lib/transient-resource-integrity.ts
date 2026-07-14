@@ -1,5 +1,10 @@
 import { getDb } from './db';
 import type { GrokCliTemporaryResourceReport } from './grok-cli';
+import { dataDir } from './data-paths';
+
+const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
+if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
+const fs = builtinFs.promises;
 
 const DEFAULT_PAIRING_RETENTION_MS = 24 * 60 * 60_000;
 const DEFAULT_PAIRING_BATCH_SIZE = 1_000;
@@ -30,6 +35,17 @@ function emptyGrokCliReport(): GrokCliTemporaryResourceReport {
     youngResourcesRetained: 0,
     errors: [],
   };
+}
+
+async function removeLegacyRedditOAuthPending(): Promise<boolean> {
+  const target = dataDir('reddit-oauth-pending.json');
+  try {
+    await fs.unlink(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function tableExists(name: string): boolean {
@@ -121,7 +137,7 @@ export async function reconcileTransientResources(
 
   const [xai, reddit, grok] = await Promise.allSettled([
     import('./xai-oauth').then(({ pruneExpiredOAuthPending }) => pruneExpiredOAuthPending(nowMs)),
-    import('./reddit-oauth').then(({ pruneExpiredRedditOAuthPending }) => pruneExpiredRedditOAuthPending(nowMs)),
+    removeLegacyRedditOAuthPending(),
     import('./grok-cli').then(({ reconcileGrokCliTemporaryResources }) =>
       reconcileGrokCliTemporaryResources({
         nowMs,
@@ -133,7 +149,7 @@ export async function reconcileTransientResources(
   if (xai.status === 'fulfilled') report.xaiOAuthPendingRemoved = xai.value ? 1 : 0;
   else report.errors.push(`xAI OAuth pending: ${xai.reason instanceof Error ? xai.reason.message : String(xai.reason)}`);
   if (reddit.status === 'fulfilled') report.redditOAuthPendingRemoved = reddit.value ? 1 : 0;
-  else report.errors.push(`Reddit OAuth pending: ${reddit.reason instanceof Error ? reddit.reason.message : String(reddit.reason)}`);
+  else report.errors.push(`legacy Reddit OAuth pending: ${reddit.reason instanceof Error ? reddit.reason.message : String(reddit.reason)}`);
   if (grok.status === 'fulfilled') {
     report.grokCli = grok.value;
     report.errors.push(...grok.value.errors.map((error) => `Grok CLI temporary resource: ${error}`));

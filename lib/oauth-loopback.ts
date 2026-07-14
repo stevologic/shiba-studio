@@ -12,7 +12,7 @@ interface LoopbackGlobals {
 
 const globals = globalThis as unknown as LoopbackGlobals;
 
-export type OAuthHandbackChannel = 'shiba-oauth' | 'shiba-drive' | 'shiba-reddit';
+export type OAuthHandbackChannel = 'shiba-oauth' | 'shiba-drive';
 
 const HAND_BACK_COPY: Record<OAuthHandbackChannel, {
   query: string;
@@ -31,12 +31,6 @@ const HAND_BACK_COPY: Record<OAuthHandbackChannel, {
     returnPath: '/settings',
     provider: 'Google',
     success: 'Google Drive is connected. Tokens are cached encrypted and refresh automatically.',
-  },
-  'shiba-reddit': {
-    query: 'reddit',
-    returnPath: '/capabilities',
-    provider: 'Reddit',
-    success: 'Reddit is connected. Tokens are cached encrypted and refresh automatically.',
   },
 };
 

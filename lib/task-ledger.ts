@@ -8,7 +8,6 @@ import { getDb } from './db';
 import { emitAppEvent } from './app-events';
 import type {
   AttentionItem,
-  AttentionKind,
   CompletionContract,
   CompletionEvaluation,
   CompletionRequirement,
@@ -367,8 +366,8 @@ function rowToAttention(row: AttentionRow): AttentionItem {
   return {
     id: row.id,
     taskId: row.taskId,
-    kind: row.kind as AttentionKind,
-    status: row.status as AttentionItem['status'],
+    kind: 'approval',
+    status: 'open',
     severity: row.severity as AttentionItem['severity'],
     title: row.title,
     body: row.body,
@@ -376,7 +375,6 @@ function rowToAttention(row: AttentionRow): AttentionItem {
     dedupeKey: row.dedupeKey,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    ...(row.resolvedAt ? { resolvedAt: row.resolvedAt } : {}),
   };
 }
 
@@ -626,7 +624,10 @@ export function listQueuedRetryTasks(limit = 50): TaskRecord[] {
     SELECT * FROM tasks
     WHERE status = 'queued' AND CASE
       WHEN retryCount > 0 THEN 1
-      WHEN json_valid(metadata) THEN COALESCE(json_extract(metadata, '$.capacityDeferred'), 0)
+      WHEN json_valid(metadata) THEN (
+        COALESCE(json_extract(metadata, '$.capacityDeferred'), 0)
+        OR COALESCE(json_extract(metadata, '$.dispatchRequested'), 0)
+      )
       ELSE 0
     END = 1
     ORDER BY updatedAt ASC, createdAt ASC
@@ -637,10 +638,15 @@ export function listQueuedRetryTasks(limit = 50): TaskRecord[] {
 export function getTaskDetails(id: string): TaskDetails | null {
   const task = getTask(id);
   if (!task) return null;
+  reconcileApprovalAttention();
   const db = getDb();
   const children = (db.prepare('SELECT * FROM tasks WHERE parentId = ? ORDER BY createdAt ASC').all(task.id) as unknown as TaskRow[]).map(rowToTask);
   const evidence = (db.prepare('SELECT * FROM task_evidence WHERE taskId = ? ORDER BY recordedAt DESC').all(task.id) as unknown as EvidenceRow[]).map(rowToEvidence);
-  const attention = (db.prepare('SELECT * FROM task_attention WHERE taskId = ? ORDER BY createdAt DESC').all(task.id) as unknown as AttentionRow[]).map(rowToAttention);
+  const attention = (db.prepare(`
+    SELECT * FROM task_attention
+    WHERE taskId = ? AND kind = 'approval' AND status = 'open'
+    ORDER BY createdAt DESC
+  `).all(task.id) as unknown as AttentionRow[]).map(rowToAttention);
   const commands = (db.prepare('SELECT * FROM task_commands WHERE taskId = ? ORDER BY createdAt ASC').all(task.id) as unknown as CommandRow[]).map(rowToCommand);
   return { ...task, children, evidence, attention, commands };
 }
@@ -881,92 +887,162 @@ export function evaluateTaskCompletion(taskId: string, persist = true): Completi
   return result;
 }
 
-function upsertAttention(input: {
-  taskId: string;
-  kind: AttentionKind;
-  severity: AttentionItem['severity'];
-  title: string;
-  body: string;
-  dedupeKey: string;
-  action?: Record<string, unknown>;
-}, emit = true): AttentionItem {
-  if (!getTask(input.taskId)) throw new Error('Task not found');
-  const db = getDb();
-  const now = nowIso();
-  const id = randomUUID();
-  db.prepare(`
-    INSERT INTO task_attention (
-      id, taskId, kind, status, severity, title, body, action, dedupeKey,
-      createdAt, updatedAt, resolvedAt
-    ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, NULL)
-    ON CONFLICT(taskId, dedupeKey) DO UPDATE SET
-      kind = excluded.kind,
-      status = 'open',
-      severity = excluded.severity,
-      title = excluded.title,
-      body = excluded.body,
-      action = excluded.action,
-      updatedAt = excluded.updatedAt,
-      resolvedAt = NULL
-  `).run(
-    id, input.taskId, input.kind, input.severity, cleanText(input.title, 500, true),
-    cleanText(input.body, 10_000, true), JSON.stringify(input.action || {}),
-    cleanText(input.dedupeKey, 300, true), now, now,
-  );
-  const row = db.prepare('SELECT * FROM task_attention WHERE taskId = ? AND dedupeKey = ?')
-    .get(input.taskId, input.dedupeKey) as unknown as AttentionRow;
-  if (emit) emitTaskChanges(true);
-  return rowToAttention(row);
+const MAX_APPROVAL_LIFETIME_MS = 5 * 60_000;
+
+function approvalArgsMatch(left: unknown, right: unknown): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
 }
 
-/** Add or refresh a durable Attention item without exposing the SQL helper. */
-export function requestTaskAttention(input: {
+function livePendingApproval(item: AttentionItem, task: TaskRecord, nowMs = Date.now()) {
+  if (item.kind !== 'approval' || item.status !== 'open' || task.status !== 'waiting_for_approval') return null;
+  const approvalId = typeof item.action.approvalId === 'string' ? item.action.approvalId : '';
+  const toolName = typeof item.action.toolName === 'string' ? item.action.toolName : '';
+  const actionTaskId = typeof item.action.taskId === 'string' ? item.action.taskId : '';
+  const args = item.action.args;
+  const expiresAtMs = Date.parse(String(item.action.expiresAt || ''));
+  const createdAtMs = Date.parse(item.createdAt);
+  if (!approvalId || !toolName || actionTaskId !== task.id || !args || typeof args !== 'object' || Array.isArray(args)) return null;
+  if (!Number.isFinite(expiresAtMs) || !Number.isFinite(createdAtMs) || expiresAtMs <= nowMs) return null;
+  if (expiresAtMs > createdAtMs + MAX_APPROVAL_LIFETIME_MS) return null;
+  if (item.dedupeKey !== `tool-approval:${approvalId}` || !task.runId) return null;
+  const pending = getPendingApproval(approvalId);
+  if (!pending || pending.runId !== task.runId || pending.toolName !== toolName) return null;
+  if (expiresAtMs > Date.parse(pending.expiresAt) || !approvalArgsMatch(pending.args, args)) return null;
+  return pending;
+}
+
+function findLiveApprovalForTask(task: TaskRecord, approvalId: string): AttentionItem | null {
+  const row = getDb().prepare(`
+    SELECT * FROM task_attention
+    WHERE taskId = ? AND kind = 'approval' AND status = 'open' AND dedupeKey = ?
+  `).get(task.id, `tool-approval:${approvalId}`) as unknown as AttentionRow | undefined;
+  if (!row) return null;
+  const item = rowToAttention(row);
+  return livePendingApproval(item, task) ? item : null;
+}
+
+/**
+ * Delete anything that is not a currently actionable, exact approval. This
+ * also repairs rows left behind by a timeout or process restart, where the
+ * process-local waiter can no longer receive a decision.
+ */
+export function reconcileApprovalAttention(nowMs = Date.now()): number {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM task_attention ORDER BY createdAt ASC').all() as unknown as AttentionRow[];
+  const taskById = new Map<string, TaskRecord | null>();
+  const remove = db.prepare('DELETE FROM task_attention WHERE id = ?');
+  let deleted = 0;
+  for (const row of rows) {
+    let task = taskById.get(row.taskId);
+    if (task === undefined) {
+      task = getTask(row.taskId);
+      taskById.set(row.taskId, task);
+    }
+    const item = row.kind === 'approval' && row.status === 'open' ? rowToAttention(row) : null;
+    if (!task || !item || !livePendingApproval(item, task, nowMs)) {
+      deleted += Number(remove.run(row.id).changes);
+    }
+  }
+  if (deleted > 0) emitAppEvent('attention');
+  return deleted;
+}
+
+/** Insert one immutable queue row bound to a live process-local waiter. */
+export function requestTaskApproval(input: {
   taskId: string;
-  kind: AttentionKind;
-  severity?: AttentionItem['severity'];
+  approvalId: string;
+  toolName: string;
+  args: Record<string, unknown>;
   title: string;
   body: string;
-  dedupeKey: string;
-  action?: Record<string, unknown>;
+  expiresAt?: string;
+  severity?: AttentionItem['severity'];
 }): AttentionItem {
-  if (!getTask(input.taskId)) throw new Error('Task not found');
-  return upsertAttention({
-    ...input,
-    severity: input.severity || 'warning',
-    action: input.action || { taskId: input.taskId },
-  });
+  const task = getTask(input.taskId);
+  if (!task) throw new Error('Task not found');
+  if (task.status !== 'waiting_for_approval' || !task.runId) {
+    throw new Error('Task is not waiting for approval');
+  }
+  const approvalId = cleanText(input.approvalId, 200, true);
+  const toolName = cleanText(input.toolName, 200, true);
+  const pending = getPendingApproval(approvalId);
+  if (!pending || pending.runId !== task.runId || pending.toolName !== toolName || !approvalArgsMatch(pending.args, input.args)) {
+    throw new Error('Approval does not match the waiting task and exact tool action');
+  }
+  const nowMs = Date.now();
+  const requestedExpiry = input.expiresAt ? Date.parse(input.expiresAt) : Number.POSITIVE_INFINITY;
+  const expiresAtMs = Math.min(
+    Number.isFinite(requestedExpiry) ? requestedExpiry : Number.POSITIVE_INFINITY,
+    Date.parse(pending.expiresAt),
+    nowMs + MAX_APPROVAL_LIFETIME_MS,
+  );
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) throw new Error('Approval already expired');
+  const now = new Date(nowMs).toISOString();
+  const dedupeKey = `tool-approval:${approvalId}`;
+  const action = {
+    taskId: task.id,
+    approvalId,
+    toolName,
+    args: input.args,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
+  const result = getDb().prepare(`
+    INSERT OR IGNORE INTO task_attention (
+      id, taskId, kind, status, severity, title, body, action, dedupeKey,
+      createdAt, updatedAt, resolvedAt
+    ) VALUES (?, ?, 'approval', 'open', ?, ?, ?, ?, ?, ?, ?, NULL)
+  `).run(
+    randomUUID(), task.id, input.severity || 'warning', cleanText(input.title, 500, true),
+    cleanText(input.body, 10_000, true), JSON.stringify(action), dedupeKey, now, now,
+  );
+  const row = getDb().prepare('SELECT * FROM task_attention WHERE taskId = ? AND dedupeKey = ?')
+    .get(task.id, dedupeKey) as unknown as AttentionRow | undefined;
+  if (!row) throw new Error('Approval queue row could not be created');
+  const item = rowToAttention(row);
+  if (!livePendingApproval(item, task, nowMs)) {
+    getDb().prepare('DELETE FROM task_attention WHERE id = ?').run(row.id);
+    throw new Error('Approval queue row failed exact-action validation');
+  }
+  if (Number(result.changes) > 0) emitAppEvent('attention');
+  return item;
 }
 
 export function listAttention(opts: {
-  status?: AttentionItem['status'];
   taskId?: string;
   limit?: number;
   offset?: number;
 } = {}): { items: AttentionItem[]; total: number } {
-  const clauses: string[] = [];
+  reconcileApprovalAttention();
+  const clauses = ["kind = 'approval'", "status = 'open'"];
   const params: SqlValue[] = [];
-  if (opts.status) { clauses.push('status = ?'); params.push(opts.status); }
   if (opts.taskId) { clauses.push('taskId = ?'); params.push(assertTaskId(opts.taskId)); }
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  const limit = Math.max(1, Math.min(500, Number(opts.limit) || 100));
-  const offset = Math.max(0, Number(opts.offset) || 0);
+  const where = `WHERE ${clauses.join(' AND ')}`;
+  const requestedLimit = Number(opts.limit);
+  const requestedOffset = Number(opts.offset);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(500, Math.trunc(requestedLimit)))
+    : 100;
+  const offset = Number.isFinite(requestedOffset)
+    ? Math.max(0, Math.trunc(requestedOffset))
+    : 0;
   const db = getDb();
   const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM task_attention ${where}`).get(...params) as { n: number }).n);
-  const rows = db.prepare(`SELECT * FROM task_attention ${where} ORDER BY createdAt DESC LIMIT ? OFFSET ?`)
+  const rows = db.prepare(`SELECT * FROM task_attention ${where} ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as unknown as AttentionRow[];
   return { items: rows.map(rowToAttention), total };
 }
 
-export function resolveAttention(id: string, status: 'resolved' | 'dismissed' = 'resolved'): AttentionItem {
-  const now = nowIso();
-  const res = getDb().prepare(`
-    UPDATE task_attention SET status = ?, updatedAt = ?, resolvedAt = ? WHERE id = ?
-  `).run(status, now, now, assertTaskId(id));
-  if (Number(res.changes) !== 1) throw new Error('Attention item not found');
-  const row = getDb().prepare('SELECT * FROM task_attention WHERE id = ?').get(id) as unknown as AttentionRow;
-  insertEvent(row.taskId, 'attention_resolved', { attentionId: id, status });
-  emitTaskChanges(true);
-  return rowToAttention(row);
+/** Approval outcomes are durable in task_commands/events; the inbox row is not history. */
+export function removeApprovalAttention(id: string): boolean {
+  const result = getDb().prepare("DELETE FROM task_attention WHERE id = ? AND kind = 'approval'")
+    .run(assertTaskId(id));
+  const removed = Number(result.changes) === 1;
+  if (removed) emitAppEvent('attention');
+  return removed;
 }
 
 function enqueueOutbox(input: {
@@ -995,32 +1071,20 @@ function terminalSignalsSuppressed(task: TaskRecord): boolean {
   return task.status !== 'succeeded' && task.metadata.suppressFailureSignals === true;
 }
 
-/** Returns true when Attention/outbox terminal signals were created. */
-function terminalSignals(task: TaskRecord, emit = true): boolean {
-  if (terminalSignalsSuppressed(task)) return false;
+/** Deliver terminal outcomes back to their originating chat, when one exists. */
+function enqueueTerminalDelivery(task: TaskRecord): void {
+  if (terminalSignalsSuppressed(task) || !task.sessionId) return;
   const succeeded = task.status === 'succeeded';
   const cancelled = task.status === 'cancelled';
-  const kind: AttentionKind = succeeded ? 'completion' : cancelled ? 'warning' : 'failure';
-  const severity: AttentionItem['severity'] = succeeded ? 'info' : cancelled ? 'warning' : 'critical';
   const title = succeeded ? `${task.title} finished` : cancelled ? `${task.title} was cancelled` : `${task.title} needs attention`;
   const body = succeeded ? task.result || 'Task completed.' : task.error || `Task ended with status ${task.status}.`;
-  upsertAttention({
-    taskId: task.id,
-    kind,
-    severity,
-    title,
-    body,
-    dedupeKey: `terminal:${task.status}:${task.retryCount}`,
-    action: { taskId: task.id, status: task.status },
-  }, emit);
   enqueueOutbox({
     taskId: task.id,
     kind: 'task_terminal',
-    target: task.sessionId ? `chat:${task.sessionId}` : 'attention',
+    target: `chat:${task.sessionId}`,
     payload: { taskId: task.id, status: task.status, title, body },
     idempotencyKey: `task-terminal:${task.id}:${task.status}:${task.retryCount}`,
   });
-  return true;
 }
 
 interface TransitionTaskInput {
@@ -1034,6 +1098,9 @@ interface TransitionTaskInput {
   error?: string | null;
   checkpointId?: string | null;
   metadata?: Record<string, unknown>;
+  /** Internal lifecycle override. Retries use null so an old execution lease
+   * cannot look alive while the next attempt is still queued. */
+  heartbeatAt?: string | null;
 }
 
 interface TransitionTaskEffects {
@@ -1073,12 +1140,9 @@ function transitionTaskInTransaction(input: TransitionTaskInput): TransitionTask
   const completion = next === 'succeeded' ? evaluateTaskCompletion(task.id, false) : task.completion;
   const metadata = input.metadata ? { ...task.metadata, ...input.metadata } : task.metadata;
   const db = getDb();
-  const shouldSignalTerminal = terminal && (!TERMINAL_TASK_STATUSES.has(task.status) || task.status !== next);
-  const shouldResolveTerminalAttention = next === 'queued'
+  const shouldDeliverTerminal = terminal && (!TERMINAL_TASK_STATUSES.has(task.status) || task.status !== next);
+  const shouldSupersedeTerminalDelivery = next === 'queued'
     && (task.status === 'failed' || task.status === 'lost');
-  let terminalSignalsCreated = false;
-  let terminalAttentionResolved = false;
-  let terminalOutboxSuperseded = false;
   const res = db.prepare(`
     UPDATE tasks SET
       status = ?, progress = ?, currentStep = ?, nextAction = ?, result = ?, error = ?,
@@ -1092,38 +1156,34 @@ function transitionTaskInTransaction(input: TransitionTaskInput): TransitionTask
     input.result === undefined ? task.result || null : input.result,
     input.error === undefined ? task.error || null : input.error,
     input.checkpointId === undefined ? task.checkpointId || null : input.checkpointId,
-    JSON.stringify(metadata), terminal ? task.heartbeatAt || now : now,
+    JSON.stringify(metadata), input.heartbeatAt === undefined
+      ? (terminal ? task.heartbeatAt || now : now)
+      : input.heartbeatAt,
     startedAt, completedAt, completion ? JSON.stringify(completion) : null,
     now, task.id, version,
   );
   if (Number(res.changes) !== 1) throw new Error('Task changed concurrently; reload and retry');
   insertEvent(task.id, 'status_changed', { from: task.status, to: next });
   const updated = getTask(task.id)!;
-  if (shouldResolveTerminalAttention) {
-    const resolvedAt = nowIso();
-    const resolved = db.prepare(`
-      UPDATE task_attention SET status = 'resolved', updatedAt = ?, resolvedAt = ?
-      WHERE taskId = ? AND status = 'open' AND dedupeKey LIKE 'terminal:%'
-    `).run(resolvedAt, resolvedAt, task.id);
-    terminalAttentionResolved = Number(resolved.changes) > 0;
-    if (terminalAttentionResolved) {
-      insertEvent(task.id, 'terminal_attention_resolved', { reason: 'task_retried' });
-    }
+  const approvalAttentionRemoved = next === 'waiting_for_approval'
+    ? false
+    : Number(db.prepare("DELETE FROM task_attention WHERE taskId = ? AND kind = 'approval'").run(task.id).changes) > 0;
+  if (shouldSupersedeTerminalDelivery) {
+    const supersededAt = nowIso();
     const superseded = db.prepare(`
       UPDATE task_outbox
       SET status = 'delivered', deliveredAt = ?, lastError = NULL, attempts = attempts + 1
       WHERE taskId = ? AND kind = 'task_terminal'
         AND status IN ('pending', 'failed', 'processing')
-    `).run(resolvedAt, task.id);
-    terminalOutboxSuperseded = Number(superseded.changes) > 0;
-    if (terminalOutboxSuperseded) {
+    `).run(supersededAt, task.id);
+    if (Number(superseded.changes) > 0) {
       insertEvent(task.id, 'terminal_delivery_superseded', { reason: 'task_retried' });
     }
   }
-  if (shouldSignalTerminal) terminalSignalsCreated = terminalSignals(updated, false);
+  if (shouldDeliverTerminal) enqueueTerminalDelivery(updated);
   return {
     task: updated,
-    attentionChanged: terminalSignalsCreated || terminalAttentionResolved || terminalOutboxSuperseded,
+    attentionChanged: approvalAttentionRemoved,
   };
 }
 
@@ -1179,7 +1239,7 @@ export function heartbeatTask(taskId: string, input: {
  * moved to running, but the process died before the matching runs row could be
  * inserted. Exact ids, staleness, active status, and run absence are all re-checked
  * under one write transaction so a late run insert cannot be mistaken as an
- * orphan. Normal terminal attention/outbox effects are retained.
+ * orphan. Normal terminal task state and originating-chat delivery are retained.
  */
 export function markStaleRunningTasksWithoutRunsLost(
   taskIds: readonly string[],
@@ -1609,7 +1669,8 @@ function applyCommandMutationsInTransaction(
   } else if (command.kind === 'retry') {
     const retryUpdate = getDb().prepare(`
       UPDATE tasks SET retryCount = retryCount + 1, result = NULL, error = NULL,
-        completion = NULL, version = version + 1, updatedAt = ?
+        completion = NULL, runId = NULL, heartbeatAt = NULL,
+        version = version + 1, updatedAt = ?
       WHERE id = ? AND version = ? AND status IN ('failed', 'lost') AND retryCount < maxRetries
     `).run(nowIso(), task.id, task.version);
     if (Number(retryUpdate.changes) !== 1) {
@@ -1622,6 +1683,7 @@ function applyCommandMutationsInTransaction(
       expectedVersion: retryable.version,
       result: null,
       error: null,
+      heartbeatAt: null,
     }).attentionChanged;
   } else if (command.kind === 'steer' && task.status === 'waiting_for_input') {
     attentionChanged ||= transitionTaskInTransaction({
@@ -1632,15 +1694,15 @@ function applyCommandMutationsInTransaction(
     }).attentionChanged;
   } else if (command.kind === 'approve' || command.kind === 'deny') {
     approvalId = cleanText(command.payload.approvalId, 200, true);
-    if (!getPendingApproval(approvalId)) throw new Error('Approval no longer exists or has expired');
-    if (task.status === 'waiting_for_approval') {
-      attentionChanged ||= transitionTaskInTransaction({
-        taskId: task.id,
-        status: 'running',
-        expectedVersion: task.version,
-        currentStep: command.kind === 'approve' ? 'Approved action continuing' : 'Denied action handled',
-      }).attentionChanged;
+    if (!findLiveApprovalForTask(task, approvalId)) {
+      throw new Error('Approval no longer exists, expired, or does not belong to this task');
     }
+    attentionChanged ||= transitionTaskInTransaction({
+      taskId: task.id,
+      status: 'running',
+      expectedVersion: task.version,
+      currentStep: command.kind === 'approve' ? 'Approved action continuing' : 'Denied action handled',
+    }).attentionChanged;
   }
 
   const parentSignal = runControlSignal(task, command.kind, instruction);
@@ -1735,9 +1797,23 @@ function applyTaskCommandInternal(
                 expectedVersion: task.version,
                 result: null,
                 error: null,
+                heartbeatAt: null,
               });
               recoveredTask = effects.task;
               recoveredAttentionChanged ||= effects.attentionChanged;
+            }
+            if (command.kind === 'retry') {
+              // Older builds could leave the previous run lease attached when
+              // a process died after applying all or half of a retry. Repair
+              // that legacy shape while finalizing the recovered command.
+              const clearedLease = db.prepare(`
+                UPDATE tasks SET runId = NULL, heartbeatAt = NULL
+                WHERE id = ? AND version = ?
+              `).run(recoveredTask.id, recoveredTask.version);
+              if (Number(clearedLease.changes) !== 1) {
+                throw new Error('Task retry lease changed during command recovery');
+              }
+              recoveredTask = getTask(recoveredTask.id)!;
             }
             const instruction = command.kind === 'steer'
               ? cleanText(command.payload.instruction, 8_000, true)
@@ -1828,17 +1904,6 @@ function applyTaskCommandInternal(
               kind: command.kind,
               reason: message.slice(0, 500),
             });
-            if (/Approval no longer exists/i.test(message)) {
-              upsertAttention({
-                taskId: task.id,
-                kind: 'warning',
-                severity: 'warning',
-                title: 'Approval expired',
-                body: 'This approval no longer exists or has already expired. No action was taken.',
-                dedupeKey: `approval-expired:${String(command.payload.approvalId || '')}`,
-              }, false);
-              attentionChanged = true;
-            }
             if (throwDeferredErrors) deferredError = error instanceof Error ? error : new Error(message);
           }
         }
@@ -1853,14 +1918,23 @@ function applyTaskCommandInternal(
 
   emitTaskChanges(attentionChanged);
   if (approvalToResolve && !resolveToolApproval(approvalToResolve.id, approvalToResolve.approved)) {
-    requestTaskAttention({
-      taskId: approvalToResolve.taskId,
-      kind: 'warning',
-      severity: 'warning',
-      title: 'Approval delivery was interrupted',
-      body: 'The decision was saved, but the original waiting process no longer exists.',
-      dedupeKey: `approval-delivery-interrupted:${approvalToResolve.id}`,
-    });
+    const message = 'Approval expired before the decision could be delivered; no action was taken';
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare("UPDATE task_commands SET status = 'rejected', appliedAt = ? WHERE id = ? AND status = 'applied'")
+        .run(nowIso(), id);
+      insertEvent(approvalToResolve.taskId, 'approval_delivery_rejected', {
+        commandId: id,
+        approvalId: approvalToResolve.id,
+        reason: message,
+      });
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
+      throw error;
+    }
+    resultRow = db.prepare('SELECT * FROM task_commands WHERE id = ?').get(id) as unknown as CommandRow;
+    if (throwDeferredErrors) deferredError = new Error(message);
   }
   if (deferredError) throw deferredError;
   return { ...rowToCommand(resultRow!), appliedNow };
@@ -2089,7 +2163,19 @@ export function taskIdForRun(runId: string): string {
 export function syncTaskFromRun(run: AgentRun): TaskRecord {
   const id = run.taskId ? assertTaskId(run.taskId) : taskIdForRun(run.id);
   const desired = mapRunStatus(run.status);
+  const attemptNo = Math.max(1, Number.isFinite(Number(run.attemptNo))
+    ? Math.floor(Number(run.attemptNo))
+    : 1);
   const existing = getTask(id);
+  // A task id is stable across retries, while every attempt receives a new
+  // run id. Fence stale projections before workspace roots, metadata, status,
+  // or any other derived task state can be mutated.
+  if (existing && (
+    (existing.runId !== undefined && existing.runId !== run.id)
+    || attemptNo < existing.retryCount + 1
+  )) {
+    return existing;
+  }
   if (!existing) {
     createTask({
       id,
@@ -2109,6 +2195,14 @@ export function syncTaskFromRun(run: AgentRun): TaskRecord {
     });
   }
   let current = getTask(id)!;
+  // Recheck after creation so a concurrent creator/assignment cannot turn a
+  // previously missing projection into permission for a stale run write.
+  if (
+    (current.runId !== undefined && current.runId !== run.id)
+    || attemptNo < current.retryCount + 1
+  ) {
+    return current;
+  }
   if (run.workspaceSnapshot && !current.workspaceRoots.some((root) => root.path === run.workspaceSnapshot)) {
     const roots = [
       ...current.workspaceRoots,
@@ -2141,24 +2235,14 @@ export function syncTaskFromRun(run: AgentRun): TaskRecord {
   if (desired === 'succeeded' && current.contract) {
     const evaluation = evaluateTaskCompletion(id, false);
     if (!evaluation.complete) {
-      const awaiting = transitionTask({
+      return transitionTask({
         taskId: id,
-        status: 'waiting_for_approval',
+        status: 'blocked',
         result: run.finalOutput || '',
-        currentStep: 'Awaiting completion evidence',
+        currentStep: 'Completion evidence is incomplete',
         nextAction: 'Record or review evidence against the completion contract',
         metadata: { sideEffects: run.sideEffects, agentName: run.agentName, model: run.model },
       });
-      requestTaskAttention({
-        taskId: id,
-        kind: 'approval',
-        severity: 'warning',
-        title: `${awaiting.title} needs verification`,
-        body: 'The work finished, but its completion contract is not yet proven. Review or record evidence before marking it complete.',
-        dedupeKey: 'completion-contract-unproven',
-        action: { taskId: id, href: `/tasks/${encodeURIComponent(id)}` },
-      });
-      return getTask(id)!;
     }
   }
   if (desired === current.status) {

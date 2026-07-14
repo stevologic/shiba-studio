@@ -30,6 +30,7 @@ const eslintConfig = defineConfig([
     "uploads/**",
     "terminals/**",
     "mcps/**",
+    "devvit/**",
     "pocs/**",
     ".tmp-*",
     "scripts/_shib*",

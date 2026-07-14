@@ -39,8 +39,31 @@ export interface GrokCliRunOptions {
   permissionMode?: 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan';
   /** Remove memory, subagents, web search, and ambient tool surfaces for scoped handoffs. */
   isolated?: boolean;
+  /** Per-chat automatic tool switch. False removes every CLI tool surface. */
+  toolsEnabled?: boolean;
   /** Additional non-secret environment entries for a scoped child process. */
   env?: Record<string, string>;
+}
+
+/** CLI flags that make `/tools off` a real boundary instead of prompt advice. */
+export function grokCliToolControlArgs(
+  opts: Pick<GrokCliRunOptions, 'toolsEnabled' | 'isolated'>,
+): string[] {
+  if (opts.toolsEnabled === false) {
+    // The CLI rejects an empty --tools value. Its documented order applies the
+    // denylist after the allowlist, so allowing then removing one known tool
+    // produces a valid, genuinely empty built-in tool set.
+    return [
+      '--tools', 'read_file',
+      '--disallowed-tools', 'read_file',
+      '--no-memory', '--no-subagents', '--disable-web-search',
+      // Permission denies are a second boundary for MCP/plugin surfaces that
+      // are not part of the built-in allowlist in some CLI versions.
+      '--deny', 'Bash', '--deny', 'Edit', '--deny', 'Write', '--deny', 'Read',
+      '--deny', 'Grep', '--deny', 'WebFetch', '--deny', 'MCPTool',
+    ];
+  }
+  return opts.isolated ? ['--no-memory', '--no-subagents', '--disable-web-search'] : [];
 }
 
 let cachedStatus: { at: number; value: GrokCliStatus } | null = null;
@@ -277,7 +300,7 @@ function buildCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): string[] {
     '--output-format', opts.outputFormat || 'plain',
     '--permission-mode', opts.permissionMode || 'acceptEdits',
   ];
-  if (opts.isolated) args.push('--no-memory', '--no-subagents', '--disable-web-search');
+  args.push(...grokCliToolControlArgs(opts));
   if (opts.cwd) args.push('--cwd', opts.cwd);
   const model = grokCliModelId(opts.model);
   if (model) args.push('-m', model);

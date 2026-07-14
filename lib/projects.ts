@@ -27,6 +27,7 @@ import {
   removeUploadMeta,
 } from './workspace';
 import { quarantineManagedPath, recordManagedStorageIssue } from './managed-storage-quarantine';
+import { ownershipStoreFencePath, withStoreFileLock } from './store-file-lock';
 
 const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | undefined;
 if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
@@ -36,13 +37,12 @@ const DATA_DIR = dataDir();
 const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
 const PROJECT_FILES_ROOT = path.join(DATA_DIR, 'project-files');
 const MAX_UPLOAD_BYTES = 48 * 1024 * 1024;
-const projectsLockGlobal = globalThis as typeof globalThis & { __shibaProjectsWriteChain?: Promise<unknown> };
 
 function withProjectsWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = projectsLockGlobal.__shibaProjectsWriteChain ?? Promise.resolve();
-  const run = previous.then(fn, fn);
-  projectsLockGlobal.__shibaProjectsWriteChain = run.then(() => undefined, () => undefined);
-  return run;
+  return withStoreFileLock(
+    ownershipStoreFencePath(DATA_DIR),
+    () => withStoreFileLock(PROJECTS_FILE, fn),
+  );
 }
 
 async function ensureData() {
@@ -153,19 +153,42 @@ export async function updateProject(
   id: string,
   patch: Partial<Pick<Project, 'name' | 'description' | 'instructions' | 'workspacePath' | 'defaultAgentId'>>,
 ): Promise<Project> {
-  return withProjectsWriteLock(async () => {
-  const projects = await loadStore();
-  const idx = projects.findIndex((p) => p.id === id);
-  if (idx < 0) throw new Error('Project not found');
-  projects[idx] = {
-    ...projects[idx],
-    ...patch,
-    updatedAt: new Date().toISOString(),
-  };
-  await saveStore(projects);
-  indexProjectContext(projects[idx]);
-  return projects[idx];
+  const mutate = () => withProjectsWriteLock(async () => {
+    const projects = await loadStore();
+    const idx = projects.findIndex((p) => p.id === id);
+    if (idx < 0) throw new Error('Project not found');
+    const mutablePatch = { ...patch };
+    if (Object.prototype.hasOwnProperty.call(mutablePatch, 'workspacePath')) {
+      const requested = mutablePatch.workspacePath?.trim() || '';
+      if (requested) {
+        const resolved = path.resolve(/* turbopackIgnore: true */ requested);
+        const stat = await fs.lstat(resolved).catch(() => null);
+        if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+          throw new Error('Project workspace must be an existing real directory');
+        }
+        mutablePatch.workspacePath = resolved;
+      } else {
+        mutablePatch.workspacePath = '';
+      }
+    }
+    projects[idx] = {
+      ...projects[idx],
+      ...mutablePatch,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveStore(projects);
+    indexProjectContext(projects[idx]);
+    return projects[idx];
   });
+  if (!Object.prototype.hasOwnProperty.call(patch, 'workspacePath')) return mutate();
+
+  const { withIntegrityMutation } = await import('./integrity-coordinator');
+  const { result } = await withIntegrityMutation(
+    `project workspace update:${id}`,
+    mutate,
+    { includeWorktrees: true, includeExternalCleanup: false },
+  );
+  return result;
 }
 
 export async function deleteProject(id: string): Promise<void> {
@@ -185,7 +208,7 @@ export async function deleteProject(id: string): Promise<void> {
       await cleanupDeletedProjectStorage(project).catch((error) => {
         console.error('[shiba-studio] deferred deleted-project storage cleanup', error);
       });
-    }));
+    }), { includeWorktrees: true, includeExternalCleanup: false });
 }
 
 /** Clear a dangling default without overwriting a concurrent project edit. */
@@ -201,6 +224,36 @@ export async function clearProjectDefaultAgentIfMatches(
     const project = projects[idx];
     if (project.defaultAgentId !== expectedAgentId || project.updatedAt !== expectedUpdatedAt) return false;
     project.defaultAgentId = '';
+    project.updatedAt = new Date().toISOString();
+    await saveStore(projects);
+    indexProjectContext(project);
+    return true;
+  });
+}
+
+/** Clear a project workspace after its app-owned worktree was reclaimed,
+ * without overwriting a concurrent project edit. */
+export async function clearProjectWorkspaceIfMatches(
+  id: string,
+  expectedWorkspacePath: string,
+  expectedUpdatedAt: string,
+): Promise<boolean> {
+  return withProjectsWriteLock(async () => {
+    const projects = await loadStore();
+    const idx = projects.findIndex((project) => project.id === id);
+    if (idx < 0) return false;
+    const project = projects[idx];
+    const current = project.workspacePath?.trim() || '';
+    const expected = expectedWorkspacePath.trim();
+    const same = current && expected && (
+      process.platform === 'win32'
+        ? path.resolve(/* turbopackIgnore: true */ current).toLowerCase()
+          === path.resolve(/* turbopackIgnore: true */ expected).toLowerCase()
+        : path.resolve(/* turbopackIgnore: true */ current)
+          === path.resolve(/* turbopackIgnore: true */ expected)
+    );
+    if (!same || project.updatedAt !== expectedUpdatedAt) return false;
+    project.workspacePath = '';
     project.updatedAt = new Date().toISOString();
     await saveStore(projects);
     indexProjectContext(project);

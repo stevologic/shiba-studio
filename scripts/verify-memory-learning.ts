@@ -30,7 +30,7 @@ async function main() {
 
   const agentFixture = (id: string, name: string) => normalizeAgent({
     id, name, model: 'local:test',
-    workspace: { path: '.', useWorktree: false }, integrations: {}, peers: [], schedules: [],
+    workspace: { path: '.', useWorktree: false }, integrations: {}, peers: [],
     learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   });
@@ -134,11 +134,14 @@ async function main() {
   assert(parseSlashCommand('/commands')?.name === 'help', 'hidden help alias resolves exactly');
   const gitParsed = parseSlashCommand('/git diff --staged');
   assert(gitParsed?.name === 'git' && gitParsed.args === 'diff --staged', 'git family preserves subcommand arguments');
+  const toolsParsed = parseSlashCommand('/TOOLS OFF');
+  assert(toolsParsed?.name === 'tools' && toolsParsed.args === 'OFF', '/tools preserves its argument and parses case-insensitively');
   assert(slashCommandMatches('/git d').some((command) => command.id === 'git-diff'), 'autocomplete resolves nested subcommands');
+  assert(slashCommandMatches('/too')[0]?.id === 'tools', 'autocomplete exposes the tools command');
   assert(slashCommandMatches('/memories')[0]?.id === 'memories', 'exact command prefixes outrank fuzzy description matches');
   assert(toolNeedsApproval('memory_forget', 'ask'), 'memory deletion honors ask-before-act approval');
   const help = renderChatCommandHelp();
-  for (const command of ['/task', '/memories', '/forget', '/git pull', '/agent']) assert(help.includes(command), `generated help includes ${command}`);
+  for (const command of ['/task', '/memories', '/forget', '/git pull', '/agent', '/tools on\\|off']) assert(help.includes(command), `generated help includes ${command}`);
   const chatPanelSource = await fs.readFile(path.join(process.cwd(), 'components', 'grok-chat-panel.tsx'), 'utf8');
   const modelCommandStart = chatPanelSource.indexOf("if (parsed.name === 'model')");
   const selectedAgentGuard = chatPanelSource.indexOf('if (selectedAgent)', modelCommandStart);

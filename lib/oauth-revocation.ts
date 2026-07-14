@@ -10,14 +10,14 @@ function ensureSchema(): void {
   `);
 }
 
-export function currentOAuthGeneration(provider: 'xai' | 'reddit'): number {
+export function currentOAuthGeneration(provider: 'xai'): number {
   ensureSchema();
   const row = getDb().prepare('SELECT generation FROM oauth_generations WHERE provider = ?')
     .get(provider) as { generation: number } | undefined;
   return Number(row?.generation) || 0;
 }
 
-export function advanceOAuthGeneration(provider: 'xai' | 'reddit'): number {
+export function advanceOAuthGeneration(provider: 'xai'): number {
   ensureSchema();
   const now = new Date().toISOString();
   const row = getDb().prepare(`

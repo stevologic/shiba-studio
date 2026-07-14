@@ -56,18 +56,14 @@ async function main() {
     assert(raw.includes('enc:v1:'), 'encrypted MCP store should contain sealed values');
 
     const slackAppToken = 'xapp-slack-secret-regression';
-    const redditClientSecret = 'reddit-client-secret-regression';
-    const redditAccessToken = 'reddit-access-token-regression';
-    const redditRefreshToken = 'reddit-refresh-token-regression';
+    const redditDevvitToken = 'devvit_at_reddit-token-regression';
+    const redditDevvitEndpoint = 'https://shiba-reddit-external.devvit.net';
     await persistence.saveConfig({
       integrations: {
         slack: { token: 'xoxb-slack-secret-regression', appToken: slackAppToken },
         reddit: {
-          clientId: 'reddit-client-id-regression',
-          clientSecret: redditClientSecret,
-          accessToken: redditAccessToken,
-          refreshToken: redditRefreshToken,
-          username: 'shiba_verify',
+          devvitEndpoint: redditDevvitEndpoint,
+          devvitAppToken: redditDevvitToken,
         },
       },
     });
@@ -88,14 +84,11 @@ async function main() {
           mentionAgentId: 'unused-agent-override-discord-target',
         },
         reddit: {
-          clientId: 'reddit-agent-client-id',
-          clientSecret: redditClientSecret,
-          accessToken: redditAccessToken,
-          refreshToken: redditRefreshToken,
+          devvitEndpoint: redditDevvitEndpoint,
+          devvitAppToken: redditDevvitToken,
         },
       },
       peers: [],
-      schedules: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -107,30 +100,76 @@ async function main() {
     assert(!agentsRaw.includes('unused-agent-override-slack-target'));
     assert(!agentsRaw.includes('unused-agent-override-discord-target'),
       'global-listener mention routing must not persist in per-agent credential overrides');
-    for (const [secret, label] of [
-      [redditClientSecret, 'Reddit client secret'],
-      [redditAccessToken, 'Reddit access token'],
-      [redditRefreshToken, 'Reddit refresh token'],
-    ] as const) {
-      assert(!configRaw.includes(secret), `global ${label} must be encrypted at rest`);
-      assert(!agentsRaw.includes(secret), `agent ${label} must be encrypted at rest`);
-    }
+    assert(!configRaw.includes(redditDevvitToken), 'global Reddit Devvit app token must be encrypted at rest');
+    assert(!agentsRaw.includes(redditDevvitToken), 'agent Reddit Devvit app token must be encrypted at rest');
+    assert(configRaw.includes(redditDevvitEndpoint), 'the non-secret Reddit Devvit endpoint remains readable at rest');
     const agentsApi = await import('../app/api/agents/route');
-    const safeAgents = await agentsApi.GET().then((response) => response.json()) as { agents: Array<{ id: string; integrationOverrides?: { reddit?: { refreshToken?: string } } }> };
-    const exposedRefresh = safeAgents.agents.find((item) => item.id === 'secret-agent')?.integrationOverrides?.reddit?.refreshToken;
-    assert(exposedRefresh && exposedRefresh !== redditRefreshToken, 'agent API must mask per-agent Reddit refresh tokens');
+    const safeAgents = await agentsApi.GET().then((response) => response.json()) as { agents: Array<{ id: string; integrationOverrides?: { reddit?: { devvitAppToken?: string } } }> };
+    const exposedToken = safeAgents.agents.find((item) => item.id === 'secret-agent')?.integrationOverrides?.reddit?.devvitAppToken;
+    assert(exposedToken && exposedToken !== redditDevvitToken, 'agent API must mask per-agent Reddit Devvit tokens');
 
     const agentsPath = path.join(process.env.SHIBA_DATA_DIR, 'agents.json');
     const legacyAgents = JSON.parse(await fs.readFile(agentsPath, 'utf8')) as Array<{
-      integrationOverrides?: { slack?: Record<string, unknown> };
+      integrationOverrides?: {
+        slack?: Record<string, unknown>;
+        reddit?: Record<string, unknown>;
+      };
     }>;
     legacyAgents[0].integrationOverrides ||= {};
     legacyAgents[0].integrationOverrides.slack ||= {};
     legacyAgents[0].integrationOverrides.slack.mentionAgentId = 'legacy-unused-mention-target';
+    legacyAgents[0].integrationOverrides.reddit ||= {};
+    Object.assign(legacyAgents[0].integrationOverrides.reddit, {
+      clientId: 'legacy-reddit-client-id',
+      clientSecret: 'legacy-reddit-client-secret',
+      accessToken: 'legacy-reddit-access-token',
+      refreshToken: 'legacy-reddit-refresh-token',
+      tokenExpiry: new Date(0).toISOString(),
+      username: 'legacy-reddit-user',
+      userId: 'legacy-reddit-user-id',
+      scopes: ['identity', 'read', 'submit'],
+      userAgent: 'legacy-reddit-user-agent',
+    });
     await fs.writeFile(agentsPath, `${JSON.stringify(legacyAgents, null, 2)}\n`, 'utf8');
-    assert.equal((await persistence.loadAgents())[0].integrationOverrides?.slack?.mentionAgentId, undefined);
-    assert(!(await fs.readFile(agentsPath, 'utf8')).includes('legacy-unused-mention-target'),
+    const migratedAgent = (await persistence.loadAgents())[0];
+    assert.equal(migratedAgent.integrationOverrides?.slack?.mentionAgentId, undefined);
+    assert.deepEqual(Object.keys(migratedAgent.integrationOverrides?.reddit || {}).sort(), [
+      'devvitAppToken',
+      'devvitEndpoint',
+    ]);
+    const migratedAgentsRaw = await fs.readFile(agentsPath, 'utf8');
+    assert(!migratedAgentsRaw.includes('legacy-unused-mention-target'),
       'legacy unused mention references are removed from disk on load');
+    assert(!migratedAgentsRaw.includes('legacy-reddit-refresh-token'),
+      'legacy per-agent Reddit OAuth data is removed from disk on load');
+
+    const redditConfigPath = path.join(process.env.SHIBA_DATA_DIR, 'config.json');
+    const legacyConfig = JSON.parse(await fs.readFile(redditConfigPath, 'utf8')) as {
+      integrations: { reddit: Record<string, unknown> };
+    };
+    Object.assign(legacyConfig.integrations.reddit, {
+      clientId: 'legacy-global-reddit-client-id',
+      clientSecret: 'legacy-global-reddit-client-secret',
+      accessToken: 'legacy-global-reddit-access-token',
+      refreshToken: 'legacy-global-reddit-refresh-token',
+      tokenExpiry: new Date(0).toISOString(),
+      username: 'legacy-global-reddit-user',
+      userId: 'legacy-global-reddit-user-id',
+      scopes: ['identity', 'read', 'submit'],
+      userAgent: 'legacy-global-reddit-user-agent',
+    });
+    await fs.writeFile(redditConfigPath, `${JSON.stringify(legacyConfig, null, 2)}\n`, 'utf8');
+    const migratedConfig = await persistence.loadConfig();
+    assert.deepEqual(Object.keys(migratedConfig.integrations.reddit || {}).sort(), [
+      'devvitAppToken',
+      'devvitEndpoint',
+    ]);
+    assert.equal(migratedConfig.integrations.reddit?.devvitAppToken, redditDevvitToken);
+    const migratedConfigRaw = await fs.readFile(redditConfigPath, 'utf8');
+    assert(!migratedConfigRaw.includes('legacy-global-reddit-refresh-token'),
+      'legacy global Reddit OAuth data is removed from disk on load');
+    assert(!migratedConfigRaw.includes(redditDevvitToken),
+      'the migrated Reddit Devvit token remains encrypted at rest');
 
     const legacySecret = 'legacy-plaintext-token';
     await fs.writeFile(mcpFile, JSON.stringify({
@@ -311,7 +350,6 @@ async function main() {
     await (await import('../lib/task-delivery')).stopTaskDeliveryPump();
     await (await import('../lib/agent-runs-store')).stopRunLeaseReconciler();
     await (await import('../lib/routines')).stopRoutineEngine();
-    await (await import('../lib/scheduler')).stopAllScheduledTasks();
     (await import('../lib/db')).closeDb();
     // Windows can release SQLite/child-process handles one tick after close.
     for (let attempt = 0; attempt < 5; attempt++) {

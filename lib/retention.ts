@@ -54,9 +54,6 @@ function pruneTerminalRuns(db: ShibaDb, cutoff: string): number {
     if (hasTable(db, 'task_run_controls')) {
       db.exec('DELETE FROM task_run_controls WHERE runId IN (SELECT id FROM retention_run_ids)');
     }
-    if (hasTable(db, 'schedule_execution_intents')) {
-      db.exec('UPDATE schedule_execution_intents SET runId = NULL WHERE runId IN (SELECT id FROM retention_run_ids)');
-    }
     if (hasTable(db, 'capability_packs')) {
       db.exec('UPDATE capability_packs SET lastSuccessRunId = NULL WHERE lastSuccessRunId IN (SELECT id FROM retention_run_ids)');
     }

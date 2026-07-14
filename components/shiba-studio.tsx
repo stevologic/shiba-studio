@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
-  CalendarClock, Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
-  CloudUpload, Command, Menu, Pencil, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
+  Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
+  CloudUpload, Command, Menu, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
   KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -68,18 +68,9 @@ import {
 } from '@/lib/chat-live-runs';
 import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '@/lib/types';
 import { isMaskedSecret, maskSecret } from '@/lib/secret-mask';
+import { redditOverridePairError } from '@/lib/integration-validation';
 import { THEME_IDENTITY } from '@/lib/theme';
 import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
-import {
-  SCHEDULE_PRESETS,
-  SchedulePresetId,
-  describeCron,
-  enrichScheduleForForm,
-  defaultScheduleEntry,
-  presetToCron,
-  schedulesForSave,
-} from '@/lib/schedule-presets';
-import { estimateCronRunsPerDay, SCHEDULE_RUNS_PER_DAY_WARN } from '@/lib/cron-estimate';
 import { AGENT_INTEGRATION_IDS, INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/integration-catalog';
 import { modelDisplayName, parseModelRef, providerLabel, providerTitle, type ModelProvider } from '@/lib/model-providers';
 import { resolveProjectWorkspace } from '@/lib/project-types';
@@ -115,11 +106,8 @@ import {
 } from '@/lib/client-json';
 import {
   getCachedIntegrationCreds,
-  getCachedRedditOAuthStatus,
   setCachedIntegrationCreds,
-  setCachedRedditOAuthStatus,
   type IntegrationCredsMap,
-  type RedditOAuthStatus,
 } from '@/lib/integrations-ui-store';
 import {
   getProvidersUiSnapshot,
@@ -248,7 +236,6 @@ function IntegrationIcon({ id, size = 'md' }: { id: string; size?: 'sm' | 'md' |
 
 const OAUTH_POLL_MS = 2000;
 const OAUTH_POLL_MAX_MS = 5 * 60_000;
-const SCHEDULED_RUNS_URL = '/api/runs?scheduledOnly=1&limit=200';
 const APP_VERSION = pkg.version;
 const GIT_COMMIT_FALLBACK = process.env.NEXT_PUBLIC_GIT_COMMIT || 'unreleased';
 const DOGE_DONATION_ADDRESS = 'DTW2M5oEW97WbmYJRM71qD7uE6xfJs1MUK';
@@ -333,12 +320,8 @@ const AGENT_OVERRIDE_FIELDS: Record<string, Array<{ key: string; label: string; 
     { key: 'accessToken', label: 'Access Token' }, { key: 'accessTokenSecret', label: 'Access Token Secret', secret: true },
   ],
   reddit: [
-    { key: 'clientId', label: 'OAuth Client ID' },
-    { key: 'clientSecret', label: 'OAuth Client Secret', secret: true },
-    { key: 'accessToken', label: 'OAuth Access Token', secret: true },
-    { key: 'refreshToken', label: 'OAuth Refresh Token', secret: true },
-    { key: 'tokenExpiry', label: 'Access-token expiry (ISO timestamp)' },
-    { key: 'userAgent', label: 'Identifying User-Agent' },
+    { key: 'devvitEndpoint', label: 'Devvit external endpoint origin' },
+    { key: 'devvitAppToken', label: 'Devvit managed app token', secret: true },
   ],
   obsidian: [{ key: 'restApiUrl', label: 'REST API URL' }, { key: 'restApiKey', label: 'REST API key', secret: true }, { key: 'vaultPath', label: 'Vault path (local mode)' }],
   googledrive: [{ key: 'accessToken', label: 'OAuth access token', secret: true }, { key: 'serviceAccountJson', label: 'Service account JSON', secret: true }],
@@ -379,53 +362,16 @@ export default function ShibaStudio() {
   // (a popup's own window.close() can be blocked after cross-origin hops).
   const oauthPopupRef = useRef<Window | null>(null);
   const drivePopupRef = useRef<Window | null>(null);
-  const redditPopupRef = useRef<Window | null>(null);
   const [driveStarting, setDriveStarting] = useState(false);
-  const [redditStarting, setRedditStarting] = useState(false);
-  const [redditStatus, setRedditStatus] = useState<RedditOAuthStatus | null>(
-    () => getCachedRedditOAuthStatus(),
-  );
   // Drive's Advanced (one-time OAuth client setup) — collapsed by default;
   // the Sign-in button opens it only if no client is configured yet.
   const [driveAdvancedOpen, setDriveAdvancedOpen] = useState(false);
-  const [redditAdvancedOpen, setRedditAdvancedOpen] = useState(false);
   // App origin for OAuth redirect URIs (SSR-safe — filled in after mount).
   const [appOrigin, setAppOrigin] = useState('');
   // Client-only so the Chat nav link points at the last session after hydrate
   // (avoids always linking bare `/chat`, which remounts and double-loads).
   const [chatNavHref, setChatNavHref] = useState('/chat');
   useEffect(() => { setAppOrigin(window.location.origin); }, []);
-
-  const refreshRedditStatus = useCallback(async (): Promise<RedditOAuthStatus | null> => {
-    try {
-      const data = await loadClientJson<any>('/api/reddit-oauth/status', { maxAgeMs: 5_000 });
-      const payload = data.status && typeof data.status === 'object'
-        ? { ...data, ...data.status }
-        : data;
-      const scopes = Array.isArray(payload.scopes)
-        ? payload.scopes.filter((scope: unknown): scope is string => typeof scope === 'string')
-        : typeof payload.scopes === 'string'
-          ? payload.scopes.split(/\s+/).filter(Boolean)
-          : [];
-      const next: RedditOAuthStatus = {
-        connected: !!payload.connected,
-        expired: !!payload.expired,
-        username: typeof payload.username === 'string' ? payload.username : undefined,
-        userId: typeof payload.userId === 'string' ? payload.userId : undefined,
-        scopes,
-        expiresAt: typeof payload.expiresAt === 'string' ? payload.expiresAt : undefined,
-        clientReady: !!payload.clientReady,
-        bundledClient: !!payload.bundledClient,
-        error: typeof payload.error === 'string' ? payload.error : undefined,
-      };
-      setCachedRedditOAuthStatus(next);
-      setRedditStatus(next);
-      return next;
-    } catch {
-      // Preserve the last server-confirmed state during a transient request error.
-      return null;
-    }
-  }, []);
 
   useEffect(() => {
     const last = readLastChatSessionId();
@@ -544,60 +490,9 @@ export default function ShibaStudio() {
   // message listener on every render.
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleRedditConnected = useCallback(async () => {
-    try { redditPopupRef.current?.close(); } catch { /* already closed */ }
-    redditPopupRef.current = null;
-    setRedditStarting(false);
-    invalidateClientJson('/api/config');
-    invalidateClientJson('/api/integrations');
-    invalidateClientJson('/api/reddit-oauth/status');
-    await loadAll(['config']);
-
-    let liveCheck: { ok?: boolean; username?: string; error?: string } | null = null;
-    try {
-      const res = await fetch('/api/integrations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'test', which: 'reddit' }),
-      });
-      liveCheck = await res.json() as { ok?: boolean; username?: string; error?: string };
-      setIntTest((current: Record<string, unknown>) => ({ ...current, reddit: liveCheck }));
-    } catch {
-      // The durable OAuth status below still reflects a successful callback.
-    }
-
-    const status = await refreshRedditStatus();
-    const username = liveCheck?.username || status?.username;
-    if (liveCheck?.ok) {
-      toast.success(`Reddit connected${username ? ` as u/${username}` : ''}`);
-    } else {
-      toast.warning('Reddit sign-in completed, but the live connection check did not finish.');
-    }
-    await loadNavStats();
-  // `loadAll` / `loadNavStats` are intentionally omitted: they are shell-local
-  // functions recreated per render, while this callback must remain stable for
-  // the postMessage and callback-query effects below.
-  }, [refreshRedditStatus]); // eslint-disable-line react-hooks/exhaustive-deps
-
   useEffect(() => {
     return () => stopOAuthPolling();
   }, [stopOAuthPolling]);
-
-  // A cancelled/closed Reddit consent popup must not leave the sign-in button
-  // disabled until the entire shell is reloaded.
-  useEffect(() => {
-    if (!redditStarting) return;
-    const timer = window.setInterval(() => {
-      const popup = redditPopupRef.current;
-      // `null` also means the browser blocked the popup; in that branch the
-      // start handler intentionally keeps working and falls back to same-tab
-      // navigation, so only an actual popup that was closed cancels loading.
-      if (!popup || !popup.closed) return;
-      redditPopupRef.current = null;
-      setRedditStarting(false);
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, [redditStarting]);
 
   // The OAuth popup's callback page announces success the instant tokens are
   // stored — no waiting on the status poll (which stays as the fallback).
@@ -609,26 +504,14 @@ export default function ShibaStudio() {
       if (e.origin !== window.location.origin && !loopback) return;
       if (e.data === 'shiba-oauth:connected') void handleOAuthConnected();
       else if (e.data === 'shiba-drive:connected') void handleDriveConnected();
-      else if (e.data === 'shiba-reddit:connected' && e.origin === window.location.origin) void handleRedditConnected();
-      else if (e.data === 'shiba-reddit:error' && e.origin === window.location.origin) {
-        try { redditPopupRef.current?.close(); } catch { /* already closed */ }
-        redditPopupRef.current = null;
-        setRedditStarting(false);
-        toast.error('Reddit sign-in failed or was cancelled.');
-        void refreshRedditStatus();
-      }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [handleOAuthConnected, handleDriveConnected, handleRedditConnected, refreshRedditStatus]);
+  }, [handleOAuthConnected, handleDriveConnected]);
 
   useEffect(() => {
     if (tab === 'settings') void refreshOAuthStatus();
   }, [tab]);
-
-  useEffect(() => {
-    if (tab === 'integrations') void refreshRedditStatus();
-  }, [tab, refreshRedditStatus]);
 
   useEffect(() => {
     if (tab !== 'settings') return;
@@ -650,23 +533,6 @@ export default function ShibaStudio() {
     }
     router.replace('/settings');
   }, [tab, searchParams, router, handleOAuthConnected, handleDriveConnected]);
-
-  // Popup-blocked OAuth falls back to the current tab. Consume the callback
-  // query once, then restore the clean Capabilities URL.
-  useEffect(() => {
-    if (tab !== 'integrations') return;
-    const reddit = searchParams.get('reddit');
-    if (!reddit) return;
-    const message = searchParams.get('message') || undefined;
-    router.replace('/capabilities');
-    if (reddit === 'connected') {
-      void handleRedditConnected();
-    } else if (reddit === 'error') {
-      setRedditStarting(false);
-      toast.error(message || 'Reddit sign-in failed');
-      void refreshRedditStatus();
-    }
-  }, [tab, searchParams, router, handleRedditConnected, refreshRedditStatus]);
 
   // Seed from module cache so remounts/tab hops never show a false empty list.
   const [agents, setAgents] = useState<Agent[]>(() => getCachedAgents() ?? []);
@@ -746,11 +612,11 @@ export default function ShibaStudio() {
   // Agent form
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
-  const [highlightScheduleIdx, setHighlightScheduleIdx] = useState<number | null>(null);
   const [agentForm, setAgentForm] = useState<any>({
     name: 'Builder Agent', avatar: 'alien-01', model: 'grok-4', workspace: { path: '', useWorktree: true },
+    autoAcceptBoardAssignments: false,
     integrations: { ...EMPTY_INTEGRATION_SCOPE },
-    peers: [], skills: [], chatSkill: '', voiceId: '', schedules: [defaultScheduleEntry()], driveFolders: [],
+    peers: [], skills: [], chatSkill: '', voiceId: '', driveFolders: [],
     learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
   });
   // TTS voice catalog for agent editor (live xAI list when signed in).
@@ -791,6 +657,9 @@ export default function ShibaStudio() {
   const [intCreds, setIntCreds] = useState<any>(() => getCachedIntegrationCreds());
   const [intTest, setIntTest] = useState<any>({});
   const [intSaving, setIntSaving] = useState<Record<string, boolean>>({});
+  const [intTesting, setIntTesting] = useState<Record<string, boolean>>({});
+  const integrationDraftVersionsRef = useRef<Record<string, number>>({});
+  const integrationTestRequestsRef = useRef<Record<string, number>>({});
   const [expandedIntegration, setExpandedIntegration] = useState<string | null>(null);
 
   function integrationConfigured(id: string): boolean {
@@ -798,7 +667,7 @@ export default function ShibaStudio() {
     if (id === 'obsidian') return !!(creds.vaultPath?.trim() || creds.restApiUrl?.trim());
     if (id === 'linear') return !!creds.apiKey?.trim();
     if (id === 'jira') return !!(creds.baseUrl?.trim() && creds.email?.trim() && creds.apiToken?.trim());
-    if (id === 'reddit') return !!(creds.clientId?.trim() && creds.clientSecret?.trim());
+    if (id === 'reddit') return !!(creds.devvitEndpoint?.trim() && creds.devvitAppToken?.trim());
     return Object.entries(creds).some(([k, v]) => k !== 'mode' && typeof v === 'string' && v.trim().length > 0);
   }
   const [folderBrowseFor, setFolderBrowseFor] = useState<'obsidian' | 'workspace' | 'mcp' | null>(null);
@@ -1448,12 +1317,37 @@ export default function ShibaStudio() {
   async function rerunFromDetail() {
     const run = runDetail;
     if (!run) return;
+    if (run.scheduleId) {
+      try {
+        const response = await fetch(`/api/routines/${encodeURIComponent(run.scheduleId)}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dedupeKey: `retry:${run.id}:${crypto.randomUUID()}`,
+            payload: { retryOfRunId: run.id },
+          }),
+        });
+        if (response.ok) {
+          closeRunDetail();
+          navigateToTab('automations');
+          toast.success('Automation retry queued');
+          return;
+        }
+        if (response.status !== 404) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Could not queue the Automation retry');
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not queue the Automation retry');
+        return;
+      }
+    }
     const agent = agents.find((a) => a.id === run.agentId) || agents.find((a) => a.name === run.agentName);
     if (!agent) { toast.error('The agent for this run no longer exists.'); return; }
     const prompt = (run.prompt || '').trim();
     if (!prompt) { toast.error('This run has no saved prompt to rerun.'); return; }
     closeRunDetail();
-    await executeAgentRun(agent, prompt, !!run.scheduleId, run.scheduleId || undefined);
+    await executeAgentRun(agent, prompt);
   }
 
   /** Ask a running run to stop. It ends at the next step boundary; the modal's
@@ -1550,24 +1444,6 @@ export default function ShibaStudio() {
 
   // "View answer" quick look on run rows (final output without the full trace)
   const [answerRun, setAnswerRun] = useState<RunSummaryLite | null>(null);
-  /** Schedules whose Run was just clicked — instant "running" UI on THAT row
-   *  until the SSE runs feed reports the real run (expires after 12s). Keyed by
-   *  schedule id so only the specific automation shows running, not the agent's
-   *  other schedules. */
-  const [justStartedRunScheds, setJustStartedRunScheds] = useState<Set<string>>(new Set());
-  function markScheduleRunJustStarted(scheduleId: string) {
-    if (!scheduleId) return;
-    setJustStartedRunScheds((current) => new Set(current).add(scheduleId));
-    window.setTimeout(() => {
-      setJustStartedRunScheds((current) => {
-        if (!current.has(scheduleId)) return current;
-        const next = new Set(current);
-        next.delete(scheduleId);
-        return next;
-      });
-    }, 12_000);
-  }
-
   // Full run-details modal (automations run log) — prompt, trace, outcome,
   // tools, skills, side effects in one place.
   const [runDetail, setRunDetail] = useState<AgentRun | null>(null);
@@ -1612,13 +1488,6 @@ export default function ShibaStudio() {
     } catch { /* keep the last snapshot on a transient error */ }
   }
 
-  /** Open the live status/trace for a running automation (its running run). */
-  function openRunningRun(scheduleId: string) {
-    const running = runs.find((r) => r.scheduleId === scheduleId && r.status === 'running');
-    if (running) { void openRunDetails(running.id); return; }
-    toast('This automation is starting — its trace will appear in a moment.');
-  }
-
   // While the run-details modal shows a still-executing run, poll it so the
   // status and trace update live (the runtime persists the trace each step).
   const runDetailId = runDetail?.id;
@@ -1629,56 +1498,7 @@ export default function ShibaStudio() {
     return () => window.clearInterval(t);
   }, [runDetailId, runDetailStatus]);
 
-  // Automations tab: what has actually run (scheduled executions), per agent
-  const [scheduledRuns, setScheduledRuns] = useState<RunSummaryLite[] | null>(null);
-  const scheduledRunsRequestRef = useRef<AbortController | null>(null);
-
-  async function refreshScheduledRuns(force = false) {
-    scheduledRunsRequestRef.current?.abort();
-    const request = new AbortController();
-    scheduledRunsRequestRef.current = request;
-    if (force) invalidateClientJson(SCHEDULED_RUNS_URL);
-    try {
-      const data = await loadClientJson<any>(SCHEDULED_RUNS_URL, { signal: request.signal });
-      if (scheduledRunsRequestRef.current === request && data.ok) setScheduledRuns(data.runs || []);
-    } catch (error) {
-      if (scheduledRunsRequestRef.current === request && !(error instanceof Error && error.name === 'AbortError')) {
-        setScheduledRuns([]);
-      }
-    } finally {
-      if (scheduledRunsRequestRef.current === request) scheduledRunsRequestRef.current = null;
-    }
-  }
-
-  useEffect(() => {
-    if (tab !== 'automations') return;
-    void refreshScheduledRuns();
-    return () => scheduledRunsRequestRef.current?.abort();
-  }, [tab]);
-
-  /** Create-automation form on the Automations page (no full agent editor). */
-  type NewAutomationForm = {
-    agentId: string;
-    instructions: string;
-    enabled: boolean;
-    _preset: SchedulePresetId;
-    _time: string;
-    _customCron: string;
-  };
-  const emptyNewAutomation = (): NewAutomationForm => ({
-    agentId: '',
-    instructions: '',
-    enabled: true,
-    _preset: 'every_30m',
-    _time: '09:00',
-    _customCron: '*/30 * * * *',
-  });
-  const [showNewAutomation, setShowNewAutomation] = useState(false);
-  const [newAutomation, setNewAutomation] = useState<NewAutomationForm>(emptyNewAutomation);
-  const [savingAutomation, setSavingAutomation] = useState(false);
-
   const mobileNavDialogRef = useDialogFocusScope<HTMLDivElement>(mobileNavOpen);
-  const automationDialogRef = useDialogFocusScope<HTMLDivElement>(showNewAutomation);
   const runDialogRef = useDialogFocusScope<HTMLDivElement>(showRunModal && !!runModalAgent);
   const runLogVisible = !!historyAgent && !(runDetail || runDetailLoading) && !showTraceModal && !answerRun;
   const runLogDialogRef = useDialogFocusScope<HTMLDivElement>(runLogVisible);
@@ -1687,70 +1507,6 @@ export default function ShibaStudio() {
   const runDetailVisible = !!(runDetail || runDetailLoading) && !showTraceModal;
   const runDetailDialogRef = useDialogFocusScope<HTMLDivElement>(runDetailVisible);
   const agentDialogRef = useDialogFocusScope<HTMLDivElement>(showAgentModal);
-
-  function openNewAutomationModal(preselectAgentId?: string) {
-    const preferred = preselectAgentId || agents[0]?.id || '';
-    setNewAutomation({
-      ...emptyNewAutomation(),
-      agentId: preferred,
-      instructions: preferred
-        ? `Scheduled work for ${agents.find((a) => a.id === preferred)?.name || 'agent'}.`
-        : '',
-    });
-    setShowNewAutomation(true);
-  }
-
-  async function createAutomationFromPage() {
-    const agent = agents.find((a) => a.id === newAutomation.agentId);
-    if (!agent) {
-      toast.error(agents.length === 0 ? 'Create an agent first (Agents page)' : 'Pick an agent for this automation');
-      return;
-    }
-    const instructions = newAutomation.instructions.trim();
-    if (!instructions) {
-      toast.error('Add instructions — what should the agent do when it runs?');
-      return;
-    }
-    const cron = presetToCron(
-      newAutomation._preset,
-      newAutomation._time,
-      newAutomation._customCron,
-    ).trim();
-    if (!cron) {
-      toast.error('Choose a valid schedule');
-      return;
-    }
-    setSavingAutomation(true);
-    try {
-      const entry = {
-        id: 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        enabled: !!newAutomation.enabled,
-        cron,
-        instructions,
-        description: instructions.slice(0, 80),
-      };
-      const existing = agentSchedules(agent);
-      const schedules = [...existing, entry];
-      const res = await fetch('/api/agents', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update',
-          agent: { ...agent, schedules, schedule: undefined },
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.error) throw new Error(data.error);
-      await refreshAgents();
-      await loadNavStats();
-      setShowNewAutomation(false);
-      setNewAutomation(emptyNewAutomation());
-      toast.success(`Automation added to ${agent.name}`);
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'Could not create automation');
-    }
-    setSavingAutomation(false);
-  }
 
   // Agents CRUD
   async function refreshAgents() {
@@ -1763,6 +1519,11 @@ export default function ShibaStudio() {
   }
 
   async function createOrUpdateAgent() {
+    const overrideError = redditOverridePairError(agentForm.integrationOverrides);
+    if (overrideError) {
+      toast.error(overrideError);
+      return;
+    }
     setLoading(true);
     try {
       // Empty string clears a previously saved agent voice (JSON omits undefined).
@@ -1770,20 +1531,22 @@ export default function ShibaStudio() {
       const payload = {
         ...agentForm,
         voiceId: voiceRaw,
-        schedules: schedulesForSave(agentForm.schedules || []),
+        autoAcceptBoardAssignments: agentForm.autoAcceptBoardAssignments === true,
       };
       const isEdit = !!editingAgent;
+      const requestAgent = (isEdit ? { ...editingAgent, ...payload } : payload) as Record<string, unknown>;
+      delete requestAgent.schedules;
+      delete requestAgent.schedule;
       const res = await fetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isEdit ? { action: 'update', agent: { ...editingAgent, ...payload } } : payload),
+        body: JSON.stringify(isEdit ? { action: 'update', agent: requestAgent } : requestAgent),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       toast.success(isEdit ? 'Agent updated' : 'Agent created');
       setShowAgentModal(false);
       setEditingAgent(null);
-      setHighlightScheduleIdx(null);
       const saved = data.agent as Agent;
       const nextAgents = isEdit
         ? agents.map((agent) => agent.id === saved.id ? saved : agent)
@@ -1806,6 +1569,7 @@ export default function ShibaStudio() {
       name: 'Code Agent ' + (agents.length + 1),
       avatar: ALIEN_AVATARS[agents.length % ALIEN_AVATARS.length].id,
       model: pickDefaultModel(),
+      autoAcceptBoardAssignments: false,
       workspace: { path: config?.defaultWorkspace || process.cwd?.() || '', useWorktree: true },
       integrations: { ...EMPTY_INTEGRATION_SCOPE },
       peers: [],
@@ -1813,7 +1577,6 @@ export default function ShibaStudio() {
       chatSkill: '',
       voiceId: '',
       learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
-      schedules: [enrichScheduleForForm({ ...defaultScheduleEntry(), instructions: 'Perform the scheduled task using your skills.' })],
     });
     setShowAgentModal(true);
   }
@@ -1829,6 +1592,7 @@ export default function ShibaStudio() {
       avatar: ALIEN_AVATARS[agents.length % ALIEN_AVATARS.length].id,
       model: pickDefaultModel(),
       description: project.description || `Agent for project: ${project.name}`,
+      autoAcceptBoardAssignments: false,
       workspace: { path: ws, useWorktree: true },
       integrations: { ...EMPTY_INTEGRATION_SCOPE },
       peers: [],
@@ -1836,86 +1600,18 @@ export default function ShibaStudio() {
       chatSkill: skill.slice(0, 4000),
       voiceId: '',
       learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
-      schedules: [enrichScheduleForForm({
-        ...defaultScheduleEntry(),
-        enabled: false,
-        instructions: `Advance the "${project.name}" project: explore the workspace, apply the project instructions, and implement the next clear step.`,
-      })],
     });
     navigateToTab('agents');
     setShowAgentModal(true);
     toast.success('Agent draft ready — review and save');
   }
 
-  function patchSchedule(idx: number, patch: Record<string, unknown>) {
-    const news = [...(agentForm.schedules || [])];
-    news[idx] = { ...news[idx], ...patch };
-    setAgentForm({ ...agentForm, schedules: news });
-  }
-
-  function onSchedulePresetChange(idx: number, presetId: SchedulePresetId) {
-    const sch = agentForm.schedules[idx];
-    const time = sch._time || '09:00';
-    const customCron = sch._customCron || sch.cron;
-    patchSchedule(idx, {
-      _preset: presetId,
-      cron: presetToCron(presetId, time, customCron),
-    });
-  }
-
-  function onScheduleTimeChange(idx: number, time: string) {
-    const sch = agentForm.schedules[idx];
-    const preset: SchedulePresetId = sch._preset || 'daily';
-    patchSchedule(idx, {
-      _time: time,
-      cron: presetToCron(preset, time, sch._customCron),
-    });
-  }
-
-  function agentSchedules(agent: Agent) {
-    return agent.schedules?.length
-      ? agent.schedules
-      : agent.schedule
-        ? [{ ...agent.schedule, id: 'legacy', instructions: agent.schedule.description || agent.description || 'Scheduled task' }]
-        : [];
-  }
-
-  function resolveScheduledPrompt(agent: Agent, scheduleIndex?: number) {
-    const scheds = agentSchedules(agent);
-    const entry =
-      scheduleIndex != null && scheds[scheduleIndex]
-        ? scheds[scheduleIndex]
-        : scheds.find((s) => s.enabled) || scheds[0];
-    const instructions = entry?.instructions?.trim();
-    return {
-      prompt: instructions || agent.description?.trim() || `Run scheduled task for ${agent.name}.`,
-      scheduleId: entry?.id,
-      scheduleInstructions: instructions,
-    };
-  }
-
-  function scheduleStats(agent: Agent) {
-    const scheds = agentSchedules(agent);
-    return {
-      configured: scheds.length,
-      active: scheds.filter((s) => s.enabled).length,
-    };
-  }
-
-  function formatScheduleSummary(agent: Agent): string {
-    const { configured, active } = scheduleStats(agent);
-    const scheduleWord = configured === 1 ? 'schedule' : 'schedules';
-    const sessionWord = active === 1 ? 'session' : 'sessions';
-    return `${configured} configured ${scheduleWord}, ${active} active ${sessionWord}`;
-  }
-
   function openEditAgent(a: Agent) {
     setEditingAgent(a);
-    const norm = { ...a };
+    const norm = { ...a } as Agent & Record<string, unknown>;
+    delete norm.schedules;
+    delete norm.schedule;
     if (!norm.skills) norm.skills = [];
-    if (!norm.schedules || norm.schedules.length === 0) {
-      norm.schedules = norm.schedule ? [{ id: 'legacy', enabled: norm.schedule.enabled, cron: norm.schedule.cron, instructions: norm.schedule.description || norm.description || 'Scheduled task' }] : [];
-    }
     setAgentForm({
       ...norm,
       avatar: resolveAgentAvatar(norm),
@@ -1925,7 +1621,6 @@ export default function ShibaStudio() {
       integrationOverrides: (norm as any).integrationOverrides ? JSON.parse(JSON.stringify((norm as any).integrationOverrides)) : {},
       driveFolders: [...((norm as any).driveFolders || [])],
       peers: [...(norm.peers || [])],
-      schedules: (norm.schedules || []).map((s: any) => enrichScheduleForForm(s)),
     });
     setDriveFolderOptions(null); // reset the picker; user loads on demand
     setShowAgentModal(true);
@@ -1935,23 +1630,21 @@ export default function ShibaStudio() {
    * Clone: open the create modal pre-filled from an existing agent so only the
    * one thing that differs (model, a scope, a skill) needs changing. Goes
    * through the CREATE path (editingAgent=null) so the server mints a fresh id
-   * — any stray id/timestamps in the form are ignored on create. Schedules are
-   * carried but disabled so the copy can't silently double an automation.
+   * — any stray id/timestamps in the form are ignored on create. Automations
+   * stay attached to the original agent and are managed separately.
    */
   function openCloneAgent(a: Agent) {
     setEditingAgent(null);
-    const norm = { ...a };
-    const srcSchedules = (norm.schedules && norm.schedules.length)
-      ? norm.schedules
-      : (norm.schedule
-        ? [{ id: 'legacy', enabled: norm.schedule.enabled, cron: norm.schedule.cron, instructions: norm.schedule.description || norm.description || 'Scheduled task' }]
-        : []);
+    const norm = { ...a } as Agent & Record<string, unknown>;
+    delete norm.schedules;
+    delete norm.schedule;
     setAgentForm({
       ...norm,
       id: undefined,
       createdAt: undefined,
       updatedAt: undefined,
       name: `${norm.name} (copy)`,
+      autoAcceptBoardAssignments: false,
       avatar: resolveAgentAvatar(norm),
       voiceId: typeof norm.voiceId === 'string' ? norm.voiceId : '',
       workspace: { ...norm.workspace },
@@ -1960,12 +1653,10 @@ export default function ShibaStudio() {
       driveFolders: [...(norm.driveFolders || [])],
       peers: [...(norm.peers || [])],
       skills: [...(norm.skills || [])],
-      schedules: srcSchedules.map((s, i) =>
-        enrichScheduleForForm({ ...s, id: `sch-clone-${i}-${Date.now()}`, enabled: false })),
     });
     setDriveFolderOptions(null);
     setShowAgentModal(true);
-    toast.success('Cloned — tweak what differs and Create. Schedules start paused.');
+    toast.success('Cloned — tweak what differs and Create.');
   }
 
   // Load Grok TTS voices when the agent editor opens (for default voice picker).
@@ -1984,25 +1675,6 @@ export default function ShibaStudio() {
     return () => { cancelled = true; };
   }, [showAgentModal]);
 
-  function openEditAgentSchedule(a: Agent, scheduleIndex = 0) {
-    openEditAgent(a);
-    setHighlightScheduleIdx(scheduleIndex);
-  }
-
-  useEffect(() => {
-    if (!showAgentModal || highlightScheduleIdx === null) return;
-    const scrollTimer = window.setTimeout(() => {
-      const target = document.getElementById(`agent-schedule-${highlightScheduleIdx}`)
-        || document.getElementById('agent-schedules-section');
-      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 120);
-    const clearTimer = window.setTimeout(() => setHighlightScheduleIdx(null), 2800);
-    return () => {
-      window.clearTimeout(scrollTimer);
-      window.clearTimeout(clearTimer);
-    };
-  }, [showAgentModal, highlightScheduleIdx]);
-
   async function deleteAgent(id: string) {
     const agent = agents.find((a) => a.id === id);
     const ok = await confirmDialog({
@@ -2020,9 +1692,6 @@ export default function ShibaStudio() {
 
   type RunAgentOptions = {
     prompt?: string;
-    /** Use configured schedule instructions — no popup (automations). */
-    useScheduleInstructions?: boolean;
-    scheduleIndex?: number;
   };
 
   function openRunModal(agent: Agent) {
@@ -2046,9 +1715,6 @@ export default function ShibaStudio() {
   async function executeAgentRun(
     agent: Agent,
     p: string,
-    scheduled: boolean,
-    scheduleId?: string,
-    scheduleInstructions?: string,
     scope?: ExecuteRunScope,
   ) {
     // Live traces render on the Automations page (runs + execution live there)
@@ -2062,9 +1728,7 @@ export default function ShibaStudio() {
     }]);
     setPreviewSelectedIdx(null);
     setPendingToolApproval(null);
-    // Ad-hoc runs pop the live trace; scheduled automations don't steal focus —
-    // their running indicator on the Automations page opens the trace on click.
-    if (!runProjectId && !scheduled) setShowTraceModal(true);
+    if (!runProjectId) setShowTraceModal(true);
 
     try {
       const res = await fetch('/api/execute/stream', {
@@ -2073,9 +1737,6 @@ export default function ShibaStudio() {
         body: JSON.stringify({
           agentId: agent.id,
           prompt: p,
-          scheduled,
-          scheduleId,
-          scheduleInstructions,
           projectId: runProjectId,
         }),
       });
@@ -2177,7 +1838,6 @@ export default function ShibaStudio() {
 
       if (!run) throw new Error('Agent run did not complete');
       invalidateClientJson('/api/runs');
-      invalidateClientJson(SCHEDULED_RUNS_URL);
       await refreshRuns();
       toast.success(`Agent "${agent.name}" finished — ${run.status}`);
     } catch (e: any) {
@@ -2194,28 +1854,13 @@ export default function ShibaStudio() {
 
   async function runAgent(agent: Agent, options?: RunAgentOptions | string) {
     const opts: RunAgentOptions = typeof options === 'string' ? { prompt: options } : (options || {});
-    let scheduled = false;
-    let scheduleId: string | undefined;
-    let scheduleInstructions: string | undefined;
-
-    let p = opts.prompt?.trim();
-    if (!p && opts.useScheduleInstructions) {
-      const resolved = resolveScheduledPrompt(agent, opts.scheduleIndex);
-      p = resolved.prompt;
-      scheduleId = resolved.scheduleId;
-      scheduleInstructions = resolved.scheduleInstructions;
-      scheduled = true;
-      if (!resolved.scheduleInstructions) {
-        toast.error(`${agent.name} has no schedule instructions — add a schedule first.`);
-        return;
-      }
-    }
+    const p = opts.prompt?.trim();
     if (!p) {
       openRunModal(agent);
       return;
     }
 
-    await executeAgentRun(agent, p, scheduled, scheduleId, scheduleInstructions);
+    await executeAgentRun(agent, p);
   }
 
   async function submitRunModal() {
@@ -2228,7 +1873,7 @@ export default function ShibaStudio() {
     setShowRunModal(false);
     const agent = runModalAgent;
     setRunModalAgent(null);
-    await executeAgentRun(agent, p, false);
+    await executeAgentRun(agent, p);
   }
 
   // Workspace explorer
@@ -2362,27 +2007,51 @@ export default function ShibaStudio() {
   }
 
   // Integrations
+  function invalidateIntegrationTest(which: string): number {
+    const nextVersion = (integrationDraftVersionsRef.current[which] || 0) + 1;
+    integrationDraftVersionsRef.current[which] = nextVersion;
+    integrationTestRequestsRef.current[which] = (integrationTestRequestsRef.current[which] || 0) + 1;
+    setIntTesting((current) => current[which] ? { ...current, [which]: false } : current);
+    setIntTest((current: Record<string, any>) => {
+      const previous = current[which];
+      if (!previous) return current;
+      // Keep discovery metadata such as Linear teams/Jira projects available,
+      // but never retain a successful connection badge after credentials edit.
+      return { ...current, [which]: { ...previous, ok: false, stale: true } };
+    });
+    return nextVersion;
+  }
+
   async function saveIntegration(which: string, options: { silent?: boolean } = {}): Promise<boolean> {
+    const draftVersion = invalidateIntegrationTest(which);
+    const credentialsSnapshot = intCreds;
     setIntSaving((s) => ({ ...s, [which]: true }));
     try {
       const res = await fetch('/api/integrations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'save', which, creds: intCreds }),
+        body: JSON.stringify({ action: 'save', which, creds: credentialsSnapshot }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      if (data.integrations) {
+      const draftIsCurrent = integrationDraftVersionsRef.current[which] === draftVersion;
+      if (data.integrations && draftIsCurrent) {
         const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
+        // The module cache represents server state, never unsaved/raw drafts.
         setCachedIntegrationCreds(merged);
-        setIntCreds(merged);
+        setIntCreds((current: IntegrationCredsMap) => ({ ...current, [which]: merged[which] || {} }));
+      }
+      if (!draftIsCurrent) {
+        if (!options.silent) toast('Credentials changed while saving. Save the latest values again.');
+        return false;
       }
       const label = getIntegrationMeta(which)?.label || which;
-      if (which === 'reddit') await refreshRedditStatus();
       if (!options.silent) toast.success(`${label} credentials saved`);
       return true;
     } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'Could not save integration credentials');
+      if (integrationDraftVersionsRef.current[which] === draftVersion) {
+        toast.error(e instanceof Error ? e.message : 'Could not save integration credentials');
+      }
       return false;
     } finally {
       setIntSaving((s) => ({ ...s, [which]: false }));
@@ -2394,7 +2063,7 @@ export default function ShibaStudio() {
     const ok = await confirmDialog({
       title: `Remove ${label} credentials?`,
       message: which === 'reddit'
-        ? 'The Reddit OAuth session is revoked and all saved Reddit app credentials are deleted from this machine. Agents lose access until you reconfigure it.'
+        ? 'The global Devvit endpoint and managed app token are deleted from this machine. Per-agent Reddit overrides remain configured, and the managed token remains valid until you revoke it in the app\'s Devvit Developer Settings.'
         : which === 'linear' || which === 'jira'
           ? 'Stored credentials are deleted from this machine. Existing issue links remain on Board, but sync is unavailable until you reconnect.'
           : 'Stored credentials for this integration are deleted from this machine. Agents lose access until you reconfigure it.',
@@ -2402,6 +2071,7 @@ export default function ShibaStudio() {
       danger: true,
     });
     if (!ok) return;
+    invalidateIntegrationTest(which);
     try {
       const res = await fetch('/api/integrations', {
         method: 'POST',
@@ -2416,7 +2086,6 @@ export default function ShibaStudio() {
         setIntCreds(merged);
       }
       setIntTest((t: any) => ({ ...t, [which]: undefined }));
-      if (which === 'reddit') await refreshRedditStatus();
       await loadNavStats();
       toast.success(`${label} credentials removed`);
     } catch (e: unknown) {
@@ -2425,11 +2094,41 @@ export default function ShibaStudio() {
   }
 
   async function testIntegration(which: string) {
-    const res = await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'test', which, creds: intCreds }) });
-    const data = await res.json();
-    setIntTest((t: any) => ({ ...t, [which]: data }));
-    if (which === 'reddit') await refreshRedditStatus();
-    if (data.ok) toast.success(`${which} connected`); else toast.error(`${which}: ${data.error || 'failed'}`);
+    const saved = await saveIntegration(which, { silent: true });
+    if (!saved) return;
+    const draftVersion = integrationDraftVersionsRef.current[which] || 0;
+    const requestId = (integrationTestRequestsRef.current[which] || 0) + 1;
+    integrationTestRequestsRef.current[which] = requestId;
+    setIntTesting((current) => ({ ...current, [which]: true }));
+    try {
+      // No browser-held credentials are sent here: the preceding save and this
+      // probe both use the same server-side, unmasked credential generation.
+      const res = await fetch('/api/integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test', which }),
+      });
+      const data = await res.json();
+      if (
+        integrationDraftVersionsRef.current[which] !== draftVersion
+        || integrationTestRequestsRef.current[which] !== requestId
+      ) return;
+      setIntTest((current: Record<string, any>) => ({ ...current, [which]: data }));
+      const label = getIntegrationMeta(which)?.label || which;
+      if (data.ok) toast.success(`${label} connected`);
+      else toast.error(`${label}: ${data.error || 'failed'}`);
+    } catch (error: unknown) {
+      if (
+        integrationDraftVersionsRef.current[which] === draftVersion
+        && integrationTestRequestsRef.current[which] === requestId
+      ) {
+        toast.error(error instanceof Error ? error.message : 'Connection test failed');
+      }
+    } finally {
+      if (integrationTestRequestsRef.current[which] === requestId) {
+        setIntTesting((current) => ({ ...current, [which]: false }));
+      }
+    }
   }
 
   // API Key
@@ -2624,7 +2323,7 @@ export default function ShibaStudio() {
 
   async function startGoogleDriveLogin() {
     // Persist the client id/secret first so the server can build the flow.
-    await saveIntegration('googledrive');
+    if (!await saveIntegration('googledrive')) return;
     setDriveStarting(true);
     const popup = window.open('about:blank', 'shiba-drive-oauth', 'width=520,height=760,menubar=no,toolbar=no,location=yes');
     drivePopupRef.current = popup;
@@ -2665,79 +2364,6 @@ export default function ShibaStudio() {
     invalidateClientJson('/api/config');
     invalidateClientJson('/api/integrations');
     await loadAll(['config']);
-  }
-
-  async function startRedditLogin() {
-    // Open synchronously with the click so browser popup blockers do not race
-    // the credential save and OAuth-start requests.
-    const popup = window.open('about:blank', 'shiba-reddit-oauth', 'width=520,height=760,menubar=no,toolbar=no,location=yes');
-    redditPopupRef.current = popup;
-    setRedditStarting(true);
-
-    const saved = await saveIntegration('reddit', { silent: true });
-    if (!saved) {
-      try { popup?.close(); } catch { /* already closed */ }
-      redditPopupRef.current = null;
-      setRedditStarting(false);
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/reddit-oauth/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ origin: window.location.origin }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok || !data.authorizeUrl) {
-        throw new Error(data.error || 'Failed to start Reddit sign-in');
-      }
-      if (popup && !popup.closed) {
-        popup.location.href = data.authorizeUrl;
-        popup.focus();
-        toast.success('Approve access in the Reddit popup — this page updates automatically.');
-      } else {
-        window.location.assign(data.authorizeUrl);
-        return;
-      }
-    } catch (error: unknown) {
-      try { popup?.close(); } catch { /* already closed */ }
-      redditPopupRef.current = null;
-      setRedditStarting(false);
-      toast.error(error instanceof Error ? error.message : 'Reddit sign-in failed');
-    }
-  }
-
-  async function disconnectReddit() {
-    const ok = await confirmDialog({
-      title: 'Disconnect Reddit?',
-      message: 'Shiba will revoke the Reddit session and remove its tokens. Your saved app client and User-Agent stay ready for reconnecting.',
-      confirmLabel: 'Disconnect',
-      danger: true,
-    });
-    if (!ok) return;
-
-    try {
-      const res = await fetch('/api/reddit-oauth/logout', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) throw new Error(data.error || 'Could not disconnect Reddit');
-      setIntTest((current: Record<string, unknown>) => ({ ...current, reddit: undefined }));
-      invalidateClientJson('/api/config');
-      invalidateClientJson('/api/integrations');
-      invalidateClientJson('/api/reddit-oauth/status');
-      await loadAll(['config']);
-      await refreshRedditStatus();
-      await loadNavStats();
-      toast.success('Reddit disconnected');
-      if (typeof data.warning === 'string') toast.warning(data.warning);
-      if (Array.isArray(data.warnings)) {
-        for (const warning of data.warnings) {
-          if (typeof warning === 'string') toast.warning(warning);
-        }
-      }
-    } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : 'Could not disconnect Reddit');
-    }
   }
 
   async function exchangeOAuthCallback() {
@@ -2936,11 +2562,13 @@ export default function ShibaStudio() {
 
   async function resolveToolApproval(approvalId: string, approved: boolean) {
     try {
-      await fetch('/api/execute/approve', {
+      const response = await fetch('/api/execute/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ approvalId, approved }),
       });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Approval failed');
       setPendingToolApproval(null);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Approval failed');
@@ -3175,42 +2803,6 @@ export default function ShibaStudio() {
     return () => { cancelled = true; };
   }, [tab]);
 
-  // Schedule run from UI
-  /** Flip one schedule entry's Active/Paused state — each cron row has its own pill. */
-  async function toggleScheduleEntry(agent: Agent, index: number) {
-    const current = agentSchedules(agent);
-    const nextEnabled = !current[index]?.enabled;
-    const scheds = current.map((s, i) => (i === index ? { ...s, enabled: nextEnabled } : s));
-    await fetch('/api/agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', agent: { ...agent, schedules: scheds, schedule: undefined } }),
-    });
-    await refreshAgents();
-    toast(nextEnabled ? 'Schedule activated' : 'Schedule paused');
-  }
-
-  /** Delete a single schedule entry; the agent and its other automations stay. */
-  async function deleteScheduleEntry(agent: Agent, index: number) {
-    const entry = agentSchedules(agent)[index];
-    const ok = await confirmDialog({
-      title: 'Delete this automation?',
-      message: `${describeCron(entry?.cron || '')} — ${agent.name} keeps any other schedules and can still be run manually.`,
-      confirmLabel: 'Delete automation',
-      danger: true,
-    });
-    if (!ok) return;
-    const scheds = agentSchedules(agent).filter((_, i) => i !== index);
-    await fetch('/api/agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update', agent: { ...agent, schedules: scheds, schedule: undefined } }),
-    });
-    await refreshAgents();
-    await loadNavStats();
-    toast('Automation deleted');
-  }
-
   // Seed a sample agent only after the first successful agents fetch returned [].
   // Never seed while agents are still loading (that looked like "no agents" and
   // could race a real list still on disk).
@@ -3249,10 +2841,10 @@ export default function ShibaStudio() {
           name: 'Explorer Agent',
           model: cfg?.defaultGrokModel || pickDefaultModel(),
           description: 'Default exploration + automation agent',
+          autoAcceptBoardAssignments: false,
           workspace: { path: cfg?.defaultWorkspace || '.', useWorktree: true },
           integrations: { ...EMPTY_INTEGRATION_SCOPE },
           peers: [],
-          schedule: { enabled: true, cron: '0 */2 * * *' },
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -3297,9 +2889,6 @@ export default function ShibaStudio() {
       if (shouldCatchUp('/api/runs', eventTs)) {
         void refreshRuns();
       }
-      if (tab === 'automations' && shouldCatchUp(SCHEDULED_RUNS_URL, eventTs)) {
-        void refreshScheduledRuns();
-      }
     };
     const refreshAgentSlice = (eventTs?: string) => {
       if (shouldCatchUp('/api/agents', eventTs)) {
@@ -3318,7 +2907,6 @@ export default function ShibaStudio() {
         // One callback catches up every slice owned by this subscription.
         const reconnectTs = new Date().toISOString();
         invalidateClientJson('/api/runs');
-        invalidateClientJson(SCHEDULED_RUNS_URL);
         invalidateClientJson('/api/agents');
         invalidateClientJson('/api/nav-stats');
         debounced('runs', () => refreshRunSlices(reconnectTs));
@@ -3330,7 +2918,6 @@ export default function ShibaStudio() {
         // Invalidate synchronously, before the debounce. If an older GET is
         // in flight, the coordinator discards it and performs one clean tail.
         invalidateClientJson('/api/runs');
-        invalidateClientJson(SCHEDULED_RUNS_URL);
         debounced('runs', () => refreshRunSlices(eventTs));
       } else if (type === 'agents') {
         invalidateClientJson('/api/agents');
@@ -3346,8 +2933,8 @@ export default function ShibaStudio() {
       unsubscribe();
       for (const t of Object.values(timers)) if (t) clearTimeout(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- helpers intentionally capture the active tab
-  }, [tab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one app-lifetime subscription; helpers read shared stores
+  }, []);
 
   // Keep sidebar/footer commit SHA in sync with the tree Node is actually serving.
   useEffect(() => {
@@ -3364,8 +2951,6 @@ export default function ShibaStudio() {
       clearInterval(t);
     };
   }, []);
-
-  const currentAgent = agents[0];
 
   const paletteCommands = useMemo((): CommandPaletteItem[] => {
     const nav: CommandPaletteItem[] = ([
@@ -3473,7 +3058,6 @@ export default function ShibaStudio() {
       } else if (showAgentModal) {
         setShowAgentModal(false);
         setEditingAgent(null);
-        setHighlightScheduleIdx(null);
       } else if (showRunModal) {
         setShowRunModal(false);
         setRunModalAgent(null);
@@ -3623,7 +3207,7 @@ export default function ShibaStudio() {
                 {!navCollapsed && item.stat != null && (
                   <span className={`nav-stat-badge nav-item-meta ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
                     item.id === 'dashboard' ? `${item.stat} active task(s)`
-                    : item.id === 'attention' ? `${item.stat} open attention item(s)`
+                    : item.id === 'attention' ? `${item.stat} pending approval(s)`
                     : item.id === 'chat' ? `${item.stat} open session(s)`
                     : item.id === 'projects' ? `${item.stat} project(s)`
                     : item.id === 'memories' ? `${item.stat} stored memory item(s)`
@@ -3973,8 +3557,7 @@ export default function ShibaStudio() {
                   <div className="grid grid-cols-2 gap-y-3 text-xs">
                     <div>Agents</div><div className="font-mono text-right">{agents.length}</div>
                     <div>Runs (stored)</div><div className="font-mono text-right">{runs.length}</div>
-                    {/* Counts enabled schedules (not agents) — matches the sidebar Automations badge. */}
-                    <div>Active schedules</div><div className="font-mono text-right">{agents.reduce((n, a: any) => n + ((a.schedules?.length ? a.schedules : (a.schedule ? [a.schedule] : [])).filter((s: any) => s.enabled).length), 0)}</div>
+                    <div>Active automations</div><div className="font-mono text-right">{navStats.automationsScheduled}</div>
                     <div>Connected</div><div className="font-mono text-right text-success">Grok only</div>
                   </div>
                   <div className="mt-4 pt-4 border-t border-default text-[11px] text-dim">{THEME_IDENTITY.sidebarTagline} — local agents with git worktrees.</div>
@@ -4123,10 +3706,10 @@ export default function ShibaStudio() {
                 <div className="min-w-0">
                   <div className="page-title">
                     Agents
-                    <InfoHint text="Agents run on this machine with full access: files, shell, browser, MCP, and their own sandbox container. Each agent has its own model, workspace, integrations, schedules, and peers." />
+                    <InfoHint text="Agents run on this machine with full access: files, shell, browser, MCP, and their own sandbox container. Each agent has its own model, workspace, integrations, and peers." />
                   </div>
                   <div className="page-subtitle">
-                    Your Grok agents — models, workspaces, schedules, integrations, and peers.
+                    Your Grok agents — models, workspaces, integrations, and peers.
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
@@ -4142,6 +3725,14 @@ export default function ShibaStudio() {
                       <div className="min-w-0 flex-1">
                         <div className="font-semibold text-base flex items-center gap-2 min-w-0">
                           <span className="truncate">{agent.name}</span>
+                          {agent.autoAcceptBoardAssignments && (
+                            <span
+                              className="badge badge-accent shrink-0 text-[9px]"
+                              title="Future Board cards manually assigned to this agent start work automatically"
+                            >
+                              Board auto-start
+                            </span>
+                          )}
                         </div>
                         <div className="text-xs text-dim flex items-center gap-1.5 min-w-0 mt-0.5">
                           <span className="min-w-0 truncate" title={modelDisplayName(agent.model)}>
@@ -4192,21 +3783,14 @@ export default function ShibaStudio() {
                     </div>
 
                     <div className="mt-auto pt-3">
-                      <div className="flex items-center justify-between text-xs gap-2 min-w-0">
+                      <div className="flex items-center text-xs gap-2 min-w-0">
                         <div className="text-dim font-mono truncate min-w-0" title={agent.workspace.path}>
                           {agent.workspace.path}
                         </div>
-                        <button
-                          onClick={() => void toggleScheduleEntry(agent, 0)}
-                          className={`text-[10px] px-2 py-0.5 rounded border shrink-0 ${scheduleStats(agent).active > 0 ? 'border-success text-success' : 'border-default text-dim'}`}
-                        >
-                          {scheduleStats(agent).active > 0 ? 'SCHEDULED' : 'schedule off'}
-                        </button>
                       </div>
                       <div className="text-xs mt-2 text-muted italic truncate" title={agent.description || undefined}>
                         {agent.description || 'No description'}
                       </div>
-                      <div className="text-[10px] mt-1 text-dim truncate">{formatScheduleSummary(agent)}</div>
                       {/* Agents page = view/edit/create. Running + traces live on Automations. */}
                       <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-default">
                         <button onClick={() => openEditAgent(agent)} className="grok-btn grok-btn-primary text-xs py-1 flex-1 min-w-0" title="Edit this agent's configuration">
@@ -4266,347 +3850,10 @@ export default function ShibaStudio() {
           {/* MEMORIES — cross-run knowledge, review queue, and CRUD */}
           {tab === 'memories' && <MemoriesPanel onDataChanged={() => { void loadNavStats(); }} />}
 
-          {/* AUTOMATIONS — schedules & orchestration */}
+          {/* AUTOMATIONS — durable triggers and orchestration */}
           {tab === 'automations' && (
             <div className="page-content">
               <RoutinesPanel agents={agents} />
-
-              <div className="page-head-row mb-0 mt-10 pt-7 border-t border-default">
-                <div className="min-w-0">
-                  <div className="page-section-title">
-                    Legacy agent schedules
-                    <InfoHint text="These cron entries remain fully supported for compatibility. New work should use durable Automations above for event triggers, retries, deduplication, and circuit breakers." />
-                  </div>
-                  <div className="page-section-sub">
-                    Existing agent-bound cron schedules. Migrate when you need durable one-time work, events, dependencies, or recovery controls.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="grok-btn grok-btn-primary text-xs shrink-0"
-                  onClick={() => openNewAutomationModal()}
-                  title="Create a legacy agent cron schedule"
-                >
-                  <Plus size={14} /> New legacy schedule
-                </button>
-              </div>
-              <div className="space-y-3">
-                {/* Only agents with actual schedules — no placeholder cards */}
-                {agents.filter((a) => agentSchedules(a).length > 0).map(a => {
-                  const scheds = agentSchedules(a);
-                  const runCount = scheduledRuns
-                    ? scheduledRuns.filter((r) => r.agentId === a.id || r.agentName === a.name).length
-                    : null;
-                  // Live "running now" is per-SCHEDULE: a run carries the
-                  // scheduleId that fired it, so only that automation's row
-                  // shows running — not the agent's other schedules. The SSE
-                  // runs feed keeps `runs` fresh; justStartedRunScheds bridges
-                  // the click→feed gap.
-                  const runningSchedIds = new Set(
-                    runs
-                      .filter((r) => r.agentId === a.id && r.status === 'running' && r.scheduleId)
-                      .map((r) => r.scheduleId as string),
-                  );
-                  return (
-                  <div key={a.id} className="grok-card p-5 automation-card">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <img src={resolveAgentAvatarPath(a)} alt="" className="agent-avatar-sm" width={28} height={28} />
-                        <div className="min-w-0">
-                          <div className="truncate flex flex-wrap items-center gap-1.5">
-                            <span>{a.name}</span>
-                            <ModelLine modelId={a.model} />
-                          </div>
-                          {(a.skills||[]).length > 0 && <span className="text-xs badge badge-accent mt-1 inline-block">skills: {(a.skills||[]).join(', ')}</span>}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-0.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => void openRunHistory(a)}
-                          className="grok-btn grok-btn-ghost text-xs p-1.5 relative"
-                          title={
-                            scheduledRuns === null
-                              ? 'Open run log'
-                              : runCount === 0
-                                ? 'Run log — no runs yet'
-                                : `Run log — ${runCount} run${runCount === 1 ? '' : 's'}`
-                          }
-                          aria-label="View run log"
-                        >
-                          <History size={14} />
-                          {runCount != null && runCount > 0 && (
-                            <span className="automation-runlog-badge">{runCount > 99 ? '99+' : runCount}</span>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openNewAutomationModal(a.id)}
-                          className="grok-btn grok-btn-ghost text-xs py-1 px-2"
-                          title="Add another automation for this agent"
-                        >
-                          <CalendarClock size={14}/> Add
-                        </button>
-                      </div>
-                    </div>
-                    {/* One row per automation — its own status pill + run/edit/delete */}
-                    <div className="mt-2 text-xs space-y-1">
-                      {scheds.map((s: any, i: number) => {
-                        // This specific automation is running (matched by the
-                        // firing run's scheduleId), not the agent as a whole.
-                        const scheduleRunning = runningSchedIds.has(s.id) || justStartedRunScheds.has(s.id);
-                        return (
-                        <div key={s.id || i} className="text-muted flex items-center gap-x-2 gap-y-1 min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => void toggleScheduleEntry(a, i)}
-                            className={`automation-status-tag shrink-0 ${s.enabled ? 'automation-status-active' : 'automation-status-paused'}`}
-                            title={s.enabled ? 'Pause this automation' : 'Activate this automation'}
-                          >
-                            {s.enabled ? 'Active' : 'Paused'}
-                          </button>
-                          {scheduleRunning && (
-                            <button
-                              type="button"
-                              className="automation-running-chip automation-running-chip-btn shrink-0"
-                              title="Show live status & trace of this run"
-                              onClick={() => openRunningRun(s.id)}
-                            >
-                              <RefreshCw size={10} className="animate-spin" /> running
-                            </button>
-                          )}
-                          <span className="font-mono text-[11px] shrink-0">{describeCron(s.cron)}</span>
-                          {(() => {
-                            const perDay = estimateCronRunsPerDay(String(s.cron || ''));
-                            return perDay !== null && perDay > SCHEDULE_RUNS_PER_DAY_WARN ? (
-                              <span
-                                className="text-warning text-[11px] shrink-0"
-                                title={`This automation fires ~${perDay}× per day — each fire is a full agent run and (on cloud models) costs tokens. Overlapping ticks are skipped, but consider a slower cadence or a daily budget in Settings → Cost & safety.`}
-                              >
-                                ⚠ ~{perDay}×/day
-                              </span>
-                            ) : null;
-                          })()}
-                          {s.instructions && <span className="text-dim truncate min-w-0">· {s.instructions.slice(0, 60)}{s.instructions.length > 60 ? '…' : ''}</span>}
-                          <span className="ml-auto flex items-center gap-1 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (scheduleRunning) { openRunningRun(s.id); return; }
-                                markScheduleRunJustStarted(s.id);
-                                void runAgent(a, { useScheduleInstructions: true, scheduleIndex: i });
-                              }}
-                              className="grok-btn grok-btn-ghost text-xs p-1"
-                              title={scheduleRunning ? 'Running now — show live status & trace' : 'Run this automation now with its instructions'}
-                              aria-label={scheduleRunning ? 'Show running automation status' : 'Run automation now'}
-                            >
-                              {scheduleRunning ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12}/>}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openEditAgentSchedule(a, i)}
-                              className="grok-btn grok-btn-ghost text-xs p-1"
-                              title="Edit this automation (cron + instructions)"
-                              aria-label="Edit automation"
-                            >
-                              <Pencil size={12}/>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void deleteScheduleEntry(a, i)}
-                              className="grok-btn grok-btn-ghost text-xs p-1 text-error"
-                              title="Delete this automation"
-                              aria-label="Delete automation"
-                            >
-                              <Trash2 size={12}/>
-                            </button>
-                          </span>
-                        </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )})}
-                {agents.filter((a) => agentSchedules(a).length > 0).length === 0 && (
-                  <div className="grok-card p-8 text-center text-dim text-sm">
-                    <Clock size={28} className="mx-auto mb-3 opacity-40" />
-                    <div className="font-medium text-sm text-primary mb-1">No legacy schedules</div>
-                    <div className="max-w-sm mx-auto leading-relaxed mb-4">
-                      {agents.length === 0
-                        ? 'Create an agent first, then come back here to put it on a schedule.'
-                        : 'Use the durable Automation editor above for new workflows, or add a legacy cron schedule for compatibility.'}
-                    </div>
-                    {agents.length === 0 ? (
-                      <button type="button" className="grok-btn grok-btn-primary text-xs" onClick={() => { openCreateAgent(); navigateToTab('agents'); }}>
-                        <Plus size={13} /> Create an agent
-                      </button>
-                    ) : (
-                      <button type="button" className="grok-btn grok-btn-primary text-xs" onClick={() => openNewAutomationModal()}>
-                        <Plus size={13} /> New legacy schedule
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-              <div className="mt-6 text-xs text-dim">
-                Legacy cron entries continue to run unchanged. The <span className="font-mono">schedule_task</span> tool saves relative follow-ups as durable one-time Automations.
-              </div>
-
-              {showNewAutomation && (
-                <div
-                  className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4"
-                  onClick={() => !savingAutomation && setShowNewAutomation(false)}
-                >
-                  <div
-                    ref={automationDialogRef}
-                    className="modal modal-pop w-full max-w-md p-5 max-h-[90vh] overflow-y-auto"
-                    onClick={(e) => e.stopPropagation()}
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="New legacy schedule"
-                    tabIndex={-1}
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <div className="text-lg font-semibold flex items-center gap-2">
-                        <CalendarClock size={18} className="opacity-70" />
-                        New legacy schedule
-                      </div>
-                      <button
-                        type="button"
-                        className="grok-btn grok-btn-ghost p-1.5"
-                        onClick={() => setShowNewAutomation(false)}
-                        disabled={savingAutomation}
-                        aria-label="Close"
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                    <div className="text-xs text-dim mb-4">
-                      Compatibility editor for an agent-bound cron entry. Prefer the durable Automation editor for new workflows.
-                    </div>
-
-                    {agents.length === 0 ? (
-                      <div className="text-sm text-dim mb-4">
-                        No agents yet.{' '}
-                        <button type="button" className="link-accent" onClick={() => { setShowNewAutomation(false); openCreateAgent(); navigateToTab('agents'); }}>
-                          Create one first
-                        </button>
-                        .
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div>
-                          <div className="grok-label">Agent</div>
-                          <select
-                            className="grok-select w-full text-sm"
-                            value={newAutomation.agentId}
-                            onChange={(e) => {
-                              const id = e.target.value;
-                              const name = agents.find((a) => a.id === id)?.name;
-                              setNewAutomation((f) => ({
-                                ...f,
-                                agentId: id,
-                                instructions: f.instructions.trim()
-                                  ? f.instructions
-                                  : (name ? `Scheduled work for ${name}.` : f.instructions),
-                              }));
-                            }}
-                          >
-                            {agents.map((a) => (
-                              <option key={a.id} value={a.id}>{a.name}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <div className="grok-label">When to run</div>
-                          <select
-                            className="grok-select w-full text-sm"
-                            value={newAutomation._preset}
-                            onChange={(e) => setNewAutomation((f) => ({
-                              ...f,
-                              _preset: e.target.value as SchedulePresetId,
-                            }))}
-                          >
-                            {SCHEDULE_PRESETS.map((p) => (
-                              <option key={p.id} value={p.id}>{p.label}</option>
-                            ))}
-                          </select>
-                          <div className="text-[11px] text-dim mt-1">
-                            {SCHEDULE_PRESETS.find((p) => p.id === newAutomation._preset)?.hint}
-                          </div>
-                          {(newAutomation._preset === 'daily' || newAutomation._preset === 'weekdays') && (
-                            <div className="mt-2">
-                              <div className="grok-label">Time</div>
-                              <input
-                                type="time"
-                                className="grok-input text-sm w-40"
-                                value={newAutomation._time}
-                                onChange={(e) => setNewAutomation((f) => ({ ...f, _time: e.target.value || '09:00' }))}
-                              />
-                            </div>
-                          )}
-                          {newAutomation._preset === 'custom' && (
-                            <div className="mt-2">
-                              <div className="grok-label">Cron expression</div>
-                              <input
-                                className="grok-input font-mono text-xs"
-                                value={newAutomation._customCron}
-                                onChange={(e) => setNewAutomation((f) => ({ ...f, _customCron: e.target.value }))}
-                                placeholder="*/30 * * * *"
-                              />
-                            </div>
-                          )}
-                          <div className="text-[11px] text-dim mt-1.5 font-mono">
-                            {describeCron(presetToCron(newAutomation._preset, newAutomation._time, newAutomation._customCron))}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="grok-label">Instructions</div>
-                          <textarea
-                            className="grok-input min-h-[6.5rem] resize-y text-sm"
-                            value={newAutomation.instructions}
-                            onChange={(e) => setNewAutomation((f) => ({ ...f, instructions: e.target.value }))}
-                            placeholder="What should this agent do when the schedule fires?"
-                          />
-                        </div>
-
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={newAutomation.enabled}
-                            onChange={(e) => setNewAutomation((f) => ({ ...f, enabled: e.target.checked }))}
-                          />
-                          Activate immediately
-                        </label>
-                      </div>
-                    )}
-
-                    <div className="flex gap-2 mt-5">
-                      <button
-                        type="button"
-                        className="grok-btn grok-btn-secondary flex-1"
-                        disabled={savingAutomation}
-                        onClick={() => setShowNewAutomation(false)}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="grok-btn grok-btn-primary flex-1"
-                        disabled={savingAutomation || agents.length === 0}
-                        onClick={() => void createAutomationFromPage()}
-                      >
-                        {savingAutomation ? 'Saving…' : 'Create legacy schedule'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Execution Trace — top of the stack. Closing returns to run
-                  details (if any) or the page; never leaves run log visible under it. */}
             </div>
           )}
 
@@ -4628,20 +3875,13 @@ export default function ShibaStudio() {
 
               <div className="integrations-grid">
                 {INTEGRATION_CATALOG.map((integration) => {
-                  const isReddit = integration.id === 'reddit';
-                  const connected = isReddit
-                    ? !!((redditStatus?.connected ?? intTest.reddit?.ok) && !redditStatus?.expired)
-                    : !!intTest[integration.id]?.ok;
-                  const configured = isReddit
-                    ? !!(redditStatus?.clientReady || redditStatus?.connected || integrationConfigured(integration.id))
-                    : integrationConfigured(integration.id);
-                  const statusLabel = isReddit && redditStatus?.expired
-                    ? 'Session expired'
-                    : connected
-                      ? 'Connected'
-                      : configured
-                        ? 'Configured'
-                        : 'Not set up';
+                  const connected = !!intTest[integration.id]?.ok;
+                  const configured = integrationConfigured(integration.id);
+                  const statusLabel = connected
+                    ? 'Connected'
+                    : configured
+                      ? 'Configured'
+                      : 'Not set up';
                   const expanded = expandedIntegration === integration.id;
                   return (
                   <div
@@ -4696,13 +3936,11 @@ export default function ShibaStudio() {
                         {integration.id === 'x' && intTest.x?.ok && (
                           <span className="integration-card-status text-success">connected as @{intTest.x.username}</span>
                         )}
-                        {integration.id === 'reddit' && redditStatus?.connected && !redditStatus.expired && (
+                        {integration.id === 'reddit' && intTest.reddit?.ok && (
                           <span className="integration-card-status text-success">
-                            connected{redditStatus.username ? ` as u/${redditStatus.username}` : ''}
+                            Devvit app {intTest.reddit.appAccount ? `u/${intTest.reddit.appAccount}` : 'connected'}
+                            {intTest.reddit.subreddit ? ` · r/${intTest.reddit.subreddit}` : ''}
                           </span>
-                        )}
-                        {integration.id === 'reddit' && redditStatus?.expired && (
-                          <span className="integration-card-status text-error">session expired — reconnect to restore access</span>
                         )}
                         {integration.id === 'obsidian' && intTest.obsidian?.ok && (
                           <span className="integration-card-status text-success">
@@ -4740,7 +3978,10 @@ export default function ShibaStudio() {
                       </span>
                     </div>
                     {expanded && (
-                    <div className="integration-card-body">
+                    <div
+                      className="integration-card-body"
+                      onChangeCapture={() => invalidateIntegrationTest(integration.id)}
+                    >
                     {integration.id === 'github' && (
                       <input className="grok-input mb-2" placeholder="GitHub Personal Access Token (ghp_...)" value={intCreds.github?.token || ''} onChange={e => setIntCreds((c:any)=>({...c, github: {...(c.github||{}), token: e.target.value}}))} />
                     )}
@@ -4847,142 +4088,71 @@ export default function ShibaStudio() {
                     })()}
                     {integration.id === 'reddit' && (() => {
                       const reddit = intCreds.reddit || {};
-                      const bundled = !!redditStatus?.bundledClient;
-                      const clientReady = !!redditStatus?.clientReady
-                        || !!(reddit.clientId?.trim() && reddit.clientSecret?.trim());
-                      const redditConnected = !!((redditStatus?.connected ?? intTest.reddit?.ok) && !redditStatus?.expired);
-                      const username = redditStatus?.username || intTest.reddit?.username;
-                      const redirectUri = `${appOrigin}/api/reddit-oauth/callback`;
+                      const redditConnected = !!intTest.reddit?.ok;
                       return (
                         <>
                           <div className="text-xs text-dim mb-3">
-                            Sign in once to let enabled agents read Reddit feeds and submit approved text or link posts.
-                            Access and refresh tokens are handled automatically.
+                            Shiba connects to Reddit through the bundled Devvit companion. The bridge can read and
+                            submit posts only in the community where that Devvit app is installed.
                           </div>
-                          <div className="flex flex-wrap items-center gap-2 mb-1">
-                            {redditStatus?.expired ? (
-                              <span className="status-pill text-error">Session expired</span>
-                            ) : redditConnected ? (
-                              <span className="status-pill text-success">Connected{username ? ` · u/${username}` : ''}</span>
-                            ) : (
-                              <span className="status-pill text-dim">Not signed in</span>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (!clientReady) {
-                                  setRedditAdvancedOpen(true);
-                                  toast('One-time: add your Reddit web app client below, then Sign in with Reddit.');
-                                  return;
-                                }
-                                void startRedditLogin();
-                              }}
-                              disabled={redditStarting || !!intSaving.reddit}
-                              className="grok-btn grok-btn-primary text-xs"
-                              title="Open the Reddit authorization popup"
-                            >
-                              <KeyRound size={13} />
-                              {redditStarting ? 'Opening Reddit…' : redditStatus?.expired ? 'Reconnect with Reddit' : 'Sign in with Reddit'}
-                            </button>
-                            {(redditConnected || redditStatus?.expired) && (
-                              <button
-                                type="button"
-                                onClick={() => void disconnectReddit()}
-                                className="grok-btn grok-btn-ghost text-xs text-error"
-                              >
-                                Disconnect
-                              </button>
-                            )}
-                          </div>
-                          {bundled && clientReady && !redditConnected && !redditStatus?.expired && (
-                            <div className="text-[11px] text-dim mb-1">Ready — click Sign in with Reddit, no app setup needed.</div>
-                          )}
-                          {redditStatus?.error && (
-                            <div className="text-[11px] text-error mb-1">{redditStatus.error}</div>
-                          )}
-                          <details
-                            className="text-xs mt-1"
-                            open={redditAdvancedOpen}
-                            onToggle={(event) => setRedditAdvancedOpen((event.currentTarget as HTMLDetailsElement).open)}
-                          >
-                            <summary className="text-dim cursor-pointer select-none">
-                              {bundled ? 'Advanced — override the bundled Reddit app' : 'Advanced — one-time Reddit app setup'}
-                            </summary>
-                            <div className="mt-2 space-y-2">
-                              <div className="text-[11px] text-dim">
-                                Create a <strong>web app</strong> in{' '}
-                                <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener noreferrer" className="link-accent">Reddit app preferences</a>{' '}
-                                and register this exact redirect URI. Reddit also requires{' '}
-                                <a
-                                  href="https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki"
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="link-accent"
-                                >
-                                  approved Data API access
-                                </a>
-                                ; commercial use may require separate permission.
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <code className="grok-input flex-1 min-w-0 text-[11px] font-mono py-1.5 truncate" title={redirectUri}>{redirectUri}</code>
-                                <button
-                                  type="button"
-                                  className="grok-btn grok-btn-ghost text-xs shrink-0"
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(redirectUri)
-                                      .then(() => toast.success('Reddit redirect URI copied'))
-                                      .catch(() => toast.error('Could not copy the redirect URI'));
-                                  }}
-                                >
-                                  Copy
-                                </button>
-                              </div>
-                              <input
-                                className="grok-input font-mono text-xs"
-                                aria-label="Reddit OAuth Client ID"
-                                placeholder="Reddit OAuth Client ID"
-                                value={reddit.clientId || ''}
-                                onChange={(event) => setIntCreds((current: IntegrationCredsMap) => ({
-                                  ...current,
-                                  reddit: { ...(current.reddit || {}), clientId: event.target.value },
-                                }))}
-                              />
-                              <input
-                                className="grok-input font-mono text-xs"
-                                type="password"
-                                aria-label="Reddit OAuth Client Secret"
-                                autoComplete="off"
-                                placeholder="Reddit OAuth Client Secret"
-                                value={reddit.clientSecret || ''}
-                                onChange={(event) => setIntCreds((current: IntegrationCredsMap) => ({
-                                  ...current,
-                                  reddit: { ...(current.reddit || {}), clientSecret: event.target.value },
-                                }))}
-                              />
-                              <input
-                                className="grok-input font-mono text-xs"
-                                aria-label="Custom Reddit User-Agent"
-                                placeholder="Custom User-Agent (optional)"
-                                value={reddit.userAgent || ''}
-                                onChange={(event) => setIntCreds((current: IntegrationCredsMap) => ({
-                                  ...current,
-                                  reddit: { ...(current.reddit || {}), userAgent: event.target.value },
-                                }))}
-                              />
-                              <div className="text-[10px] text-dim">
-                                The User-Agent override is optional; Shiba generates an identifying one when blank. Sign in saves these app settings before OAuth begins.
-                              </div>
-                              <div className="text-[10px] text-dim border-t border-white/5 pt-2">
-                                Requested permissions: identity, read, and submit. Ask mode requires exact post approval; autonomous or YOLO runs post only when the task explicitly names Reddit as the destination.
-                                Ensure your approved use case permits AI-assisted processing by your configured model provider.{' '}
-                                Use of Reddit data remains subject to the{' '}
-                                <a href="https://redditinc.com/policies/data-api-terms" target="_blank" rel="noopener noreferrer" className="link-accent">Data API Terms</a>.
-                              </div>
-                              {!!redditStatus?.scopes?.length && (
-                                <div className="text-[10px] text-dim">Granted scopes: {redditStatus.scopes.join(', ')}</div>
-                              )}
+                          {redditConnected && (
+                            <div className="flex flex-wrap items-center gap-2 mb-3">
+                              <span className="status-pill text-success">
+                                Connected
+                                {intTest.reddit.appAccount ? ` · u/${intTest.reddit.appAccount}` : ''}
+                                {intTest.reddit.subreddit ? ` · r/${intTest.reddit.subreddit}` : ''}
+                              </span>
                             </div>
-                          </details>
+                          )}
+                          <div className="rounded-lg border border-warning/25 bg-warning/5 p-3 text-[11px] text-dim mb-3">
+                            Reddit External Endpoints are currently a limited-access Devvit capability. Your app must
+                            be approved before its managed token can call the deployed bridge.{' '}
+                            <a
+                              href="https://developers.reddit.com/docs/capabilities/server/external-endpoints"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="link-accent"
+                            >
+                              External Endpoints guide
+                            </a>
+                          </div>
+                          <ol className="text-[11px] text-dim list-decimal pl-5 mb-3 space-y-1">
+                            <li>Open <code className="font-mono">devvit/reddit-bridge</code>, log in with the Devvit CLI, then upload and publish the app.</li>
+                            <li>Install that app in the one subreddit Shiba should access.</li>
+                            <li>Create a managed External Endpoint token and copy its endpoint origin and token below.</li>
+                          </ol>
+                          <input
+                            className="grok-input mb-2 font-mono text-xs"
+                            type="url"
+                            inputMode="url"
+                            autoCapitalize="none"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            aria-label="Reddit Devvit external endpoint origin"
+                            placeholder="https://your-app-abc123-external.devvit.net"
+                            value={reddit.devvitEndpoint || ''}
+                            onChange={(event) => setIntCreds((current: IntegrationCredsMap) => ({
+                              ...current,
+                              reddit: { ...(current.reddit || {}), devvitEndpoint: event.target.value },
+                            }))}
+                          />
+                          <input
+                            className="grok-input mb-2 font-mono text-xs"
+                            type="password"
+                            autoComplete="off"
+                            aria-label="Reddit Devvit managed app token"
+                            placeholder="devvit_at_…"
+                            value={reddit.devvitAppToken || ''}
+                            onChange={(event) => setIntCreds((current: IntegrationCredsMap) => ({
+                              ...current,
+                              reddit: { ...(current.reddit || {}), devvitAppToken: event.target.value },
+                            }))}
+                          />
+                          <div className="text-[10px] text-dim">
+                            The token is stored encrypted on this machine and is never bundled into the Devvit app.
+                            Automated posts are authored by the Devvit app account—not your personal Reddit account.
+                            This connection cannot read a home feed or access arbitrary communities.
+                          </div>
                         </>
                       );
                     })()}
@@ -5359,7 +4529,7 @@ export default function ShibaStudio() {
                             rel="noopener noreferrer"
                             className="integration-docs-link"
                           >
-                            Setup guide ↗
+                            {integration.setupLabel || 'Setup guide'} ↗
                           </a>
                         )}
                       </div>
@@ -5368,7 +4538,7 @@ export default function ShibaStudio() {
                       <button
                         type="button"
                         onClick={() => saveIntegration(integration.id)}
-                        disabled={!!intSaving[integration.id]}
+                        disabled={!!intSaving[integration.id] || !!intTesting[integration.id]}
                         className="grok-btn grok-btn-primary text-xs"
                       >
                         {intSaving[integration.id] ? 'Saving…' : 'Save'}
@@ -5376,9 +4546,10 @@ export default function ShibaStudio() {
                       <button
                         type="button"
                         onClick={() => testIntegration(integration.id)}
+                        disabled={!!intSaving[integration.id] || !!intTesting[integration.id]}
                         className="grok-btn grok-btn-secondary text-xs"
                       >
-                        Test Connection
+                        {intSaving[integration.id] || intTesting[integration.id] ? 'Testing…' : 'Test Connection'}
                       </button>
                       {configured && (
                         <button
@@ -6244,6 +5415,7 @@ export default function ShibaStudio() {
           } else if (folderBrowseFor === 'mcp') {
             setMcpBrowsePath(path);
           } else {
+            invalidateIntegrationTest('obsidian');
             setIntCreds((c: any) => ({
               ...c,
               obsidian: { ...(c.obsidian || { mode: 'local' }), vaultPath: path },
@@ -6341,7 +5513,7 @@ export default function ShibaStudio() {
               {historyRuns === null ? (
                 <div className="data-loading-row py-6"><span className="data-spinner" /> Loading runs…</div>
               ) : historyRuns.length === 0 ? (
-                <div className="text-sm text-dim py-6 text-center">No runs yet — press ▶ on a schedule or wait for the next cron tick.</div>
+                <div className="text-sm text-dim py-6 text-center">No runs yet — run an Automation to see its history here.</div>
               ) : (
                 <div className="space-y-1.5">
                   {historyRuns.map((r) => (
@@ -6863,6 +6035,37 @@ export default function ShibaStudio() {
                 <div className="agent-form-section">
                   <div className="agent-form-section-head">
                     <div className="agent-form-section-title">
+                      <KanbanSquare size={15} className="opacity-70" />
+                      Board work
+                    </div>
+                    <div className="agent-form-section-sub">
+                      Choose whether assigning new Board work should dispatch this agent immediately.
+                    </div>
+                  </div>
+                  <label className="flex items-start gap-3 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={agentForm.autoAcceptBoardAssignments === true}
+                      onChange={(event) => setAgentForm({
+                        ...agentForm,
+                        autoAcceptBoardAssignments: event.target.checked,
+                      })}
+                    />
+                    <span>
+                      <span className="block font-medium">Auto-start future Board assignments</span>
+                      <span className="block text-[11px] text-dim mt-1 leading-relaxed">
+                        When enabled, manually assigning a future Board card to this agent automatically starts work.
+                        Existing assignments stay unchanged. When the work finishes successfully, the card moves to
+                        In Review for you to validate.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+
+                <div className="agent-form-section">
+                  <div className="agent-form-section-head">
+                    <div className="agent-form-section-title">
                       <Plug size={15} className="opacity-70" />
                       Capabilities — integrations
                     </div>
@@ -6963,13 +6166,20 @@ export default function ShibaStudio() {
                     <details className="grok-card p-3 bg-black/20">
                       <summary className="grok-label mb-0 cursor-pointer select-none flex items-center gap-1.5">
                         Scoped credentials (optional)
-                        <InfoHint text="Give this agent its OWN account for an enabled integration — e.g. its own GitHub token or X account — instead of the global one. Leave a field blank to fall back to the global credentials. Stored AES-256-GCM encrypted." />
+                        <InfoHint text="Give this agent its OWN account for an enabled integration — e.g. its own GitHub token or X account — instead of the global one. Most blank fields fall back to global credentials; Reddit requires both override fields or neither. Stored AES-256-GCM encrypted." />
                       </summary>
                       <div className="mt-2 space-y-3">
-                        <div className="text-[11px] text-dim">Only fills shown for integrations this agent has enabled above. Empty = use the global account.</div>
+                        <div className="text-[11px] text-dim">Only fields for integrations enabled above are shown. Unless noted below, an empty field uses the global account.</div>
                         {enabledAuth.map((svc) => (
                           <div key={svc}>
-                            <div className="text-xs font-medium flex items-center gap-1.5 mb-1"><IntegrationIcon id={svc} size="sm" /> {getIntegrationMeta(svc)?.label} — this agent&apos;s account</div>
+                            <div className="text-xs font-medium flex items-center gap-1.5 mb-1">
+                              <IntegrationIcon id={svc} size="sm" /> {getIntegrationMeta(svc)?.label} — {svc === 'reddit' ? 'this agent\'s Devvit installation' : 'this agent\'s account'}
+                            </div>
+                            {svc === 'reddit' && (
+                              <div className="text-[11px] text-dim mb-1.5">
+                                Reddit overrides are one credential pair: enter both the Devvit endpoint and managed app token, or leave both blank to use the global Reddit connection. A partial pair is rejected.
+                              </div>
+                            )}
                             <div className="space-y-1.5">
                               {AGENT_OVERRIDE_FIELDS[svc].map((f) => (
                                 f.key === 'serviceAccountJson' ? (
@@ -7124,175 +6334,10 @@ export default function ShibaStudio() {
                   />
                 </div>
 
-                <div
-                  id="agent-schedules-section"
-                  className={`agent-form-section ${highlightScheduleIdx !== null ? 'schedule-section-focus' : ''}`}
-                >
-                  <div className="agent-form-section-head">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="agent-form-section-title">
-                          <CalendarClock size={15} className="opacity-70" />
-                          Automations
-                        </div>
-                        <div className="agent-form-section-sub">
-                          When this agent should wake up on its own — and exactly what to do each time.
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAgentForm({
-                            ...agentForm,
-                            schedules: [...(agentForm.schedules || []), defaultScheduleEntry()],
-                          });
-                        }}
-                        className="grok-btn grok-btn-secondary text-xs shrink-0"
-                      >
-                        <Plus size={13} /> Add schedule
-                      </button>
-                    </div>
-                  </div>
-
-                  {(agentForm.schedules || []).length === 0 ? (
-                    <div className="agent-schedule-empty">
-                      <Clock size={20} className="opacity-40 mb-2" />
-                      <div className="text-sm font-medium">No automations yet</div>
-                      <div className="text-xs text-dim mt-1 max-w-xs mx-auto leading-relaxed">
-                        Add a schedule so this agent can run on a timer with its own prompt — no cron knowledge needed.
-                      </div>
-                      <button
-                        type="button"
-                        className="grok-btn grok-btn-primary text-xs mt-3"
-                        onClick={() => {
-                          setAgentForm({
-                            ...agentForm,
-                            schedules: [defaultScheduleEntry()],
-                          });
-                        }}
-                      >
-                        <Plus size={13} /> Create first schedule
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {(agentForm.schedules || []).map((sch: any, idx: number) => {
-                        const preset: SchedulePresetId = sch._preset || 'every_30m';
-                        const presetMeta = SCHEDULE_PRESETS.find((p) => p.id === preset);
-                        return (
-                          <div
-                            key={sch.id || idx}
-                            id={`agent-schedule-${idx}`}
-                            className={`agent-schedule-card ${highlightScheduleIdx === idx ? 'schedule-entry-highlight' : ''} ${sch.enabled ? 'is-active' : 'is-paused'}`}
-                          >
-                            <div className="agent-schedule-card-top">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="agent-schedule-index">{idx + 1}</span>
-                                <div className="min-w-0">
-                                  <div className="text-xs font-semibold truncate">
-                                    {presetMeta?.label || 'Schedule'}
-                                    {(preset === 'daily' || preset === 'weekdays') && sch._time
-                                      ? ` · ${sch._time}`
-                                      : ''}
-                                  </div>
-                                  <div className="text-[10px] text-dim font-mono truncate">
-                                    {sch.cron || presetMeta?.hint}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <button
-                                  type="button"
-                                  className={`automation-status-tag ${sch.enabled ? 'automation-status-active' : 'automation-status-paused'}`}
-                                  onClick={() => patchSchedule(idx, { enabled: !sch.enabled })}
-                                  title={sch.enabled ? 'Pause this schedule' : 'Activate this schedule'}
-                                >
-                                  {sch.enabled ? 'Active' : 'Paused'}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="grok-btn grok-btn-ghost text-xs p-1 text-error"
-                                  title="Remove schedule"
-                                  onClick={() => {
-                                    const news = (agentForm.schedules || []).filter((_: any, i: number) => i !== idx);
-                                    setAgentForm({ ...agentForm, schedules: news });
-                                  }}
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              </div>
-                            </div>
-
-                            <div className="agent-schedule-freq">
-                              <div className="agent-schedule-freq-label">Frequency</div>
-                              <div className="agent-schedule-presets">
-                                {SCHEDULE_PRESETS.filter((p) => p.id !== 'custom').map((p) => (
-                                  <button
-                                    key={p.id}
-                                    type="button"
-                                    className={`agent-schedule-preset ${preset === p.id ? 'active' : ''}`}
-                                    onClick={() => onSchedulePresetChange(idx, p.id)}
-                                    title={p.hint}
-                                  >
-                                    {p.label}
-                                  </button>
-                                ))}
-                                <button
-                                  type="button"
-                                  className={`agent-schedule-preset ${preset === 'custom' ? 'active' : ''}`}
-                                  onClick={() => onSchedulePresetChange(idx, 'custom')}
-                                  title="Raw cron expression"
-                                >
-                                  Custom
-                                </button>
-                              </div>
-                              {(preset === 'daily' || preset === 'weekdays') && (
-                                <div className="flex items-center gap-2 mt-2">
-                                  <span className="text-[10px] text-dim">At</span>
-                                  <input
-                                    type="time"
-                                    className="grok-input w-auto text-xs"
-                                    value={sch._time || '09:00'}
-                                    onChange={(e) => onScheduleTimeChange(idx, e.target.value)}
-                                  />
-                                  <span className="text-[10px] text-dim">{presetMeta?.hint}</span>
-                                </div>
-                              )}
-                              {preset === 'custom' ? (
-                                <input
-                                  className="grok-input text-xs font-mono mt-2"
-                                  placeholder="*/15 * * * *"
-                                  value={sch._customCron ?? sch.cron ?? ''}
-                                  onChange={(e) => patchSchedule(idx, {
-                                    _customCron: e.target.value,
-                                    cron: e.target.value,
-                                    _preset: 'custom',
-                                  })}
-                                />
-                              ) : preset !== 'daily' && preset !== 'weekdays' ? (
-                                <div className="text-[10px] text-dim mt-2">{presetMeta?.hint}</div>
-                              ) : null}
-                            </div>
-
-                            <div>
-                              <div className="agent-schedule-freq-label">What to do each run</div>
-                              <textarea
-                                className="grok-input schedule-instructions-input text-xs"
-                                placeholder="Clear instructions for this automation — e.g. “Summarize new issues in #agent-logs and flag blockers.”"
-                                value={sch.instructions || ''}
-                                onChange={(e) => patchSchedule(idx, { instructions: e.target.value })}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
               </div>
 
               <div className="flex gap-3 mt-6">
-                <button onClick={() => { setShowAgentModal(false); setEditingAgent(null); setHighlightScheduleIdx(null); }} className="grok-btn grok-btn-secondary flex-1">Cancel</button>
+                <button onClick={() => { setShowAgentModal(false); setEditingAgent(null); }} className="grok-btn grok-btn-secondary flex-1">Cancel</button>
                 <button onClick={createOrUpdateAgent} disabled={loading} className="grok-btn grok-btn-primary flex-1">Save Agent</button>
               </div>
               <div className="modal-multimodal-note mt-4">

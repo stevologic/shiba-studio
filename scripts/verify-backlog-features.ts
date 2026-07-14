@@ -77,6 +77,31 @@ async function main() {
   assert(kanbanUi.includes('Start work'), 'kanban UI');
   assert((await read('lib/app-navigation.ts')).includes("'board'"), 'board nav tab');
 
+  // Per-agent Board auto-start is an explicit, future-only opt-in. Legacy and
+  // malformed values stay off, while create/update forms preserve the choice.
+  assert(types.includes('autoAcceptBoardAssignments: boolean'), 'agent Board auto-start type');
+  assert(
+    types.includes('base.autoAcceptBoardAssignments = base.autoAcceptBoardAssignments === true'),
+    'agent Board auto-start strict normalization',
+  );
+  const { normalizeAgent } = await import('../lib/types');
+  assert(normalizeAgent({ autoAcceptBoardAssignments: true }).autoAcceptBoardAssignments, 'true Board auto-start survives normalization');
+  assert(!normalizeAgent({}).autoAcceptBoardAssignments, 'legacy agent defaults Board auto-start off');
+  assert(!normalizeAgent({ autoAcceptBoardAssignments: 'true' }).autoAcceptBoardAssignments, 'non-boolean Board auto-start stays off');
+  const agentsApi = await read('app/api/agents/route.ts');
+  assert(
+    agentsApi.includes('autoAcceptBoardAssignments: body.autoAcceptBoardAssignments === true'),
+    'agent create API preserves Board auto-start opt-in',
+  );
+  const studioUi = await read('components/shiba-studio.tsx');
+  assert(studioUi.includes('Auto-start future Board assignments'), 'agent editor exposes Board auto-start');
+  assert(studioUi.includes('Existing assignments stay unchanged'), 'Board auto-start explains future-only behavior');
+  assert(studioUi.includes('Board auto-start'), 'agent card shows Board auto-start status');
+  assert(
+    (studioUi.match(/autoAcceptBoardAssignments: false/g) || []).length >= 5,
+    'all agent-create and clone paths default Board auto-start off',
+  );
+
   // Board review stage: user validates In Review work into Done, or sends it
   // back with feedback that re-dispatches the assigned agent as a refinement.
   const boardApi = await read('app/api/board/route.ts');

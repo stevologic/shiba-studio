@@ -67,6 +67,8 @@ interface IntegrityCoordinatorGlobals {
   __shibaIntegrityLastStorageAt?: number;
   __shibaIntegrityRepairRetryTimer?: ReturnType<typeof setTimeout>;
   __shibaIntegrityRetryNeedsStorage?: boolean;
+  __shibaIntegrityRetryNeedsWorktrees?: boolean;
+  __shibaIntegrityRetryNeedsExternal?: boolean;
   __shibaFinishedIntegrityRequests?: Map<string, string | null>;
 }
 
@@ -75,6 +77,8 @@ const globals = globalThis as typeof globalThis & IntegrityCoordinatorGlobals;
 export interface CoordinatedIntegrityOptions {
   reason?: string;
   includeStorage?: boolean;
+  /** Reconcile owned worktrees without running the full managed-storage sweep. */
+  includeWorktrees?: boolean;
   nowMs?: number;
   minOrphanAgeMs?: number;
   minTemporaryAgeMs?: number;
@@ -531,9 +535,14 @@ async function runCoordinatedIntegrity(
     if (report.transientResources.errors.length) scheduleIntegrityRequestRetry(30_000);
     assertLease();
 
-    if (options.includeStorage) {
+    if (options.includeStorage || options.includeWorktrees) {
       const { reconcileWorktreeResources } = await import('./worktree-integrity');
-      report.worktrees = await reconcileWorktreeResources({ agents: latestAgents });
+      const worktrees = await reconcileWorktreeResources();
+      report.worktrees = worktrees;
+      if (worktrees.errors.length) scheduleIntegrityRequestRetry(30_000, false, true, false);
+      if (worktrees.pending > 0) scheduleIntegrityRequestRetry(30_000, false, true, false);
+    }
+    if (options.includeStorage) {
       const { reconcileCapabilityPackRegistry } = await import('./capability-packs');
       report.capabilityPackRegistry = await reconcileCapabilityPackRegistry({
         nowMs,
@@ -553,7 +562,7 @@ async function runCoordinatedIntegrity(
       const storageClean = report.storage.errors.length === 0
         && report.binaryStorage.errors.length === 0
         && report.capabilityPackRegistry.errors.length === 0
-        && report.worktrees.errors.length === 0
+        && (report.worktrees?.errors.length || 0) === 0
         && report.sandboxes.status === 'ok'
         && report.sandboxes.retryPending === 0;
       if (storageClean) globals.__shibaIntegrityLastStorageAt = nowMs;
@@ -641,29 +650,47 @@ function flushFinishedIntegrityRequests(): void {
   }
 }
 
-function scheduleIntegrityRequestRetry(delayMs = 5_000, includeStorage = false): void {
+function scheduleIntegrityRequestRetry(
+  delayMs = 5_000,
+  includeStorage = false,
+  includeWorktrees = false,
+  includeExternalCleanup = true,
+): void {
   if (includeStorage) globals.__shibaIntegrityRetryNeedsStorage = true;
+  if (includeStorage || includeWorktrees) globals.__shibaIntegrityRetryNeedsWorktrees = true;
+  if (includeExternalCleanup) globals.__shibaIntegrityRetryNeedsExternal = true;
   if (globals.__shibaIntegrityRepairRetryTimer) return;
   globals.__shibaIntegrityRepairRetryTimer = setTimeout(() => {
     globals.__shibaIntegrityRepairRetryTimer = undefined;
     const retryStorage = Boolean(globals.__shibaIntegrityRetryNeedsStorage);
+    const retryWorktrees = Boolean(globals.__shibaIntegrityRetryNeedsWorktrees);
+    const retryExternal = Boolean(globals.__shibaIntegrityRetryNeedsExternal);
     globals.__shibaIntegrityRetryNeedsStorage = false;
+    globals.__shibaIntegrityRetryNeedsWorktrees = false;
+    globals.__shibaIntegrityRetryNeedsExternal = false;
     try {
       flushFinishedIntegrityRequests();
     } catch (error) {
       console.error('[shiba-studio] queued mutation intent finalization failed', error);
-      scheduleIntegrityRequestRetry(5_000, retryStorage);
+      scheduleIntegrityRequestRetry(5_000, retryStorage, retryWorktrees, retryExternal);
       return;
     }
-    void reconcileAllDataIntegrity({ reason: 'queued mutation cleanup', includeStorage: retryStorage })
+    void reconcileAllDataIntegrity({
+      reason: 'queued mutation cleanup',
+      includeStorage: retryStorage,
+      includeWorktrees: retryWorktrees,
+      includeExternalCleanup: retryExternal,
+    })
       .then((report) => {
         const pending = Number((getDb().prepare('SELECT COUNT(*) AS count FROM data_integrity_requests')
           .get() as { count: number }).count) || 0;
-        if (pending > 0 || report.skippedBecauseLeaseHeld) scheduleIntegrityRequestRetry(5_000, retryStorage);
+        if (pending > 0 || report.skippedBecauseLeaseHeld) {
+          scheduleIntegrityRequestRetry(5_000, retryStorage, retryWorktrees, retryExternal);
+        }
       })
       .catch((error) => {
         console.error('[shiba-studio] queued mutation integrity repair failed', error);
-        scheduleIntegrityRequestRetry(30_000, retryStorage);
+        scheduleIntegrityRequestRetry(30_000, retryStorage, retryWorktrees, retryExternal);
       });
   }, Math.max(250, delayMs));
   globals.__shibaIntegrityRepairRetryTimer.unref?.();
@@ -719,7 +746,12 @@ export async function withIntegrityMutation<T>(
     markIntegrityRequestCommitted(requestId, mutationError);
   } catch {
     rememberFinishedIntegrityRequest(requestId, mutationError);
-    scheduleIntegrityRequestRetry();
+    scheduleIntegrityRequestRetry(
+      5_000,
+      !!options.includeStorage,
+      !!options.includeWorktrees,
+      options.includeExternalCleanup !== false,
+    );
   }
   if (!mutationSucceeded) throw mutationError;
   let cleanupCompleted = false;
@@ -736,7 +768,14 @@ export async function withIntegrityMutation<T>(
       // return while its cleanup is merely queued.
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
-    if (!cleanupCompleted) scheduleIntegrityRequestRetry(250);
+    if (!cleanupCompleted) {
+      scheduleIntegrityRequestRetry(
+        250,
+        !!options.includeStorage,
+        !!options.includeWorktrees,
+        options.includeExternalCleanup !== false,
+      );
+    }
   } catch (error) {
     getDb().prepare(`
       UPDATE data_integrity_requests
@@ -747,7 +786,12 @@ export async function withIntegrityMutation<T>(
       String(error instanceof Error ? error.message : error).slice(0, 4_000),
       requestId,
     );
-    scheduleIntegrityRequestRetry();
+    scheduleIntegrityRequestRetry(
+      5_000,
+      !!options.includeStorage,
+      !!options.includeWorktrees,
+      options.includeExternalCleanup !== false,
+    );
   }
   return { result, cleanupCompleted, requestId };
 }
@@ -759,7 +803,7 @@ export function startDataIntegritySchedule(intervalMs = DEFAULT_INTERVAL_MS): vo
   globals.__shibaIntegrityCoordinatorTimer = setInterval(() => {
     const nowMs = Date.now();
     const includeStorage = nowMs - (globals.__shibaIntegrityLastStorageAt || 0) >= DEFAULT_STORAGE_INTERVAL_MS;
-    void reconcileAllDataIntegrity({ reason: 'periodic', includeStorage, nowMs }).catch((error) => {
+    void reconcileAllDataIntegrity({ reason: 'periodic', includeStorage, includeWorktrees: true, nowMs }).catch((error) => {
       console.error('[shiba-studio] periodic data-integrity repair failed', error);
     });
   }, period);

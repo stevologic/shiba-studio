@@ -29,7 +29,6 @@ test('shell and primary panels do not double-load the same resource', async ({ p
     '/api/nav-stats',
     '/api/routines?limit=500',
     '/api/runs',
-    '/api/runs?scheduledOnly=1&limit=200',
   ]);
 
   requests = [];

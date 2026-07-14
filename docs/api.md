@@ -46,9 +46,9 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/version` | Running commit/version. `?checkUpdate=1` also probes GitHub releases (cached 6 h). |
-| GET | `/api/boot` | Boot ping — hydrates config and arms schedules (idempotent; carries the live commit). |
-| GET | `/api/health` | Lightweight liveness probe with no startup or scheduling side effects. |
-| GET | `/api/nav-stats` | Sidebar counts: chats, projects, workspace files, schedules, integrations, usage cost, `cloudReachable`. |
+| GET | `/api/boot` | Boot ping — hydrates config and ensures the single process-global Automation engine is running (idempotent; carries the live commit). |
+| GET | `/api/health` | Lightweight liveness probe with no startup or Automation-engine side effects. |
+| GET | `/api/nav-stats` | Sidebar counts: chats, projects, workspace files, active Automations, integrations, usage cost, `cloudReachable`. |
 | GET | `/api/models` | Selectable models (cloud + local) and cloud-auth flags. |
 | GET | `/api/tools` | The full built-in tool catalog with groups and scope requirements. |
 
@@ -58,25 +58,25 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | --- | --- | --- |
 | GET | `/api/config` | Settings with secrets masked, auth flags, secret-key location. |
 | POST | `/api/config` | Update settings. Body is a partial config, e.g. `{ "usageBudgetUsd": 50 }`, `{ "toolApprovalMode": "ask" }`, `{ "dailyBudgetUsd": 10, "budgetHardStop": true }`, `{ "action": "testLocalGrok", "localGrokBaseUrl": "…" }`. |
-| GET | `/api/integrations` | Stored integration credentials + channel-listener status. |
+| GET | `/api/integrations` | Configured integration credentials with secret fields masked + channel-listener status. |
 | POST | `/api/integrations` | `{ action: 'save'\|'delete'\|'test', which, creds }` — save/remove/test one integration. |
 
-### Agents, runs & scheduling
+### Agents & runs
+
+Agents are execution owners. Trigger and schedule management is available only through the [Automation endpoints](#automations-routine-api).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/agents` | All agents (models, workspaces, scopes, skills, schedules). |
+| GET | `/api/agents` | All execution owners (models, workspaces, scopes, skills, peers). |
 | POST | `/api/agents` | `{ action: 'create'\|'update'\|'delete', … }` — manage agents. |
 | GET | `/api/memories` | Search/filter memories by `q`, `agentId`, `status`, or `source`; returns stats and scope labels. |
 | POST | `/api/memories` | `{ action: 'create'|'update'|'delete'|'clear', … }` — manage, approve, pin, archive, move, or remove memories. |
-| GET | `/api/runs` | Run summaries. Filters: `?agentId`, `?scheduleId`, `?scheduledOnly=1`, `?limit`. `?id=<runId>` returns one run **with its full trace**. |
-| GET | `/api/scheduler` | Armed cron schedules. |
-| POST | `/api/scheduler` | Update an agent's schedule (`{ agentId, cron, enabled }`). |
+| GET | `/api/runs` | Run summaries. Filters: `?agentId`, `?scheduleId=<automationId>`, `?scheduledOnly=1`, `?limit`. `?id=<runId>` returns one run **with its full trace**. The `scheduleId` field name is retained for run-record compatibility and carries the Automation id. |
 | POST | `/api/execute` | Run an agent once (non-streaming); returns the finished run. |
 | POST | `/api/execute/stream` | Run an agent with a live **SSE** trace (`{ agentId, prompt, … }`). |
 | POST | `/api/execute/approve` | Approve/deny a pending tool call (`{ approvalId, approved }`). |
 
-### Tasks, evidence, and Attention
+### Tasks, evidence, and approvals
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -92,12 +92,12 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | GET/POST | `/api/tasks/:id/checkpoints/:checkpointId` | Inspect or restore an exact file/task/chat checkpoint. |
 | GET/POST | `/api/tasks/:id/team` | Read or create the bounded specialist dependency graph. |
 | POST | `/api/tasks/:id/team/dispatch` | Claim and start all dependency-ready worker tasks. |
-| GET | `/api/attention` | List the shared questions, exact approvals, failures, and completions inbox. |
-| PATCH | `/api/attention/:id` | Resolve/dismiss an eligible Attention item. Exact approvals use task commands. |
+| GET | `/api/attention` | List live exact approvals awaiting a decision. Optional query parameters: `taskId`, `limit` (1–500; default 100), and `offset` (non-negative; default 0). Results have a stable newest-first order. |
+| PATCH | `/api/attention/:id` | Compatibility guard that returns `409`; approvals must use an exact `approve` or `deny` task command. |
 
 ### Automations (Routine API)
 
-The primary Studio surface calls these **Automations**. Stable endpoint paths, payloads, and persisted types retain **Routine** terminology for compatibility.
+The primary Studio surface calls these **Automations**. Every recurring, one-time, webhook, event, filesystem, health-check, and manual definition lives here; there is no separate agent scheduling API. Stable endpoint paths, payloads, and persisted types retain **Routine** terminology for compatibility.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -163,7 +163,7 @@ There is no standalone Meetings page. The meeting-named endpoints remain as the 
 | --- | --- | --- |
 | GET/POST | `/api/workspace` | List files (`?dir=`); POST `{ action: 'read', path }` or `{ path, content }` to write. |
 | GET | `/api/workspace/diff` | Working-tree diff for a workspace. |
-| GET | `/api/workspace/worktrees` | Git worktrees for an agent workspace. |
+| GET/POST | `/api/workspace/worktrees` | List app-managed Git worktrees with authoritative agent/chat consumers, create one only for an agent mapped to that repository, or request safe removal. Removal refuses live, dirty, or unpushed worktrees. |
 | POST | `/api/workspace/sync`, `/api/workspace/upload`, `/api/workspace/cloud-file`, `/api/workspace/context` | Global uploads, cloud sync, and context assembly. |
 | GET | `/api/fs/browse` | Folder browser — subdirectories of `?dir=` (git repos badged). |
 | GET/POST | `/api/projects`, `/api/projects/context`, `/api/projects/upload` | Project CRUD, context, and file uploads. |
@@ -207,7 +207,7 @@ See [Artifact Studio](artifact-studio.md) for checkpoint, renderer, sandbox, and
 | POST | `/api/native-nodes/pair` | Consume a five-minute pairing code and a verified signed-release proof; returns a node key once. HTTPS or loopback. |
 | GET | `/api/native-nodes/poll` | Authenticated helper poll for the next HMAC-signed, leased one-shot job. |
 | POST | `/api/native-nodes/complete` | Authenticated signed job completion, optional screenshot, accessibility/clipboard text security scan, and audit. |
-| POST | `/api/native-nodes/events` | Authenticated signed quick-entry or file-drop event; creates a durable task and Attention item. |
+| POST | `/api/native-nodes/events` | Authenticated signed quick-entry or file-drop event; creates a durable task. |
 | GET | `/api/native-nodes/captures/:id` | Localhost-only stored PNG for a completed capture job. |
 | GET | `/api/native-nodes/release/:file` | Public signed helper release file. HTTPS or loopback; contains no secret. |
 
@@ -220,7 +220,7 @@ See [Native companion nodes](native-nodes.md) for the signed protocol, escalatio
 | GET/POST | `/api/companion/admin` | Localhost-only remote-access toggle, scoped pairing creation, and device revocation. |
 | POST | `/api/companion/pair` | Consume a short-lived pairing code and return one expiring device key once. |
 | GET | `/api/companion/status` | Public disabled/enabled and pairing status without task data. |
-| GET | `/api/companion/data` | Authenticated redacted tasks/evidence/Attention/Routine projection plus sanitized voice-request status for devices with `action:voice`. |
+| GET | `/api/companion/data` | Authenticated redacted tasks/evidence/pending-approval/Routine projection plus sanitized voice-request status for devices with `action:voice`. |
 | POST | `/api/companion/actions` | Scoped, revision-bound, idempotent exact approval/deny, steering, cancel, or Routine action. |
 | POST | `/api/companion/voice` | Stream one consent-confirmed, SHA-256-bound microphone request from a device with `action:voice`. Supported audio is capped at 50 MB, retained locally for one day, transcribed through server-side xAI auth, and dispatched as a durable task. |
 | GET/POST | `/api/harness-grants` | List or issue one-workspace, action-level, TTL-bound external coding grants. |
@@ -238,10 +238,8 @@ See [Native companion nodes](native-nodes.md) for the signed protocol, escalatio
 | GET | `/api/xai-oauth/status` | OAuth connection status. |
 | POST | `/api/xai-oauth/logout` | Disconnect OAuth. |
 | GET/POST | `/api/google-oauth/start`, `/api/google-oauth/callback` | Google Drive OAuth. |
-| POST | `/api/reddit-oauth/start` | Begin Reddit authorization-code OAuth with the fixed registered callback. |
-| GET | `/api/reddit-oauth/callback` | Validate one-time state, exchange the code, and return the popup handoff page. |
-| GET | `/api/reddit-oauth/status` | Read public Reddit connection status; never returns tokens or the client secret. |
-| POST | `/api/reddit-oauth/logout` | Revoke and disconnect the Reddit session. |
+
+Reddit does not expose a browser-OAuth route in Shiba. The server calls the bundled Devvit companion's fixed `/external/shiba/status`, `/external/shiba/posts/read`, and `/external/shiba/posts/submit` routes with a managed app token. See [`devvit/reddit-bridge/README.md`](../devvit/reddit-bridge/README.md) for the deployment contract.
 
 ### Backup & sync
 

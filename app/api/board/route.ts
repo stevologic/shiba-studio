@@ -80,7 +80,8 @@ export async function POST(req: NextRequest) {
       }
       case 'startWork': {
         const started = await startWorkOnTask(String(body.id || ''));
-        return Response.json({ ok: true, started });
+        const task = await getBoardTask(started.taskId);
+        return Response.json({ ok: true, started, task });
       }
       // Review stage: the user validates finished work into Done…
       case 'validate': {
@@ -108,7 +109,8 @@ export async function POST(req: NextRequest) {
           note: { kind: 'user', text: `↺ Sent back for refinement: ${feedback.slice(0, 2000)}` },
         });
         const started = await startWorkOnTask(String(body.id || ''), { feedback });
-        return Response.json({ ok: true, started });
+        const task = await getBoardTask(started.taskId);
+        return Response.json({ ok: true, started, task });
       }
       default:
         return Response.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });

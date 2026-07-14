@@ -11,7 +11,7 @@ flowchart TB
         SubBrowser["Annotation sub-browser<br/>interact / annotate / scroll"]
         Workspace["Chat workspace<br/>bind a folder or repo"]
         AgentsUI["Agents page<br/>create / edit / configure"]
-        AutomationsUI["Automations page<br/>per-schedule pills, run log, live trace"]
+        AutomationsUI["Automations page<br/>definitions, triggers, run history, live trace"]
         Dashboard["Dashboard<br/>readiness badges, recent runs"]
         LogsUI["Logs page<br/>audit trail, deep links"]
     end
@@ -20,18 +20,18 @@ flowchart TB
         Gateway["Model gateway (grok-client)<br/>xAI key / OAuth / Grok CLI / local server"]
         ToolExec["Tool executor<br/>40+ tools: fs, shell, browser, web,<br/>memory, images, PRs, deploys, MCP"]
         Runtime["Agent runtime<br/>tool-calling loop + trace"]
-        Scheduler["Scheduler (node-cron)<br/>armed at server start, headless"]
+        AutomationEngine["Durable Automation engine<br/>all triggers, claims, leases, retries"]
     end
 
     subgraph Capabilities["Capabilities — what it can reach"]
-        Integrations["Integrations<br/>GitHub, Slack, Drive, Discord, X, Reddit,<br/>Obsidian, Vercel, Netlify"]
+        Integrations["Integrations<br/>GitHub, Slack, Drive, Discord, X, Reddit Devvit,<br/>Obsidian, Vercel, Netlify"]
         Skills["Custom skills"]
         MCP["MCP servers"]
         Git["Git actions<br/>status / checkout / commit / PR"]
     end
 
     subgraph Storage["Storage — what it remembers"]
-        SQLite[("SQLite (~/.shiba-studio)<br/>runs + traces, audit log,<br/>agent memory, schedule ticks")]
+        SQLite[("SQLite (~/.shiba-studio)<br/>tasks, runs + traces, audit log,<br/>agent memory, Automation claims")]
         Config[("config.json<br/>credentials sealed AES-256-GCM")]
         Sync["Cloud sync<br/>snapshots in your xAI file storage"]
     end
@@ -44,12 +44,12 @@ flowchart TB
     SubBrowser -->|"selector + HTML + screenshot"| Chat
     SubBrowser -->|"headless Chrome"| ToolExec
 
-    AgentsUI -->|"defines agents, scopes, schedules"| Runtime
-    AutomationsUI -->|"Run now + pause/edit/delete per cron"| Scheduler
-    Scheduler -->|"tick claim in SQLite, then run"| Runtime
+    AgentsUI -->|"defines execution owners + scopes"| Runtime
+    AutomationsUI -->|"create / edit / run / pause"| AutomationEngine
+    AutomationEngine -->|"durable trigger claim + task"| Runtime
     Runtime <-->|"thoughts + tool calls"| Gateway
     Runtime -->|"executes"| ToolExec
-    Runtime -->|"schedule_task / send_to_peer"| Scheduler
+    Runtime -->|"schedule_task creates an Automation"| AutomationEngine
 
     ToolExec --> Integrations
     ToolExec --> Git
@@ -57,6 +57,7 @@ flowchart TB
     Skills -->|"injected into prompts"| Runtime
 
     Runtime -->|"runs + traces"| SQLite
+    AutomationEngine -->|"definitions + invocation state"| SQLite
     ToolExec -->|"agent memory"| SQLite
     Integrations -->|"credentials"| Config
     Config --> Sync
@@ -75,13 +76,23 @@ flowchart TB
   these four routes.
 - **One tool executor, many callers.** The chat tool loop, agent runs, and
   slash commands all execute through `lib/agent-tool-exec` — so a tool behaves
-  identically whether chat called it, a scheduled run called it, or you typed
+  identically whether chat called it, an Automation called it, or you typed
   a slash command. Cloud-origin agents are blocked from machine tools; a chat
   workspace binding explicitly grants the fs tools for that folder only.
-- **The scheduler is process-safe.** Cron arms once at server start
-  (`instrumentation.ts`), state is shared across module copies, and every fire
-  atomically claims its minute tick in SQLite — duplicate tasks or extra
-  server processes skip instead of double-running.
+- **Agents execute; Automations decide when.** Agent records contain model,
+  workspace, capability, and policy configuration. Every recurring, one-time,
+  webhook, integration-event, filesystem, health-check, or manual trigger lives
+  in a durable Automation that names its execution owner.
+- **There is one process-safe Automation engine.** `lib/routines.ts` owns every
+  trigger and invocation path. `/api/boot` ensures one process-global engine is
+  running; `instrumentation.ts` eagerly calls that same idempotent initializer
+  for headless startup. It does not create another engine or stop/re-arm work
+  on page loads. Trigger claims and execution leases are persisted in SQLite, so
+  duplicate deliveries, module copies, or extra server processes do not
+  double-run an invocation.
+- **Agent follow-ups use the same path.** `schedule_task` creates a durable
+  Automation assigned to the calling agent, whether its request is a five-field
+  cron expression or a relative/date-like one-time trigger.
 - **Everything lands in the audit log.** Runs, chats, tool calls, config
   changes, git actions, sync — the Logs page reads the same SQLite trail and
   deep-links back into full execution traces.

@@ -95,7 +95,6 @@ async function main() {
       integrations: {},
       peers: [],
       skills: [packSkillId],
-      schedules: [],
       createdAt: now,
       updatedAt: now,
     })]);
@@ -130,7 +129,7 @@ async function main() {
     await assert.rejects(() => fs.stat(orphanRegistry), /ENOENT/);
     assert.equal(packs.exportCapabilityPack('release-workflow').version, '1.0.0');
 
-    const routine = await packs.instantiateCapabilityPackRoutine('release-workflow', 'release-routine', 'agent-1');
+    const routine = await packs.instantiateCapabilityPackRoutine('release-workflow', 'release-routine', 'pack-skill-owner');
     assert.equal(routine.enabled, false);
     assert.equal(routine.triggers[0].type, 'manual');
 

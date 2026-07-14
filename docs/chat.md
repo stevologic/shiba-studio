@@ -48,6 +48,7 @@ Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dism
 | `/clear` | Clear the current conversation after confirmation |
 | `/agent <name\|grok\|all>` | Switch who answers the chat |
 | `/model <name>` | Switch the Grok session model; selected agents keep their configured model |
+| `/tools on\|off` | Enable or disable automatic model tool calls for this chat; explicit slash commands still work |
 | `/project <name\|off>` | Link or detach project context |
 | `/git status` | Branch, changed files, and recent commits of the workspace |
 | `/git diff [--staged]` | Show unstaged or staged changes |

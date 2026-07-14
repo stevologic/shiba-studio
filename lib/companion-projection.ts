@@ -49,17 +49,24 @@ export function companionApprovalDescriptor(
   attention: AttentionItem,
   task: TaskRecord,
 ): CompanionApprovalDescriptor | null {
-  if (attention.kind !== 'approval' || attention.status !== 'open') return null;
+  if (attention.kind !== 'approval' || attention.status !== 'open' || task.status !== 'waiting_for_approval') return null;
   const approvalId = typeof attention.action.approvalId === 'string' ? attention.action.approvalId : '';
   if (!approvalId) return null;
   const pending = getPendingApproval(approvalId);
   if (!pending || pending.runId !== task.runId) return null;
+  if (attention.dedupeKey !== `tool-approval:${approvalId}` || attention.action.taskId !== task.id) return null;
   const actionTool = String(attention.action.toolName || '');
   if (pending.toolName !== actionTool) return null;
   if (companionActionDigest(pending.args) !== companionActionDigest(attention.action.args)) return null;
   const requestedExpiry = Date.parse(String(attention.action.expiresAt || ''));
+  const pendingExpiry = Date.parse(pending.expiresAt);
   const hardExpiry = Date.parse(attention.createdAt) + 5 * 60_000;
-  const expiresAtMs = Math.min(Number.isFinite(requestedExpiry) ? requestedExpiry : hardExpiry, hardExpiry);
+  const expiresAtMs = Math.min(
+    Number.isFinite(requestedExpiry) ? requestedExpiry : hardExpiry,
+    Number.isFinite(pendingExpiry) ? pendingExpiry : hardExpiry,
+    hardExpiry,
+  );
+  if (expiresAtMs <= Date.now()) return null;
   const exact = {
     attentionId: attention.id,
     taskId: task.id,
@@ -86,7 +93,7 @@ export function findCompanionApproval(attentionId: string): {
   task: TaskRecord;
   descriptor: CompanionApprovalDescriptor;
 } | null {
-  const attention = listAttention({ status: 'open', limit: 500 }).items.find((item) => item.id === attentionId);
+  const attention = listAttention({ limit: 500 }).items.find((item) => item.id === attentionId);
   if (!attention) return null;
   const task = getTask(attention.taskId);
   if (!task) return null;
@@ -145,10 +152,11 @@ export function companionTaskSummaries(limit = 30) {
 }
 
 export function companionAttentionSummaries(limit = 50) {
-  return listAttention({ status: 'open', limit: Math.min(100, Math.max(1, limit)) }).items.map((item) => {
+  return listAttention({ limit: Math.min(100, Math.max(1, limit)) }).items.flatMap((item) => {
     const task = getTask(item.taskId);
     const approval = task ? companionApprovalDescriptor(item, task) : null;
-    return {
+    if (!approval) return [];
+    return [{
       id: item.id,
       taskId: item.taskId,
       kind: item.kind,
@@ -157,8 +165,8 @@ export function companionAttentionSummaries(limit = 50) {
       title: companionSafeText(item.title, 180),
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
-      ...(approval ? { approval } : {}),
-    };
+      approval,
+    }];
   });
 }
 

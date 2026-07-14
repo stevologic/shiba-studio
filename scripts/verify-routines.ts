@@ -15,7 +15,7 @@ async function main() {
   const ledger = await import('../lib/task-ledger');
   try {
     routines.ensureRoutineSchema();
-    const db = dbModule.getDb();
+    let db = dbModule.getDb();
     const tables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((row) => row.name));
     assert(tables.has('routines'));
     assert(tables.has('routine_invocations'));
@@ -23,6 +23,161 @@ async function main() {
     assert(tables.has('routine_step_runs'));
     const invocationColumns = new Set((db.prepare('PRAGMA table_info(routine_invocations)').all() as Array<{ name: string }>).map((row) => row.name));
     assert(invocationColumns.has('definitionSnapshot'));
+
+    // Exercise the v13 -> v14 retirement on a real pre-migration shape. Only
+    // pending work is staged; terminal history stays in runs/tasks and the old
+    // scheduler tables disappear permanently.
+    db.exec(`
+      CREATE TABLE schedule_ticks (
+        scheduleKey TEXT NOT NULL,
+        tick TEXT NOT NULL,
+        claimedAt TEXT NOT NULL,
+        PRIMARY KEY (scheduleKey, tick)
+      );
+      CREATE TABLE schedule_execution_intents (
+        id TEXT PRIMARY KEY,
+        scheduleKey TEXT NOT NULL,
+        tick TEXT NOT NULL,
+        agentId TEXT NOT NULL,
+        agentName TEXT NOT NULL,
+        scheduleId TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        instructions TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt INTEGER NOT NULL DEFAULT 0,
+        availableAt TEXT NOT NULL,
+        leaseOwner TEXT,
+        leaseExpiresAt TEXT,
+        runId TEXT,
+        taskId TEXT,
+        error TEXT,
+        result TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        completedAt TEXT,
+        UNIQUE(scheduleKey, tick)
+      );
+    `);
+    const stagedAt = new Date().toISOString();
+    const insertLegacyIntent = db.prepare(`
+      INSERT INTO schedule_execution_intents (
+        id, scheduleKey, tick, agentId, agentName, scheduleId, cron,
+        instructions, status, availableAt, runId, taskId, createdAt, updatedAt, completedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertLegacyIntent.run(
+      'legacy-intent-pending', 'legacy-multi-agent:multi-a', '2026-07-13T12:00',
+      'legacy-multi-agent', 'Legacy multi', 'multi-a', '*/15 * * * *',
+      'First legacy task', 'pending', stagedAt, null, null, stagedAt, stagedAt, null,
+    );
+    insertLegacyIntent.run(
+      'legacy-intent-linked', 'legacy-multi-agent:multi-b', '2026-07-13T12:01',
+      'legacy-multi-agent', 'Legacy multi', 'multi-b', '0 * * * *',
+      'Second legacy task', 'processing', stagedAt, 'already-dispatched', null, stagedAt, stagedAt, null,
+    );
+    insertLegacyIntent.run(
+      'legacy-intent-terminal', 'legacy-multi-agent:multi-c', '2026-07-13T12:02',
+      'legacy-multi-agent', 'Legacy multi', 'multi-c', '0 9 * * *',
+      'Completed legacy task', 'succeeded', stagedAt, 'completed-run', null, stagedAt, stagedAt, stagedAt,
+    );
+    db.exec('PRAGMA user_version = 13');
+    dbModule.closeDb();
+    db = dbModule.getDb();
+    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 14);
+    const migratedTables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((row) => row.name));
+    assert.equal(migratedTables.has('schedule_ticks'), false);
+    assert.equal(migratedTables.has('schedule_execution_intents'), false);
+    assert.equal(migratedTables.has('automation_legacy_intents'), true);
+    assert.equal(
+      Number((db.prepare('SELECT COUNT(*) AS count FROM automation_legacy_intents').get() as { count: number }).count),
+      2,
+      'v14 stages only pending/processing legacy work',
+    );
+    assert.equal(
+      (db.prepare('SELECT runId FROM automation_legacy_intents WHERE id = ?').get('legacy-intent-linked') as { runId: string | null }).runId,
+      'already-dispatched',
+      'staged work preserves links to an already-dispatched run',
+    );
+
+    // An interim build may already have stamped v14 before retiring the old
+    // tables. Reopening that database must converge through the same lossless
+    // staging path instead of dropping pending work because no migration runs.
+    db.exec(`
+      CREATE TABLE schedule_execution_intents (
+        id TEXT PRIMARY KEY,
+        scheduleKey TEXT NOT NULL,
+        tick TEXT NOT NULL,
+        agentId TEXT NOT NULL,
+        agentName TEXT NOT NULL,
+        scheduleId TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        instructions TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt INTEGER NOT NULL DEFAULT 0,
+        availableAt TEXT NOT NULL,
+        leaseOwner TEXT,
+        leaseExpiresAt TEXT,
+        runId TEXT,
+        taskId TEXT,
+        error TEXT,
+        result TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        completedAt TEXT,
+        UNIQUE(scheduleKey, tick)
+      );
+    `);
+    const insertCurrentV14Intent = db.prepare(`
+      INSERT INTO schedule_execution_intents (
+        id, scheduleKey, tick, agentId, agentName, scheduleId, cron,
+        instructions, status, availableAt, runId, taskId, createdAt, updatedAt, completedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertCurrentV14Intent.run(
+      'v14-reopen-pending', 'v14-agent:pending', '2026-07-13T13:00',
+      'v14-agent', 'V14 agent', 'pending', '*/20 * * * *',
+      'Pending from an interim v14 build', 'pending', stagedAt, null, null, stagedAt, stagedAt, null,
+    );
+    insertCurrentV14Intent.run(
+      'v14-reopen-processing', 'v14-agent:processing', '2026-07-13T13:01',
+      'v14-agent', 'V14 agent', 'processing', '*/25 * * * *',
+      'Processing from an interim v14 build', 'processing', stagedAt, null, null, stagedAt, stagedAt, null,
+    );
+    insertCurrentV14Intent.run(
+      'v14-reopen-terminal', 'v14-agent:terminal', '2026-07-13T13:02',
+      'v14-agent', 'V14 agent', 'terminal', '0 10 * * *',
+      'Terminal history stays outside the inbox', 'succeeded', stagedAt, 'historical-run', null, stagedAt, stagedAt, stagedAt,
+    );
+    assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 14);
+    dbModule.closeDb();
+    db = dbModule.getDb();
+    assert.equal(Boolean(db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'schedule_execution_intents'").get()), false,
+      'an already-v14 reopen retires the stale scheduler table');
+    assert.deepEqual(
+      db.prepare(`
+        SELECT id, status FROM automation_legacy_intents
+        WHERE id LIKE 'v14-reopen-%' ORDER BY id
+      `).all().map((row) => ({ ...(row as { id: string; status: string }) })),
+      [
+        { id: 'v14-reopen-pending', status: 'pending' },
+        { id: 'v14-reopen-processing', status: 'processing' },
+      ],
+      'an already-v14 reopen stages pending/processing intents and excludes terminal rows',
+    );
+    db.prepare("DELETE FROM automation_legacy_intents WHERE id LIKE 'v14-reopen-%'").run();
+
+    db.prepare(`
+      INSERT INTO runs (id, agentId, agentName, model, status, prompt, startedAt, completedAt, sideEffects, trace)
+      VALUES (?, ?, ?, ?, 'completed', ?, ?, ?, '[]', '[]')
+    `).run(
+      'already-dispatched',
+      'legacy-multi-agent',
+      'Legacy multi',
+      'grok-4',
+      'Already handled by the retired scheduler',
+      stagedAt,
+      stagedAt,
+    );
 
     const activeBudget = new routines.routineRuntimeTestHooks.RoutineActiveTimeBudget(100, 0);
     activeBudget.sample(false, 40);
@@ -60,16 +215,16 @@ async function main() {
     );
     assert.equal(detachedFailure, 'simulated detached worker failure', 'detached workers must always observe rejections');
 
-    const scheduler = await import('../lib/scheduler');
-    assert.equal(scheduler.isSupportedAutomationCron('*/5 * * * *'), true);
-    assert.equal(scheduler.isSupportedAutomationCron('0 0 L * *'), true);
+    const automationCron = await import('../lib/automation-cron');
+    assert.equal(automationCron.isSupportedAutomationCron('*/5 * * * *'), true);
+    assert.equal(automationCron.isSupportedAutomationCron('0 0 L * *'), true);
     assert.equal(
-      scheduler.automationTick(new Date('2026-01-01T12:34:00.000Z')),
+      automationCron.automationTick(new Date('2026-01-01T12:34:00.000Z')),
       '2026-01-01T12:34',
       'delayed cron callbacks must retain the scheduled minute instead of using callback wall time',
     );
-    assert.equal(scheduler.isSupportedAutomationCron('*/10 * * * * *'), false, 'seconds-field cron must be rejected');
-    assert.match(scheduler.automationCronError('*/10 * * * * *') || '', /exactly five fields/i);
+    assert.equal(automationCron.isSupportedAutomationCron('*/10 * * * * *'), false, 'seconds-field cron must be rejected');
+    assert.match(automationCron.automationCronError('*/10 * * * * *') || '', /exactly five fields/i);
     assert.equal(
       routines.routineTriggerTestHooks.latestMissedScheduleTick(
         { id: 'last-day', type: 'schedule', enabled: true, cron: '0 0 L * *', timezone: 'UTC' },
@@ -79,99 +234,131 @@ async function main() {
       '2026-01-31T00:00:00.000Z',
       'offline catch-up must use the same L/# cron matcher as live scheduling',
     );
-    const durableTickOne = scheduler.schedulerRuntimeTestHooks.enqueueScheduleExecutionIntent({
-      scheduleKey: 'durable-agent:durable-schedule',
-      tick: '2026-01-01T00:00',
-      agentId: 'durable-agent',
-      agentName: 'Durable agent',
-      scheduleId: 'durable-schedule',
-      cron: '* * * * *',
-      instructions: 'Original durable instructions',
+
+    const agentsPath = path.join(process.env.SHIBA_DATA_DIR, 'agents.json');
+    const now = new Date().toISOString();
+    const baseAgent = (id: string, name: string) => ({
+      id,
+      name,
+      model: 'grok-4',
+      workspace: { path: root, useWorktree: false },
+      integrations: {},
+      peers: [],
+      skills: [],
+      createdAt: now,
+      updatedAt: now,
     });
-    const duplicateDurableTick = scheduler.schedulerRuntimeTestHooks.enqueueScheduleExecutionIntent({
-      scheduleKey: 'durable-agent:durable-schedule',
-      tick: '2026-01-01T00:00',
-      agentId: 'durable-agent',
-      agentName: 'Durable agent',
-      scheduleId: 'durable-schedule',
-      cron: '* * * * *',
-      instructions: 'Original durable instructions',
-    });
-    assert.equal(durableTickOne.inserted, true);
-    assert.equal(duplicateDurableTick.inserted, false, 'one schedule minute must have one durable intent');
-    assert.equal(duplicateDurableTick.intent.id, durableTickOne.intent.id);
-    const durableTickTwo = scheduler.schedulerRuntimeTestHooks.enqueueScheduleExecutionIntent({
-      scheduleKey: 'durable-agent:durable-schedule',
-      tick: '2026-01-01T00:01',
-      agentId: 'durable-agent',
-      agentName: 'Durable agent',
-      scheduleId: 'durable-schedule',
-      cron: '* * * * *',
-      instructions: 'Newest durable instructions',
-    });
-    assert.equal(durableTickTwo.inserted, true);
-    assert.equal(
-      scheduler.schedulerRuntimeTestHooks.list().find((intent) => intent.id === durableTickOne.intent.id)?.status,
-      'skipped',
-      'new ticks coalesce an offline pending backlog',
+    const legacyAgents = [
+      baseAgent('agent-verifier', 'Agent verifier'),
+      {
+        ...baseAgent('legacy-multi-agent', 'Legacy multi'),
+        schedules: [
+          { id: 'multi-a', enabled: true, cron: '*/15 * * * *', instructions: 'First legacy task' },
+          { id: 'multi-b', enabled: false, cron: '0 * * * *', instructions: 'Second legacy task' },
+        ],
+      },
+      {
+        ...baseAgent('legacy-single-agent', 'Legacy single'),
+        schedule: {
+          id: 'single-invalid',
+          enabled: true,
+          cron: '*/10 * * * * *',
+          instructions: 'Preserve this invalid task',
+          description: 'Invalid legacy schedule',
+        },
+      },
+    ];
+    await fs.mkdir(path.dirname(agentsPath), { recursive: true });
+    await fs.writeFile(agentsPath, `${JSON.stringify(legacyAgents, null, 2)}\n`, 'utf8');
+    const firstLegacyMigration = await routines.migrateLegacyAgentSchedules();
+    assert.deepEqual(firstLegacyMigration, { migrated: 3, created: 3, existing: 0, invalid: 1, agents: 2 });
+    const migratedAgentsRaw = JSON.parse(await fs.readFile(agentsPath, 'utf8')) as Array<Record<string, unknown>>;
+    assert(migratedAgentsRaw.every((agent) => !Object.hasOwn(agent, 'schedule') && !Object.hasOwn(agent, 'schedules')),
+      'legacy schedule fields are removed only after durable Routines exist');
+    const legacyRoutines = routines.listRoutines({ limit: 100 }).routines.filter(
+      (candidate) => candidate.parameters.migratedFrom === 'agent_schedule',
     );
-    let durableIntentClaim = scheduler.schedulerRuntimeTestHooks.claimScheduleExecutionIntents(1)[0];
-    assert.equal(durableIntentClaim.id, durableTickTwo.intent.id);
-    const deferredAt = Date.now();
-    assert.equal(scheduler.schedulerRuntimeTestHooks.deferScheduleIntent(durableIntentClaim, 'simulated capacity refusal', 1_000), true);
-    const deferredIntent = scheduler.schedulerRuntimeTestHooks.list().find((intent) => intent.id === durableIntentClaim.id)!;
-    assert.equal(deferredIntent.status, 'pending');
-    assert(Date.parse(deferredIntent.availableAt) >= deferredAt + 900, 'retry backoff must prevent a hot loop');
-    assert.equal(scheduler.schedulerRuntimeTestHooks.claimScheduleExecutionIntents(1).length, 0);
-    db.prepare('UPDATE schedule_execution_intents SET availableAt = ? WHERE id = ?')
-      .run(new Date().toISOString(), deferredIntent.id);
-    durableIntentClaim = scheduler.schedulerRuntimeTestHooks.claimScheduleExecutionIntents(1)[0];
-    db.prepare('UPDATE schedule_execution_intents SET leaseExpiresAt = ? WHERE id = ?')
-      .run(new Date(Date.now() - 1_000).toISOString(), durableIntentClaim.id);
-    assert.equal(scheduler.schedulerRuntimeTestHooks.recoverExpiredScheduleIntents(), 1);
-    assert.equal(
-      scheduler.schedulerRuntimeTestHooks.list().find((intent) => intent.id === durableIntentClaim.id)?.status,
-      'pending',
-      'a crash before run persistence must recover the exact scheduled intent',
-    );
-    db.prepare('UPDATE schedule_execution_intents SET availableAt = ?, createdAt = ? WHERE id = ?')
-      .run(new Date().toISOString(), new Date(Date.now() - 25 * 60 * 60 * 1_000).toISOString(), durableIntentClaim.id);
-    durableIntentClaim = scheduler.schedulerRuntimeTestHooks.claimScheduleExecutionIntents(1)[0];
-    assert.equal(scheduler.schedulerRuntimeTestHooks.deferScheduleIntent(durableIntentClaim, 'still offline', 1_000), true);
-    assert.equal(
-      scheduler.schedulerRuntimeTestHooks.list().find((intent) => intent.id === durableIntentClaim.id)?.status,
-      'failed',
-      'stale intents eventually stop retrying',
-    );
-    db.prepare('UPDATE schedule_execution_intents SET completedAt = ? WHERE id = ?')
-      .run(new Date(Date.now() - 31 * 24 * 60 * 60 * 1_000).toISOString(), durableTickOne.intent.id);
-    scheduler.schedulerRuntimeTestHooks.enqueueScheduleExecutionIntent({
-      scheduleKey: 'durable-agent:durable-schedule',
-      tick: '2026-01-01T00:02',
-      agentId: 'durable-agent',
-      agentName: 'Durable agent',
-      scheduleId: 'durable-schedule',
-      cron: '* * * * *',
-      instructions: 'Retention probe',
-    });
-    assert.equal(
-      scheduler.schedulerRuntimeTestHooks.list().some((intent) => intent.id === durableTickOne.intent.id),
-      false,
-      'old terminal schedule intents must be pruned',
-    );
+    assert.equal(legacyRoutines.length, 3);
+    const invalidLegacy = legacyRoutines.find((candidate) => candidate.parameters.legacyScheduleId === 'single-invalid')!;
+    assert.equal(invalidLegacy.enabled, false);
+    assert.equal(invalidLegacy.prompt, 'Preserve this invalid task');
+    assert.equal(invalidLegacy.parameters.legacyCron, '*/10 * * * * *');
+    assert.equal(invalidLegacy.triggers[0].type, 'manual');
+
+    // Re-introduce the exact retired payload to simulate a crash after SQLite
+    // commit but before agents.json cleanup. Content-derived ids prevent
+    // duplicate Automations and the fields are safely removed on retry.
+    await fs.writeFile(agentsPath, `${JSON.stringify(legacyAgents, null, 2)}\n`, 'utf8');
+    const retriedLegacyMigration = await routines.migrateLegacyAgentSchedules();
+    assert.deepEqual(retriedLegacyMigration, { migrated: 3, created: 0, existing: 3, invalid: 1, agents: 2 });
+    assert.equal(routines.listRoutines({ limit: 100 }).routines.filter(
+      (candidate) => candidate.parameters.migratedFrom === 'agent_schedule',
+    ).length, 3, 'legacy agent migration is idempotent');
+
+    const tombstonedLegacy = legacyRoutines.find(
+      (candidate) => candidate.parameters.legacyScheduleId === 'multi-b',
+    )!;
     db.prepare(`
-      UPDATE schedule_execution_intents SET status = 'skipped', completedAt = ?, updatedAt = ?
-      WHERE status IN ('pending', 'processing')
-    `).run(new Date().toISOString(), new Date().toISOString());
+      UPDATE routines SET enabled = 0, deletedAt = ?, updatedAt = ?, version = version + 1
+      WHERE id = ? AND deletedAt IS NULL
+    `).run(stagedAt, stagedAt, tombstonedLegacy.id);
+    await fs.writeFile(agentsPath, `${JSON.stringify(legacyAgents, null, 2)}\n`, 'utf8');
+    const tombstoneRetry = await routines.migrateLegacyAgentSchedules();
+    assert.deepEqual(tombstoneRetry, { migrated: 3, created: 0, existing: 3, invalid: 1, agents: 2 });
+    assert.equal(routines.getRoutine(tombstonedLegacy.id), null,
+      'reintroduced legacy payload must not resurrect a deliberately deleted Automation');
+    assert.equal(typeof (db.prepare('SELECT deletedAt FROM routines WHERE id = ?').get(tombstonedLegacy.id) as { deletedAt: string }).deletedAt, 'string',
+      'the deterministic Routine tombstone remains authoritative during retry');
+    const tombstoneRetriedAgents = JSON.parse(await fs.readFile(agentsPath, 'utf8')) as Array<Record<string, unknown>>;
+    assert(tombstoneRetriedAgents.every((agent) => !Object.hasOwn(agent, 'schedule') && !Object.hasOwn(agent, 'schedules')),
+      'a tombstoned legacy schedule is treated as handled and does not block startup cleanup');
+
+    const linkedStagedRow = db.prepare('SELECT * FROM automation_legacy_intents WHERE id = ?')
+      .get('legacy-intent-linked') as Record<string, unknown>;
+    assert.equal(linkedStagedRow.runId, 'already-dispatched');
     db.prepare(`
-      INSERT INTO runs (id, agentId, agentName, model, status, prompt, startedAt, scheduleId, sideEffects, trace)
-      VALUES (?, ?, ?, ?, 'running', ?, ?, ?, '[]', '[]')
-    `).run('persisted-overlap-run', 'overlap-agent', 'Overlap verifier', 'local:test', 'running schedule', new Date().toISOString(), 'schedule-a');
-    assert.equal(scheduler.isPersistedScheduleStillRunning('overlap-agent', 'schedule-a'), true);
-    assert.equal(scheduler.isPersistedScheduleStillRunning('overlap-agent', 'schedule-b'), false);
-    db.prepare('UPDATE runs SET status = ?, completedAt = ? WHERE id = ?')
-      .run('completed', new Date().toISOString(), 'persisted-overlap-run');
-    assert.equal(scheduler.isPersistedScheduleStillRunning('overlap-agent', 'schedule-a'), false);
+      INSERT INTO automation_legacy_intents (
+        id, scheduleKey, tick, agentId, agentName, scheduleId, cron,
+        instructions, status, availableAt, runId, taskId, createdAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'legacy-intent-unmatched', 'legacy-multi-agent:removed', '2026-07-13T12:03',
+      'legacy-multi-agent', 'Legacy multi', 'removed', '*/7 * * * *',
+      'This schedule was removed before upgrade', 'pending', stagedAt, null, null, stagedAt,
+    );
+    const routineCountBeforeIntentMigration = routines.listRoutines({ limit: 100 }).total;
+    const stagedIntentMigration = await routines.migrateLegacyScheduleIntents();
+    assert.deepEqual(stagedIntentMigration, { queued: 1, linked: 1, skipped: 1, pending: 0 });
+    assert.equal(Boolean(db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'automation_legacy_intents'").get()), false,
+      'the v14 migration inbox is retired after every staged intent is resolved');
+    assert.equal(routines.listRoutines({ limit: 100 }).total, routineCountBeforeIntentMigration,
+      'an unmatched staged intent must not create a recurring Automation');
+    assert.equal(routines.listRoutines({ limit: 100 }).routines.some(
+      (candidate) => candidate.parameters.legacyScheduleId === 'removed',
+    ), false, 'a removed legacy schedule is skipped instead of re-enabled');
+    const migratedPendingRoutine = routines.listRoutines({ limit: 100 }).routines.find(
+      (candidate) => candidate.agentId === 'legacy-multi-agent' && candidate.parameters.legacyScheduleId === 'multi-a',
+    )!;
+    assert.equal(routines.listRoutineInvocations(migratedPendingRoutine.id).length, 1,
+      'pending scheduler work is handed to the durable Routine queue exactly once');
+    db.prepare(`
+      UPDATE routine_invocations
+      SET status = 'skipped', error = 'verification cleanup', updatedAt = ?, completedAt = ?
+      WHERE routineId = ? AND status = 'pending'
+    `).run(new Date().toISOString(), new Date().toISOString(), migratedPendingRoutine.id);
+
+    await assert.rejects(
+      routines.createOwnedRoutine({
+        id: 'missing-owner-routine',
+        name: 'Missing owner',
+        agentId: 'agent-does-not-exist',
+        prompt: 'Never persist this Automation',
+        triggers: [{ id: 'manual', type: 'manual', enabled: true }],
+      }),
+      /Automation agent not found/i,
+    );
+    assert.equal(routines.getRoutine('missing-owner-routine'), null,
+      'owned creation rejects a missing Agent before persisting the Automation');
 
     const secret = 'routine-webhook-secret-123';
     const routine = routines.createRoutine({
@@ -204,6 +391,12 @@ async function main() {
     const storedTriggers = JSON.parse((db.prepare('SELECT triggers FROM routines WHERE id = ?').get(routine.id) as { triggers: string }).triggers) as Array<{ type: string; secret?: string }>;
     assert.match(storedTriggers.find((trigger) => trigger.type === 'webhook')?.secret || '', /^enc:v1:/, 'webhook secret must be encrypted at rest');
     assert.deepEqual(routine.steps.map((step) => step.id), ['first', 'second']);
+    await assert.rejects(
+      routines.updateOwnedRoutine(routine.id, { agentId: 'agent-does-not-exist' }, routine.version),
+      /Automation agent not found/i,
+    );
+    assert.equal(routines.getRoutine(routine.id)?.agentId, 'agent-verifier',
+      'owned reassignment rejects a missing Agent without changing the Automation');
 
     const atomicTriggerRoutine = routines.createRoutine({
       id: 'atomic-trigger-routine',
@@ -331,7 +524,8 @@ async function main() {
     const opened = routines.getRoutine(routine.id)!;
     assert.equal(opened.circuitState, 'open');
     assert(opened.circuitOpenUntil);
-    assert.equal(ledger.listAttention({ status: 'open', taskId: 'routine-fail-task-2' }).total, 1, 'breaker must open one durable attention item');
+    assert.equal(ledger.listAttention({ taskId: 'routine-fail-task-2' }).total, 0,
+      'circuit-breaker failures must stay in routine/task history rather than Attention');
     assert.equal(routines.triggerRoutineManually(routine.id, { kind: 'go' }, 'while-open').invocation.status, 'skipped');
     const reset = routines.resetRoutineCircuit(routine.id, opened.version);
     assert.equal(reset.circuitState, 'closed');
@@ -398,7 +592,8 @@ async function main() {
     }), true);
     assert.equal(ledger.getTask('recovered-parent-task')?.status, 'lost', 'the prior parent must not remain running');
     assert.equal(ledger.getTask('recovered-child-task')?.status, 'lost', 'the prior child must be settled and cancelled');
-    assert.equal(ledger.listAttention({ taskId: 'recovered-parent-task', status: 'open' }).total, 0, 'retry recovery must not notify as a final failure');
+    assert.equal(ledger.listAttention({ taskId: 'recovered-parent-task' }).total, 0,
+      'retry recovery must not create an approval request');
     assert.throws(
       () => routines.finishRoutineInvocation(staleClaim.id, { ok: true, result: 'stale result' }, staleAttempt),
       /lease is no longer owned/,
@@ -772,17 +967,55 @@ async function main() {
     const durable = routines.createDurableOneTimeRoutine({ agentId: 'agent-verifier', when: 'in 1 minute', prompt: 'Follow up' });
     assert.equal(durable.routine.triggers[0].type, 'one_time');
 
-    const agentsRoute = await import('../app/api/agents/route');
-    const invalidAgentResponse = await agentsRoute.POST(new Request('http://localhost/api/agents', {
+    const scheduledCron = await routines.scheduleFromAgentTool(
+      'agent-verifier',
+      '*/20 * * * *',
+      'Durable cron from schedule_task',
+    );
+    assert.equal(scheduledCron.ok, true);
+    assert.equal(scheduledCron.type, 'cron');
+    assert.equal(scheduledCron.durable, true);
+    const scheduledCronRoutine = routines.getRoutine(String(scheduledCron.routineId))!;
+    assert.equal(scheduledCronRoutine.prompt, 'Durable cron from schedule_task');
+    assert.equal(scheduledCronRoutine.triggers[0].type, 'schedule');
+
+    const scheduledOnce = await routines.scheduleFromAgentTool(
+      'agent-verifier',
+      'in 2 minutes',
+      'Durable one-time task from schedule_task',
+    );
+    assert.equal(scheduledOnce.ok, true);
+    assert.equal(scheduledOnce.type, 'one_time');
+    assert.equal(scheduledOnce.durable, true);
+    assert.equal(routines.getRoutine(String(scheduledOnce.routineId))?.triggers[0].type, 'one_time');
+    const rejectedSecondsCron = await routines.scheduleFromAgentTool(
+      'agent-verifier',
+      '*/10 * * * * *',
+      'Never create this',
+    );
+    assert.equal(rejectedSecondsCron.ok, false);
+    assert.match(String(rejectedSecondsCron.error), /exactly five fields/i);
+    const agentsAfterScheduling = JSON.parse(await fs.readFile(agentsPath, 'utf8')) as Array<Record<string, unknown>>;
+    assert(agentsAfterScheduling.every((agent) => !Object.hasOwn(agent, 'schedule') && !Object.hasOwn(agent, 'schedules')),
+      'schedule_task creates only durable Routines and never mutates Agent schedule fields');
+
+    const [{ NextRequest }, agentsRoute] = await Promise.all([
+      import('next/server'),
+      import('../app/api/agents/route'),
+    ]);
+    const invalidAgentResponse = await agentsRoute.POST(new NextRequest('http://localhost/api/agents', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        name: 'Invalid cron agent',
+        name: 'Rejected scheduled agent',
         schedules: [{ id: 'seconds', enabled: true, cron: '*/10 * * * * *', instructions: 'Never save' }],
       }),
-    }) as Parameters<typeof agentsRoute.POST>[0]);
-    assert.equal(invalidAgentResponse.status, 400, 'agent API must reject unsupported cron before persistence');
-    assert.match(String((await invalidAgentResponse.json() as { error?: string }).error), /exactly five fields/i);
+    }));
+    assert.equal(invalidAgentResponse.status, 400, 'agent API must reject retired schedule fields');
+    assert.match(String((await invalidAgentResponse.json() as { error?: string }).error), /schedules were retired|Automation/i);
+    assert.equal((await (await import('../lib/persistence')).loadAgents()).some(
+      (agent) => agent.name === 'Rejected scheduled agent',
+    ), false, 'a rejected schedule-bearing agent is never persisted');
 
     const json = routines.exportRoutine(routine.id, 'json');
     const yaml = routines.exportRoutine(routine.id, 'yaml');
@@ -808,15 +1041,9 @@ async function main() {
       }), { params: Promise.resolve({ id: freeRoutine.id }) });
       assert.equal(maintenanceResponse.status, 503);
       assert.equal(maintenanceResponse.headers.get('retry-after'), '5');
-      await scheduler.initScheduler();
-      assert.equal(scheduler.listScheduled().length, 0);
     } finally {
       releaseMaintenance();
     }
-
-    await scheduler.initScheduler();
-    await scheduler.stopAllScheduledTasks();
-    assert.equal(scheduler.listScheduled().length, 0, 'awaited scheduler stop must leave no re-armed tasks');
 
     console.log('Routine verification passed');
   } finally {

@@ -30,12 +30,17 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            devvit/reddit-bridge/package-lock.json
 
       # `npm ci` enforces lockfile integrity — it fails if package.json and
       # package-lock.json disagree. Puppeteer's Chromium is needed by
       # verify-theme (headless launch check).
       - name: Install (lockfile-exact)
-        run: npm ci
+        run: |
+          npm ci
+          npm ci --prefix devvit/reddit-bridge
 
       # Non-blocking until the remaining no-explicit-any debt is zeroed
       # (TODO.md §4) — then drop continue-on-error so CI enforces it.
@@ -51,6 +56,9 @@ jobs:
 
       - name: Functional verification suite
         run: npm test
+
+      - name: Devvit Reddit bridge verification
+        run: npm --prefix devvit/reddit-bridge run verify
 
   audit:
     name: npm audit (high+)

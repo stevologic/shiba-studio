@@ -1,7 +1,6 @@
 // Next.js instrumentation — runs once when the SERVER starts, before any
-// request. Arms every agent cron schedule immediately, so automations run
-// even if no browser ever opens the app (previously scheduling was triggered
-// by the client hitting /api/boot on page load). Also starts the real host
+// request. Starts the durable Automation engine so work runs even if no
+// browser ever opens the app. Also starts the real host
 // PTY WebSocket bridge (node-pty) on localhost for the in-app terminal.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
@@ -31,6 +30,8 @@ export async function register() {
     const { beginAutomationMaintenance } = await import('./lib/automation-maintenance');
     const releaseIntegrityGate = beginAutomationMaintenance('startup data-integrity repair');
     try {
+      const { migrateLegacyAgentSchedules } = await import('./lib/routines');
+      await migrateLegacyAgentSchedules();
       const { reconcileInterruptedCheckpointRestores } = await import('./lib/task-checkpoints');
       const checkpointRestores = await reconcileInterruptedCheckpointRestores();
       if (checkpointRestores.errors.length) {
@@ -98,6 +99,12 @@ export async function register() {
     console.error('[shiba-studio] failed to start queued retry recovery', e);
   }
   try {
+    const { startBoardAssignmentProcessor } = await import('./lib/board-runner');
+    startBoardAssignmentProcessor();
+  } catch (e) {
+    console.error('[shiba-studio] failed to start Board assignment recovery', e);
+  }
+  try {
     const { reconcileInterruptedMeetings } = await import('./lib/meetings');
     const meetings = reconcileInterruptedMeetings();
     if (meetings > 0) console.log(`[shiba-studio] marked ${meetings} interrupted meeting transcription(s) as failed`);
@@ -120,20 +127,11 @@ export async function register() {
     console.error('[shiba-studio] failed to start task delivery pump', e);
   }
   try {
-    const { initScheduler } = await import('./lib/scheduler');
-    await initScheduler();
-    const { audit } = await import('./lib/audit-log');
-    audit('system', 'schedules armed at server start', 'instrumentation.register');
-    console.log('[shiba-studio] agent schedules armed at server start');
-  } catch (e) {
-    console.error('[shiba-studio] failed to arm schedules at server start', e);
-  }
-  try {
     const { startRoutineEngine } = await import('./lib/routines');
-    startRoutineEngine();
-    console.log('[shiba-studio] durable routine engine started');
+    await startRoutineEngine();
+    console.log('[shiba-studio] durable Automation engine started');
   } catch (e) {
-    console.error('[shiba-studio] failed to start durable routine engine', e);
+    console.error('[shiba-studio] failed to start durable Automation engine', e);
   }
   try {
     const { startTerminalServer } = await import('./lib/terminal-server');

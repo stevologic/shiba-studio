@@ -9,12 +9,12 @@ import {
   getTask,
   heartbeatTask,
   publishTaskChanges,
-  requestTaskAttention,
   transitionTask,
   transitionTaskInOpenTransaction,
 } from './task-ledger';
-import { automationTick, isSupportedAutomationCron } from './scheduler';
+import { automationCronError, automationTick, isSupportedAutomationCron } from './automation-cron';
 import { automationMaintenanceReason, isAutomationMaintenanceActive } from './automation-maintenance';
+import { loadAgents, mutateAgents, withAgentOwnershipSnapshot } from './persistence';
 import type {
   CreateRoutineInput,
   RoutineCondition,
@@ -659,6 +659,11 @@ function selectRoutineRow(id: string): RoutineRow | undefined {
   return getDb().prepare('SELECT * FROM routines WHERE id = ? AND deletedAt IS NULL').get(assertId(id)) as unknown as RoutineRow | undefined;
 }
 
+function selectRoutineRowIncludingDeleted(id: string): RoutineRow | undefined {
+  ensureRoutineSchema();
+  return getDb().prepare('SELECT * FROM routines WHERE id = ?').get(assertId(id)) as unknown as RoutineRow | undefined;
+}
+
 function getRoutineInternal(id: string): RoutineDefinition | null {
   const row = selectRoutineRow(id);
   return row ? rowToRoutine(row, true) : null;
@@ -833,6 +838,35 @@ export function updateRoutine(id: string, patch: Partial<CreateRoutineInput>, ex
   emitAppEvent('routines');
   requestRoutineScheduleSync();
   return getRoutine(current.id)!;
+}
+
+/**
+ * Public/API writes hold the Agent store stable until the Automation row is
+ * committed. Agent deletion uses the same ownership fence, so a create or
+ * reassignment cannot race it and leave an armed Automation without an owner.
+ */
+export async function createOwnedRoutine(input: CreateRoutineInput): Promise<RoutineDefinition> {
+  const agentId = assertId(input.agentId, 'agent id');
+  return withAgentOwnershipSnapshot(async (agentIds) => {
+    if (!agentIds.has(agentId)) throw new Error('Automation agent not found');
+    return createRoutine(input);
+  });
+}
+
+export async function updateOwnedRoutine(
+  id: string,
+  patch: Partial<CreateRoutineInput>,
+  expectedVersion: number,
+): Promise<RoutineDefinition> {
+  return withAgentOwnershipSnapshot(async (agentIds) => {
+    const current = getRoutineInternal(id);
+    if (!current) throw new Error('Routine not found');
+    const agentId = patch.agentId === undefined
+      ? current.agentId
+      : assertId(patch.agentId, 'agent id');
+    if (!agentIds.has(agentId)) throw new Error('Automation agent not found');
+    return updateRoutine(id, patch, expectedVersion);
+  });
 }
 
 const ACTIVE_ROUTINE_TASK_STATUSES = new Set([
@@ -1124,6 +1158,7 @@ export function enqueueRoutineInvocation(input: {
   payload?: Record<string, unknown>;
   forceStatus?: 'pending' | 'skipped';
   skipReason?: string;
+  availableAt?: string;
 }): { invocation: RoutineInvocation; inserted: boolean } {
   assertRoutineDispatchAvailable();
   const routine = getRoutineInternal(input.routineId);
@@ -1142,6 +1177,10 @@ export function enqueueRoutineInvocation(input: {
   const payloadJson = JSON.stringify(payload);
   if (payloadJson.length > 1_000_000) throw new Error('Routine payload exceeds the 1 MB limit');
   const definitionSnapshot = JSON.stringify(executionSnapshotForRoutine(routine));
+  const requestedAt = input.availableAt ? new Date(input.availableAt) : null;
+  const availableAt = requestedAt && !Number.isNaN(requestedAt.getTime()) && requestedAt.getTime() > Date.now()
+    ? requestedAt.toISOString()
+    : now;
   const db = getDb();
   const result = db.prepare(`
     INSERT OR IGNORE INTO routine_invocations (
@@ -1152,7 +1191,7 @@ export function enqueueRoutineInvocation(input: {
       WHERE EXISTS (SELECT 1 FROM routines WHERE id = ? AND deletedAt IS NULL)
   `).run(
     id, routine.id, triggerId, input.triggerType, dedupeKey, cleanText(concurrencyKey, 300, true), status,
-    payloadJson, definitionSnapshot, routine.retryPolicy.maxAttempts, now, reason || null, now, now, status === 'skipped' ? now : null,
+    payloadJson, definitionSnapshot, routine.retryPolicy.maxAttempts, availableAt, reason || null, now, now, status === 'skipped' ? now : null,
     routine.id,
   );
   const row = db.prepare('SELECT * FROM routine_invocations WHERE routineId = ? AND dedupeKey = ?')
@@ -1307,18 +1346,6 @@ export function claimRoutineInvocations(limit = 10, leaseMs = 60_000): RoutineIn
     );
     maybeRetireOneTimeRoutine(invocation.routineId);
   }
-  for (const { routine, invocation, openUntil } of openedCircuits) {
-    if (!invocation.taskId || !getTask(invocation.taskId)) continue;
-    requestTaskAttention({
-      taskId: invocation.taskId,
-      kind: 'failure',
-      severity: 'critical',
-      title: `${routine.name} circuit breaker opened`,
-      body: `${routine.failureStreak} consecutive automation invocations failed. Automatic runs are paused until ${openUntil}.`,
-      dedupeKey: `routine-circuit:${routine.id}`,
-      action: { taskId: invocation.taskId, routineId: routine.id },
-    });
-  }
   if (claimed.length || recovered.length || exhausted.length || openedCircuits.length || closedCircuits) emitAppEvent('routines');
   return claimed;
 }
@@ -1421,7 +1448,6 @@ export function finishRoutineInvocation(
   if (!routine) throw new Error('Routine not found');
   const execution = executionSnapshotForInvocationRow(row, routine);
   const now = nowIso();
-  let openedCircuit: { routine: RoutineDefinition; openUntil: string } | null = null;
   if (outcome.ok) {
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -1478,27 +1504,15 @@ export function finishRoutineInvocation(
       if (failedRoutine && failedRoutine.circuitState === 'closed'
         && failedRoutine.failureStreak >= failedRoutine.circuitBreaker.failureThreshold) {
         const openUntil = new Date(Date.now() + failedRoutine.circuitBreaker.cooldownSeconds * 1_000).toISOString();
-        const opened = db.prepare(`
+        db.prepare(`
           UPDATE routines SET circuitState = 'open', circuitOpenedAt = ?, circuitOpenUntil = ?,
             updatedAt = ? WHERE id = ? AND circuitState = 'closed' AND deletedAt IS NULL
         `).run(now, openUntil, now, failedRoutine.id);
-        if (Number(opened.changes) === 1) openedCircuit = { routine: failedRoutine, openUntil };
       }
       db.exec('COMMIT');
     } catch (error) {
       try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
       throw error;
-    }
-    if (openedCircuit && invocation.taskId && getTask(invocation.taskId)) {
-      requestTaskAttention({
-        taskId: invocation.taskId,
-        kind: 'failure',
-        severity: 'critical',
-        title: `${openedCircuit.routine.name} circuit breaker opened`,
-        body: `${openedCircuit.routine.failureStreak} consecutive routine invocations failed. Automatic runs are paused until ${openedCircuit.openUntil}.`,
-        dedupeKey: `routine-circuit:${openedCircuit.routine.id}`,
-        action: { taskId: invocation.taskId, routineId: openedCircuit.routine.id },
-      });
     }
   }
   audit('run', outcome.ok ? 'routine invocation succeeded' : 'routine invocation failed', routine.name, {
@@ -2395,6 +2409,7 @@ interface RoutineEngineGlobals {
   __shibaRoutinePumpActive?: boolean;
   __shibaRoutineCrons?: Map<string, cron.ScheduledTask>;
   __shibaRoutineCronSync?: Promise<void>;
+  __shibaRoutineStart?: Promise<void>;
   __shibaRoutineGeneration?: number;
   __shibaRoutineStopped?: boolean;
 }
@@ -2473,6 +2488,17 @@ export function syncRoutineSchedules(): Promise<void> {
   return next;
 }
 
+export function getRoutineEngineStatus(): { running: boolean; armedSchedules: number; expectedSchedules: number } {
+  const expectedSchedules = activeRoutines().reduce((count, routine) => (
+    count + routine.triggers.filter((trigger) => trigger.type === 'schedule' && trigger.enabled).length
+  ), 0);
+  return {
+    running: !engine.__shibaRoutineStopped && Boolean(engine.__shibaRoutinePoll && engine.__shibaRoutinePump),
+    armedSchedules: routineCrons.size,
+    expectedSchedules,
+  };
+}
+
 function runRoutinePoll(generation: number): void {
   if (isAutomationMaintenanceActive() || engine.__shibaRoutineStopped || generation !== engine.__shibaRoutineGeneration || engine.__shibaRoutinePollActive) return;
   const promise = pollRoutineTriggers()
@@ -2506,25 +2532,39 @@ function runRoutinePump(generation: number): void {
   engine.__shibaRoutinePumpPromise = promise;
 }
 
-export function startRoutineEngine(): void {
-  if (isAutomationMaintenanceActive()) return;
-  if (!engine.__shibaRoutineStopped && engine.__shibaRoutinePoll && engine.__shibaRoutinePump) return;
+export function startRoutineEngine(): Promise<void> {
+  if (isAutomationMaintenanceActive()) return Promise.resolve();
+  if (!engine.__shibaRoutineStopped && engine.__shibaRoutinePoll && engine.__shibaRoutinePump) return Promise.resolve();
+  if (engine.__shibaRoutineStart) return engine.__shibaRoutineStart;
   ensureRoutineSchema();
   engine.__shibaRoutineStopped = false;
   const generation = engine.__shibaRoutineGeneration ?? 0;
-  void syncRoutineSchedules().catch((error) => {
-    audit('run', 'routine schedule sync failed', error instanceof Error ? error.message : String(error));
+  const start = (async () => {
+    const migration = await migrateLegacyAgentSchedules();
+    if (migration.migrated > 0) {
+      audit('system', 'legacy agent schedules migrated', `${migration.migrated} Automation${migration.migrated === 1 ? '' : 's'} created`, migration);
+    }
+    if (routineEngineFenceActive(generation)) return;
+    await migrateLegacyScheduleIntents();
+    if (routineEngineFenceActive(generation)) return;
+    await syncRoutineSchedules();
+    if (routineEngineFenceActive(generation)) return;
+    if (!engine.__shibaRoutinePoll) {
+      runRoutinePoll(generation);
+      engine.__shibaRoutinePoll = setInterval(() => { runRoutinePoll(generation); }, 5_000);
+      engine.__shibaRoutinePoll.unref?.();
+    }
+    if (!engine.__shibaRoutinePump) {
+      runRoutinePump(generation);
+      engine.__shibaRoutinePump = setInterval(() => { runRoutinePump(generation); }, 1_000);
+      engine.__shibaRoutinePump.unref?.();
+    }
+  })();
+  const wrapped = start.finally(() => {
+    if (engine.__shibaRoutineStart === wrapped) engine.__shibaRoutineStart = undefined;
   });
-  if (!engine.__shibaRoutinePoll) {
-    runRoutinePoll(generation);
-    engine.__shibaRoutinePoll = setInterval(() => { runRoutinePoll(generation); }, 5_000);
-    engine.__shibaRoutinePoll.unref?.();
-  }
-  if (!engine.__shibaRoutinePump) {
-    runRoutinePump(generation);
-    engine.__shibaRoutinePump = setInterval(() => { runRoutinePump(generation); }, 1_000);
-    engine.__shibaRoutinePump.unref?.();
-  }
+  engine.__shibaRoutineStart = wrapped;
+  return wrapped;
 }
 
 export async function stopRoutineEngine(): Promise<void> {
@@ -2535,18 +2575,330 @@ export async function stopRoutineEngine(): Promise<void> {
   engine.__shibaRoutinePoll = undefined;
   engine.__shibaRoutinePump = undefined;
   await Promise.allSettled([
+    engine.__shibaRoutineStart,
     engine.__shibaRoutineCronSync,
     engine.__shibaRoutinePollActive,
     engine.__shibaRoutinePumpPromise,
     ...[...activeRoutineExecutions.values()].map((execution) => execution.promise),
   ].filter((promise): promise is Promise<void> => Boolean(promise)));
   engine.__shibaRoutinePollActive = undefined;
+  engine.__shibaRoutineStart = undefined;
   engine.__shibaRoutinePumpPromise = undefined;
   engine.__shibaRoutinePumpActive = false;
   for (const [, task] of routineCrons) {
     try { task.stop(); } catch { /* already stopped */ }
   }
   routineCrons.clear();
+}
+
+type LegacyAgentSchedule = {
+  id?: unknown;
+  enabled?: unknown;
+  cron?: unknown;
+  instructions?: unknown;
+  description?: unknown;
+};
+
+function legacyScheduleEntries(agent: unknown): LegacyAgentSchedule[] {
+  if (!agent || typeof agent !== 'object') return [];
+  const value = agent as Record<string, unknown>;
+  const schedules = Array.isArray(value.schedules)
+    ? value.schedules.filter((entry): entry is LegacyAgentSchedule => Boolean(entry && typeof entry === 'object'))
+    : [];
+  if (schedules.length > 0) return schedules;
+  return value.schedule && typeof value.schedule === 'object'
+    ? [value.schedule as LegacyAgentSchedule]
+    : [];
+}
+
+function hasLegacyScheduleFields(agent: unknown): boolean {
+  if (!agent || typeof agent !== 'object') return false;
+  return Object.prototype.hasOwnProperty.call(agent, 'schedules')
+    || Object.prototype.hasOwnProperty.call(agent, 'schedule');
+}
+
+function legacyScheduleRoutineId(agentId: string, entry: LegacyAgentSchedule, index: number): string {
+  const fingerprint = createHash('sha256').update(JSON.stringify({
+    agentId,
+    index,
+    id: entry.id,
+    cron: entry.cron,
+    instructions: entry.instructions,
+    description: entry.description,
+  })).digest('hex').slice(0, 32);
+  return `legacy-agent-schedule:${fingerprint}`;
+}
+
+/**
+ * Convert the retired per-agent schedule shape into durable Automations.
+ * Routine ids are content-derived, so a process crash after SQLite commits but
+ * before agents.json is rewritten simply reuses the same rows on the next run.
+ * The legacy fields are removed only after every entry has been created.
+ */
+export async function migrateLegacyAgentSchedules(snapshot?: readonly unknown[]): Promise<{
+  migrated: number;
+  created: number;
+  existing: number;
+  invalid: number;
+  agents: number;
+}> {
+  const observed = snapshot ?? await loadAgents();
+  if (!observed.some(hasLegacyScheduleFields)) {
+    return { migrated: 0, created: 0, existing: 0, invalid: 0, agents: 0 };
+  }
+
+  return mutateAgents(async (agents) => {
+    let migrated = 0;
+    let created = 0;
+    let existing = 0;
+    let invalid = 0;
+    let migratedAgents = 0;
+
+    for (const agent of agents) {
+      if (!hasLegacyScheduleFields(agent)) continue;
+      const entries = legacyScheduleEntries(agent);
+      for (const [index, entry] of entries.entries()) {
+        const cronExpression = typeof entry.cron === 'string' ? entry.cron.trim() : '';
+        const prompt = cleanText(
+          typeof entry.instructions === 'string' ? entry.instructions : entry.description,
+          20_000,
+        ) || 'Perform the scheduled task.';
+        const legacyDescription = cleanText(entry.description, 5_000);
+        const id = legacyScheduleRoutineId(agent.id, entry, index);
+        const validCron = isSupportedAutomationCron(cronExpression);
+        migrated++;
+        if (!validCron) invalid++;
+
+        // A tombstone proves this exact legacy schedule was migrated and then
+        // deliberately removed. Treat it as handled instead of resurrecting it
+        // or repeatedly colliding with the retained primary key.
+        if (selectRoutineRowIncludingDeleted(id)) {
+          existing++;
+          continue;
+        }
+
+        createRoutine({
+          id,
+          name: cleanText(legacyDescription || prompt, 100) || `${agent.name} automation`,
+          description: validCron
+            ? `Migrated from an agent schedule.${legacyDescription ? ` ${legacyDescription}` : ''}`
+            : `Migrated from an agent schedule with an invalid cron expression (${cronExpression || 'empty'}). Review the trigger and enable this Automation.${legacyDescription ? ` ${legacyDescription}` : ''}`,
+          enabled: validCron && entry.enabled === true,
+          agentId: agent.id,
+          prompt,
+          triggers: validCron
+            ? [{ id: 'schedule', type: 'schedule', enabled: true, cron: cronExpression }]
+            : [{ id: 'manual', type: 'manual', enabled: true }],
+          parameters: {
+            migratedFrom: 'agent_schedule',
+            ...(typeof entry.id === 'string' && entry.id ? { legacyScheduleId: entry.id } : {}),
+            ...(cronExpression ? { legacyCron: cronExpression } : {}),
+          },
+          retryPolicy: { maxAttempts: 3, baseDelayMs: 1_000, multiplier: 2, maxDelayMs: 60_000 },
+          catchUpPolicy: 'run_once',
+          circuitBreaker: { failureThreshold: 3, cooldownSeconds: 900 },
+        });
+        created++;
+      }
+
+      const record = agent as unknown as Record<string, unknown>;
+      delete record.schedules;
+      delete record.schedule;
+      migratedAgents++;
+    }
+
+    return { migrated, created, existing, invalid, agents: migratedAgents };
+  });
+}
+
+type LegacyScheduleIntentMigrationRow = {
+  id: string;
+  scheduleKey: string;
+  tick: string;
+  agentId: string;
+  agentName: string;
+  scheduleId: string;
+  cron: string;
+  instructions: string;
+  status: string;
+  availableAt: string;
+  runId: string | null;
+  taskId: string | null;
+  createdAt: string;
+};
+
+function allRoutineDefinitions(): RoutineDefinition[] {
+  const definitions: RoutineDefinition[] = [];
+  for (let offset = 0;; offset += 500) {
+    const page = listRoutines({ limit: 500, offset });
+    definitions.push(...page.routines);
+    if (definitions.length >= page.total || page.routines.length === 0) return definitions;
+  }
+}
+
+/** Consume pending work staged by the v14 database migration. */
+export async function migrateLegacyScheduleIntents(): Promise<{ queued: number; linked: number; skipped: number; pending: number }> {
+  const db = getDb();
+  const inboxExists = () => Boolean(db.prepare(`
+    SELECT 1 AS found FROM sqlite_master
+    WHERE type = 'table' AND name = 'automation_legacy_intents'
+  `).get());
+  if (!inboxExists()) return { queued: 0, linked: 0, skipped: 0, pending: 0 };
+  if (isAutomationMaintenanceActive()) {
+    // Another process may finish the one-time migration between the existence
+    // check and this read. A vanished inbox means there is no work left here.
+    if (!inboxExists()) return { queued: 0, linked: 0, skipped: 0, pending: 0 };
+    let pending = 0;
+    try {
+      pending = Number((db.prepare('SELECT COUNT(*) AS count FROM automation_legacy_intents').get() as { count: number }).count);
+    } catch (error) {
+      if (!inboxExists()) return { queued: 0, linked: 0, skipped: 0, pending: 0 };
+      throw error;
+    }
+    return { queued: 0, linked: 0, skipped: 0, pending };
+  }
+
+  return withAgentOwnershipSnapshot(async (agentIds) => {
+  const definitions = allRoutineDefinitions();
+  const byLegacyId = new Map<string, RoutineDefinition>();
+  const byLegacyShape = new Map<string, RoutineDefinition>();
+  for (const routine of definitions) {
+    if (routine.parameters?.migratedFrom !== 'agent_schedule') continue;
+    const legacyId = typeof routine.parameters.legacyScheduleId === 'string' ? routine.parameters.legacyScheduleId : '';
+    const legacyCron = typeof routine.parameters.legacyCron === 'string' ? routine.parameters.legacyCron : '';
+    if (legacyId) byLegacyId.set(`${routine.agentId}\0${legacyId}`, routine);
+    if (legacyCron) byLegacyShape.set(`${routine.agentId}\0${legacyCron}\0${routine.prompt}`, routine);
+  }
+
+  let queued = 0;
+  let linked = 0;
+  let skipped = 0;
+  let rows: LegacyScheduleIntentMigrationRow[] = [];
+  let pending = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    // Another process may have consumed and removed the inbox while this one
+    // was loading Agent ownership. Recheck after taking SQLite's writer lock.
+    if (!inboxExists()) {
+      db.exec('COMMIT');
+      return { queued: 0, linked: 0, skipped: 0, pending: 0 };
+    }
+    rows = db.prepare('SELECT * FROM automation_legacy_intents ORDER BY createdAt ASC')
+      .all() as unknown as LegacyScheduleIntentMigrationRow[];
+    for (const row of rows) {
+      try {
+        // A linked run/task proves the old worker already dispatched this
+        // intent. Keep that durable history and never execute it twice.
+        const hasLinkedRun = Boolean(row.runId && db.prepare('SELECT 1 AS found FROM runs WHERE id = ?').get(row.runId));
+        const hasLinkedTask = Boolean(row.taskId && db.prepare('SELECT 1 AS found FROM tasks WHERE id = ?').get(row.taskId));
+        if (hasLinkedRun || hasLinkedTask) {
+          linked++;
+        } else if (!agentIds.has(row.agentId)) {
+          skipped++;
+        } else {
+          const matchedRoutine = byLegacyId.get(`${row.agentId}\0${row.scheduleId}`)
+            || byLegacyShape.get(`${row.agentId}\0${row.cron}\0${row.instructions}`);
+          const routine = matchedRoutine ? getRoutineInternal(matchedRoutine.id) : null;
+          if (!routine) {
+            // The retired scheduler rechecked the live Agent schedule before
+            // dispatch. No matching migrated definition means it was removed,
+            // disabled through deletion, or never valid; do not resurrect a
+            // recurring external side effect from an orphaned tick.
+            skipped++;
+          } else {
+            const trigger = routine.triggers.find((candidate) => candidate.type === 'schedule')
+              || routine.triggers[0];
+            const result = enqueueRoutineInvocation({
+              routineId: routine.id,
+              triggerId: trigger.id,
+              triggerType: trigger.type,
+              dedupeKey: trigger.type === 'schedule'
+                ? `schedule:${trigger.id}:${row.tick}`
+                : `legacy-intent:${row.id}`,
+              payload: {
+                tick: row.tick,
+                migratedFrom: 'agent_schedule_intent',
+                legacyIntentId: row.id,
+                legacyScheduleKey: row.scheduleKey,
+              },
+              availableAt: row.availableAt,
+            });
+            if (result.inserted && result.invocation.status === 'pending') queued++;
+            else skipped++;
+          }
+        }
+        db.prepare('DELETE FROM automation_legacy_intents WHERE id = ?').run(row.id);
+      } catch (error) {
+        audit('system', 'legacy schedule intent migration deferred', error instanceof Error ? error.message : String(error), {
+          legacyIntentId: row.id,
+          agentId: row.agentId,
+        });
+      }
+    }
+
+    pending = Number((db.prepare('SELECT COUNT(*) AS count FROM automation_legacy_intents').get() as { count: number }).count);
+    if (pending === 0) db.exec('DROP TABLE IF EXISTS automation_legacy_intents');
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* no transaction */ }
+    throw error;
+  }
+
+  if (rows.length > 0) {
+    audit('system', 'legacy schedule intents retired', `${queued} queued, ${linked} already linked, ${skipped} skipped, ${pending} pending`);
+  }
+  if (pending > 0) {
+    throw new Error(`${pending} legacy schedule intent${pending === 1 ? '' : 's'} could not be migrated; Automation startup is paused until retry succeeds`);
+  }
+  return { queued, linked, skipped, pending };
+  });
+}
+
+export async function scheduleFromAgentTool(agentId: string, when: string, prompt: string): Promise<Record<string, unknown>> {
+  if (isAutomationMaintenanceActive()) {
+    return {
+      ok: false,
+      error: `Automations are temporarily paused for maintenance${automationMaintenanceReason() ? `: ${automationMaintenanceReason()}` : ''}. Retry shortly.`,
+    };
+  }
+
+  const agent = (await loadAgents()).find((candidate) => candidate.id === agentId);
+  if (!agent) return { ok: false, error: 'agent not found' };
+  const requested = when.trim();
+  const instructions = cleanText(prompt, 20_000) || 'Scheduled follow-up task';
+
+  try {
+    if (isSupportedAutomationCron(requested)) {
+      const routine = await createOwnedRoutine({
+        name: cleanText(instructions, 100) || 'Scheduled follow-up',
+        description: `Created by schedule_task for ${agent.name}.`,
+        agentId,
+        prompt: instructions,
+        triggers: [{ id: 'schedule', type: 'schedule', enabled: true, cron: requested }],
+        retryPolicy: { maxAttempts: 3, baseDelayMs: 5_000, multiplier: 2, maxDelayMs: 5 * 60_000 },
+        catchUpPolicy: 'run_once',
+        circuitBreaker: { failureThreshold: 3, cooldownSeconds: 900 },
+      });
+      return { ok: true, type: 'cron', durable: true, routineId: routine.id, cron: requested };
+    }
+
+    const fieldCount = requested ? requested.split(/\s+/).length : 0;
+    if (fieldCount === 5 || fieldCount === 6) {
+      return { ok: false, error: automationCronError(requested) };
+    }
+
+    const oneTime = durableOneTimeRoutineDefinition({ agentId, when: requested, prompt: instructions });
+    const routine = await createOwnedRoutine(oneTime.definition);
+    return {
+      ok: true,
+      type: 'one_time',
+      durable: true,
+      routineId: routine.id,
+      runAt: oneTime.runAt,
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Could not understand the requested schedule' };
+  }
 }
 
 export function parseNaturalOneTime(value: string, base = new Date()): Date | null {
@@ -2572,19 +2924,30 @@ export function parseNaturalOneTime(value: string, base = new Date()): Date | nu
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-export function createDurableOneTimeRoutine(input: { agentId: string; when: string; prompt: string }): { routine: RoutineDefinition; runAt: string } {
+function durableOneTimeRoutineDefinition(input: { agentId: string; when: string; prompt: string }): {
+  definition: CreateRoutineInput;
+  runAt: string;
+} {
   const runAt = parseNaturalOneTime(input.when);
   if (!runAt || runAt.getTime() <= Date.now()) throw new Error('One-time routine must resolve to a future date');
-  const routine = createRoutine({
-    name: cleanText(input.prompt, 100) || 'Scheduled follow-up',
-    description: `Created by schedule_task for ${runAt.toISOString()}`,
-    agentId: input.agentId,
-    prompt: input.prompt || 'Scheduled follow-up task',
-    triggers: [{ id: 'one-time', type: 'one_time', enabled: true, at: runAt.toISOString() }],
-    catchUpPolicy: 'run_once',
-    retryPolicy: { maxAttempts: 3, baseDelayMs: 5_000, multiplier: 2, maxDelayMs: 5 * 60_000 },
-  });
-  return { routine, runAt: runAt.toISOString() };
+  const at = runAt.toISOString();
+  return {
+    runAt: at,
+    definition: {
+      name: cleanText(input.prompt, 100) || 'Scheduled follow-up',
+      description: `Created by schedule_task for ${at}`,
+      agentId: input.agentId,
+      prompt: input.prompt || 'Scheduled follow-up task',
+      triggers: [{ id: 'one-time', type: 'one_time', enabled: true, at }],
+      catchUpPolicy: 'run_once',
+      retryPolicy: { maxAttempts: 3, baseDelayMs: 5_000, multiplier: 2, maxDelayMs: 5 * 60_000 },
+    },
+  };
+}
+
+export function createDurableOneTimeRoutine(input: { agentId: string; when: string; prompt: string }): { routine: RoutineDefinition; runAt: string } {
+  const oneTime = durableOneTimeRoutineDefinition(input);
+  return { routine: createRoutine(oneTime.definition), runAt: oneTime.runAt };
 }
 
 function yamlScalar(value: unknown): string {

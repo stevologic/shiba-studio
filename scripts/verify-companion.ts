@@ -96,7 +96,7 @@ async function main() {
 
     const db = dbModule.getDb();
     const version = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    assert(version.user_version >= 8, 'guarded companion tables do not change schema version');
+    assert(version.user_version >= 13, 'companion approvals require the approval-only Attention schema');
     const pairingRow = db.prepare('SELECT codeHash FROM companion_pairings WHERE id = ?')
       .get(pairingPayload.pairing.id) as { codeHash: string };
     assert.notEqual(pairingRow.codeHash, pairingPayload.pairing.code, 'raw pairing code is never stored');
@@ -152,19 +152,14 @@ async function main() {
       apiKey: 'TOP_SECRET_APPROVAL',
       content: 'TOP_SECRET_BODY',
     }, 60_000);
-    const attention = ledger.requestTaskAttention({
+    const attention = ledger.requestTaskApproval({
       taskId: task.id,
-      kind: 'approval',
+      approvalId: pending.approvalId,
+      toolName: 'shell_exec',
+      args: { command: 'npm test', apiKey: 'TOP_SECRET_APPROVAL', content: 'TOP_SECRET_BODY' },
       title: 'Approve test command',
       body: 'Contains TOP_SECRET_BODY and must never be projected.',
-      dedupeKey: `tool-approval:${pending.approvalId}`,
-      action: {
-        taskId: task.id,
-        approvalId: pending.approvalId,
-        toolName: 'shell_exec',
-        args: { command: 'npm test', apiKey: 'TOP_SECRET_APPROVAL', content: 'TOP_SECRET_BODY' },
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-      },
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
 
     const dataResponse = await dataRoute.GET(new Request('http://shiba.local:3000/api/companion/data', {
@@ -208,7 +203,7 @@ async function main() {
     ));
     assert.equal(approveResponse.status, 200);
     assert.equal(await pending.wait, true, 'exact remote decision resolves the host approval synchronously');
-    assert.equal(ledger.listAttention({ status: 'open', taskId: task.id }).items.some((item) => item.id === attention.id), false);
+    assert.equal(ledger.listAttention({ taskId: task.id }).items.some((item) => item.id === attention.id), false);
     const replayResponse = await actionRoute.POST(jsonRequest(
       'http://shiba.local:3000/api/companion/actions', approvalBody, paired.deviceKey,
     ));
@@ -225,18 +220,14 @@ async function main() {
     });
     ledger.transitionTask({ taskId: staleTask.id, status: 'waiting_for_approval' });
     const stalePending = approvals.beginToolApproval(staleTask.runId!, 'fs_write', { path: 'safe.txt', content: 'hello' }, 60_000);
-    const staleAttention = ledger.requestTaskAttention({
+    const staleAttention = ledger.requestTaskApproval({
       taskId: staleTask.id,
-      kind: 'approval',
+      approvalId: stalePending.approvalId,
+      toolName: 'fs_write',
+      args: { path: 'safe.txt', content: 'hello' },
       title: 'Write safe.txt',
       body: 'Exact write approval',
-      dedupeKey: `tool-approval:${stalePending.approvalId}`,
-      action: {
-        approvalId: stalePending.approvalId,
-        toolName: 'fs_write',
-        args: { path: 'safe.txt', content: 'hello' },
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-      },
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
     const staleData = await (await dataRoute.GET(new Request('http://shiba.local:3000/api/companion/data', {
       headers: { Authorization: `Bearer ${paired.deviceKey}` },
@@ -257,14 +248,11 @@ async function main() {
     }, paired.deviceKey));
     assert.equal(staleDecision.status, 409, 'stale task revision cannot approve an action');
     assert(approvals.getPendingApproval(stalePending.approvalId), 'stale decision leaves approval pending');
-    const genericApprovalResolve = await actionRoute.POST(jsonRequest('http://shiba.local:3000/api/companion/actions', {
-      action: 'resolve_attention', idempotencyKey: 'resolve-approval-denied-0001',
-      attentionId: staleAttention.id, updatedAt: staleAttention.updatedAt,
-    }, paired.deviceKey));
-    assert.equal(genericApprovalResolve.status, 409, 'generic attention resolution cannot dismiss an approval');
-    assert(ledger.listAttention({ status: 'open', taskId: staleTask.id }).items.some((item) => item.id === staleAttention.id));
+    assert(ledger.listAttention({ taskId: staleTask.id }).items.some((item) => item.id === staleAttention.id));
     approvals.resolveToolApproval(stalePending.approvalId, false);
     assert.equal(await stalePending.wait, false);
+    assert.equal(ledger.listAttention({ taskId: staleTask.id }).total, 0,
+      'resolved pending-map approvals must be pruned from companion Attention data');
 
     const steerTask = ledger.createTask({
       id: 'companion-steer-task', kind: 'work', title: 'Steer or cancel', status: 'running', runId: 'no-live-run',
@@ -280,16 +268,6 @@ async function main() {
     }, paired.deviceKey));
     assert.equal(cancelResponse.status, 200);
     assert.equal(ledger.getTask(steerTask.id)?.status, 'cancelled');
-
-    const clearItem = ledger.requestTaskAttention({
-      taskId: task.id, kind: 'warning', title: 'Review one warning', body: 'Safe summary', dedupeKey: 'companion-clear-me',
-    });
-    const clearResponse = await actionRoute.POST(jsonRequest('http://shiba.local:3000/api/companion/actions', {
-      action: 'resolve_attention', idempotencyKey: 'clear-action-0001',
-      attentionId: clearItem.id, updatedAt: clearItem.updatedAt,
-    }, paired.deviceKey));
-    assert.equal(clearResponse.status, 200);
-    assert.equal(ledger.listAttention({ taskId: task.id }).items.find((item) => item.id === clearItem.id)?.status, 'resolved');
 
     const auditEntries = auditLog.listAuditLogs({ category: 'auth', q: 'companion approve', limit: 20 }).entries;
     assert(auditEntries.some((entry) => entry.meta?.deviceId === paired.device.id), 'remote mutation audit is device-attributed');

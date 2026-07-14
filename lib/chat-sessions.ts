@@ -5,6 +5,7 @@ import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
 import type { ChatSession } from './chat-session-types';
 import { compactContextScope, deleteContextScope, indexSessionContext } from './context-engine';
+import { ownershipStoreFencePath, withStoreFileLock } from './store-file-lock';
 
 export type { ChatSession } from './chat-session-types';
 export { deriveSessionTitle } from './chat-session-types';
@@ -22,17 +23,11 @@ interface ChatSessionStore {
  * UI patches used to interleave writes and corrupt chat-sessions.json into
  * concatenated JSON — list then returned empty (parse failure).
  */
-const chatStoreLockGlobal = globalThis as typeof globalThis & { __shibaChatStoreChain?: Promise<unknown> };
-
 function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = chatStoreLockGlobal.__shibaChatStoreChain ?? Promise.resolve();
-  const run = previous.then(fn, fn);
-  // Keep the queue alive even if this op fails.
-  chatStoreLockGlobal.__shibaChatStoreChain = run.then(
-    () => undefined,
-    () => undefined,
+  return withStoreFileLock(
+    ownershipStoreFencePath(DATA_DIR),
+    () => withStoreFileLock(SESSIONS_FILE, fn),
   );
-  return run;
 }
 
 async function ensureData() {
@@ -100,6 +95,23 @@ async function saveStore(sessions: ChatSession[]) {
   await saveStoreUnlocked(sessions);
 }
 
+async function projectWorkspaceForChat(projectId: string | null | undefined): Promise<string> {
+  if (!projectId) return '';
+  const { getProject } = await import('./projects');
+  const project = await getProject(projectId);
+  if (!project) throw new Error('Chat project not found');
+  return typeof project.workspacePath === 'string' ? project.workspacePath.trim() : '';
+}
+
+async function assertExistingChatWorkspace(candidate: string): Promise<string> {
+  const resolved = path.resolve(candidate);
+  const stat = await fs.lstat(resolved).catch(() => null);
+  if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error('Chat workspace must be an existing real directory');
+  }
+  return resolved;
+}
+
 export async function listChatSessions(opts?: { includeArchived?: boolean }): Promise<ChatSession[]> {
   return withStoreLock(async () => {
     const store = await loadStore();
@@ -146,17 +158,25 @@ export async function getChatSession(id: string): Promise<ChatSession | null> {
 }
 
 export async function createChatSession(
-  defaults: Partial<Pick<ChatSession, 'title' | 'chatTarget' | 'chatModel' | 'projectId' | 'useGrokCli' | 'reasoningEffort' | 'ephemeral'>> = {},
+  defaults: Partial<Pick<ChatSession, 'title' | 'chatTarget' | 'chatModel' | 'projectId' | 'useGrokCli' | 'toolsEnabled' | 'reasoningEffort' | 'ephemeral'>> = {},
 ): Promise<ChatSession> {
   return withStoreLock(async () => {
+    let projectId: string | null = null;
+    if (defaults.projectId != null) {
+      if (typeof defaults.projectId !== 'string') throw new Error('Chat project id must be a string or null');
+      projectId = defaults.projectId.trim() || null;
+    }
+    const projectWorkspace = await projectWorkspaceForChat(projectId);
+    if (projectWorkspace) await assertExistingChatWorkspace(projectWorkspace);
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: uuidv4(),
       title: defaults.title?.trim() || 'New chat',
       chatTarget: defaults.chatTarget || 'grok',
       chatModel: defaults.chatModel || 'cloud:grok-4',
-      projectId: defaults.projectId ?? null,
+      projectId,
       useGrokCli: !!defaults.useGrokCli,
+      toolsEnabled: defaults.toolsEnabled !== false,
       reasoningEffort: defaults.reasoningEffort || 'low',
       ephemeral: !!defaults.ephemeral,
       unreadCount: 0,
@@ -176,7 +196,9 @@ export async function updateChatSession(
   id: string,
   patch: Partial<Omit<ChatSession, 'id' | 'createdAt'>>,
 ): Promise<ChatSession> {
-  return withStoreLock(async () => {
+  const ownershipChanged = Object.prototype.hasOwnProperty.call(patch, 'workspaceDir')
+    || Object.prototype.hasOwnProperty.call(patch, 'projectId');
+  const mutate = () => withStoreLock(async () => {
     const store = await loadStore();
     const idx = store.sessions.findIndex((s) => s.id === id);
     if (idx < 0) throw new Error('Chat session not found');
@@ -189,6 +211,45 @@ export async function updateChatSession(
     delete mutablePatch.unreadCount;
     delete mutablePatch.lastReadMessageId;
     delete mutablePatch.lastReadAt;
+    if (Object.prototype.hasOwnProperty.call(mutablePatch, 'toolsEnabled')
+      && typeof mutablePatch.toolsEnabled !== 'boolean') {
+      throw new Error('Chat tools setting must be a boolean');
+    }
+    if (Object.prototype.hasOwnProperty.call(mutablePatch, 'projectId')) {
+      const requested = mutablePatch.projectId;
+      if (requested == null || (typeof requested === 'string' && !requested.trim())) {
+        mutablePatch.projectId = null;
+      } else if (typeof requested === 'string') {
+        mutablePatch.projectId = requested.trim();
+      } else {
+        throw new Error('Chat project id must be a string or null');
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(mutablePatch, 'workspaceDir')) {
+      const requested = mutablePatch.workspaceDir;
+      if (requested == null || (typeof requested === 'string' && !requested.trim())) {
+        mutablePatch.workspaceDir = null;
+      } else if (typeof requested === 'string') {
+        mutablePatch.workspaceDir = path.resolve(requested.trim());
+      } else {
+        throw new Error('Chat workspace must be a directory path or null');
+      }
+    }
+    if (ownershipChanged) {
+      const nextWorkspaceDir = Object.prototype.hasOwnProperty.call(mutablePatch, 'workspaceDir')
+        ? mutablePatch.workspaceDir
+        : current.workspaceDir;
+      const nextProjectId = Object.prototype.hasOwnProperty.call(mutablePatch, 'projectId')
+        ? mutablePatch.projectId
+        : current.projectId;
+      const projectWorkspace = await projectWorkspaceForChat(
+        typeof nextProjectId === 'string' ? nextProjectId : null,
+      );
+      const effectiveWorkspace = typeof nextWorkspaceDir === 'string' && nextWorkspaceDir.trim()
+        ? nextWorkspaceDir.trim()
+        : projectWorkspace;
+      if (effectiveWorkspace) await assertExistingChatWorkspace(effectiveWorkspace);
+    }
     if (Array.isArray(mutablePatch.messages)) {
       const incomingIds = new Set(mutablePatch.messages.map((message) => message.id));
       const serverDelivered = (current.messages || []).filter((message) =>
@@ -218,6 +279,15 @@ export async function updateChatSession(
     indexSessionContext(store.sessions[idx]);
     return store.sessions[idx];
   });
+  if (!ownershipChanged) return mutate();
+
+  const { withIntegrityMutation } = await import('./integrity-coordinator');
+  const { result } = await withIntegrityMutation(
+    `chat workspace update:${id}`,
+    mutate,
+    { includeWorktrees: true, includeExternalCleanup: false },
+  );
+  return result;
 }
 
 /**
@@ -260,7 +330,7 @@ export async function deleteChatSession(id: string): Promise<void> {
       await saveStore(store.sessions.filter((s) => s.id !== id));
       try { deleteContextScope('session', id); }
       catch (error) { console.error('[shiba-studio] deferred deleted-chat context cleanup', error); }
-    }));
+    }), { includeWorktrees: true, includeExternalCleanup: false });
 }
 
 function cloneMessages(messages: import('./project-types').ProjectChatMessage[]) {
@@ -288,6 +358,7 @@ export async function forkChatSession(
       chatModel: parent.chatModel,
       projectId: parent.projectId,
       useGrokCli: parent.useGrokCli,
+      toolsEnabled: parent.toolsEnabled !== false,
       cliModel: parent.cliModel,
       reasoningEffort: parent.reasoningEffort,
       workspaceDir: parent.workspaceDir,

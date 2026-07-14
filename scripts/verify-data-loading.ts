@@ -157,11 +157,11 @@ async function main() {
       name: 'Legacy Agent',
       model: 'cloud:grok-4',
       description: '',
+      autoAcceptBoardAssignments: false,
       workspace: { path: workspace, useWorktree: false },
       integrations: { ...EMPTY_INTEGRATION_SCOPE },
       peers: [],
       skills: [],
-      schedules: [],
       createdAt: '2026-07-13T10:00:00.000Z',
       updatedAt: '2026-07-13T10:00:00.000Z',
     }]);

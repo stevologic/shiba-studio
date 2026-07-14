@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server';
-import { createRoutine, listRoutines } from '@/lib/routines';
+import { createOwnedRoutine, listRoutines } from '@/lib/routines';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const routine = createRoutine(body);
+    const routine = await createOwnedRoutine(body);
     return Response.json({ ok: true, routine }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid routine';

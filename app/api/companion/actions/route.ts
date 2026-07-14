@@ -10,20 +10,18 @@ import {
   applyTaskCommand,
   enqueueTaskCommand,
   getTask,
-  listAttention,
-  resolveAttention,
+  removeApprovalAttention,
 } from '@/lib/task-ledger';
 import { getRoutine, triggerRoutineManually } from '@/lib/routines';
 import type { CompanionScope } from '@/lib/companion-auth';
 
-type ActionKind = 'approve' | 'deny' | 'steer' | 'cancel' | 'resolve_attention' | 'start_routine';
+type ActionKind = 'approve' | 'deny' | 'steer' | 'cancel' | 'start_routine';
 
 const ACTION_SCOPE: Record<ActionKind, CompanionScope> = {
   approve: 'action:attention',
   deny: 'action:attention',
   steer: 'action:steer',
   cancel: 'action:cancel',
-  resolve_attention: 'action:attention',
   start_routine: 'action:routines',
 };
 
@@ -96,7 +94,7 @@ export async function POST(request: Request) {
       });
       const applied = applyTaskCommand(command.id);
       if (applied.status !== 'applied') throw new CompanionAuthError('Approval could not be applied', 409);
-      resolveAttention(exact.attention.id, 'resolved');
+      removeApprovalAttention(exact.attention.id);
       result = { action: kind, taskId: exact.task.id, attentionId: exact.attention.id };
     } else if (kind === 'steer') {
       const task = getTask(String(body.taskId || ''));
@@ -128,16 +126,6 @@ export async function POST(request: Request) {
       const applied = applyTaskCommand(command.id);
       if (applied.status !== 'applied') throw new CompanionAuthError('Cancellation could not be applied', 409);
       result = { action: kind, taskId: task.id };
-    } else if (kind === 'resolve_attention') {
-      const attention = listAttention({ status: 'open', limit: 500 }).items
-        .find((item) => item.id === String(body.attentionId || ''));
-      if (!attention) throw new CompanionAuthError('Attention item is no longer open', 409);
-      if (attention.kind === 'approval') {
-        throw new CompanionAuthError('Approval items must be approved or denied through their exact bound action', 409);
-      }
-      if (body.updatedAt !== attention.updatedAt) throw new CompanionAuthError('Attention item changed; refresh before resolving', 409);
-      resolveAttention(attention.id, 'resolved');
-      result = { action: kind, attentionId: attention.id, taskId: attention.taskId };
     } else {
       const routineId = String(body.routineId || '').trim();
       const routine = getRoutine(routineId);

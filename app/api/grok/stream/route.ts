@@ -8,6 +8,7 @@ import { buildGlobalUploadsChatContext } from '@/lib/workspace';
 import { buildGlobalInstructionsContext } from '@/lib/global-instructions';
 import { resolveCloudBearer } from '@/lib/xai-oauth';
 import { clipForModel, environmentFacts } from '@/lib/prompt-hygiene';
+import { resolveChatToolsEnabled, shouldUseChatTools } from '@/lib/chat-tool-mode';
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -16,6 +17,7 @@ export async function POST(req: NextRequest) {
     : null;
   const ephemeralSession = !!requestChatSession?.ephemeral;
   const backgroundSessionId = requestChatSession && !ephemeralSession ? requestChatSession.id : null;
+  const toolsEnabled = resolveChatToolsEnabled(body.toolsEnabled, requestChatSession?.toolsEnabled);
   const cfg = await loadConfig();
   let integrationCreds = cfg.integrations || {};
   const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
@@ -148,7 +150,7 @@ export async function POST(req: NextRequest) {
   }
   // Agents browse for real in chat: tell the model how that works so it
   // neither refuses nor invents results.
-  if (chatAgent) {
+  if (chatAgent && toolsEnabled) {
     systemParts.push([
       '## Browser',
       'Your browser tools (browser_navigate, browser_click, browser_type, browser_extract, browser_screenshot) drive a real headless Chrome — no window appears on screen by design.',
@@ -157,7 +159,7 @@ export async function POST(req: NextRequest) {
     ].join('\n'));
   }
 
-  if (workspaceDir) {
+  if (workspaceDir && toolsEnabled) {
     systemParts.push([
       '## Chat workspace (coding agent)',
       `This chat is bound to the folder \`${workspaceDir}\` on the user's machine.`,
@@ -183,30 +185,37 @@ export async function POST(req: NextRequest) {
     ].join('\n'));
   }
 
-  // Always-on: Studio Terminal is available for local chat (same machine).
-  systemParts.push([
-    '## Studio Terminal',
-    'You can drive the in-app Studio Terminal with the terminal_exec tool.',
-    'Commands run in a real shared PTY the user can open anytime (Ctrl+` / Terminal button); they see live output.',
-    'Prefer terminal_exec when the user asks to run something in the terminal, or for interactive multi-step shell work.',
-    'Prefer shell_exec for silent workspace automation. Avoid full-screen interactive apps (vim, less, top) via tools.',
-  ].join('\n'));
+  if (toolsEnabled) {
+    // Studio Terminal is available for local chat (same machine).
+    systemParts.push([
+      '## Studio Terminal',
+      'You can drive the in-app Studio Terminal with the terminal_exec tool.',
+      'Commands run in a real shared PTY the user can open anytime (Ctrl+` / Terminal button); they see live output.',
+      'Prefer terminal_exec when the user asks to run something in the terminal, or for interactive multi-step shell work.',
+      'Prefer shell_exec for silent workspace automation. Avoid full-screen interactive apps (vim, less, top) via tools.',
+    ].join('\n'));
 
-  // Always-on chat tools (web, etc.) — never promise to look something up without
-  // calling tools and finishing with a complete answer in the same turn sequence.
-  systemParts.push([
-    '## Tools & complete answers',
-    'You have live tools in this chat (at least web_search, web_fetch, and terminal_exec; more when an agent or workspace is bound).',
-    'For current events, sports fixtures, news, docs, or anything time-sensitive: call web_search / web_fetch (or other tools) before answering.',
-    'Never end with only a promise like "I\'ll check", "let me look that up", or "one moment" — the user only sees your final message after tools finish.',
-    'Workflow: call tools as needed → then write a complete final answer with the facts. If tools fail, say what failed and answer with best effort.',
-    '## Grounding',
-    'Specifics (names, paths, versions, numbers, dates, URLs, quotes) must come from the conversation, the provided context, or a tool result — never from guesswork.',
-    'If the needed information is not available and no tool can obtain it, say plainly what is missing instead of inventing a plausible answer.',
-    'Tool results marked "[truncated…]" are incomplete — do not guess the missing part; re-read a narrower slice or say the data was cut off.',
-  ].join('\n'));
+    // Tool-enabled chat must finish the work instead of stopping on a promise.
+    systemParts.push([
+      '## Tools & complete answers',
+      'You have live tools in this chat (at least web_search, web_fetch, and terminal_exec; more when an agent or workspace is bound).',
+      'For current events, sports fixtures, news, docs, or anything time-sensitive: call web_search / web_fetch (or other tools) before answering.',
+      'Never end with only a promise like "I\'ll check", "let me look that up", or "one moment" — the user only sees your final message after tools finish.',
+      'Workflow: call tools as needed → then write a complete final answer with the facts. If tools fail, say what failed and answer with best effort.',
+      '## Grounding',
+      'Specifics (names, paths, versions, numbers, dates, URLs, quotes) must come from the conversation, the provided context, or a tool result — never from guesswork.',
+      'If the needed information is not available and no tool can obtain it, say plainly what is missing instead of inventing a plausible answer.',
+      'Tool results marked "[truncated…]" are incomplete — do not guess the missing part; re-read a narrower slice or say the data was cut off.',
+    ].join('\n'));
+  } else {
+    systemParts.push([
+      '## Tools disabled for this chat',
+      'Do not call, simulate, or claim to have used web, terminal, workspace, integration, memory, browser, or background-task tools.',
+      'Answer only from the conversation and supplied context. If a tool is required, explain what is unavailable and mention that the user can run `/tools on`.',
+    ].join('\n'));
+  }
 
-  if (backgroundSessionId) {
+  if (backgroundSessionId && toolsEnabled) {
     // Long-running work requires a verified durable chat destination.
     systemParts.push([
       '## Background tasks (long-running work)',
@@ -287,6 +296,7 @@ export async function POST(req: NextRequest) {
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   audit('chat', 'message sent', (lastUser?.content || '').slice(0, 120), {
     model, agent: agentName, agentId: body.agentId || null, turns: messages.length,
+    toolsEnabled,
     workspace: workspaceDir || null,
     contextMeter: preparedSessionContext?.meter || null,
   });
@@ -295,7 +305,7 @@ export async function POST(req: NextRequest) {
   // model can actually look things up. Attachments fall back to the plain vision stream.
   // Works for OAuth, API token, and local OpenAI-compatible models.
   const hasAttachments = messages.some((m) => m.attachments?.length);
-  const useAgentTools = !hasAttachments;
+  const useAgentTools = shouldUseChatTools(toolsEnabled, hasAttachments);
   // Extra turns for research/coding so we never stop mid-promise.
   const MAX_TOOL_TURNS = workspaceDir ? 18 : 12;
   /** How many times we re-ask after a promise-only / empty final. */

@@ -16,6 +16,12 @@ import { getToolDefinitions } from '../lib/agent-runtime';
 import { filterToolsByDisabled } from '../lib/disabled-tools';
 import { parseInlineToolCall } from '../lib/inline-tool-calls';
 import { assertTaskShellCommand } from '../lib/task-workspace-policy';
+import {
+  parseChatToolsSetting,
+  resolveChatToolsEnabled,
+  shouldUseChatTools,
+} from '../lib/chat-tool-mode';
+import { grokCliToolControlArgs } from '../lib/grok-cli';
 
 let failures = 0;
 function assert(cond: boolean, msg: string) {
@@ -24,6 +30,34 @@ function assert(cond: boolean, msg: string) {
 }
 
 async function main() {
+  // --- Per-chat tool mode: exact parsing, backwards compatibility, dispatch ---
+  assert(parseChatToolsSetting(' ON ') === true, '/tools accepts case-insensitive on');
+  assert(parseChatToolsSetting('off') === false, '/tools accepts off');
+  assert(parseChatToolsSetting('maybe') === null, '/tools rejects ambiguous values');
+  assert(resolveChatToolsEnabled(undefined, undefined), 'legacy sessions default tools on');
+  assert(!resolveChatToolsEnabled(undefined, false), 'persisted tools-off state is restored');
+  assert(resolveChatToolsEnabled(true, false), 'explicit request state wins during session refresh');
+  assert(!shouldUseChatTools(false, false), 'tools off selects the plain chat stream');
+  assert(shouldUseChatTools(true, false), 'tools on selects the tool loop');
+  assert(!shouldUseChatTools(true, true), 'attachments keep using the plain vision stream');
+
+  const cliToolsOff = grokCliToolControlArgs({ toolsEnabled: false });
+  const cliToolsFlag = cliToolsOff.indexOf('--tools');
+  const cliDeniedToolsFlag = cliToolsOff.indexOf('--disallowed-tools');
+  assert(
+    cliToolsFlag >= 0
+      && cliDeniedToolsFlag >= 0
+      && cliToolsOff[cliToolsFlag + 1] === cliToolsOff[cliDeniedToolsFlag + 1],
+    'Grok CLI allowlists then removes the same tool, yielding an empty set',
+  );
+  for (const flag of ['--no-memory', '--no-subagents', '--disable-web-search']) {
+    assert(cliToolsOff.includes(flag), `Grok CLI tools-off mode includes ${flag}`);
+  }
+  assert(
+    cliToolsOff.some((value, index) => value === 'MCPTool' && cliToolsOff[index - 1] === '--deny'),
+    'Grok CLI tools-off mode denies residual MCP tool calls',
+  );
+
   // --- Bug 1: filter must never alias the input (in-place mutation safe) ---
   const tools = getToolDefinitions(
     { github: false, slack: false, googledrive: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false } as never,
@@ -74,6 +108,26 @@ async function main() {
   }
 
   const fs = await import('fs/promises');
+  const [chatPanelSource, grokStreamSource, grokCliStreamSource] = await Promise.all([
+    fs.readFile(path.join(process.cwd(), 'components/grok-chat-panel.tsx'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'app/api/grok/stream/route.ts'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'app/api/grok-cli/stream/route.ts'), 'utf8'),
+  ]);
+  assert(
+    chatPanelSource.includes("if (parsed.name === 'tools')")
+      && chatPanelSource.includes('toolsEnabled,'),
+    'Grok composer handles /tools and sends the mode with each turn',
+  );
+  assert(
+    grokStreamSource.includes('shouldUseChatTools(toolsEnabled, hasAttachments)')
+      && grokStreamSource.includes('## Tools disabled for this chat'),
+    'API chat gates both tool dispatch and tool-capability prompting',
+  );
+  assert(
+    grokCliStreamSource.includes('toolsEnabled,')
+      && grokCliStreamSource.includes('maxTurns: toolsEnabled ?'),
+    'Grok CLI receives the tool boundary and collapses tools-off runs to one turn',
+  );
   await fs.mkdir(SCRATCH, { recursive: true }).catch(() => {});
   await fs.writeFile(
     path.join(SCRATCH, 'tool-dispatch-verify.log'),
