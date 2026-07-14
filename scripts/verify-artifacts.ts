@@ -16,6 +16,8 @@ async function main() {
   process.env.SHIBA_DATA_DIR = path.join(root, 'data');
   process.env.SHIBA_SECRET_KEY = '99'.repeat(32);
   await fs.mkdir(workspace, { recursive: true });
+  const workspaceAlias = path.join(root, 'workspace-alias');
+  await fs.symlink(workspace, workspaceAlias, process.platform === 'win32' ? 'junction' : 'dir');
 
   const files = {
     html: path.join(workspace, 'dashboard.html'),
@@ -133,7 +135,12 @@ async function main() {
     assert.equal(automatic?.kind, 'image');
     assert.equal(automatic?.sourceLineage.origin, 'agent_fs_write');
     await fs.writeFile(files.svg, '<svg xmlns="http://www.w3.org/2000/svg"><text>two</text></svg>');
-    const automaticV2 = await artifacts.autoRegisterArtifactWrite({ taskId: task.id, filePath: files.svg, runId: 'run-1' });
+    const automaticV2 = await artifacts.autoRegisterArtifactWrite({
+      taskId: task.id,
+      filePath: path.join(workspaceAlias, path.basename(files.svg)),
+      runId: 'run-1',
+    });
+    assert.equal(automaticV2?.id, automatic?.id, 'canonical path aliases update the existing artifact');
     assert.equal(automaticV2?.versions?.length, 2);
 
     const tamperVersion = automaticV2!.versions![0];

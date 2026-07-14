@@ -644,7 +644,8 @@ export function publicationAudienceAllowsRequest(publication: ArtifactPublicatio
 
 export async function autoRegisterArtifactWrite(input: { taskId: string; filePath: string; runId?: string }): Promise<ArtifactRecord | null> {
   if (!AUTO_REGISTER_EXTENSIONS.has(path.extname(input.filePath).toLowerCase())) return null;
-  const absolute = path.resolve(input.filePath);
+  const requested = path.resolve(input.filePath);
+  const absolute = await fs.realpath(requested).catch(() => requested);
   const existing = listArtifacts(input.taskId).find((artifact) => artifact.sourceLineage.sourcePath === absolute);
   if (existing) {
     const full = getArtifact(existing.id)!;
