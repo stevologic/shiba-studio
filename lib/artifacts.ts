@@ -243,13 +243,14 @@ async function resolveOwnedFile(taskId: string, requestedPath: string): Promise<
   const task = getTask(taskId);
   if (!task) throw new Error('Task not found');
   const requested = path.resolve(String(requestedPath || ''));
-  const matching = task.workspaceRoots.filter((root) => root.permission === 'write' && inside(root.path, requested));
-  for (const root of matching) {
+  const absolute = await fs.realpath(requested).catch(() => null);
+  const stat = await fs.lstat(requested).catch(() => null);
+  if (!absolute || !stat?.isFile() || stat.isSymbolicLink()) {
+    throw new Error('Artifact must be a regular file inside a task-owned writable workspace root');
+  }
+  for (const root of task.workspaceRoots.filter((candidate) => candidate.permission === 'write')) {
     const rootReal = await fs.realpath(path.resolve(root.path)).catch(() => null);
-    const absolute = await fs.realpath(requested).catch(() => null);
-    if (!rootReal || !absolute || !inside(rootReal, absolute)) continue;
-    const stat = await fs.lstat(requested).catch(() => null);
-    if (!stat?.isFile() || stat.isSymbolicLink()) continue;
+    if (!rootReal || !inside(rootReal, absolute)) continue;
     if (stat.size > MAX_ARTIFACT_BYTES) throw new Error(`Artifact exceeds ${MAX_ARTIFACT_BYTES} bytes`);
     return { absolute, relative: path.relative(rootReal, absolute).replace(/\\/g, '/'), rootId: root.id };
   }

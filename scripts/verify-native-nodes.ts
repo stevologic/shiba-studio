@@ -104,15 +104,43 @@ async function main() {
       appRevision: '1',
       capabilities: ['capture'],
     }), /Sensitive/);
-    const appId = path.resolve('C:\\Apps\\Notes.exe').toLowerCase();
+    assert.throws(() => native.createNativeNodeGrant({
+      nodeId: paired.node.id,
+      appId: '/Applications/1Password.app/Contents/MacOS/1Password',
+      appLabel: '1Password',
+      appRevision: '1',
+      capabilities: ['capture'],
+    }), /Sensitive/);
+    assert.throws(() => native.createNativeNodeGrant({
+      nodeId: paired.node.id,
+      appId: 'Apps/Notes.exe',
+      appLabel: 'Notes',
+      appRevision: '1',
+      capabilities: ['capture'],
+    }), /absolute executable path/);
+    const appId = 'c:\\apps\\notes.exe';
     const grant = native.createNativeNodeGrant({
       nodeId: paired.node.id,
-      appId,
+      appId: 'C:\\Apps\\Notes.exe',
       appLabel: 'Notes',
       appRevision: '1.0|stamp',
       capabilities: ['capture', 'click', 'type'],
       ttlMinutes: 5,
     });
+    assert.equal(grant.appId, appId, 'Windows app identities normalize independently of the server OS');
+    const posixGrant = native.createNativeNodeGrant({
+      nodeId: paired.node.id,
+      appId: '/Applications/Notes.app/Contents/MacOS/Notes',
+      appLabel: 'Notes',
+      appRevision: '1.0|stamp',
+      capabilities: ['capture'],
+      ttlMinutes: 5,
+    });
+    assert.equal(
+      posixGrant.appId,
+      '/Applications/Notes.app/Contents/MacOS/Notes',
+      'POSIX app identities normalize independently of the server OS',
+    );
     assert(Date.parse(grant.expiresAt) - Date.now() <= 5 * 60_000);
     assert.throws(() => native.enqueueNativeNodeJob({
       nodeId: paired.node.id,
@@ -327,7 +355,7 @@ async function main() {
     assert.equal(native.getNativeNodeJob(processingNodeJob.id)?.status, 'failed');
     assert.equal(native.getNativeNodeJob(queuedNodeJob.id)?.status, 'failed');
     assert.throws(() => native.authenticateNativeNode(authRequest()), /expired or revoked/);
-    console.log('native-nodes: 49 passed, 0 failed');
+    console.log('native-nodes: 53 passed, 0 failed');
   } finally {
     dbModule.closeDb();
     await fs.rm(root, { recursive: true, force: true });

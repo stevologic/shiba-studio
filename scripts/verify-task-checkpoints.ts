@@ -20,6 +20,7 @@ async function main() {
   git(workspace, 'init');
   git(workspace, 'config', 'user.email', 'checkpoint@example.invalid');
   git(workspace, 'config', 'user.name', 'Checkpoint Verifier');
+  git(workspace, 'config', 'commit.gpgSign', 'false');
   git(workspace, 'add', '.');
   git(workspace, 'commit', '-m', 'baseline');
   await fs.writeFile(path.join(workspace, 'unrelated.txt'), 'user dirty bytes\n');

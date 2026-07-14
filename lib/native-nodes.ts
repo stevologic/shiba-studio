@@ -480,8 +480,16 @@ export function isSensitiveNativeApp(appId: string, label = ''): boolean {
 function normalizeAppId(raw: string): string {
   const value = raw.trim();
   if (value === '__clipboard__' || value === '__file_open__') return value;
-  if (!path.isAbsolute(value)) throw new NativeNodeError('App id must be an absolute executable path');
-  return process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+  // App identities come from the native node, which can run a different OS
+  // than the Shiba server. Parse them using their own path syntax instead of
+  // the server's host-specific `path` implementation.
+  if (path.posix.isAbsolute(value)) return path.posix.normalize(value);
+  if (path.win32.isAbsolute(value)) return path.win32.normalize(value).toLowerCase();
+  throw new NativeNodeError('App id must be an absolute executable path');
+}
+
+function nativeAppBasename(appId: string): string {
+  return path.posix.isAbsolute(appId) ? path.posix.basename(appId) : path.win32.basename(appId);
 }
 
 const SYSTEM_CAPS: Record<string, NativeNodeCapability[]> = {
@@ -502,7 +510,7 @@ export function createNativeNodeGrant(input: {
   const node = listNativeNodes().find((item) => item.id === input.nodeId && !item.revokedAt && Date.parse(item.expiresAt) > Date.now());
   if (!node) throw new NativeNodeError('Active native node not found', 404);
   const appId = normalizeAppId(input.appId);
-  const appLabel = cleanText(input.appLabel || path.basename(appId), 160, true);
+  const appLabel = cleanText(input.appLabel || nativeAppBasename(appId), 160, true);
   if (isSensitiveNativeApp(appId, appLabel)) throw new NativeNodeError('Sensitive app classes cannot be granted native control', 403);
   const capabilities = normalizeCapabilities(input.capabilities);
   const allowed = appId in SYSTEM_CAPS ? SYSTEM_CAPS[appId] : ['capture', 'click', 'type'] as NativeNodeCapability[];

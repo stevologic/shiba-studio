@@ -169,7 +169,7 @@ async function verifyStructuralWiring(): Promise<void> {
   assert((await read('public/integrations/reddit.svg')).includes('<svg'), 'Reddit integration icon exists');
 
   const types = await read('lib/types.ts');
-  const redditType = types.match(/reddit\?:\s*\{([\s\S]*?)\n\s*\};\n\s*obsidian\?:/)?.[1] || '';
+  const redditType = types.match(/reddit\?:\s*\{([\s\S]*?)\}\s*;\s*obsidian\?:/)?.[1] || '';
   assert(redditType.includes('devvitEndpoint?: string'), 'credential type stores the Devvit endpoint');
   assert(redditType.includes('devvitAppToken?: string'), 'credential type stores the managed app token');
   assert(!/(?:clientSecret|accessToken|refreshToken|username)/.test(redditType), 'credential type contains no legacy Reddit OAuth session');
