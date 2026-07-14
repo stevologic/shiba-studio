@@ -697,6 +697,15 @@ function scheduleIntegrityRequestRetry(
 }
 
 /**
+ * Queue the follow-up pass required by worktree cleanup's two-phase grace
+ * period. Inventory routes use this after discovering a legacy worktree so
+ * cleanup still converges when the hourly maintenance pass is not imminent.
+ */
+export function scheduleWorktreeIntegrityReconciliation(delayMs = 30_000): void {
+  scheduleIntegrityRequestRetry(delayMs, false, true, false);
+}
+
+/**
  * Write a durable repair intent before a cross-store mutation, then reconcile
  * after it commits. Cleanup failure never turns a successful user mutation
  * into a false API failure; the retained request is retried automatically.

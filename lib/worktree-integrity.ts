@@ -69,6 +69,11 @@ function samePath(left: string, right: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+function normalizedPathKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 function pathIsAtOrInside(candidate: string, root: string): boolean {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   return relative === ''
@@ -150,6 +155,19 @@ async function loadStore(): Promise<WorktreeResourceStore> {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { resources: [] };
     throw error;
   }
+}
+
+/** Read-only snapshot for inventory/status surfaces. */
+export async function listWorktreeResourceRecords(
+  baseWorkspace: string,
+): Promise<WorktreeResourceRecord[]> {
+  const base = path.resolve(baseWorkspace);
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    return store.resources
+      .filter((record) => samePath(record.baseWorkspace, base))
+      .map((record) => ({ ...record }));
+  });
 }
 
 async function saveStore(store: WorktreeResourceStore): Promise<void> {
@@ -241,6 +259,21 @@ async function git(args: string[], cwd: string): Promise<{ ok: boolean; stdout: 
   }
 }
 
+function parseWorktreeList(output: string): Array<{ worktreePath: string; branch?: string }> {
+  const worktrees: Array<{ worktreePath: string; branch?: string }> = [];
+  let current: { worktreePath: string; branch?: string } | undefined;
+  for (const field of output.split('\0')) {
+    if (field.startsWith('worktree ')) {
+      if (current) worktrees.push(current);
+      current = { worktreePath: field.slice('worktree '.length) };
+    } else if (current && field.startsWith('branch ')) {
+      current.branch = field.slice('branch '.length);
+    }
+  }
+  if (current) worktrees.push(current);
+  return worktrees;
+}
+
 async function safelyRemove(record: WorktreeResourceRecord): Promise<{ removed: boolean; attention?: string }> {
   const exact = exactResource(record.baseWorkspace, record.agentId);
   if (!samePath(exact.worktree, record.worktreePath)) {
@@ -317,6 +350,7 @@ export async function reconcileWorktreeResources(input: {
   agents?: ReadonlyArray<{ id: string; workspace?: { path?: string; useWorktree?: boolean } }>;
   sessions?: ReadonlyArray<{ workspaceDir?: unknown; projectId?: unknown; archived?: unknown }>;
   projects?: ReadonlyArray<{ id: string; workspacePath?: unknown; updatedAt?: unknown }>;
+  baseWorkspaces?: ReadonlyArray<string>;
 } = {}): Promise<WorktreeIntegrityReport> {
   const report: WorktreeIntegrityReport = {
     tracked: 0,
@@ -402,6 +436,56 @@ export async function reconcileWorktreeResources(input: {
         return [];
       }
     });
+
+    // Older Shiba versions created agent worktrees without adding them to the
+    // durable registry. Adopt only entries Git itself identifies as worktrees
+    // and whose path + branch exactly match Shiba's ownership convention. All
+    // other folders remain unowned and are intentionally left untouched.
+    const baseWorkspaces = new Map<string, string>();
+    const addBaseWorkspace = (value: unknown): void => {
+      if (typeof value !== 'string' || !value.trim()) return;
+      const resolved = path.resolve(value.trim());
+      baseWorkspaces.set(normalizedPathKey(resolved), resolved);
+    };
+    for (const record of store.resources) addBaseWorkspace(record.baseWorkspace);
+    for (const agent of agents) addBaseWorkspace(agent.workspace?.path);
+    for (const workspace of input.baseWorkspaces ?? []) addBaseWorkspace(workspace);
+
+    for (const base of baseWorkspaces.values()) {
+      const listed = await git(['worktree', 'list', '--porcelain', '-z'], base);
+      if (!listed.ok) continue;
+      const root = path.resolve(base, '.worktrees');
+      for (const candidate of parseWorktreeList(listed.stdout)) {
+        const candidatePath = path.resolve(candidate.worktreePath);
+        if (!samePath(path.dirname(candidatePath), root)) continue;
+        const agentId = path.basename(candidatePath);
+        let exact: ReturnType<typeof exactResource>;
+        try {
+          exact = exactResource(base, agentId);
+        } catch {
+          continue;
+        }
+        if (!samePath(candidatePath, exact.worktree)
+          || candidate.branch !== `refs/heads/agent-${exact.agentId}`) continue;
+        const stat = await fs.lstat(candidatePath).catch(() => null);
+        if (!stat?.isDirectory() || stat.isSymbolicLink()) continue;
+        const key = resourceKey(exact.base, exact.agentId);
+        if (store.resources.some((record) => (
+          resourceKey(record.baseWorkspace, record.agentId) === key
+        ))) continue;
+        store.resources.push({
+          id: randomUUID(),
+          baseWorkspace: exact.base,
+          agentId: exact.agentId,
+          worktreePath: exact.worktree,
+          state: 'delete_requested',
+          createdAt: now,
+          updatedAt: now,
+          deleteRequestedAt: now,
+        });
+        report.discovered += 1;
+      }
+    }
 
     for (const agent of agents) {
       if (!agent.workspace?.useWorktree || !agent.workspace.path) continue;
@@ -525,6 +609,7 @@ export async function reconcileWorktreeResources(input: {
           record.state = 'delete_requested';
           record.updatedAt = now;
         }
+        report.pending += 1;
         retained.push(record);
         continue;
       }

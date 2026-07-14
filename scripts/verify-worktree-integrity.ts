@@ -175,7 +175,11 @@ async function main() {
     assert.equal(first.tracked, 10);
     assert.equal(first.discovered, 0);
     assert.equal(first.removed, 0, 'automatic cleanup must publish a tombstone before deleting');
-    assert.equal(first.pending, 5, 'automatic orphans and both creation handoffs are pending');
+    assert.equal(
+      first.pending,
+      6,
+      'automatic orphans, active task ownership, and both creation handoffs are pending',
+    );
     assert.equal(first.attention, 0);
     assert.deepEqual(first.errors, []);
     assert.equal(await pathExists(clean.worktreePath), true);
@@ -216,7 +220,7 @@ async function main() {
     });
     const second = await integrity.reconcileWorktreeResources({ agents, sessions, projects });
     assert.equal(second.removed, 1, 'expired clean orphan is removed');
-    assert.equal(second.pending, 2, 'fresh creation generations remain pending');
+    assert.equal(second.pending, 3, 'active task ownership and fresh creation generations remain pending');
     assert.equal(second.attention, 2, 'dirty and unpushed worktrees require attention');
     assert.deepEqual(second.errors, []);
     assert.equal(await pathExists(clean.worktreePath), false);
@@ -262,6 +266,93 @@ async function main() {
     assert.equal(await pathExists(nestedChat.worktreePath), false);
     assert.equal(await pathExists(projectChat.worktreePath), false);
     assert.equal(await pathExists(unregistered), true, 'unknown user directory remains untouched');
+
+    // Older Shiba builds could leave behind valid Git worktrees without a
+    // registry record. Adopt only worktrees that still belong to this
+    // repository and use Shiba's exact agent-<id> branch convention. They
+    // must then pass through the same grace period and byte-safety checks as
+    // worktrees created by the current registry-aware path.
+    const legacyCleanId = 'legacy-clean-adoption';
+    const legacyDirtyId = 'legacy-dirty-adoption';
+    const mismatchedId = 'legacy-mismatched-branch';
+    const legacyCleanPath = path.join(workspace, '.worktrees', legacyCleanId);
+    const legacyDirtyPath = path.join(workspace, '.worktrees', legacyDirtyId);
+    const mismatchedPath = path.join(workspace, '.worktrees', mismatchedId);
+    git(workspace, 'worktree', 'add', '-b', `agent-${legacyCleanId}`, legacyCleanPath, 'main');
+    git(workspace, 'push', '--quiet', '-u', 'origin', `agent-${legacyCleanId}`);
+    git(workspace, 'worktree', 'add', '-b', `agent-${legacyDirtyId}`, legacyDirtyPath, 'main');
+    await fs.writeFile(path.join(legacyDirtyPath, 'untracked-user-bytes.txt'), 'must survive cleanup\n');
+    git(workspace, 'worktree', 'add', '-b', 'manual-legacy-mismatch', mismatchedPath, 'main');
+
+    const beforeLegacyAdoption = JSON.parse(await fs.readFile(registryPath, 'utf8')) as typeof afterFirst;
+    assert.equal(
+      beforeLegacyAdoption.resources.some((record) => [legacyCleanId, legacyDirtyId, mismatchedId].includes(record.agentId)),
+      false,
+      'legacy fixtures begin outside Shiba registry authority',
+    );
+
+    const adoptedLegacy = await integrity.reconcileWorktreeResources({
+      agents: [],
+      sessions: [],
+      projects: [],
+      baseWorkspaces: [workspace],
+    });
+    assert.equal(adoptedLegacy.discovered, 2, 'only exact Shiba legacy worktrees are adopted');
+    assert.equal(adoptedLegacy.removed, 0, 'adoption always publishes a tombstone before deletion');
+    assert.equal(await pathExists(legacyCleanPath), true);
+    assert.equal(await pathExists(legacyDirtyPath), true);
+    assert.equal(await pathExists(mismatchedPath), true, 'a current-repository worktree on a manual branch is not adopted');
+    assert.equal(await pathExists(unregistered), true, 'non-Git unregistered content is not adopted');
+
+    let legacyRegistry = JSON.parse(await fs.readFile(registryPath, 'utf8')) as typeof afterFirst;
+    assert.equal(
+      legacyRegistry.resources.find((record) => record.agentId === legacyCleanId)?.state,
+      'delete_requested',
+    );
+    assert.equal(
+      legacyRegistry.resources.find((record) => record.agentId === legacyDirtyId)?.state,
+      'delete_requested',
+    );
+    assert.equal(
+      legacyRegistry.resources.some((record) => record.agentId === mismatchedId),
+      false,
+      'branch-mismatched Git worktrees remain outside automatic deletion authority',
+    );
+
+    await mutateRegistry((resources) => {
+      for (const record of resources) {
+        if ([legacyCleanId, legacyDirtyId].includes(String(record.agentId))) {
+          record.deleteRequestedAt = old;
+        }
+      }
+    });
+    const expiredLegacy = await integrity.reconcileWorktreeResources({
+      agents: [],
+      sessions: [],
+      projects: [],
+      baseWorkspaces: [workspace],
+    });
+    assert.equal(expiredLegacy.discovered, 0, 'adoption is idempotent once resources are registered');
+    assert.equal(expiredLegacy.removed, 1, 'an expired clean and pushed legacy worktree is reclaimed');
+    assert.equal(await pathExists(legacyCleanPath), false);
+    assert.equal(await pathExists(legacyDirtyPath), true, 'untracked legacy bytes must be preserved');
+    assert.equal(await pathExists(mismatchedPath), true, 'manual Git worktrees remain untouched');
+    assert.equal(await pathExists(unregistered), true, 'non-Git unregistered content remains untouched');
+    legacyRegistry = JSON.parse(await fs.readFile(registryPath, 'utf8')) as typeof afterFirst;
+    assert.equal(
+      legacyRegistry.resources.some((record) => record.agentId === legacyCleanId),
+      false,
+      'successful legacy cleanup removes the adopted registry record',
+    );
+    assert.match(
+      legacyRegistry.resources.find((record) => record.agentId === legacyDirtyId)?.attention || '',
+      /uncommitted/i,
+      'dirty adopted worktrees surface attention instead of deleting user bytes',
+    );
+    assert.equal(
+      legacyRegistry.resources.some((record) => record.agentId === mismatchedId),
+      false,
+    );
 
     byAgent = new Map((JSON.parse(await fs.readFile(registryPath, 'utf8')) as typeof afterFirst)
       .resources.map((record) => [record.agentId, record]));

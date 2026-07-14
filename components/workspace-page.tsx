@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
-  Bot, ChevronRight, ChevronsUp, Cloud, CloudDownload, CloudUpload,
+  Activity, Bot, ChevronRight, ChevronsUp, Cloud, CloudDownload, CloudUpload,
   ExternalLink, FileCode, FileText, Folder, FolderOpen, GitBranch, HardDrive, MessageSquare,
   RefreshCw, Save, Search, Trash2, Upload, X,
 } from 'lucide-react';
@@ -45,6 +45,11 @@ interface WorktreeEntry {
   exists: boolean;
   mappedAgent?: boolean;
   chatConsumers?: Array<{ id: string; title: string; archived?: boolean }>;
+  activeTaskConsumers?: Array<{ id: string; title: string; status: string }>;
+  managed?: boolean;
+  cleanupState?: 'creating' | 'active' | 'delete_requested' | 'attention';
+  cleanupAttention?: string;
+  deleteRequestedAt?: string;
 }
 
 interface ExplorerIntent {
@@ -528,7 +533,8 @@ export default function WorkspacePage({
   function consumersFor(wt: WorktreeEntry) {
     const agent = wt.mappedAgent ? agentById.get(wt.agentId) : undefined;
     const chats = wt.chatConsumers || [];
-    return { agent, chats };
+    const activeTasks = wt.activeTaskConsumers || [];
+    return { agent, chats, activeTasks };
   }
 
   const filteredFiles = useMemo(() => {
@@ -741,7 +747,8 @@ export default function WorkspacePage({
               ) : (
                 <div className="ws-wt-list">
                   {worktrees.map((wt) => {
-                    const { agent, chats } = consumersFor(wt);
+                    const { agent, chats, activeTasks } = consumersFor(wt);
+                    const hasConsumers = Boolean(wt.mappedAgent || chats.length || activeTasks.length);
                     return (
                       <article key={wt.agentId} className={`ws-wt-card ${wt.exists ? '' : 'ws-wt-card-missing'}`}>
                         <div className="ws-wt-card-top">
@@ -799,7 +806,7 @@ export default function WorkspacePage({
                         </div>
 
                         <div className="ws-wt-usage">
-                          <div className="ws-wt-usage-label">Used by</div>
+                          <div className="ws-wt-usage-label">{hasConsumers ? 'Used by' : 'Cleanup'}</div>
                           <div className="ws-wt-usage-row">
                             {agent ? (
                               <button
@@ -820,8 +827,26 @@ export default function WorkspacePage({
                                 <MessageSquare size={12} /> {s.title || 'Chat'}{s.archived ? ' (archived)' : ''}
                               </span>
                             ))}
-                            {!wt.mappedAgent && chats.length === 0 && (
-                              <span className="text-[11px] text-dim">No linked agent or chat found</span>
+                            {activeTasks.map((task) => (
+                              <span key={task.id} className="ws-usage-pill" title={`Active task · ${task.title} · ${task.status}`}>
+                                <Activity size={12} /> {task.title || 'Background task'}
+                              </span>
+                            ))}
+                            {!hasConsumers && (
+                              <span
+                                className="text-[11px] text-dim"
+                                title={wt.cleanupState === 'attention' ? wt.cleanupAttention : undefined}
+                              >
+                                {wt.cleanupState === 'delete_requested'
+                                  ? 'Unused — automatic cleanup pending'
+                                  : wt.cleanupState === 'attention'
+                                    ? 'Automatic cleanup paused'
+                                    : wt.cleanupState === 'creating'
+                                      ? 'Worktree creation in progress'
+                                      : wt.managed === false
+                                        ? 'Unmanaged folder — preserved for safety'
+                                        : 'Managed worktree — checking ownership'}
+                              </span>
                             )}
                           </div>
                         </div>
