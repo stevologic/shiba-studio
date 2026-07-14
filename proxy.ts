@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
+import { advertisedHostnames } from './lib/mdns';
 
 const CLIENT_CLASS_HEADER = 'x-shiba-client-class';
 const PROXY_SECRET_HEADER = 'x-shiba-lan-proxy-secret';
@@ -24,11 +25,20 @@ const OAUTH_CALLBACK_PATHS = new Set([
 function isAllowedOrigin(origin: string, req: NextRequest): boolean {
   try {
     const u = new URL(origin);
-    const host = u.hostname;
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    const host = u.hostname.toLowerCase().replace(/\.$/, '');
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return true;
     // The app served from a non-loopback host (deliberate LAN exposure):
     // accept only the exact host:port the request itself was addressed to.
-    return u.host === req.nextUrl.host;
+    if (u.host.toLowerCase() === req.nextUrl.host.toLowerCase()) return true;
+
+    // Next normalizes a loopback-bound dev server's URL authority to localhost,
+    // even when the browser reached it through the configured mDNS alias. In
+    // that one case, compare against the preserved Host header. Restricting the
+    // exception to an advertised name keeps forged and lookalike hosts denied.
+    const requestHost = (req.headers.get('host') || '').trim().toLowerCase();
+    return u.protocol === req.nextUrl.protocol
+      && advertisedHostnames().includes(host)
+      && requestHost === u.host.toLowerCase();
   } catch {
     return false; // includes literal "null" origins (sandboxed iframes)
   }

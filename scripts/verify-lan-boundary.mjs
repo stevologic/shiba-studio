@@ -87,9 +87,11 @@ async function websocketUpgrade(port, secret) {
 async function main() {
   const previousLan = process.env.SHIBA_LAN;
   const previousSecret = process.env.SHIBA_LAN_PROXY_SECRET;
+  const previousMdnsHost = process.env.SHIBA_MDNS_HOST;
   const secret = 'lan-boundary-test-secret-with-enough-entropy';
   process.env.SHIBA_LAN = '1';
   process.env.SHIBA_LAN_PROXY_SECRET = secret;
+  process.env.SHIBA_MDNS_HOST = 'shiba.local';
 
   assert.equal(classifyClientAddress('127.0.0.1'), 'local');
   assert.equal(classifyClientAddress('::1'), 'local');
@@ -163,6 +165,52 @@ async function main() {
   const localResponse = proxy(new NextRequest('http://localhost:3000/api/tasks', { headers: localHeaders }));
   assert.equal(localResponse.status, 200, 'socket-classified loopback retains the Studio API');
 
+  // Next may normalize its internal URL to loopback while preserving the mDNS
+  // authority in Host. The real same-origin browser request must remain valid,
+  // without allowing a different port or an mDNS lookalike through the guard.
+  const mdnsHeaders = (origin, secFetchSite = 'same-origin') => buildUpstreamHeaders({
+    host: 'shiba.local:3000',
+    ...(origin === undefined ? {} : { origin }),
+    'sec-fetch-site': secFetchSite,
+  }, '127.0.0.1', secret);
+  const mdnsSameOriginResponse = proxy(new NextRequest('http://127.0.0.1:3000/api/tasks', {
+    method: 'POST',
+    headers: mdnsHeaders('http://shiba.local:3000'),
+  }));
+  assert.equal(mdnsSameOriginResponse.status, 200, 'configured mDNS same-origin requests must be allowed');
+
+  process.env.SHIBA_MDNS_HOST = 'studio';
+  const customMdnsSameOriginResponse = proxy(new NextRequest('http://127.0.0.1:3000/api/tasks', {
+    method: 'POST',
+    headers: buildUpstreamHeaders({
+      host: 'studio.local:3000',
+      origin: 'http://studio.local:3000',
+      'sec-fetch-site': 'same-origin',
+    }, '127.0.0.1', secret),
+  }));
+  assert.equal(customMdnsSameOriginResponse.status, 200, 'a configured bare mDNS alias must normalize and remain allowed');
+  process.env.SHIBA_MDNS_HOST = 'shiba.local';
+
+  for (const rejectedOrigin of [
+    'http://shiba.local:4000',
+    'https://shiba.local:3000',
+    'https://evil.example',
+    'http://shiba.local.evil.example:3000',
+    'http://evil-shiba.local:3000',
+    'null',
+  ]) {
+    const rejectedResponse = proxy(new NextRequest('http://127.0.0.1:3000/api/tasks', {
+      method: 'POST',
+      headers: mdnsHeaders(rejectedOrigin),
+    }));
+    assert.equal(rejectedResponse.status, 403, `origin ${rejectedOrigin} must remain denied`);
+  }
+  const originlessCrossSiteResponse = proxy(new NextRequest('http://127.0.0.1:3000/api/tasks', {
+    method: 'POST',
+    headers: mdnsHeaders(undefined, 'cross-site'),
+  }));
+  assert.equal(originlessCrossSiteResponse.status, 403, 'origin-less cross-site requests must remain denied');
+
   // Exercise real HTTP and upgrade forwarding. Forged metadata is overwritten
   // before either request reaches the loopback upstream.
   let observedUpgradeHeaders;
@@ -209,6 +257,8 @@ async function main() {
   else process.env.SHIBA_LAN = previousLan;
   if (previousSecret === undefined) delete process.env.SHIBA_LAN_PROXY_SECRET;
   else process.env.SHIBA_LAN_PROXY_SECRET = previousSecret;
+  if (previousMdnsHost === undefined) delete process.env.SHIBA_MDNS_HOST;
+  else process.env.SHIBA_MDNS_HOST = previousMdnsHost;
   console.log('LAN boundary verification passed: socket classification, Host spoof denial, HTTP forwarding, and WebSocket upgrades');
 }
 
