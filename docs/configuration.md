@@ -34,6 +34,8 @@ Settings is a card grid; each card maps to a concern:
 | `SHIBA_MDNS_HOST` | `shiba.local` | The `.local` name(s) the app advertises via mDNS — comma-separated; a bare label gets `.local` appended |
 | `SHIBA_MDNS` | on | Set to `off` to disable mDNS advertising entirely |
 | `SHIBA_LAN` | unset | Set by `npm run dev:lan`/`start:lan`; makes mDNS advertise the machine's LAN IP (network-wide) instead of `127.0.0.1` |
+| `SHIBA_LAN_IP` | OS default-route IPv4 | Overrides the address advertised for `shiba.local` when a machine has several physical, VPN, container, or VM adapters |
+| `SHIBA_LAN_STUDIO` | unset | Set by `dev:lan:studio`/`start:lan:studio`; grants the full Studio to private-network socket peers instead of only scoped Companion/native-node routes |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | unset | A bundled Google OAuth client for Drive. When both are set, Capabilities → Google Drive becomes zero-setup — users just click **Sign in with Google**. Unset = each user adds their own client under the card's Advanced section. See [Capabilities](capabilities.md) |
 
 Put these in a `.env.local` file in the project root (gitignored) or your shell environment; see `.env.example`.
@@ -66,6 +68,16 @@ On start the app advertises itself over multicast DNS so you can open it at
   Remote access is disabled until it is enabled and a device is paired from
   `http://localhost:3000/companion/admin`. Only use LAN mode on a trusted
   network and read [SECURITY.md](../SECURITY.md) first.
+- **`npm run dev:lan:studio` / `start:lan:studio` (trusted LAN Studio):** the
+  same gateway grants the complete Studio to socket peers in RFC1918,
+  link-local, CGNAT, or IPv6 ULA ranges. Public-address peers still receive only
+  the scoped surface. There is no Studio login or per-user isolation, so every
+  reachable private peer must be trusted. The terminal WebSocket is relayed
+  through the same classified gateway rather than exposed on its own port.
+
+The LAN address is selected from the interface owning the OS default route,
+which avoids advertising a VirtualBox/VMware/container host-only adapter. Set
+`SHIBA_LAN_IP` explicitly if the desired network is not the default route.
 
 Resolution needs an mDNS resolver on the client: Windows 10+ and macOS have it
 built in, Linux via Avahi/nss-mdns. Rename with `SHIBA_MDNS_HOST`
@@ -117,4 +129,4 @@ Upgrades are automatic: a legacy `~/.grokdesk` directory (including its key and 
 - **Local-first:** no telemetry; outbound traffic goes only to xAI and integrations you configure.
 - **Secrets:** AES-256-GCM at rest (`enc:v1:` prefix), machine key outside the project, plaintext migrated on load, never included in cloud-sync snapshots.
 - **Audit:** every consequential action (runs, chats, config, integrations, sync, git, sub-browser) lands in the Logs page with agent/model provenance and CSV/JSON export.
-- **Network boundary:** `npm run dev`/`npm run start` bind `127.0.0.1` only. In explicit `dev:lan`/`start:lan` mode, an outer listener classifies the TCP peer and forwards to a loopback-only Next server; non-loopback requests are redirected to `/companion`, while generic Studio APIs and companion administration are rejected even if a client spoofs `Host: localhost`. Companion data/actions require a scoped, expiring, revocable device key in addition to same-origin checks. Localhost Studio APIs remain unauthenticated for the single local user. The terminal WebSocket bridge refuses foreign origins, and tool approval defaults to **Ask**. Full threat model: [SECURITY.md](../SECURITY.md).
+- **Network boundary:** `npm run dev`/`npm run start` bind `127.0.0.1` only. `dev:lan`/`start:lan` expose only socket-classified Companion/native-node routes. The separate `dev:lan:studio`/`start:lan:studio` opt-in gives full access only to authenticated-proxy requests from private socket peers; public peers remain scoped. Host and exact Origin checks protect browser requests, but full-LAN peers are not individually authenticated. The terminal WebSocket bridge refuses foreign origins, and tool approval defaults to **Ask**. Full threat model: [SECURITY.md](../SECURITY.md).

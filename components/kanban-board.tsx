@@ -18,9 +18,17 @@ import { subscribeLiveEvents } from '@/lib/live-events';
 import type { BoardStatus, BoardTask } from '@/lib/board-types';
 import { BOARD_PRIORITY_LABELS, BOARD_STATUS_LABELS } from '@/lib/board-types';
 import type { CardWork, WorkFile } from '@/lib/board-work';
+import {
+  BOARD_PROJECT_FILTER_ALL,
+  BOARD_PROJECT_FILTER_UNASSIGNED,
+  boardProjectFilterForId,
+  boardProjectIdFromFilter,
+  boardTaskMatchesProjectFilter,
+  type BoardProjectFilter,
+} from '@/lib/board-project-filter';
 import type { Agent } from '@/lib/types';
 
-// Markdown pipeline is heavy — load it only when a work modal opens.
+// Markdown pipeline is heavy — defer it until an agent answer is visible.
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
 
 function formatBytes(n: number): string {
@@ -180,6 +188,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   const [tableView, setTableView] = useState<BoardStatus | null>(null);
   /** Projects a card can be linked to (loaded once; refreshed with the board). */
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [projectFilter, setProjectFilter] = useState<BoardProjectFilter>(BOARD_PROJECT_FILTER_ALL);
   /** Draft title/description for the open card — an explicit Save persists them.
    *  Held locally so a live board refresh can't wipe an in-progress edit. */
   const [draftTitle, setDraftTitle] = useState('');
@@ -196,14 +205,24 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
+  const filteredTasks = useMemo(
+    () => tasks.filter((task) => boardTaskMatchesProjectFilter(task, projectFilter)),
+    [projectFilter, tasks],
+  );
+  const activeProjectId = boardProjectIdFromFilter(projectFilter);
+  const activeProjectFilterLabel = projectFilter === BOARD_PROJECT_FILTER_ALL
+    ? null
+    : projectFilter === BOARD_PROJECT_FILTER_UNASSIGNED
+      ? 'No project'
+      : projectById.get(activeProjectId || '')?.name || 'Selected project';
   const selected = useMemo(
     () => (selectedId ? tasks.find((t) => t.id === selectedId) || null : null),
     [selectedId, tasks],
   );
   /** Open = work still ahead of review: backlog + todo + in progress. */
-  const openCount = useMemo(
-    () => tasks.filter((t) => t.status === 'backlog' || t.status === 'todo' || t.status === 'in_progress').length,
-    [tasks],
+  const visibleOpenCount = useMemo(
+    () => filteredTasks.filter((t) => t.status === 'backlog' || t.status === 'todo' || t.status === 'in_progress').length,
+    [filteredTasks],
   );
 
   /** Select a card (or close with null) — review feedback never leaks across cards. */
@@ -324,7 +343,12 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     const title = composerTitle.trim();
     if (!title) { setComposerCol(null); return; }
     setComposerTitle('');
-    const task = await post({ action: 'create', title, status });
+    const task = await post({
+      action: 'create',
+      title,
+      status,
+      projectId: boardProjectIdFromFilter(projectFilter),
+    });
     if (task) {
       setTasks((prev) => [...prev, task]);
       composerRef.current?.focus();
@@ -523,10 +547,10 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   const byColumn = useMemo(() => {
     const map = new Map<BoardStatus, BoardTask[]>();
     for (const col of COLUMNS) {
-      map.set(col, tasks.filter((t) => t.status === col).sort((a, b) => a.order - b.order));
+      map.set(col, filteredTasks.filter((t) => t.status === col).sort((a, b) => a.order - b.order));
     }
     return map;
-  }, [tasks]);
+  }, [filteredTasks]);
 
   const doneish = (c: BoardStatus) => c === 'done' || c === 'cancelled';
   /** Cards of the column currently opened as a table. */
@@ -540,9 +564,12 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
             Board
             <span
               className="kb-open-pill"
-              title="Open cards — Backlog, Todo, and In Progress combined"
+              title={activeProjectFilterLabel
+                ? `Open cards in ${activeProjectFilterLabel} — Backlog, Todo, and In Progress combined`
+                : 'Open cards — Backlog, Todo, and In Progress combined'}
+              aria-live="polite"
             >
-              {openCount} open
+              {visibleOpenCount} open
             </span>
           </div>
           <div className="page-subtitle">
@@ -550,6 +577,22 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
           </div>
         </div>
         <div className="kb-head-actions">
+          <div className={`kb-project-filter${projectFilter !== BOARD_PROJECT_FILTER_ALL ? ' kb-project-filter-active' : ''}`}>
+            <FolderKanban size={14} aria-hidden="true" />
+            <label className="sr-only" htmlFor="board-project-filter">Filter board by project</label>
+            <select
+              id="board-project-filter"
+              className="grok-select kb-project-filter-select"
+              value={projectFilter}
+              onChange={(event) => setProjectFilter(event.target.value as BoardProjectFilter)}
+            >
+              <option value={BOARD_PROJECT_FILTER_ALL}>All projects</option>
+              <option value={BOARD_PROJECT_FILTER_UNASSIGNED}>No project</option>
+              {projects.map((project) => (
+                <option key={project.id} value={boardProjectFilterForId(project.id)}>{project.name}</option>
+              ))}
+            </select>
+          </div>
           <button
             type="button"
             className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
@@ -567,7 +610,13 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
         </div>
       </div>
 
-      <div className="kb-columns" role="list" aria-label="Kanban board columns">
+      <div
+        className="kb-columns"
+        role="list"
+        aria-label={activeProjectFilterLabel
+          ? `Kanban board columns filtered by ${activeProjectFilterLabel}`
+          : 'Kanban board columns'}
+      >
         {COLUMNS.map((col) => {
           const colTasks = byColumn.get(col) || [];
           return (
@@ -989,7 +1038,9 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                       </button>
                     )}
                   </div>
-                  <div className="kb-activity-text">{a.text}</div>
+                  <div className={`kb-activity-text${a.kind === 'agent' ? ' kb-activity-text-markdown' : ''}`}>
+                    {a.kind === 'agent' ? <ChatMarkdown content={a.text} /> : a.text}
+                  </div>
                 </div>
               ))}
               {selected.activity.length === 0 && <div className="kb-col-empty">No activity yet</div>}
@@ -1008,13 +1059,16 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
           <div
             className="kb-work-modal kb-table-modal"
             role="dialog"
-            aria-label={`All ${BOARD_STATUS_LABELS[tableView]} cards`}
+            aria-label={`All ${BOARD_STATUS_LABELS[tableView]} cards${activeProjectFilterLabel ? ` in ${activeProjectFilterLabel}` : ''}`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="kb-work-head">
               <StatusIcon status={tableView} />
               <div className="kb-work-title min-w-0">
-                <span className="kb-work-title-text">{BOARD_STATUS_LABELS[tableView]} — all {tableTasks.length} cards</span>
+                <span className="kb-work-title-text">
+                  {BOARD_STATUS_LABELS[tableView]} — all {tableTasks.length} cards
+                  {activeProjectFilterLabel ? ` in ${activeProjectFilterLabel}` : ''}
+                </span>
               </div>
               <button type="button" className="kb-icon-btn" title="Close" aria-label="Close" onClick={() => setTableView(null)}>
                 <X size={15} />

@@ -1039,6 +1039,155 @@ async function main() {
     assert(!json.includes(secret));
     assert(!yaml.includes(secret));
 
+    const importSource = routines.createRoutine({
+      id: 'routine-import-source',
+      name: 'Portable verifier automation',
+      description: 'Exercises JSON and YAML import previews.',
+      enabled: true,
+      agentId: 'agent-verifier',
+      prompt: 'Review {{subject}} before publishing.',
+      triggers: [
+        { id: 'manual', type: 'manual', enabled: true },
+        { id: 'portable-hook', type: 'webhook', enabled: true, secret: 'portable-webhook-secret-123' },
+      ],
+      conditions: [{ path: 'approved', operator: 'equals', value: true }],
+      parameters: { subject: 'release notes', nested: { safe: true } },
+      steps: [{ id: 'review', name: 'Review', prompt: 'Review the release notes' }],
+    });
+    const importJson = routines.exportRoutine(importSource.id, 'json');
+    const importYaml = routines.exportRoutine(importSource.id, 'yaml');
+    const routineImport = await import('../lib/routine-import');
+    const availableOwners = new Set(['agent-verifier']);
+    const routineCountBeforePreview = routines.listRoutines({ limit: 500 }).total;
+    const jsonPreview = routineImport.parseRoutineImport(importJson, 'json', { availableAgentIds: availableOwners });
+    const yamlPreview = routineImport.parseRoutineImport(importYaml, 'yaml', { availableAgentIds: availableOwners });
+    assert.equal(routines.listRoutines({ limit: 500 }).total, routineCountBeforePreview,
+      'parsing an Automation import is a preview and must not persist a Routine');
+    assert.equal(jsonPreview.source.schema, 'shiba.routine/v1');
+    assert.equal(jsonPreview.source.originalId, importSource.id);
+    assert.equal(jsonPreview.source.format, 'json');
+    assert.equal(yamlPreview.source.format, 'yaml');
+    assert.notEqual(jsonPreview.draft.id, importSource.id, 'an imported Automation receives a fresh identity');
+    assert.notEqual(yamlPreview.draft.id, importSource.id, 'YAML imports also receive a fresh identity');
+    assert.notEqual(jsonPreview.draft.id, yamlPreview.draft.id, 'separate import previews never reuse an identity');
+    assert.equal(jsonPreview.draft.enabled, false, 'import previews always start paused for review');
+    assert.equal(yamlPreview.draft.enabled, false, 'YAML import previews always start paused for review');
+    assert.equal(jsonPreview.draft.concurrencyKey, `routine:${jsonPreview.draft.id}`,
+      'the default concurrency key follows the fresh imported identity');
+    assert.equal(yamlPreview.draft.concurrencyKey, `routine:${yamlPreview.draft.id}`,
+      'the YAML default concurrency key follows the fresh imported identity');
+    assert.equal(
+      jsonPreview.draft.triggers.find((trigger) => trigger.type === 'webhook')?.secret,
+      '',
+      'redacted webhook credentials are removed from JSON import previews',
+    );
+    assert.equal(
+      yamlPreview.draft.triggers.find((trigger) => trigger.type === 'webhook')?.secret,
+      '',
+      'redacted webhook credentials are removed from YAML import previews',
+    );
+    assert(jsonPreview.warnings.some((warning) => /paused/i.test(warning)));
+    assert(jsonPreview.warnings.some((warning) => /webhook secret/i.test(warning)));
+    const comparableDraft = (draft: typeof jsonPreview.draft) => ({
+      ...draft,
+      id: '<fresh-id>',
+      concurrencyKey: '<default-concurrency>',
+    });
+    assert.deepEqual(comparableDraft(yamlPreview.draft), comparableDraft(jsonPreview.draft),
+      'the exported JSON and YAML formats produce the same import draft');
+    assert.equal(Object.hasOwn(jsonPreview.draft, 'version'), false, 'runtime version state is not imported');
+    assert.equal(Object.hasOwn(jsonPreview.draft, 'failureStreak'), false, 'runtime failure state is not imported');
+
+    const missingOwnerPreview = routineImport.parseRoutineImport(importJson, 'json', { availableAgentIds: new Set() });
+    assert.equal(missingOwnerPreview.draft.agentId, '', 'a missing exported owner must be reassigned before save');
+    assert(missingOwnerPreview.warnings.some((warning) => /agent.*not available|choose an agent/i.test(warning)));
+    assert.equal(routines.listRoutines({ limit: 500 }).total, routineCountBeforePreview,
+      'a missing-owner preview cannot create an orphaned Automation');
+
+    assert.throws(
+      () => routineImport.parseRoutineImport('{', 'json', { availableAgentIds: availableOwners }),
+      (error: unknown) => error instanceof routineImport.RoutineImportError && /not valid JSON/i.test(error.message),
+      'malformed JSON is rejected before a draft is opened',
+    );
+    assert.throws(
+      () => routineImport.parseRoutineImport('schema: [', 'yaml', { availableAgentIds: availableOwners }),
+      (error: unknown) => error instanceof routineImport.RoutineImportError && /not valid YAML/i.test(error.message),
+      'malformed YAML is rejected before a draft is opened',
+    );
+    assert.throws(
+      () => routineImport.parseRoutineImport(JSON.stringify({
+        schema: 'shiba.routine/v2',
+        routine: JSON.parse(importJson).routine,
+      }), 'json', { availableAgentIds: availableOwners }),
+      (error: unknown) => error instanceof routineImport.RoutineImportError && /shiba\.routine\/v1/i.test(error.message),
+      'unsupported Automation schemas are rejected explicitly',
+    );
+    assert.equal(routineImport.routineImportFormat('portable.JSON'), 'json');
+    assert.equal(routineImport.routineImportFormat('portable.YML'), 'yaml');
+    assert.equal(routineImport.routineImportFormat('portable.txt'), null, 'non-export file types are rejected');
+
+    const customConcurrencyExport = JSON.parse(importJson) as { routine: { concurrencyKey: string } };
+    customConcurrencyExport.routine.concurrencyKey = 'shared:portable-verifier';
+    const customConcurrencyPreview = routineImport.parseRoutineImport(JSON.stringify(customConcurrencyExport), 'json', {
+      availableAgentIds: availableOwners,
+    });
+    assert.equal(customConcurrencyPreview.draft.concurrencyKey, 'shared:portable-verifier',
+      'a deliberately shared concurrency key is preserved while identity defaults are remapped');
+    assert.throws(
+      () => routineImport.parseRoutineImport('schema: shiba.routine/v1\nschema: shiba.routine/v1\nroutine: {}\n', 'yaml'),
+      (error: unknown) => error instanceof routineImport.RoutineImportError && /not valid YAML/i.test(error.message),
+      'duplicate YAML keys are rejected',
+    );
+    assert.throws(
+      () => routineImport.parseRoutineImport('schema: shiba.routine/v1\nroutine: &routine {}\ncopy: *routine\n', 'yaml'),
+      (error: unknown) => error instanceof routineImport.RoutineImportError && /alias|not valid YAML/i.test(error.message),
+      'YAML aliases are rejected instead of being expanded',
+    );
+
+    const importRoute = await import('../app/api/routines/import/route');
+    const importForm = new FormData();
+    importForm.set('file', new File([importJson], 'portable-automation.json', { type: 'application/json' }));
+    const routeCountBeforePreview = routines.listRoutines({ limit: 500 }).total;
+    const importResponse = await importRoute.POST(new Request('http://localhost/api/routines/import', {
+      method: 'POST',
+      body: importForm,
+    }));
+    assert.equal(importResponse.status, 200);
+    const importPayload = await importResponse.json() as {
+      ok?: boolean;
+      draft?: { id?: string; enabled?: boolean; agentId?: string };
+      source?: { originalId?: string };
+    };
+    assert.equal(importPayload.ok, true);
+    assert.equal(importPayload.source?.originalId, importSource.id);
+    assert.notEqual(importPayload.draft?.id, importSource.id);
+    assert.equal(importPayload.draft?.enabled, false);
+    assert.equal(importPayload.draft?.agentId, 'agent-verifier');
+    assert.equal(routines.listRoutines({ limit: 500 }).total, routeCountBeforePreview,
+      'the import API validates and returns a preview without persisting an Automation');
+
+    const rejectedImportForm = new FormData();
+    rejectedImportForm.set('file', new File([importJson], 'portable-automation.txt', { type: 'text/plain' }));
+    const rejectedImportResponse = await importRoute.POST(new Request('http://localhost/api/routines/import', {
+      method: 'POST',
+      body: rejectedImportForm,
+    }));
+    assert.equal(rejectedImportResponse.status, 415, 'the import API rejects a non-export filename');
+    assert.equal(routines.listRoutines({ limit: 500 }).total, routeCountBeforePreview,
+      'a rejected import cannot persist a partial Automation');
+
+    const oversizedImportForm = new FormData();
+    oversizedImportForm.set('file', new File([
+      new Uint8Array(routineImport.ROUTINE_IMPORT_MAX_BYTES + 1),
+    ], 'oversized-automation.json', { type: 'application/json' }));
+    const oversizedImportResponse = await importRoute.POST(new Request('http://localhost/api/routines/import', {
+      method: 'POST',
+      body: oversizedImportForm,
+    }));
+    assert.equal(oversizedImportResponse.status, 413, 'the import API rejects oversized files before parsing');
+    assert.equal(routines.listRoutines({ limit: 500 }).total, routeCountBeforePreview,
+      'an oversized import cannot persist a partial Automation');
+
     const maintenance = await import('../lib/automation-maintenance');
     const releaseMaintenance = maintenance.beginAutomationMaintenance('routine verification');
     try {

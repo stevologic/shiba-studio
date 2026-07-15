@@ -61,6 +61,7 @@ const CHAIN = [
   'verify-project-builder.ts',
   'verify-netlify.ts',
   'verify-board-sync.ts',
+  'verify-board-cloud-sync.ts',
 ] as const;
 
 async function main() {

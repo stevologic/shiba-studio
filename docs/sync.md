@@ -4,7 +4,7 @@ Sync backs up this machine's setup to your xAI account, or restores it on anothe
 
 ## What syncs
 
-Agents, automations, projects, chats, workspace uploads, and (when a local model is in use) local model settings — each category as one JSON snapshot.
+Agents, automations, projects, chats, the Board, workspace uploads, and (when a local model is in use) local model settings — each category as one JSON snapshot.
 
 ## Where snapshots live
 
@@ -16,6 +16,12 @@ Each category is serialized to a single file named `shiba-sync-<category>.json` 
 - **Pull to local (pull)** — downloads the latest snapshots and **merges** them: local items with the same id are updated, new items are added, and nothing local is deleted.
 
 The modal shows per-category counts, live per-item status, and a progress bar; the same explanation is embedded in the modal itself.
+
+### Board snapshot safeguards
+
+The Board snapshot is `shiba-sync-board.json` with schema `shiba.board/v1`. Pull merges cards by stable internal id: the newer card wins, an older snapshot cannot roll back newer local work, and a cloud snapshot never deletes a local-only card. Repeating a pull does not create duplicates.
+
+Only portable card content and column state are included. Agent/project assignments, active-work claims, working flags, pending auto-assignments, run ids, activity history, and external issue links stay local. A card with active agent work is skipped during pull, and an invalid snapshot is rejected before any Board mutation.
 
 ## Cloud agents
 

@@ -11,14 +11,22 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** GET /api/terminal — PTY bridge status + WebSocket URL for the client. */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     startTerminalServer();
     const info = getTerminalServerInfo();
+    const forwardedProtocol = (req.headers.get('x-forwarded-proto') || req.nextUrl.protocol).toLowerCase();
+    const requestHost = (req.headers.get('host') || req.nextUrl.host).trim();
+    const lanStudioWsUrl = process.env.SHIBA_LAN_STUDIO === '1' && requestHost
+      ? `${forwardedProtocol.startsWith('https') ? 'wss' : 'ws'}://${requestHost}/api/terminal/ws`
+      : info.wsUrl;
     return NextResponse.json({
       ok: true,
       ...info,
-      note: 'Shared host PTY via node-pty. Localhost WebSocket; session survives reconnects.',
+      wsUrl: lanStudioWsUrl,
+      note: process.env.SHIBA_LAN_STUDIO === '1'
+        ? 'Shared host PTY via the authenticated LAN boundary; session survives reconnects.'
+        : 'Shared host PTY via node-pty. Localhost WebSocket; session survives reconnects.',
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

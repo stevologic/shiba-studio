@@ -75,6 +75,32 @@ async function main() {
   assert((await read('lib/agent-tool-exec.ts')).includes("case 'board_update_task'"), 'board tool exec');
   const kanbanUi = await read('components/kanban-board.tsx');
   assert(kanbanUi.includes('Start work'), 'kanban UI');
+  assert(
+    kanbanUi.includes("a.kind === 'agent' ? <ChatMarkdown content={a.text} /> : a.text"),
+    'agent answers in Board card activity render as rich Markdown',
+  );
+  assert(
+    (await read('app/globals.css')).includes('.kb-activity-text-markdown'),
+    'Board card Markdown resets plain activity whitespace styling',
+  );
+  const {
+    BOARD_PROJECT_FILTER_ALL,
+    BOARD_PROJECT_FILTER_UNASSIGNED,
+    boardProjectFilterForId,
+    boardProjectIdFromFilter,
+    boardTaskMatchesProjectFilter,
+  } = await import('../lib/board-project-filter');
+  const projectFilter = boardProjectFilterForId('project-a');
+  assert(boardTaskMatchesProjectFilter({ projectId: 'project-a' }, BOARD_PROJECT_FILTER_ALL), 'All projects includes linked cards');
+  assert(boardTaskMatchesProjectFilter({ projectId: null }, BOARD_PROJECT_FILTER_ALL), 'All projects includes unlinked cards');
+  assert(boardTaskMatchesProjectFilter({ projectId: null }, BOARD_PROJECT_FILTER_UNASSIGNED), 'No project includes unlinked cards');
+  assert(!boardTaskMatchesProjectFilter({ projectId: 'project-a' }, BOARD_PROJECT_FILTER_UNASSIGNED), 'No project excludes linked cards');
+  assert(boardTaskMatchesProjectFilter({ projectId: 'project-a' }, projectFilter), 'project filter includes matching cards');
+  assert(!boardTaskMatchesProjectFilter({ projectId: 'project-b' }, projectFilter), 'project filter excludes other cards');
+  assert(boardProjectIdFromFilter(projectFilter) === 'project-a', 'project-filtered cards inherit the selected project');
+  assert(boardProjectIdFromFilter(BOARD_PROJECT_FILTER_ALL) === null, 'All projects creates an unlinked card');
+  assert(kanbanUi.includes('Filter board by project'), 'Board exposes an accessible project filter');
+  assert(kanbanUi.includes('All projects') && kanbanUi.includes('No project'), 'Board exposes all and unlinked project filters');
   assert((await read('lib/app-navigation.ts')).includes("'board'"), 'board nav tab');
 
   // Per-agent Board auto-start is an explicit, future-only opt-in. Legacy and

@@ -331,8 +331,21 @@ export async function runDoctor(): Promise<DoctorReport> {
     cfg.safeMode ? 'Safe mode is enabled; optional listeners and extension packs stay disabled after restart.' : 'Normal startup mode is enabled.',
     { repairAction: cfg.safeMode ? 'disable_safe_mode' : 'enable_safe_mode' },
   ));
-  const host = String(process.env.HOST || process.env.HOSTNAME || 'loopback/default');
-  checks.push(check('network-bind', 'network', 'Network binding', host === '0.0.0.0' ? 'warning' : 'ok', host === '0.0.0.0' ? 'The server is bound to all interfaces. Use companion pairing for remote actions.' : `Server bind mode: ${host}.`, { data: { lanExposed: host === '0.0.0.0' } }));
+  const lanExposed = process.env.SHIBA_LAN === '1';
+  const studioLan = lanExposed && process.env.SHIBA_LAN_STUDIO === '1';
+  const networkDetail = studioLan
+    ? 'Full Studio access is enabled for private-network peers. Every reachable peer must be trusted.'
+    : lanExposed
+      ? 'The classified LAN gateway exposes only paired Companion/native-node routes.'
+      : 'The Studio is bound to loopback only.';
+  checks.push(check(
+    'network-bind',
+    'network',
+    'Network binding',
+    studioLan ? 'warning' : 'ok',
+    networkDetail,
+    { data: { lanExposed, studioLan } },
+  ));
   const summary: Record<DoctorStatus, number> = { ok: 0, warning: 0, error: 0 };
   for (const item of checks) summary[item.status]++;
   return { generatedAt: new Date().toISOString(), safeMode: !!cfg.safeMode, summary, checks };

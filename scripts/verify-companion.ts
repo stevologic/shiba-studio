@@ -488,6 +488,7 @@ async function main() {
     const lanHeaders = (clientClass: 'local' | 'remote', extra: Record<string, string> = {}) => ({
       'x-shiba-client-class': clientClass,
       'x-shiba-lan-proxy-secret': process.env.SHIBA_LAN_PROXY_SECRET!,
+      'x-forwarded-proto': 'http',
       ...extra,
     });
     const blockedApi = proxy(new NextRequest('http://shiba.local:3000/api/tasks', {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import {
   Braces,
@@ -18,11 +19,13 @@ import {
   RotateCcw,
   ShieldAlert,
   Trash2,
+  Upload,
   Webhook,
   Workflow,
 } from 'lucide-react';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { emptyRoutineInput, RoutineEditor, routineToInput } from '@/components/routine-editor';
+import { MISSING_AGENT_AVATAR_PATH, resolveAgentAvatarPath } from '@/lib/agent-avatars';
 import { createClientId } from '@/lib/client-id';
 import { subscribeLiveEvents } from '@/lib/live-events';
 import { toast } from '@/lib/toast';
@@ -36,6 +39,7 @@ interface RoutinesPanelProps {
 
 interface RoutineEditorState {
   key: string;
+  title?: string;
   routine?: RoutineDefinition;
   sourceTaskId?: string;
   initial: CreateRoutineInput;
@@ -47,6 +51,15 @@ interface RoutineDetailResponse {
   invocations?: RoutineInvocation[];
   error?: string;
 }
+
+interface RoutineImportResponse {
+  ok?: boolean;
+  draft?: CreateRoutineInput;
+  warnings?: string[];
+  error?: string;
+}
+
+const ROUTINE_IMPORT_MAX_BYTES = 2 * 1024 * 1024;
 
 const SCHEDULE_LABELS: Record<string, string> = {
   '0 * * * *': 'Every hour',
@@ -99,16 +112,17 @@ function invocationTone(status: RoutineInvocation['status']): string {
 
 function RoutineCard({
   routine,
-  agentName,
+  agent,
   selected,
   onSelect,
 }: {
   routine: RoutineDefinition;
-  agentName: string;
+  agent: Agent | undefined;
   selected: boolean;
   onSelect: () => void;
 }) {
   const activeTriggers = routine.triggers.filter((trigger) => trigger.enabled);
+  const agentName = agent?.name || routine.agentId;
   return (
     <button
       type="button"
@@ -126,7 +140,20 @@ function RoutineCard({
             <span className={`status-pill ${routine.enabled ? 'text-success' : 'text-dim'}`}>{routine.enabled ? 'active' : 'paused'}</span>
             {routine.circuitState === 'open' && <span className="status-pill text-error">breaker open</span>}
           </span>
-          <span className="block text-xs text-dim mt-1">{routine.description || `Runs with ${agentName}`}</span>
+          <span className="block text-xs text-dim mt-1 line-clamp-2">{routine.description || routine.prompt}</span>
+          <span className="flex items-center gap-1.5 min-w-0 mt-2 text-xs">
+            <Image
+              src={agent ? resolveAgentAvatarPath(agent) : MISSING_AGENT_AVATAR_PATH}
+              alt=""
+              className="agent-avatar-xs shrink-0"
+              width={20}
+              height={20}
+              unoptimized
+              title={agent ? undefined : 'Assigned agent no longer exists'}
+            />
+            <span className="text-dim shrink-0">Assigned to</span>
+            <span className="font-medium text-muted truncate">{agentName}</span>
+          </span>
           <span className="flex flex-wrap gap-1.5 mt-2">
             {activeTriggers.slice(0, 2).map((trigger) => <span key={trigger.id} className="status-pill text-muted max-w-full truncate">{triggerLabel(trigger)}</span>)}
             {activeTriggers.length > 2 && <span className="status-pill text-dim">+{activeTriggers.length - 2} more</span>}
@@ -148,8 +175,10 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [editor, setEditor] = useState<RoutineEditorState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [action, setAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
   const deepLinkHandled = useRef(false);
   const detailRequest = useRef(0);
 
@@ -242,6 +271,58 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
     setEditor({ key: `new:${createClientId()}`, initial: emptyRoutineInput(agents[0]?.id || '') });
   }
 
+  async function importRoutine(file: File) {
+    if (importing) return;
+    const extension = file.name.toLowerCase().match(/\.(json|ya?ml)$/)?.[1];
+    if (!extension) {
+      const message = 'Choose an exported automation file ending in .json, .yaml, or .yml';
+      setError(message);
+      toast.error(message);
+      return;
+    }
+    if (file.size === 0 || file.size > ROUTINE_IMPORT_MAX_BYTES) {
+      const message = file.size === 0
+        ? 'The selected automation file is empty'
+        : 'Automation imports must be 2 MB or smaller';
+      setError(message);
+      toast.error(message);
+      return;
+    }
+
+    setImporting(true);
+    setError(null);
+    try {
+      const body = new FormData();
+      body.set('file', file);
+      const response = await fetch('/api/routines/import', { method: 'POST', body });
+      const data = await response.json().catch(() => ({})) as RoutineImportResponse;
+      if (!response.ok || !data.ok || !data.draft) {
+        throw new Error(data.error || 'Could not import this automation file');
+      }
+
+      const warnings = [...(data.warnings || [])];
+      let draft = data.draft;
+      if (draft.agentId && !agents.some((agent) => agent.id === draft.agentId)) {
+        draft = { ...draft, agentId: '' };
+        if (!warnings.some((warning) => /agent|owner/i.test(warning))) {
+          warnings.push('Choose an agent before saving because the exported agent is not available here.');
+        }
+      }
+      setEditor({
+        key: `import:${createClientId()}`,
+        title: `Import ${file.name}`,
+        initial: draft,
+      });
+      if (warnings.length > 0) toast.warning(warnings.join(' '));
+    } catch (importError) {
+      const message = importError instanceof Error ? importError.message : 'Could not import this automation file';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
   function editRoutine(routine: RoutineDefinition) {
     setEditor({ key: `edit:${routine.id}:${routine.version}`, routine, initial: routineToInput(routine) });
   }
@@ -287,6 +368,10 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
       await loadDetail(data.routine.id);
       router.replace(`/automations?routine=${encodeURIComponent(data.routine.id)}`);
       toast.success(editing ? 'Automation updated' : 'Automation created');
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : 'Could not save the automation';
+      setError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -375,7 +460,30 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
           <h1 id="durable-automations-heading" className="page-title">Automations</h1>
           <p className="page-subtitle">Choose what should happen and when. Shiba handles the runs, retries, and recovery.</p>
         </div>
-        <button type="button" className="grok-btn grok-btn-primary shrink-0" onClick={newRoutine} disabled={agents.length === 0}><Plus size={14} /> New automation</button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            className="grok-btn grok-btn-secondary"
+            onClick={() => importFileRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Upload size={14} aria-hidden="true" />}
+            {importing ? 'Importing\u2026' : 'Import automation'}
+          </button>
+          <input
+            ref={importFileRef}
+            type="file"
+            accept=".json,.yaml,.yml,application/json,application/yaml,text/yaml"
+            className="hidden"
+            aria-label="Choose an exported automation JSON or YAML file"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void importRoutine(file);
+            }}
+          />
+          <button type="button" className="grok-btn grok-btn-primary" onClick={newRoutine} disabled={agents.length === 0 || importing}><Plus size={14} /> New automation</button>
+        </div>
       </header>
 
       {error && <div className="grok-card p-3 text-sm text-error" role="alert">{error}</div>}
@@ -397,11 +505,12 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
             <button type="button" className="grok-btn grok-btn-ghost p-1.5" onClick={() => void loadRoutines()} aria-label="Refresh automations"><RefreshCw size={13} aria-hidden="true" /></button>
           </div>
           {routines.map((routine) => {
-            const agentName = agents.find((agent) => agent.id === routine.agentId)?.name || routine.agentId;
+            const agent = agents.find((candidate) => candidate.id === routine.agentId);
+            const agentName = agent?.name || routine.agentId;
             const details = selected?.id === routine.id ? selected : null;
             return (
               <div key={routine.id} className="space-y-2">
-                <RoutineCard routine={routine} agentName={agentName} selected={selectedId === routine.id} onSelect={() => toggleRoutine(routine.id)} />
+                <RoutineCard routine={routine} agent={agent} selected={selectedId === routine.id} onSelect={() => toggleRoutine(routine.id)} />
                 {selectedId === routine.id && (
                   <section id={`automation-${routine.id}-details`} className="rounded-lg border border-default bg-[var(--bg-elev)] p-4 sm:p-5" aria-label={`${routine.name} details`}>
                     {detailLoading && !details ? (
@@ -493,7 +602,7 @@ export function RoutinesPanel({ agents }: RoutinesPanelProps) {
         </div>
       )}
 
-      {editor && <RoutineEditor key={editor.key} agents={agents} initial={editor.initial} title={editor.routine ? `Edit ${editor.routine.name}` : editor.sourceTaskId ? 'Configure automation draft' : 'New automation'} saving={saving} onCancel={() => !saving && setEditor(null)} onSave={saveRoutine} />}
+      {editor && <RoutineEditor key={editor.key} agents={agents} initial={editor.initial} title={editor.title || (editor.routine ? `Edit ${editor.routine.name}` : editor.sourceTaskId ? 'Configure automation draft' : 'New automation')} saving={saving} onCancel={() => !saving && setEditor(null)} onSave={saveRoutine} />}
     </section>
   );
 }

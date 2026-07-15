@@ -14,17 +14,23 @@ runs, saving config — is a call you can make yourself.
 ## Access & security
 
 - **Base URL:** `http://127.0.0.1:3000` (whatever host/port you run on).
-- **Same-origin only.** `proxy.ts` rejects any `/api/*` request whose `Origin`
-  is not loopback, and any cross-site navigation. Requests from another website
-  in your browser get **403**. Calls from `curl`/scripts (no `Origin` header)
-  and from the app's own pages are allowed. This is why the interactive
-  explorer lives inside the app rather than on the docs site.
+- **Same-origin only.** `proxy.ts` first validates that the destination Host is
+  owned by this Studio (loopback, a configured mDNS alias, or a local interface
+  IP), then requires an exact scheme/host/port `Origin`. Cross-site navigations
+  are also rejected. Calls from `curl`/scripts (no `Origin` header) and from the
+  app's own pages are allowed. This is why the interactive explorer lives
+  inside the app rather than on the docs site.
 - **Local API has no auth token.** The full API is single-user and localhost
   only. In `dev:lan` / `start:lan`, network clients are restricted to the
   paired Companion API and the signed native-node protocol. Their data/action
   handlers require separate scoped bearer keys; administration and captures
   remain localhost-only. Do not manually bind the full app beyond localhost
   outside that supported mode.
+- **Trusted-LAN Studio is explicit.** `dev:lan:studio` / `start:lan:studio`
+  grant this unauthenticated full API to private-network socket peers through
+  the classified gateway. Same-origin checks prevent browser drive-by requests,
+  but every peer that can directly reach the port has the host user's Studio
+  powers. Use only where every LAN/VPN peer is trusted.
 - **Responses are JSON** unless noted (streams are SSE; backup is a file
   download). Most return `{ ok: true, ... }`; errors return a non-2xx status
   with `{ error }` or `{ ok: false, error }`.
@@ -247,7 +253,7 @@ Reddit does not expose a browser-OAuth route in Shiba. The server calls the bund
 | --- | --- | --- |
 | GET | `/api/backup` | Download a full studio backup (JSON incl. encryption key; `?key=omit` to exclude it). |
 | POST | `/api/backup` | Restore a backup bundle (posted as the JSON body). |
-| GET/POST | `/api/cloud/entities` | Cloud-sync entity snapshots (push/pull). |
+| GET/POST | `/api/cloud/entities` | List counts/auth state or push/pull entity snapshots. Kinds include `agents`, `automations`, `projects`, `board`, `chats`, `workspace`, and `models`. |
 
 ## Streaming (SSE) endpoints
 

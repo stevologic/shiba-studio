@@ -44,7 +44,7 @@ npm test          # scripts/verify-all.ts — the full gate (isolated data dir)
 npm run test:e2e  # Playwright browser E2E (needs `npx playwright install chromium` + a build)
 ```
 
-`dev:lan` / `start:lan` bind all interfaces for deliberate LAN exposure — see [SECURITY.md](../SECURITY.md) first.
+`dev:lan` / `start:lan` bind the classified gateway on all interfaces but expose only scoped Companion/native-node routes. `dev:lan:studio` / `start:lan:studio` explicitly add the full Studio for private-network peers — see [SECURITY.md](../SECURITY.md) first.
 
 `npm test` chains the `verify-*` scripts: theme + page-chrome checks, a full runtime drive of the shipped code (real agent run with tools), tool-dispatch guards, voice-VAD unit tests, shell-state, 40+ OAuth/API unit+HTTP tests, and feature structural checks. Results go to `functional-npm-test.log` in the suite's scratch dir — stdout stays quiet; exit code 0 means pass. The Playwright E2E suite is separate (`npm run test:e2e`) and not yet wired into CI.
 

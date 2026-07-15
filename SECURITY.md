@@ -23,10 +23,10 @@ that power.
 
 | Boundary | Protection |
 | --- | --- |
-| **Network** | `npm run dev` / `npm run start` bind `127.0.0.1` only. In explicit `dev:lan` / `start:lan` mode, an outer listener derives local/remote status from the TCP peer address, overwrites an authenticated internal header, and forwards to a loopback-only Next server. Host and forwarding headers are never trusted for locality. Non-loopback clients can reach only the separately authenticated `/companion` surface; generic Studio pages/APIs and companion administration remain localhost-only. There is no public relay. |
-| **mDNS name (`shiba.local`)** | The app advertises `shiba.local` over multicast DNS. In the default (loopback) mode it points at `127.0.0.1` — a same-machine alias only. In `:lan` mode it points at the LAN IP so the network can reach the app **by name** — this does not add exposure beyond the LAN binding itself. Disable with `SHIBA_MDNS=off`. |
-| **Cross-site (CSRF / drive-by)** | `proxy.ts` rejects any `/api/*` request with a non-loopback `Origin` or a `Sec-Fetch-Site: cross-site` navigation, so a malicious website open in the same browser cannot drive agents or the shell. OAuth callbacks are exempt (protected by the `state` parameter). |
-| **Terminal bridge** | The node-pty WebSocket bridge binds `127.0.0.1` and rejects browser connections from non-loopback origins (WebSockets are not covered by CORS). |
+| **Network** | `npm run dev` / `npm run start` bind `127.0.0.1` only. In explicit `dev:lan` / `start:lan` mode, an outer listener derives local/remote status from the TCP peer address, overwrites an authenticated internal header, and forwards to a loopback-only Next server. Host and forwarding headers are never trusted for locality. Non-loopback clients can reach only the separately authenticated `/companion` surface. `dev:lan:studio` / `start:lan:studio` additionally promote socket peers in private/CGNAT/ULA ranges to full Studio access; public peers remain scoped. There is no public relay. |
+| **mDNS name (`shiba.local`)** | The app advertises `shiba.local` over multicast DNS. In default mode it points at `127.0.0.1`. In either `:lan` mode it selects the IPv4 owning the OS default route (or `SHIBA_LAN_IP`) so the LAN can reach it **by name**. Disable with `SHIBA_MDNS=off`. |
+| **Cross-site (CSRF / drive-by)** | `proxy.ts` validates the destination Host against loopback, configured mDNS names, and this machine's interface IPs, then requires an exact scheme/host/port `Origin` for `/api/*`. Cross-site navigations are rejected, blocking browser drive-by and DNS-rebinding requests. OAuth callbacks are exempt (protected by the `state` parameter). |
+| **Terminal bridge** | The node-pty WebSocket bridge stays bound to `127.0.0.1` and rejects foreign browser origins. Full-Studio LAN mode reaches it only through the socket-classifying outer gateway on a same-origin WebSocket path. |
 | **Companion devices** | Remote access is disabled by default. One-time pairing codes have a short TTL and attempt limit. Device keys are stored hashed, scoped per action, expiring, revocable, and checked again inside every handler. Approval actions bind the exact normalized action, expiry, and task revision. Remote projections omit workspace roots/file contents, result bodies, evidence commands/metadata, and integration configuration. |
 | **Secrets at rest** | All credentials (xAI API key, OAuth tokens, integration secrets) are AES-256-GCM encrypted (`enc:v1:` prefix). The machine key lives outside the project at `~/.shiba-studio/shiba-studio.key`, or supply `SHIBA_SECRET_KEY` (64 hex chars) for headless installs. Plaintext stores migrate to encrypted form on first load. Secrets are excluded from cloud-sync snapshots. |
 | **Tool execution** | Tool approval defaults to **Ask** — sensitive tools (`shell_exec`, `fs_write`, browser actions, posting to integrations) require an explicit approval per call. YOLO mode is an explicit opt-in under Settings → Agent Behavior. |
@@ -44,6 +44,12 @@ that power.
 A same-machine TLS or tunnel proxy must forward companion traffic to the
 machine's LAN address, not `127.0.0.1`: loopback peers are deliberately treated
 as the trusted local Studio user.
+
+Full-Studio LAN mode is for a private network where **every peer is trusted**.
+Its same-origin checks stop another website from silently driving Shiba through
+a victim's browser; they do not authenticate a person who can directly reach
+`shiba.local`. Such a peer can read Studio data, spend model credits, use
+integrations, write files, and execute commands with the host user's privileges.
 
 ## Known accepted risks
 

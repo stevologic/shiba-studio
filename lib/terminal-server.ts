@@ -6,6 +6,7 @@
  * session (with scrollback replay). Chat `terminal_exec` writes into this PTY.
  */
 import type { Server as HttpServer } from 'http';
+import os from 'node:os';
 import type { Duplex } from 'stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
@@ -467,14 +468,25 @@ export function restartMainSession(): { ok: boolean; error?: string; pid?: numbe
   }
 }
 
-/** True for loopback origins and the app's own mDNS name (shiba.local). */
-function isLoopbackOrigin(origin: string): boolean {
+/** True for loopback, or this app's exact trusted-LAN Studio origin. */
+function isAllowedTerminalOrigin(origin: string): boolean {
   try {
-    const host = new URL(origin).hostname;
+    const parsed = new URL(origin);
+    const host = parsed.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return true;
-    // Accept the app's own mDNS names so the terminal works when the app is
-    // opened by name (http://shiba.local:3000) instead of by loopback IP.
-    return advertisedHostnames().includes(host.toLowerCase());
+    if (process.env.SHIBA_LAN_STUDIO !== '1') return advertisedHostnames().includes(host);
+    const allowedHosts = new Set(advertisedHostnames());
+    if (process.env.SHIBA_LAN_IP?.trim()) allowedHosts.add(process.env.SHIBA_LAN_IP.trim().toLowerCase());
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const entry of list || []) {
+        if (!entry.internal && entry.address) allowedHosts.add(entry.address.toLowerCase());
+      }
+    }
+    const expectedPort = String(Number(process.env.SHIBA_APP_PORT || process.env.PORT || 3000) || 3000);
+    const actualPort = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && actualPort === expectedPort
+      && allowedHosts.has(host);
   } catch {
     return false;
   }
@@ -512,7 +524,7 @@ export function startTerminalServer(): { port: number; host: string; shell: Term
     // origin (any port) may attach; non-browser clients (no Origin) are local
     // processes and stay allowed.
     const origin = req.headers.origin;
-    if (origin && !isLoopbackOrigin(origin)) {
+    if (origin && !isAllowedTerminalOrigin(origin)) {
       console.warn(`[shiba-studio] rejected terminal WS from origin ${origin}`);
       ws.close(1008, 'Forbidden origin');
       return;

@@ -11,7 +11,7 @@ A shared Kanban board — Linear-style — that you and every agent work from. C
 - **New card** (top right) or the **+** on any column header opens an inline composer — type a title, press Enter. Press Enter repeatedly to file several cards fast.
 - Click a card for the **detail panel**: title, description, status, priority, assignee, labels, and the full activity feed.
 
-## Sync with Linear or Jira
+## Sync with Linear, Jira, or Grok Files
 
 Connect either service on **Capabilities**, then open **Board → Sync**:
 
@@ -35,6 +35,17 @@ Every synced card keeps its stable `SHIB-#` key. A Linear or Jira badge shows th
 Sync is intentionally bounded: it never deletes local cards or remote issues, and it does not copy card ordering, Shiba agent assignments, remote assignees, activity/run history, or Jira sprint membership. Provider and workflow-transition failures are reported per item without deleting either copy. If a provider creates an issue but Shiba cannot receive or persist its ID, check that service before retrying because the local card cannot yet know which remote issue to reuse.
 
 Pagination is explicit rather than silent: one run processes up to 10,000 issues. Larger Jira targets return an error so you can narrow the optional JQL; larger Linear teams return an error instead of pretending the partial pull was complete.
+
+### Grok Files snapshots
+
+Choose **Grok Files** in the Board Sync dialog to back up the Board to the private xAI Files storage connected in Settings. Shiba writes one owned, versioned snapshot named `shiba-sync-board.json`; sending again replaces Shiba's previous owned snapshot without claiming or deleting an unrelated file that happens to have the same name.
+
+- **Send to Grok Files** publishes the current safe card fields as a new snapshot.
+- **Pull from Grok Files** merges cards by their stable internal id. A newer cloud card updates its local copy, an older cloud card cannot roll back a newer local edit, and cards that exist only locally are never deleted.
+- Repeating the same pull is idempotent: it does not duplicate cards or activity.
+- Cards with active agent work are skipped so a cloud restore cannot replace live execution state. Run pull again after that work settles.
+
+The snapshot contains portable card content and column state only. Agent and project assignments remain local, and it never replays active-work claims, working flags, pending auto-assignments, run ids, activity history, or Linear/Jira link state. Pull validates the snapshot before changing the Board; malformed or unsupported snapshots leave local data untouched.
 
 ## Agents work the board
 

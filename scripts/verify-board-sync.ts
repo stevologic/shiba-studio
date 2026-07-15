@@ -95,6 +95,7 @@ async function main() {
     const studio = await read('components/shiba-studio.tsx');
     const board = await read('components/kanban-board.tsx');
     const modal = await read('components/board-sync-modal.tsx');
+    const globalSyncModal = await read('components/sync-modal.tsx');
     const integrationsApi = await read('app/api/integrations/route.ts');
     const syncApi = await read('app/api/board/sync/route.ts');
     assert(studio.includes("integration.id === 'linear'"), 'Capabilities renders Linear');
@@ -103,6 +104,9 @@ async function main() {
     assert(board.includes('BoardSyncModal') && board.includes('externalRefs'), 'Board opens sync UI and renders links');
     assert(modal.includes("fetch('/api/board/sync'"), 'sync modal calls Board sync API');
     assert(modal.includes("setDirection('pull')") && modal.includes("setDirection('push')") && modal.includes("setDirection('bidirectional')"), 'all sync directions exposed');
+    assert(modal.includes("'grok_files'") && modal.includes("fetch('/api/cloud/entities'"), 'Grok Files snapshot destination is wired');
+    assert(modal.includes("kind: 'board'") && modal.includes('Send Board') && modal.includes('Pull Board'), 'Grok Files exposes explicit Board push and pull');
+    assert(globalSyncModal.includes("kind: 'board'") && globalSyncModal.includes("label: 'Board'"), 'global Grok cloud sync includes Board');
     assert(integrationsApi.includes("which === 'linear'") && integrationsApi.includes('testLinear'), 'Linear connection API branch');
     assert(integrationsApi.includes("which === 'jira'") && integrationsApi.includes('testJira'), 'Jira connection API branch');
     assert(syncApi.includes("action: z.literal('discover')") && syncApi.includes("action: z.literal('sync')"), 'Board API validates discover and sync');

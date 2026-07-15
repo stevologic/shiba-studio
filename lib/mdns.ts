@@ -14,7 +14,9 @@
 // comma-separated, a bare label gets ".local" appended (default "shiba.local").
 
 import dgram from 'dgram';
-import os from 'os';
+import { execFileSync } from 'node:child_process';
+import { isIPv4 } from 'node:net';
+import os, { type NetworkInterfaceInfo } from 'node:os';
 
 const MDNS_ADDR = '224.0.0.251';
 const MDNS_PORT = 5353;
@@ -25,19 +27,91 @@ interface MdnsGlobals {
 }
 const g = globalThis as unknown as MdnsGlobals;
 
-/** First non-internal IPv4 address, or null if the machine is offline. */
-export function primaryLanIPv4(): string | null {
-  const ifaces = os.networkInterfaces();
-  // Prefer common LAN interface names, then anything non-internal IPv4.
-  const all: string[] = [];
-  for (const list of Object.values(ifaces)) {
-    for (const ni of list || []) {
-      if (ni.family === 'IPv4' && !ni.internal && ni.address) all.push(ni.address);
+type NetworkInterfaces = NodeJS.Dict<NetworkInterfaceInfo[]>;
+
+function interfaceNameRank(name: string): number {
+  if (/virtual|host-only|vmware|vbox|docker|wsl|hyper-v|vethernet|tailscale|zerotier|hamachi|vpn|tun|tap|utun|bridge|bluetooth/i.test(name)) return 3;
+  if (/wi-?fi|wireless|wlan|ethernet|local area connection|^(eth|en\d|eno|enp|ens|wlp)/i.test(name)) return 0;
+  return 1;
+}
+
+function ipv4RangeRank(address: string): number {
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address)) return 0;
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(address)) return 1;
+  if (address.startsWith('169.254.')) return 3;
+  return 2;
+}
+
+/** Select a reachable physical-LAN IPv4 instead of a host-only VM adapter. */
+export function selectPrimaryLanIPv4(
+  ifaces: NetworkInterfaces,
+  override?: string,
+  defaultRouteAddress?: string | null,
+): string | null {
+  const configured = override?.trim();
+  if (configured && isIPv4(configured)) return configured;
+  const candidates: Array<{ address: string; nameRank: number; rangeRank: number; order: number }> = [];
+  let order = 0;
+  for (const [name, list] of Object.entries(ifaces)) {
+    for (const entry of list || []) {
+      if (entry.family !== 'IPv4' || entry.internal || !entry.address || !isIPv4(entry.address)) continue;
+      candidates.push({
+        address: entry.address,
+        nameRank: interfaceNameRank(name),
+        rangeRank: ipv4RangeRank(entry.address),
+        order: order++,
+      });
     }
   }
-  // De-prioritize link-local (169.254.x) and prefer private LAN ranges.
-  const preferred = all.find((a) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a));
-  return preferred || all.find((a) => !a.startsWith('169.254.')) || all[0] || null;
+  const routeAddress = defaultRouteAddress?.trim();
+  if (routeAddress && isIPv4(routeAddress) && candidates.some((candidate) => candidate.address === routeAddress)) {
+    return routeAddress;
+  }
+  candidates.sort((a, b) => a.nameRank - b.nameRank || a.rangeRank - b.rangeRank || a.order - b.order);
+  return candidates[0]?.address || null;
+}
+
+/** Ask the OS routing table which local IPv4 owns the default route. */
+function defaultRouteIPv4(ifaces: NetworkInterfaces): string | null {
+  try {
+    if (process.platform === 'win32') {
+      const output = execFileSync('route.exe', ['print', '-4'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const matches = [...output.matchAll(/^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+\S+\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d+)\s*$/gm)]
+        .map((match) => ({ address: match[1], metric: Number(match[2]) }))
+        .sort((a, b) => a.metric - b.metric);
+      return matches.find((match) => isIPv4(match.address))?.address || null;
+    }
+    if (process.platform === 'linux') {
+      const output = execFileSync('ip', ['-4', 'route', 'get', '1.1.1.1'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return output.match(/\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3})\b/)?.[1] || null;
+    }
+    if (process.platform === 'darwin') {
+      const output = execFileSync('route', ['-n', 'get', 'default'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const name = output.match(/^\s*interface:\s*(\S+)\s*$/m)?.[1];
+      return name
+        ? (ifaces[name] || []).find((entry) => entry.family === 'IPv4' && !entry.internal)?.address || null
+        : null;
+    }
+  } catch {
+    // Fall through to deterministic interface ranking below.
+  }
+  return null;
+}
+
+/** Best LAN IPv4 (or SHIBA_LAN_IP override), or null if offline. */
+export function primaryLanIPv4(): string | null {
+  const ifaces = os.networkInterfaces();
+  return selectPrimaryLanIPv4(ifaces, process.env.SHIBA_LAN_IP, defaultRouteIPv4(ifaces));
 }
 
 /** Normalize a configured host to a single-label `<name>.local`. */
@@ -153,6 +227,9 @@ export function startMdns(): MdnsInfo | null {
 
   const hostnames = advertisedHostnames();
   const lanMode = process.env.SHIBA_LAN === '1';
+  if (process.env.SHIBA_LAN_IP?.trim() && !isIPv4(process.env.SHIBA_LAN_IP.trim())) {
+    console.warn(`[shiba-studio] ignoring invalid SHIBA_LAN_IP=${process.env.SHIBA_LAN_IP}`);
+  }
   const ip = lanMode ? (primaryLanIPv4() || '127.0.0.1') : '127.0.0.1';
 
   const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });

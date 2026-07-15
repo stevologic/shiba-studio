@@ -6430,6 +6430,37 @@ body::before {
   flex-shrink: 0;
 }
 
+.kb-project-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.kb-project-filter > svg {
+  position: absolute;
+  top: 50%;
+  left: 0.7rem;
+  z-index: 1;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+select.kb-project-filter-select {
+  min-width: 175px;
+  max-width: 240px;
+  padding-left: 2rem;
+}
+
+.kb-project-filter-active {
+  color: var(--text);
+}
+
+.kb-project-filter-active select.kb-project-filter-select {
+  border-color: color-mix(in srgb, var(--accent-2) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent-2) 7%, var(--bg-elev));
+}
+
 .kb-inline-key {
   color: var(--text);
   font-weight: 500;
@@ -7291,13 +7322,18 @@ body::before {
   word-break: break-word;
 }
 
+.kb-activity-text-markdown {
+  min-width: 0;
+  white-space: normal;
+}
+
 /* ── Board provider sync ───────────────────────────────────────────── */
 
 .kb-sync-modal { max-height: min(760px, calc(100vh - 2rem)); overflow-y: auto; }
 
 .kb-sync-provider-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(8.75rem, 1fr));
   gap: 0.55rem;
 }
 
@@ -7367,7 +7403,9 @@ body::before {
 
 @media (max-width: 640px) {
   .kb-head { flex-direction: column; }
-  .kb-head-actions { width: 100%; }
+  .kb-head-actions { width: 100%; flex-wrap: wrap; }
+  .kb-project-filter { flex: 1 0 100%; }
+  select.kb-project-filter-select { width: 100%; max-width: none; }
   .kb-head-actions .grok-btn { flex: 1; }
   .kb-sync-directions { grid-template-columns: 1fr; }
 }

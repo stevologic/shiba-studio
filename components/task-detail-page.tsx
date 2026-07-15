@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
@@ -8,7 +8,9 @@ import {
   CalendarClock,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleDashed,
   ExternalLink,
   FileCheck2,
@@ -54,6 +56,8 @@ const CANCELLABLE_STATUSES = new Set<TaskStatus>([
   'waiting_for_approval',
   'blocked',
 ]);
+
+const TASK_PROMPT_PREVIEW_CHARACTERS = 300;
 
 function formatDate(value?: string): string {
   if (!value) return '—';
@@ -125,6 +129,34 @@ function EvidenceUri({ uri }: { uri?: string }) {
     );
   }
   return <div className="text-[11px] font-mono text-dim mt-1 break-all">{uri}</div>;
+}
+
+function ExpandableTaskPrompt({ prompt }: { prompt: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const promptId = useId();
+  const characters = Array.from(prompt);
+  const expandable = characters.length > TASK_PROMPT_PREVIEW_CHARACTERS;
+  const visiblePrompt = expandable && !expanded
+    ? `${characters.slice(0, TASK_PROMPT_PREVIEW_CHARACTERS).join('').trimEnd()}\u2026`
+    : prompt;
+
+  return (
+    <div className="mt-2 max-w-4xl">
+      <p id={promptId} className="text-sm text-muted whitespace-pre-wrap break-words">{visiblePrompt}</p>
+      {expandable && (
+        <button
+          type="button"
+          className="grok-btn grok-btn-ghost mt-1.5"
+          aria-expanded={expanded}
+          aria-controls={promptId}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
+          {expanded ? 'Show less' : 'Show full prompt'}
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
@@ -313,7 +345,7 @@ export function TaskDetailPage({ taskId, onBack }: TaskDetailPageProps) {
               <span className="text-[11px] text-dim font-mono">{task.id}</span>
             </div>
             <h1 id="task-title" className="text-2xl font-semibold break-words">{task.title}</h1>
-            {task.description && <p className="text-sm text-muted mt-2 whitespace-pre-wrap max-w-4xl">{task.description}</p>}
+            {task.description && <ExpandableTaskPrompt key={task.id} prompt={task.description} />}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" className="grok-btn grok-btn-ghost" onClick={() => void loadTask()}>

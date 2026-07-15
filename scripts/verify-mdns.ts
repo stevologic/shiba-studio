@@ -12,6 +12,7 @@ import {
   startMdns,
   stopMdns,
   primaryLanIPv4,
+  selectPrimaryLanIPv4,
 } from '../lib/mdns';
 
 let failures = 0;
@@ -80,6 +81,32 @@ async function main() {
   assert(ipFromAnswer(ans) === '192.168.1.42', 'answer carries the advertised IP');
   assert(ans.readUInt16BE(6) === 1, 'answer has ancount=1');
   assert(ans.includes(Buffer.from('shib')) && ans.includes(Buffer.from('local')), 'answer encodes the hostname labels');
+
+  const fakeInterfaces = {
+    'VirtualBox Host-Only Network': [{ family: 'IPv4', internal: false, address: '192.168.56.1' }],
+    'Wi-Fi': [{ family: 'IPv4', internal: false, address: '192.168.1.220' }],
+    Loopback: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }],
+  } as unknown as Parameters<typeof selectPrimaryLanIPv4>[0];
+  assert(
+    selectPrimaryLanIPv4(fakeInterfaces) === '192.168.1.220',
+    'physical Wi-Fi wins over an earlier VirtualBox host-only adapter',
+  );
+  const ambiguousInterfaces = {
+    'Ethernet 4': [{ family: 'IPv4', internal: false, address: '192.168.56.1' }],
+    'Wi-Fi': [{ family: 'IPv4', internal: false, address: '192.168.1.220' }],
+  } as unknown as Parameters<typeof selectPrimaryLanIPv4>[0];
+  assert(
+    selectPrimaryLanIPv4(ambiguousInterfaces, undefined, '192.168.1.220') === '192.168.1.220',
+    'OS default-route address wins when adapter display names are ambiguous',
+  );
+  assert(
+    selectPrimaryLanIPv4(fakeInterfaces, '10.20.30.40') === '10.20.30.40',
+    'explicit SHIBA_LAN_IP-compatible override wins',
+  );
+  assert(
+    selectPrimaryLanIPv4(fakeInterfaces, 'not-an-ip') === '192.168.1.220',
+    'invalid LAN IP override falls back to adapter selection',
+  );
 
   // --- primaryLanIPv4 shape ---
   const lan = primaryLanIPv4();

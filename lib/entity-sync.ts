@@ -1,13 +1,19 @@
 // Entity-level cloud sync — push/pull Shiba Studio entities (agents, automations, projects,
-// chats, workspace uploads, local-model settings) to/from the xAI cloud file store.
+// Board cards, chats, workspace uploads, local-model settings) to/from the xAI cloud file store.
 // Each entity kind is serialized as one JSON snapshot file so any Shiba Studio install
 // connected to the same xAI account can pull it down.
 
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import { loadAgents, mutateAgents, loadConfig, saveConfig, withAgentOwnershipSnapshot } from './persistence';
 import { normalizeAgent, type Agent } from './types';
 import { listProjects, updateProject, createProject } from './projects';
 import { listChatSessions, createChatSession, updateChatSession, type ChatSession } from './chat-sessions';
+import {
+  listBoardCloudTasks,
+  mergeBoardCloudTasks,
+  type BoardCloudTask,
+} from './board';
 import { syncUploadToCloud, syncDownloadFromCloud } from './cloud-sync';
 import { downloadXaiFileContent, listXaiFiles } from './xai-files';
 import { resolveCloudBearer } from './xai-oauth';
@@ -28,9 +34,9 @@ import {
 } from './routines';
 import type { CreateRoutineInput, RoutineDefinition } from './routine-types';
 
-export type SyncKind = 'agents' | 'automations' | 'projects' | 'chats' | 'workspace' | 'models';
+export type SyncKind = 'agents' | 'automations' | 'projects' | 'board' | 'chats' | 'workspace' | 'models';
 
-export const SYNC_KINDS: SyncKind[] = ['agents', 'automations', 'projects', 'chats', 'workspace', 'models'];
+export const SYNC_KINDS: SyncKind[] = ['agents', 'automations', 'projects', 'board', 'chats', 'workspace', 'models'];
 
 export interface SyncKindResult {
   kind: SyncKind;
@@ -44,7 +50,55 @@ const SNAPSHOT_PREFIX = 'shiba-sync-';
 const LEGACY_SNAPSHOT_PREFIX = 'grokdesk-sync-';
 const AUTOMATION_SNAPSHOT_SCHEMA = 'shiba.automations/v1' as const;
 const AUTOMATION_SNAPSHOT_VERSION = 1 as const;
+const BOARD_SNAPSHOT_SCHEMA = 'shiba.board/v1' as const;
+const BOARD_SNAPSHOT_VERSION = 1 as const;
+const XAI_FILE_MAX_BYTES = 48 * 1024 * 1024;
+// uploadOwnedXaiEntitySnapshot adds an ownership envelope around this payload.
+const BOARD_SNAPSHOT_ENVELOPE_RESERVE_BYTES = 16 * 1024;
 const REDACTED_SECRET = '••••••••';
+
+const boardTimestampSchema = z.string().max(40).datetime({ offset: true });
+const boardCloudTaskSchema: z.ZodType<BoardCloudTask> = z.object({
+  id: z.string().min(1).max(200).regex(/^[A-Za-z0-9:._-]+$/),
+  key: z.string().trim().min(1).max(64).regex(/^[\x20-\x7E]+$/),
+  title: z.string().min(1).max(300).refine((value) => value.trim() === value, 'Task title must be trimmed'),
+  description: z.string().max(20_000),
+  status: z.enum(['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled']),
+  priority: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+  labels: z.array(
+    z.string().min(1).max(255).refine((value) => value.trim() === value, 'Labels must be trimmed'),
+  ).max(10),
+  createdAt: boardTimestampSchema,
+  syncUpdatedAt: boardTimestampSchema,
+}).strict();
+
+const boardCloudSnapshotSchema = z.object({
+  schema: z.literal(BOARD_SNAPSHOT_SCHEMA),
+  version: z.literal(BOARD_SNAPSHOT_VERSION),
+  exportedAt: boardTimestampSchema,
+  tasks: z.array(boardCloudTaskSchema).max(10_000),
+}).strict().superRefine((snapshot, context) => {
+  const ids = new Set<string>();
+  snapshot.tasks.forEach((task, index) => {
+    if (ids.has(task.id)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['tasks', index, 'id'],
+        message: 'Duplicate Board task id',
+      });
+    }
+    ids.add(task.id);
+    if (Date.parse(task.syncUpdatedAt) < Date.parse(task.createdAt)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['tasks', index, 'syncUpdatedAt'],
+        message: 'Task sync timestamp predates its creation timestamp',
+      });
+    }
+  });
+});
+
+type BoardCloudSnapshot = z.infer<typeof boardCloudSnapshotSchema>;
 
 interface AutomationRoutineSnapshot extends CreateRoutineInput {
   id: string;
@@ -89,6 +143,24 @@ interface RoutineApplyResult {
 
 function snapshotName(kind: SyncKind): string {
   return `${SNAPSHOT_PREFIX}${kind}.json`;
+}
+
+function boardSnapshotFromUnknown(value: unknown): BoardCloudSnapshot {
+  const parsed = boardCloudSnapshotSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  const first = parsed.error.issues[0];
+  const location = first?.path.length ? ` at ${first.path.join('.')}` : '';
+  throw new Error(`Cloud Board snapshot is malformed${location}: ${first?.message || 'invalid payload'}`);
+}
+
+function assertBoardSnapshotFitsXaiFile(snapshot: BoardCloudSnapshot): void {
+  const bytes = Buffer.byteLength(JSON.stringify(snapshot), 'utf8');
+  const safePayloadLimit = XAI_FILE_MAX_BYTES - BOARD_SNAPSHOT_ENVELOPE_RESERVE_BYTES;
+  if (bytes > safePayloadLimit) {
+    throw new Error(
+      `Board snapshot is ${bytes} bytes and exceeds the safe payload limit for xAI's 48 MB per-file cap. No cards were uploaded.`,
+    );
+  }
 }
 
 async function requireCloudAuth(): Promise<{ token: string; source: OwnedXaiAuthSource }> {
@@ -482,6 +554,19 @@ export async function pushKind(kind: SyncKind): Promise<SyncKindResult> {
       return { kind, ok: true, detail: `${routines.length} Automation(s) pushed` };
     }
 
+    if (kind === 'board') {
+      const tasks = await listBoardCloudTasks();
+      const snapshot = boardSnapshotFromUnknown({
+        schema: BOARD_SNAPSHOT_SCHEMA,
+        version: BOARD_SNAPSHOT_VERSION,
+        exportedAt: new Date().toISOString(),
+        tasks,
+      });
+      assertBoardSnapshotFitsXaiFile(snapshot);
+      await pushSnapshot(kind, snapshot, auth);
+      return { kind, ok: true, detail: `${tasks.length} Board card(s) pushed` };
+    }
+
     if (kind === 'projects') {
       const projects = await listProjects();
       await pushSnapshot(kind, projects, auth);
@@ -574,6 +659,18 @@ export async function pullKind(kind: SyncKind): Promise<SyncKindResult> {
       };
     }
 
+    if (kind === 'board') {
+      const cloud = await pullSnapshot<unknown>(kind);
+      if (!cloud) return { kind, ok: true, detail: 'No cloud snapshot yet — push first' };
+      const snapshot = boardSnapshotFromUnknown(cloud);
+      const applied = await mergeBoardCloudTasks(snapshot.tasks);
+      return {
+        kind,
+        ok: true,
+        detail: `${applied.added} added, ${applied.updated} updated, ${applied.unchanged} already current, ${applied.skipped} skipped with active work`,
+      };
+    }
+
     if (kind === 'projects') {
       const cloud = await pullSnapshot<Array<{ id: string; name: string; description?: string; updatedAt?: string; messages?: unknown[] }>>(kind);
       if (!cloud) return { kind, ok: true, detail: 'No cloud snapshot yet — push first' };
@@ -654,6 +751,7 @@ export async function getSyncOverview(): Promise<SyncOverview> {
   const agents = await loadAgents();
   const projects = await listProjects();
   const chats = await listChatSessions({ includeArchived: true });
+  const board = await listBoardCloudTasks();
   const { listGlobalUploadFiles } = await import('./workspace');
   const uploads = await listGlobalUploadFiles().catch(() => []);
   return {
@@ -662,6 +760,7 @@ export async function getSyncOverview(): Promise<SyncOverview> {
       agents: agents.length,
       automations: listRoutines({ limit: 1 }).total,
       projects: projects.length,
+      board: board.length,
       chats: chats.length,
       workspace: uploads.length,
       models: cfg.localGrokEnabled ? 1 : 0,

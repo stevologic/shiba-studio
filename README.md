@@ -76,11 +76,11 @@ npm install
 npm run dev          # → http://127.0.0.1:3000 (localhost only, by design)
 ```
 
-Also reachable by name at **http://shiba.local** — the app advertises that name over mDNS and a port-80 redirect forwards bare `shiba.local` to the app port (so **http://shiba.local:3000** works too, and is the fallback if port 80 is taken). `npm run dev:lan` / `start:lan` make the paired Companion/native-node gateway reachable network-wide while keeping the full Studio local (read [SECURITY.md](SECURITY.md) first).
+Also reachable by name at **http://shiba.local** — the app advertises that name over mDNS and a port-80 redirect forwards bare `shiba.local` to the app port (so **http://shiba.local:3000** works too, and is the fallback if port 80 is taken). `npm run dev:lan` / `start:lan` expose only the paired Companion/native-node gateway. To deliberately share the complete Studio with trusted private-network peers, use `npm run dev:lan:studio` / `start:lan:studio` (read [SECURITY.md](SECURITY.md) first).
 
 **Requirements:** Node.js ≥ 22.5 (the runs/audit database uses Node's built-in `node:sqlite` — nothing to compile on any platform). Runs on **Windows, macOS, and Linux**.
 
-In LAN mode, network peers reach only the authenticated Companion/native-node gateway; the full Studio stays on an internal loopback listener. See [Security](SECURITY.md) before enabling it.
+In regular LAN mode, network peers reach only the authenticated Companion/native-node gateway. Full-Studio LAN mode is a separate explicit opt-in and has no per-user login or isolation: every trusted peer gets the host user's Studio powers. See [Security](SECURITY.md) before enabling it.
 
 Then open **Settings** and connect a model source (any one works):
 
@@ -99,7 +99,7 @@ The top bar shows a readiness badge for each source.
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install on Windows/macOS/Linux, first run, connecting model sources |
 | [Grok Chat](docs/chat.md) | Sessions, models & reasoning, attachments, slash commands, the annotation sub-browser, quotas |
-| [Board](docs/board.md) | Shared Kanban, agent-run cards, and pull/push/two-way Linear or Jira sync |
+| [Board](docs/board.md) | Shared Kanban, agent-run cards, Linear/Jira mirroring, and private Grok Files snapshots |
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
 | [Memories](docs/memories.md) | Automatic learning modes, relevance recall, review queue, scopes, safety, and management |
 | [Automations](docs/automations.md) | Recurring, one-time, monitored, and event triggers; traces, retries, and headless operation |
@@ -124,13 +124,15 @@ The top bar shows a readiness badge for each source.
 - **Cost & safety guardrails** — monthly *and* daily spend limits with an optional hard stop, a global concurrent-run cap, per-run token caps, and overlap-suppressed Automation invocations (Settings → Cost & safety).
 - **Global search** — Ctrl+K searches chats, memories, agent runs, and the audit log alongside commands, deep-linking straight to the result.
 - **Backup & restore** — export your entire studio (settings, agents, chats, projects, runs, audit log) to one file and restore it on another machine.
-- **Bounded Board sync** — mirror task fields and optional workflow status with Linear or Jira while keeping stable `SHIB-#` keys; ordering, assignees, activity, runs, sprints, and deletions stay out of sync.
+- **Bounded Board sync** — mirror task fields and optional workflow status with Linear or Jira, or explicitly send/pull a safe Board snapshot through private Grok Files. Assignments, active work, activity, runs, provider links, and deletions stay local.
 - **Cross-session agent learning** — scoped SQLite memories are relevance-ranked and injected automatically; successful runs can propose or activate safe learned memories with provenance and manual-review controls.
 - **Grok CLI deep integration** — route chats through the local CLI, and give agents `grok_cli` with effort levels, self-verification, best-of-N, and structured JSON output.
 
 ## Security
 
 - **Scoped LAN gateway** — `dev:lan` / `start:lan` keep Next on an internal loopback listener and classify the real socket peer at the gateway, so a forged `Host: localhost` cannot expose generic Studio APIs. Remote clients reach only paired Companion/native-node routes.
+
+- **Explicit trusted-LAN Studio** — `dev:lan:studio` / `start:lan:studio` use the same socket-classifying gateway but grant full Studio access only to private/CGNAT/ULA peers. Public peers remain scoped, and exact Host/Origin validation blocks cross-site and DNS-rebinding requests. This mode has no user login; use it only on a network where every peer is trusted.
 
 - **Localhost only, by default** — the server binds `127.0.0.1`; a same-origin guard (`proxy.ts`) blocks any other website in your browser from reaching the API, and the terminal bridge rejects foreign WebSocket origins. `npm run dev:lan` / `start:lan` opt into LAN exposure.
 - **Ask-before-act** — sensitive tools (shell, file writes, posting) require per-call approval by default; YOLO mode is an explicit opt-in.
@@ -146,7 +148,8 @@ Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Pri
 | `npm run dev` | Development server with hot reload (binds `127.0.0.1`) |
 | `npm run build` | Production build |
 | `npm run start` | Serve the production build (binds `127.0.0.1`) |
-| `npm run dev:lan` / `start:lan` | Explicitly expose on all interfaces — read [SECURITY.md](SECURITY.md) first |
+| `npm run dev:lan` / `start:lan` | Expose only paired Companion/native-node routes on the LAN |
+| `npm run dev:lan:studio` / `start:lan:studio` | Expose the complete Studio to trusted private-network peers — read [SECURITY.md](SECURITY.md) first |
 | `npm test` | Full functional verification suite — isolated, never touches your live data |
 | `npm run test:e2e` | Playwright browser E2E (run `npx playwright install chromium` + `npm run build` first) |
 

@@ -99,6 +99,23 @@ async function main() {
   const team = await source('components/task-team-panel.tsx');
   check([artifactStudio, harness, team].every((value) => value.includes('catch((loadError)')), 'task-detail subpanels surface initial load failures');
 
+  const taskDetail = await source('components/task-detail-page.tsx');
+  const taskPromptStart = taskDetail.indexOf('function ExpandableTaskPrompt(');
+  const taskPromptEnd = taskDetail.indexOf('export function TaskDetailPage', taskPromptStart);
+  const taskPrompt = taskPromptStart >= 0 && taskPromptEnd > taskPromptStart
+    ? taskDetail.slice(taskPromptStart, taskPromptEnd)
+    : '';
+  check(
+    taskDetail.includes('const TASK_PROMPT_PREVIEW_CHARACTERS = 300;')
+      && taskPrompt.includes('const characters = Array.from(prompt);')
+      && taskPrompt.includes('characters.slice(0, TASK_PROMPT_PREVIEW_CHARACTERS)')
+      && taskPrompt.includes('aria-expanded={expanded}')
+      && taskPrompt.includes('aria-controls={promptId}')
+      && taskPrompt.includes("expanded ? 'Show less' : 'Show full prompt'")
+      && taskDetail.includes('<ExpandableTaskPrompt key={task.id} prompt={task.description} />'),
+    'Task details truncate long prompts by Unicode character count and expose an accessible expand/collapse control',
+  );
+
   const packs = await source('components/capability-packs-panel.tsx');
   check(packs.includes("archived: false") && packs.includes('ArchiveRestore'), 'archived capability packs have a restore path');
 
@@ -127,6 +144,66 @@ async function main() {
   check(
     !studio.includes('MeetingCapturePanel') && !studio.includes('DoctorPage'),
     'retired Meetings and Doctor panels are not mounted by the app shell',
+  );
+
+  const automations = await source('components/routines-panel.tsx');
+  const automationCardStart = automations.indexOf('function RoutineCard(');
+  const automationCardEnd = automations.indexOf('export function RoutinesPanel', automationCardStart);
+  const automationCard = automationCardStart >= 0 && automationCardEnd > automationCardStart
+    ? automations.slice(automationCardStart, automationCardEnd)
+    : '';
+  check(
+    automationCard.includes('agent: Agent | undefined')
+      && automationCard.includes('src={agent ? resolveAgentAvatarPath(agent) : MISSING_AGENT_AVATAR_PATH}')
+      && automationCard.includes('className="agent-avatar-xs shrink-0"')
+      && automationCard.includes('width={20}')
+      && automationCard.includes('height={20}')
+      && automationCard.includes('Assigned to')
+      && automationCard.includes('const agentName = agent?.name || routine.agentId;')
+      && automationCard.includes('{agentName}'),
+    'Automation summary cards show the assigned agent identity and small avatar, including a deleted-agent fallback',
+  );
+  check(
+    automations.includes('const agent = agents.find((candidate) => candidate.id === routine.agentId);')
+      && automations.includes('<RoutineCard routine={routine} agent={agent}'),
+    'Automation summaries resolve and pass their assigned Agent to the card',
+  );
+  const automationHeaderStart = automations.indexOf('<header className="page-head-row mb-0">');
+  const automationHeaderEnd = automations.indexOf('</header>', automationHeaderStart);
+  const automationHeader = automationHeaderStart >= 0 && automationHeaderEnd > automationHeaderStart
+    ? automations.slice(automationHeaderStart, automationHeaderEnd)
+    : '';
+  const importAutomationButton = buttonContaining(automationHeader, 'Import automation');
+  const newAutomationButton = buttonContaining(automationHeader, 'New automation');
+  check(
+    automationHeader.indexOf('Import automation') < automationHeader.indexOf('New automation')
+      && importAutomationButton.includes('type="button"')
+      && importAutomationButton.includes('importFileRef.current?.click()')
+      && importAutomationButton.includes('disabled={importing}')
+      && newAutomationButton.includes('type="button"'),
+    'Import automation is an adjacent, keyboard-operable action before New automation',
+  );
+  check(
+    automationHeader.includes('ref={importFileRef}')
+      && automationHeader.includes('type="file"')
+      && automationHeader.includes('accept=".json,.yaml,.yml,application/json,application/yaml,text/yaml"')
+      && automationHeader.includes('aria-label="Choose an exported automation JSON or YAML file"')
+      && automationHeader.includes("event.target.value = ''")
+      && !automationHeader.includes(' multiple'),
+    'Automation import uses an accessible single-file JSON/YAML picker that can retry the same file',
+  );
+  const importRoutineStart = automations.indexOf('async function importRoutine(file: File)');
+  const importRoutineEnd = automations.indexOf('function editRoutine(', importRoutineStart);
+  const importRoutine = importRoutineStart >= 0 && importRoutineEnd > importRoutineStart
+    ? automations.slice(importRoutineStart, importRoutineEnd)
+    : '';
+  check(
+    importRoutine.includes("fetch('/api/routines/import', { method: 'POST', body })")
+      && importRoutine.includes('setEditor({')
+      && importRoutine.includes('initial: draft')
+      && importRoutine.includes("draft = { ...draft, agentId: '' }")
+      && importRoutine.includes('setImporting(false)'),
+    'Automation import previews a validated draft, requires reassignment for a missing owner, and releases its busy state',
   );
 
   const filesPanel = await source('components/files-panel.tsx');

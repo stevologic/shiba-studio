@@ -9,9 +9,11 @@
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
     "dev:lan": "node scripts/lan.mjs dev",
+    "dev:lan:studio": "node scripts/lan.mjs dev --studio",
     "build": "next build",
     "start": "next start -H 127.0.0.1",
     "start:lan": "node scripts/lan.mjs start",
+    "start:lan:studio": "node scripts/lan.mjs start --studio",
     "lint": "eslint",
     "test": "tsx scripts/verify-all.ts",
     "test:e2e": "playwright test",
@@ -49,6 +51,7 @@
     "sonner": "^2.0.7",
     "uuid": "^14.0.1",
     "ws": "^8.21.0",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

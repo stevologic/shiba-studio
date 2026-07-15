@@ -42,7 +42,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000** (or just **http://shiba.local** — the app advertises that name over mDNS and redirects bare `shiba.local` to the app port; `http://shiba.local:3000` works too). For a production build: `npm run build && npm run start`. Both bind `127.0.0.1` only. The explicit `dev:lan` / `start:lan` commands expose a socket-classifying gateway for the paired Companion/native-node routes while the full Studio remains loopback-only (read [SECURITY.md](../SECURITY.md) first).
+Open **http://localhost:3000** (or just **http://shiba.local** — the app advertises that name over mDNS and redirects bare `shiba.local` to the app port; `http://shiba.local:3000` works too). For a production build: `npm run build && npm run start`. Both bind `127.0.0.1` only. `dev:lan` / `start:lan` expose a socket-classifying gateway for paired Companion/native-node routes. To make the complete Studio available at `shiba.local` to trusted private-network peers, use `npm run dev:lan:studio` or `npm run start:lan:studio`. This mode has no per-user login or isolation; read [SECURITY.md](../SECURITY.md) first.
 
 > **Slim install:** `npm install` downloads a headless Chromium (~150 MB) for the browser-automation tools and the annotation sub-browser. If you'll never use those, install with `PUPPETEER_SKIP_DOWNLOAD=1 npm install` — everything else works, and the browser tools tell you the one command to fetch Chromium later (`npx puppeteer browsers install chrome-headless-shell`).
 

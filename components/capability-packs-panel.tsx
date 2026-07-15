@@ -17,7 +17,7 @@ export function CapabilityPacksPanel() {
   const [busy, setBusy] = useState('');
   const [showWorkshop, setShowWorkshop] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [sourceMode, setSourceMode] = useState<SourceMode>('manifest');
+  const [sourceMode, setSourceMode] = useState<SourceMode>('url');
   const [sourceValue, setSourceValue] = useState('');
   const [approved, setApproved] = useState<Record<string, Set<string>>>({});
 
@@ -138,8 +138,8 @@ export function CapabilityPacksPanel() {
             <h3 className="text-xs font-semibold">Skill Workshop proposal</h3>
             <button type="button" className="grok-btn grok-btn-ghost ml-auto p-1" onClick={() => setShowWorkshop(false)} aria-label="Close workshop"><X size={13} /></button>
           </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <select className="grok-select text-xs" value={sourceMode} onChange={(event) => setSourceMode(event.target.value as SourceMode)} aria-label="Workflow source">
+          <div className="mt-2 flex flex-wrap items-start gap-2">
+            <select className="grok-select shrink-0 self-start text-xs" value={sourceMode} onChange={(event) => setSourceMode(event.target.value as SourceMode)} aria-label="Workflow source">
               <option value="manifest">Pack manifest</option><option value="run">Successful run ID</option>
               <option value="url">HTTPS URL</option><option value="folder">Local/Git folder</option>
             </select>

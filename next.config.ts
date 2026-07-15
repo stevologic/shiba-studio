@@ -1,5 +1,6 @@
 import type { NextConfig } from 'next';
 import { execSync } from 'child_process';
+import { isIP } from 'node:net';
 import os from 'os';
 
 // Initial bake only — the UI prefers live SHAs from GET /api/version which
@@ -36,6 +37,8 @@ const mdnsDevOrigins = (process.env.SHIBA_MDNS_HOST || 'shiba.local')
 // restart refreshes them if the address changes.
 function lanIPv4Origins(): string[] {
   const out: string[] = [];
+  const configured = process.env.SHIBA_LAN_IP?.trim();
+  if (configured && isIP(configured)) out.push(configured);
   for (const list of Object.values(os.networkInterfaces())) {
     for (const ni of list || []) {
       if (ni && ni.family === 'IPv4' && !ni.internal && ni.address) out.push(ni.address);

@@ -3,12 +3,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  AlertTriangle, Check, CloudDownload, CloudUpload, Clock, FolderKanban, FolderOpen, Loader2,
+  AlertTriangle, Check, CloudDownload, CloudUpload, Clock, Columns3, FolderKanban, FolderOpen, Loader2,
   MessageSquare, RefreshCw, Server, Users, X,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 
-type SyncKind = 'agents' | 'automations' | 'projects' | 'chats' | 'workspace' | 'models';
+type SyncKind = 'agents' | 'automations' | 'projects' | 'board' | 'chats' | 'workspace' | 'models';
 type ItemStatus = 'pending' | 'syncing' | 'done' | 'error' | 'skipped';
 
 interface SyncItem {
@@ -34,6 +34,7 @@ const KIND_META: Array<{ kind: SyncKind; label: string; icon: SyncItem['icon'] }
   { kind: 'agents', label: 'Agents', icon: Users },
   { kind: 'automations', label: 'Automations', icon: Clock },
   { kind: 'projects', label: 'Projects', icon: FolderKanban },
+  { kind: 'board', label: 'Board', icon: Columns3 },
   { kind: 'chats', label: 'Chats', icon: MessageSquare },
   { kind: 'workspace', label: 'Workspace uploads', icon: FolderOpen },
   { kind: 'models', label: 'Local model settings', icon: Server },

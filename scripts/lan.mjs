@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const CLIENT_CLASS_HEADER = 'x-shiba-client-class';
 export const PROXY_SECRET_HEADER = 'x-shiba-lan-proxy-secret';
+export const LAN_STUDIO_FLAG = '--studio';
 
 const LOOPBACK_HOST = '127.0.0.1';
 const PUBLIC_HOST = '0.0.0.0';
@@ -31,16 +32,42 @@ export function classifyClientAddress(remoteAddress) {
   return 'remote';
 }
 
-/** Companion/native-node traffic is HTTP-only; upgrade channels stay local. */
-export function allowLanUpgrade(remoteAddress) {
-  return classifyClientAddress(remoteAddress) === 'local';
+/** True only for non-public address ranges used by a local LAN or private VPN. */
+export function isPrivateNetworkAddress(remoteAddress) {
+  let address = String(remoteAddress || '').trim().toLowerCase().split('%')[0];
+  if (address.startsWith('::ffff:')) address = address.slice(7);
+  if (net.isIPv4(address)) {
+    const [a, b] = address.split('.').map(Number);
+    return a === 10
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || (a === 169 && b === 254)
+      || (a === 100 && b >= 64 && b <= 127);
+  }
+  if (net.isIPv6(address)) {
+    const first = Number.parseInt(address.split(':')[0] || '0', 16);
+    return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+  }
+  return false;
+}
+
+/** Socket-derived class; only explicit Studio mode promotes a private peer. */
+export function classifyProxyClientAddress(remoteAddress, studioAccess = false) {
+  if (classifyClientAddress(remoteAddress) === 'local') return 'local';
+  if (studioAccess && isPrivateNetworkAddress(remoteAddress)) return 'studio';
+  return 'remote';
+}
+
+/** Companion mode keeps upgrades local; Studio mode adds private LAN peers. */
+export function allowLanUpgrade(remoteAddress, studioAccess = false) {
+  return classifyProxyClientAddress(remoteAddress, studioAccess) !== 'remote';
 }
 
 /**
  * Build upstream headers from an untrusted client request. Exported so the
  * security verifier can prove that hostile headers are overwritten.
  */
-export function buildUpstreamHeaders(headers, remoteAddress, secret) {
+export function buildUpstreamHeaders(headers, remoteAddress, secret, studioAccess = false) {
   const forwarded = { ...headers };
   delete forwarded[CLIENT_CLASS_HEADER];
   delete forwarded[PROXY_SECRET_HEADER];
@@ -49,7 +76,7 @@ export function buildUpstreamHeaders(headers, remoteAddress, secret) {
   delete forwarded['x-forwarded-proto'];
 
   const host = typeof forwarded.host === 'string' ? forwarded.host : '';
-  forwarded[CLIENT_CLASS_HEADER] = classifyClientAddress(remoteAddress);
+  forwarded[CLIENT_CLASS_HEADER] = classifyProxyClientAddress(remoteAddress, studioAccess);
   forwarded[PROXY_SECRET_HEADER] = secret;
   forwarded['x-forwarded-for'] = String(remoteAddress || 'unknown');
   forwarded['x-forwarded-host'] = host;
@@ -67,9 +94,9 @@ function writeUpgradeResponse(socket, response) {
 }
 
 /** Create the public reverse proxy. The caller controls when it starts. */
-export function createLanProxyServer({ internalPort, secret }) {
+export function createLanProxyServer({ internalPort, secret, studioAccess = false, terminalPort = null }) {
   const server = http.createServer((request, response) => {
-    const headers = buildUpstreamHeaders(request.headers, request.socket.remoteAddress, secret);
+    const headers = buildUpstreamHeaders(request.headers, request.socket.remoteAddress, secret, studioAccess);
     const upstream = http.request({
       host: LOOPBACK_HOST,
       port: internalPort,
@@ -102,17 +129,20 @@ export function createLanProxyServer({ internalPort, secret }) {
   });
 
   server.on('upgrade', (request, clientSocket, clientHead) => {
-    if (!allowLanUpgrade(request.socket.remoteAddress)) {
+    if (!allowLanUpgrade(request.socket.remoteAddress, studioAccess)) {
       clientSocket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n');
       return;
     }
-    const headers = buildUpstreamHeaders(request.headers, request.socket.remoteAddress, secret);
+    const headers = buildUpstreamHeaders(request.headers, request.socket.remoteAddress, secret, studioAccess);
     headers.connection = 'Upgrade';
     headers.upgrade = request.headers.upgrade || 'websocket';
+    const terminalUpgrade = studioAccess
+      && terminalPort
+      && request.url?.startsWith('/api/terminal/ws');
 
     const upstream = http.request({
       host: LOOPBACK_HOST,
-      port: internalPort,
+      port: terminalUpgrade ? terminalPort : internalPort,
       method: request.method,
       path: request.url,
       headers,
@@ -171,7 +201,7 @@ export function nextPassthroughArgs(args) {
       index += 1;
       continue;
     }
-    if (arg.startsWith('--port=') || arg.startsWith('--hostname=')) continue;
+    if (arg.startsWith('--port=') || arg.startsWith('--hostname=') || arg === LAN_STUDIO_FLAG) continue;
     result.push(arg);
   }
   return result;
@@ -193,11 +223,16 @@ function findFreeLoopbackPort() {
 async function main() {
   const mode = process.argv[2] === 'start' ? 'start' : 'dev';
   const userArgs = process.argv.slice(3);
+  const studioAccess = process.env.SHIBA_LAN_STUDIO === '1' || userArgs.includes(LAN_STUDIO_FLAG);
   const publicPort = parsePublicPort(userArgs, process.env);
   const internalPort = await findFreeLoopbackPort();
+  const terminalPort = Number(process.env.TERMINAL_WS_PORT || 3911);
+  if (!Number.isInteger(terminalPort) || terminalPort < 1 || terminalPort > 65535) {
+    throw new Error(`Invalid terminal WebSocket port: ${process.env.TERMINAL_WS_PORT}`);
+  }
   const secret = randomBytes(32).toString('base64url');
   const nextBin = path.join(root, 'node_modules', 'next', 'dist', 'bin', 'next');
-  const server = createLanProxyServer({ internalPort, secret });
+  const server = createLanProxyServer({ internalPort, secret, studioAccess, terminalPort });
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -219,10 +254,14 @@ async function main() {
       SHIBA_APP_PORT: String(publicPort),
       SHIBA_INTERNAL_PORT: String(internalPort),
       SHIBA_LAN_PROXY_SECRET: secret,
+      SHIBA_LAN_STUDIO: studioAccess ? '1' : '0',
     },
   });
 
-  console.log(`[shiba-studio] LAN boundary listening on http://${PUBLIC_HOST}:${publicPort}; Next is loopback-only on ${LOOPBACK_HOST}:${internalPort}`);
+  const scope = studioAccess
+    ? 'full Studio enabled for private-network peers'
+    : 'scoped Companion/native-node access only';
+  console.log(`[shiba-studio] LAN boundary listening on http://${PUBLIC_HOST}:${publicPort} (${scope}); Next is loopback-only on ${LOOPBACK_HOST}:${internalPort}`);
 
   let closing = false;
   const close = (exitCode, signal) => {

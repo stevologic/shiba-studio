@@ -219,6 +219,158 @@ export async function listBoardTasks(): Promise<BoardTask[]> {
   });
 }
 
+/**
+ * Safe, portable portion of a Board card stored in the Grok Files snapshot.
+ * Runtime/ownership fields are intentionally absent: restoring a snapshot must
+ * never replay an assignment, agent run, work claim, activity entry, project
+ * reference, or provider credential/link on another Studio installation.
+ */
+export interface BoardCloudTask {
+  id: string;
+  /** Source-machine display key only; imports always allocate a local SHIB key. */
+  key: string;
+  title: string;
+  description: string;
+  status: BoardStatus;
+  priority: BoardTask['priority'];
+  labels: string[];
+  createdAt: string;
+  /** Sole merge clock for provider-syncable task fields. */
+  syncUpdatedAt: string;
+}
+
+export interface BoardCloudMergeResult {
+  added: number;
+  updated: number;
+  unchanged: number;
+  /** Existing cards with active or conservatively-marked working state. */
+  skipped: number;
+}
+
+/** Read one internally-consistent, operational-state-free Board snapshot. */
+export async function listBoardCloudTasks(): Promise<BoardCloudTask[]> {
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    return store.tasks.map((task) => ({
+      id: task.id,
+      key: task.key,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      labels: [...task.labels],
+      createdAt: task.createdAt,
+      syncUpdatedAt: task.syncUpdatedAt || task.updatedAt || task.createdAt,
+    }));
+  });
+}
+
+function allocateBoardKey(store: BoardStore): string {
+  const used = new Set(store.tasks.map((task) => task.key.toUpperCase()));
+  let candidate = Number.isSafeInteger(store.nextNumber) && store.nextNumber > 0
+    ? store.nextNumber
+    : 1;
+  while (used.has(`${KEY_PREFIX}-${candidate}`)) {
+    candidate += 1;
+    if (!Number.isSafeInteger(candidate)) throw new Error('Board key space is exhausted');
+  }
+  store.nextNumber = candidate + 1;
+  return `${KEY_PREFIX}-${candidate}`;
+}
+
+function cloudFieldsMatch(local: BoardTask, remote: BoardCloudTask): boolean {
+  return local.title === remote.title
+    && local.description === remote.description
+    && local.status === remote.status
+    && local.priority === remote.priority
+    && JSON.stringify(local.labels) === JSON.stringify(remote.labels);
+}
+
+/**
+ * Additively merge a validated Grok Files Board snapshot in one Board lock and
+ * one durable write/event. Local-only and operational fields are never read
+ * from the snapshot, and cards with live work are never changed underneath an
+ * agent. Missing cloud cards never delete local cards.
+ */
+export async function mergeBoardCloudTasks(remoteTasks: readonly BoardCloudTask[]): Promise<BoardCloudMergeResult> {
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    const result: BoardCloudMergeResult = { added: 0, updated: 0, unchanged: 0, skipped: 0 };
+    const seen = new Set<string>();
+    let changed = false;
+
+    for (const remote of remoteTasks) {
+      if (seen.has(remote.id)) throw new Error(`Cloud Board snapshot contains duplicate task id: ${remote.id}`);
+      seen.add(remote.id);
+
+      const local = store.tasks.find((task) => task.id === remote.id);
+      if (!local) {
+        const createdAt = remote.createdAt;
+        store.tasks.push({
+          id: remote.id,
+          key: allocateBoardKey(store),
+          title: remote.title,
+          description: remote.description,
+          status: remote.status,
+          priority: remote.priority,
+          assigneeAgentId: null,
+          projectId: null,
+          labels: [...remote.labels],
+          order: endOrder(store.tasks, remote.status),
+          activity: [systemEvent('Created by Grok Files sync')],
+          runIds: [],
+          syncUpdatedAt: remote.syncUpdatedAt,
+          externalRefs: [],
+          createdAt,
+          updatedAt: remote.syncUpdatedAt,
+        });
+        result.added += 1;
+        changed = true;
+        continue;
+      }
+
+      if (local.activeWork || local.working) {
+        result.skipped += 1;
+        continue;
+      }
+
+      const localClock = Date.parse(local.syncUpdatedAt || local.updatedAt || local.createdAt) || 0;
+      const remoteClock = Date.parse(remote.syncUpdatedAt) || 0;
+      if (remoteClock <= localClock) {
+        result.unchanged += 1;
+        continue;
+      }
+
+      if (cloudFieldsMatch(local, remote)) {
+        // Advance the merge baseline without manufacturing an activity item.
+        local.syncUpdatedAt = remote.syncUpdatedAt;
+        result.unchanged += 1;
+        changed = true;
+        continue;
+      }
+
+      const statusChanged = local.status !== remote.status;
+      local.title = remote.title;
+      local.description = remote.description;
+      local.status = remote.status;
+      local.priority = remote.priority;
+      local.labels = [...remote.labels];
+      if (statusChanged) {
+        local.order = endOrder(store.tasks.filter((task) => task.id !== local.id), remote.status);
+      }
+      local.syncUpdatedAt = remote.syncUpdatedAt;
+      local.updatedAt = now();
+      local.activity.push(systemEvent('Pulled task fields from Grok Files'));
+      if (local.activity.length > 200) local.activity = local.activity.slice(-200);
+      result.updated += 1;
+      changed = true;
+    }
+
+    if (changed) await saveStore(store);
+    return result;
+  });
+}
+
 export async function getBoardTask(idOrKey: string): Promise<BoardTask | null> {
   const needle = idOrKey.trim().toUpperCase();
   return withStoreLock(async () => {
