@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Code2
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Code2, Activity
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -26,6 +26,7 @@ const panelLoading = () => (
 );
 const ChatSessionsPanel = dynamic(() => import('@/components/chat-sessions-panel'), { loading: panelLoading });
 const ProjectsPanel = dynamic(() => import('@/components/projects-panel'), { loading: panelLoading });
+const SiteTrafficDashboard = dynamic(() => import('@/components/site-traffic-dashboard'), { loading: panelLoading });
 const UsageDashboard = dynamic(() => import('@/components/usage-dashboard'), { loading: panelLoading });
 const LogsPanel = dynamic(() => import('@/components/logs-panel'), { loading: panelLoading });
 const McpPanel = dynamic(() => import('@/components/mcp-panel'), { loading: panelLoading });
@@ -141,7 +142,7 @@ type RunSummaryLite = {
 const TAB_LABELS: Record<string, string> = {
   dashboard: 'Dashboard', attention: 'Attention', chat: 'Grok Chat', projects: 'Projects', board: 'Board', agents: 'Agents',
   memories: 'Memories', workspace: 'Workspace', code: 'Code', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
-  usage: 'Usage', logs: 'Logs', settings: 'Settings',
+  traffic: 'Traffic', usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
 
 /** Survives React remounts so chat session URL changes never re-bootstrap the shell. */
@@ -3045,6 +3046,7 @@ export default function ShibaStudio() {
       { id: 'files', label: 'Files' },
       { id: 'automations', label: 'Automations' },
       { id: 'integrations', label: 'Capabilities' },
+      { id: 'traffic', label: 'Traffic' },
       { id: 'usage', label: 'Usage' },
       { id: 'logs', label: 'Logs' },
       { id: 'settings', label: 'Settings' },
@@ -3249,6 +3251,7 @@ export default function ShibaStudio() {
             { id: 'files', label: 'Files', icon: FileText, stat: null as string | null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
             { id: 'integrations', label: 'Capabilities', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
+            { id: 'traffic', label: 'Traffic', icon: Activity, stat: null as string | null },
             {
               id: 'usage',
               label: 'Usage',
@@ -3283,7 +3286,7 @@ export default function ShibaStudio() {
               >
                 <Icon size={16} strokeWidth={1.75} className="nav-item-icon" aria-hidden />
                 <span className="nav-item-label">{item.label}</span>
-                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
+                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'traffic' && item.id !== 'logs' && (
                   <span className="data-spinner nav-item-meta ml-auto" aria-label={`Loading ${item.label} count`} />
                 )}
                 {!navCollapsed && item.stat != null && (
@@ -4706,6 +4709,10 @@ export default function ShibaStudio() {
 
           {tab === 'board' && (
             <KanbanBoard agents={agents} onOpenRun={openRunTrace} onOpenCountChanged={() => { void loadNavStats(); }} />
+          )}
+
+          {tab === 'traffic' && (
+            <SiteTrafficDashboard />
           )}
 
           {tab === 'usage' && (

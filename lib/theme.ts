@@ -81,6 +81,7 @@ export const PRIMARY_PAGE_SURFACES = [
   'workspace',
   'automations',
   'integrations',
+  'traffic',
   'usage',
   'logs',
   'settings',

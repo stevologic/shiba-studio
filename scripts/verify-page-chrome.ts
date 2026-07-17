@@ -35,6 +35,7 @@ const SURFACE_SOURCES: Record<(typeof PRIMARY_PAGE_SURFACES)[number], string[]> 
   workspace: ['components/workspace-page.tsx'],
   automations: ['components/shiba-studio.tsx'],
   integrations: ['components/shiba-studio.tsx'],
+  traffic: ['components/site-traffic-dashboard.tsx'],
   usage: ['components/usage-dashboard.tsx'],
   logs: ['components/logs-panel.tsx'],
   settings: ['components/shiba-studio.tsx'],

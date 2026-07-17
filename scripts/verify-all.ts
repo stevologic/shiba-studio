@@ -23,6 +23,7 @@ const CHAIN = [
   'verify-ide-workspaces.ts',
   'verify-ide-git.ts',
   'verify-ide-github.ts',
+  'verify-site-traffic.ts',
   'verify-client-loading.ts',
   'verify-release-ui.ts',
   'verify-runtime.ts',

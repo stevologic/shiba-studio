@@ -130,6 +130,12 @@ export interface IntegrationCreds {
   github?: {
     token: string; // PAT
   };
+  goatcounter?: {
+    /** Hosted GoatCounter code, e.g. "shiba-studio" for shiba-studio.goatcounter.com. */
+    siteCode: string;
+    /** API token generated from the GoatCounter account API screen. */
+    apiToken: string;
+  };
   slack?: {
     token: string; // xoxb-...
     defaultChannel?: string;

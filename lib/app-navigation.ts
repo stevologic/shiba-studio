@@ -11,6 +11,7 @@ export const APP_TABS = [
   'files',
   'automations',
   'integrations',
+  'traffic',
   'usage',
   'logs',
   'settings',
