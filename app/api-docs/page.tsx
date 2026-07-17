@@ -74,7 +74,7 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'Code IDE', method: 'GET', path: '/api/ide/github', summary: 'Open pull requests, issues, and workflow runs for the workspace origin.', query: [{ name: 'workspace', desc: 'Workspace root (default configured workspace)', example: '' }] },
 
   // --- CLI & backup ---
-  { group: 'CLI & Backup', method: 'GET', path: '/api/grok-cli/status', summary: 'Grok CLI detection: installed, version, path, models.', query: [{ name: 'checkUpdate', desc: '1 = also check for a newer CLI release' }] },
+  { group: 'CLI & Backup', method: 'GET', path: '/api/grok-cli/status', summary: 'Official Grok Build path/version, authenticated readiness, models, detected headless/ACP capabilities, and audited open-source provenance.', query: [{ name: 'checkUpdate', desc: '1 = also check for a newer released binary' }] },
   { group: 'CLI & Backup', method: 'GET', path: '/api/backup', summary: 'Download a full studio backup. Sensitive: the encryption key is included unless omitted.', sensitive: true, query: [{ name: 'key', desc: 'Use "omit" unless you explicitly need a portable secret-bearing backup', example: 'omit' }] },
 ];
 

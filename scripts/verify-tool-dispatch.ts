@@ -108,10 +108,18 @@ async function main() {
   }
 
   const fs = await import('fs/promises');
-  const [chatPanelSource, grokStreamSource, grokCliStreamSource] = await Promise.all([
+  const [
+    chatPanelSource,
+    grokStreamSource,
+    grokCliStreamSource,
+    agentRuntimeSource,
+    agentToolExecSource,
+  ] = await Promise.all([
     fs.readFile(path.join(process.cwd(), 'components/grok-chat-panel.tsx'), 'utf8'),
     fs.readFile(path.join(process.cwd(), 'app/api/grok/stream/route.ts'), 'utf8'),
     fs.readFile(path.join(process.cwd(), 'app/api/grok-cli/stream/route.ts'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'lib/agent-runtime.ts'), 'utf8'),
+    fs.readFile(path.join(process.cwd(), 'lib/agent-tool-exec.ts'), 'utf8'),
   ]);
   assert(
     chatPanelSource.includes("if (parsed.name === 'tools')")
@@ -125,8 +133,15 @@ async function main() {
   );
   assert(
     grokCliStreamSource.includes('toolsEnabled,')
-      && grokCliStreamSource.includes('maxTurns: toolsEnabled ?'),
-    'Grok CLI receives the tool boundary and collapses tools-off runs to one turn',
+      && grokCliStreamSource.includes('maxTurns: toolsEnabled ?')
+      && grokCliStreamSource.includes("toolsEnabled && cfg.toolApprovalMode === 'yolo'")
+      && grokCliStreamSource.includes("? 'bypassPermissions'"),
+    'Grok CLI gates unattended approval on explicit YOLO plus the chat tool boundary',
+  );
+  assert(
+    agentRuntimeSource.includes("!opts.readOnly && cfg.toolApprovalMode === 'yolo'")
+      && agentToolExecSource.includes("permissionMode: 'bypassPermissions'"),
+    'CLI-model runs respect YOLO/read-only policy and approved tool delegations are explicit',
   );
   await fs.mkdir(SCRATCH, { recursive: true }).catch(() => {});
   await fs.writeFile(

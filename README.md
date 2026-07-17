@@ -44,7 +44,9 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 - **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Reddit through a Devvit companion, Obsidian, Vercel, and Netlify agent integrations; Linear/Jira Board sync; custom skills; MCP servers; and a live catalog of 40+ built-in agent tools (web search, workspace grep, persistent memory, image generation, social posting, PRs, deploys, …).
 - **Everything local** — Shiba-managed credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, one-file backup & restore, and zero telemetry. External CLIs can maintain their own permission-restricted caches (the X MCP bridge is documented below).
 
-All intelligence routes exclusively through **Grok/xAI** — cloud API key, OAuth 2.0 with X, the local Grok CLI, or any OpenAI-compatible local model server (LM Studio, Ollama, llama.cpp).
+All intelligence routes exclusively through **Grok/xAI** — cloud API key,
+OAuth 2.0 with X, the local official Grok Build CLI, or any OpenAI-compatible
+local model server (LM Studio, Ollama, llama.cpp).
 
 ## A look around
 
@@ -89,10 +91,28 @@ Then open **Settings** and connect a model source (any one works):
 | --- | --- |
 | **xAI API key** | Paste your `xai-…` key from [console.x.ai](https://console.x.ai) → *Save & Validate* |
 | **OAuth 2.0 with X** | *Sign in with X* → a popup opens `accounts.x.ai`, then closes itself — tokens cached & auto-refreshed, nothing to paste |
-| **Grok CLI** | Install the `grok` CLI — detected automatically from PATH |
+| **Grok Build CLI** | Install the official [`xai-org/grok-build`](https://github.com/xai-org/grok-build) `grok` binary — detected automatically from `PATH`, with authenticated readiness checked through `grok models` |
 | **Local models** | Enable local models and point at any OpenAI-compatible server |
 
 The top bar shows a readiness badge for each source.
+
+Install the released Grok Build binary with the official platform command:
+
+```sh
+# macOS / Linux / Git Bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+```
+
+```powershell
+# Windows PowerShell
+irm https://x.ai/cli/install.ps1 | iex
+```
+
+Shiba's compatibility baseline is public source commit
+[`98c3b2438aa922fbbe6178a5c0a4c48f85edc8ce`](https://github.com/xai-org/grok-build/commit/98c3b2438aa922fbbe6178a5c0a4c48f85edc8ce)
+(source version `0.2.102`, `SOURCE_REV`
+`124d85bc5dc6e7805560215fcc6d5413944920e1`) and the separately released,
+tested `grok 0.2.103` binary.
 
 ## Documentation
 
@@ -110,7 +130,8 @@ The top bar shows a readiness badge for each source.
 | [Capability Packs](docs/capability-packs.md) | Governed learn → review → activate workflow packs, permissions, versions, rollback, and uninstall |
 | [Artifact Studio](docs/artifact-studio.md) | Immutable previews, visual evidence, annotations, live refresh, rollback, and publishing |
 | [Native Nodes](docs/native-nodes.md) | Signed Windows-helper protocol and compatibility API for existing paired nodes |
-| [Grok CLI](docs/cli.md) | Routing chat through the local `grok` CLI, the `grok_cli` agent tool, effort/check/best-of-N/structured output |
+| [Grok Build CLI](docs/cli.md) | Official installation and provenance, authenticated readiness, one-shot chat/agent delegation, output and safety contracts |
+| [Grok Build Harnesses](docs/grok-build-harnesses.md) | Managed headless requests, persistent `grok agent stdio` ACP, and external attachment/callback boundaries |
 | [API Reference](docs/api.md) | Every `/api/*` endpoint, curl examples, and the in-app interactive explorer at `/api-docs` |
 | [Cloud Sync](docs/sync.md) | What sync does, where snapshots live, push/pull semantics |
 | [Architecture](docs/architecture.md) | How every feature fits together — one diagram, one engine |
@@ -128,7 +149,12 @@ The top bar shows a readiness badge for each source.
 - **Backup & restore** — export your entire studio (settings, agents, chats, projects, runs, audit log) to one file and restore it on another machine.
 - **Bounded Board sync** — mirror task fields and optional workflow status with Linear or Jira, or explicitly send/pull a safe Board snapshot through private Grok Files. Assignments, active work, activity, runs, provider links, and deletions stay local.
 - **Cross-session agent learning** — scoped SQLite memories are relevance-ranked and injected automatically; successful runs can propose or activate safe learned memories with provenance and manual-review controls.
-- **Grok CLI deep integration** — route chats through the local CLI, and give agents `grok_cli` with effort levels, self-verification, best-of-N, and structured JSON output.
+- **Official Grok Build integration** — route chats and `grok_cli` delegation
+  through bounded one-shot headless processes (streaming NDJSON for chat,
+  plain or schema-constrained output for delegation), with the upstream
+  persistent `grok agent stdio` ACP harness documented separately for IDE
+  clients. External harness grants remain attachment/callback contracts and do
+  not launch ambient host CLIs.
 
 ## Security
 

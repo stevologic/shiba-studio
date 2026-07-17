@@ -129,8 +129,8 @@ The primary Studio surface calls these **Automations**. Every recurring, one-tim
 | GET/POST | `/api/chat-sessions` | List / create / update / delete chat sessions. |
 | POST | `/api/grok/stream` | Stream a chat turn (SSE) — the main chat endpoint. |
 | POST | `/api/grok/multi-agent-stream` | "All agents" group chat with synthesis (SSE). |
-| POST | `/api/grok-cli/stream` | Stream a chat turn routed through the local **Grok CLI** (SSE). See [CLI](cli.md). |
-| GET | `/api/grok-cli/status` | Grok CLI detection: installed, version, path, models. `?checkUpdate=1` checks for a newer CLI. |
+| POST | `/api/grok-cli/stream` | Stream a chat turn through a managed, one-shot official Grok Build process (SSE). Shiba launches `grok --no-auto-update -p … --output-format streaming-json` and projects the CLI's NDJSON events into the chat stream. See [CLI](cli.md). |
+| GET | `/api/grok-cli/status` | Official Grok Build detection: installed path/version plus authenticated model readiness from `grok models`. `?checkUpdate=1` also checks for a newer released binary. |
 | POST | `/api/chat-tools` | Run chat research, memory, and X actions (`search`, `fetch`, `remember`, `recall`, `forget`, `post_x`). Git, Board, and Obsidian commands use their dedicated endpoints. |
 | POST | `/api/chat/upload` | Attach files/images to a chat. |
 | POST | `/api/tts` | Text-to-speech (xAI voices). |
@@ -233,10 +233,17 @@ See [Native companion nodes](native-nodes.md) for the signed protocol, escalatio
 | GET | `/api/companion/data` | Authenticated redacted tasks/evidence/pending-approval/Routine projection plus sanitized voice-request status for devices with `action:voice`. |
 | POST | `/api/companion/actions` | Scoped, revision-bound, idempotent exact approval/deny, steering, cancel, or Routine action. |
 | POST | `/api/companion/voice` | Stream one consent-confirmed, SHA-256-bound microphone request from a device with `action:voice`. Supported audio is capped at 50 MB, retained locally for one day, transcribed through server-side xAI auth, and dispatched as a durable task. |
-| GET/POST | `/api/harness-grants` | List or issue one-workspace, action-level, TTL-bound external coding grants. |
-| POST | `/api/harness-grants/:id/start` | Activate a one-session grant and start/attach the selected harness. |
+| GET/POST | `/api/harness-grants` | List or issue one-workspace, action-level, TTL-bound attachment grants for an external coding worker. |
+| POST | `/api/harness-grants/:id/start` | Activate one grant, create or attach its child task/session contract, and return the attachment metadata. This endpoint does not discover or spawn an ambient host CLI. |
 | POST | `/api/harness-grants/:id/callback` | Authenticated external worker status and typed evidence callback. |
 | POST | `/api/harness-grants/:id/revoke` | Revoke the grant and cancel its child task. |
+
+External harness grants are callback contracts, not process launchers. The
+external worker or operator launches the selected harness and reports status
+and evidence with the grant credential. The official Grok Build CLI's own
+persistent IDE transport is `grok agent stdio` over ACP; Shiba currently uses
+the separate one-shot headless transport for chat and agent delegation. See
+[Grok Build harnesses](grok-build-harnesses.md).
 
 ### OAuth (browser-driven)
 

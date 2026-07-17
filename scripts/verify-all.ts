@@ -29,6 +29,7 @@ const CHAIN = [
   'verify-agent-outcomes.ts',
   'verify-reddit.ts',
   'verify-tool-dispatch.ts',
+  'verify-grok-cli.ts',
   'verify-task-ledger.ts',
   'verify-context-engine.ts',
   'verify-session-lifecycle.ts',

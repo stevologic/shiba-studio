@@ -2182,18 +2182,21 @@ export default function GrokChatPanel({
       try {
         const data = await loadClientJson<{
           installed?: boolean;
+          ready?: boolean;
           version?: string;
           models?: string[];
           defaultModel?: string;
         }>('/api/grok-cli/status', { maxAgeMs: CHAT_READ_REUSE_MS });
         if (cancelled) return;
-        setGrokCliInstalled(!!data.installed);
+        // This legacy state name now means "usable": PATH presence without
+        // authentication/capability support must not enable the CLI toggle.
+        setGrokCliInstalled(data.ready === true);
         setGrokCliVersion(data.version || null);
         const models: string[] = Array.isArray(data.models) ? data.models : [];
         setCliModels(models);
         setCliDefaultModel(data.defaultModel || null);
         setCliModel((cur) => (cur && models.includes(cur) ? cur : (data.defaultModel || models[0] || '')));
-        if (!data.installed) setUseGrokCli(false);
+        if (!data.ready) setUseGrokCli(false);
       } catch {
         if (cancelled) return;
         setGrokCliInstalled(false);

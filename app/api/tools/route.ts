@@ -92,7 +92,7 @@ export async function GET() {
       },
       true,
     ),
-    ...(cli.installed ? [grokCliToolDefinition()] : []),
+    ...(cli.ready ? [grokCliToolDefinition()] : []),
     ...mcpToolDefinitions(),
   ];
   const tools: ToolCatalogEntry[] = defs.map((t) => {

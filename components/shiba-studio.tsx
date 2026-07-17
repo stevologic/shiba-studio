@@ -116,6 +116,7 @@ import {
   hasProvidersUiSnapshot,
   patchProvidersUiSnapshot,
   setProvidersUiSnapshot,
+  type CachedGrokCliStatus,
   type CachedOauthStatus,
 } from '@/lib/providers-ui-store';
 import {
@@ -254,14 +255,76 @@ let cachedRuntimeVersion: RuntimeVersionState | null = null;
 let cachedUpdateNotice: { latest: string; url: string | null } | null = null;
 
 /** Providers rail probes (local reachability, CLI) — cache 10 min across reloads. */
-const PROVIDER_STATUS_LS = 'shiba-provider-status-v1';
+const PROVIDER_STATUS_LS = 'shiba-provider-status-v2';
 const PROVIDER_STATUS_TTL_MS = 10 * 60_000;
 
 type ProviderStatusCache = {
   at: number;
   localGrokReachable?: boolean;
-  grokCli?: { installed: boolean; version?: string; path?: string };
+  grokCli?: CachedGrokCliStatus;
 };
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeGrokCliStatus(value: unknown): CachedGrokCliStatus {
+  const data = value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    installed: data.installed === true,
+    ready: data.ready === true,
+    explicitlyTrusted: data.explicitlyTrusted === true,
+    discovery: data.discovery === 'explicit' || data.discovery === 'path' || data.discovery === 'missing'
+      ? data.discovery
+      : undefined,
+    authenticated: typeof data.authenticated === 'boolean' ? data.authenticated : undefined,
+    authMode: optionalString(data.authMode),
+    version: optionalString(data.version),
+    versionNumber: optionalString(data.versionNumber),
+    channel: optionalString(data.channel),
+    path: optionalString(data.path),
+    error: optionalString(data.error),
+    models: Array.isArray(data.models)
+      ? [...new Set(data.models.map(optionalString).filter((model): model is string => !!model))]
+      : undefined,
+    defaultModel: optionalString(data.defaultModel),
+    capabilities: data.capabilities && typeof data.capabilities === 'object'
+      ? data.capabilities as CachedGrokCliStatus['capabilities']
+      : undefined,
+    source: data.source && typeof data.source === 'object'
+      ? data.source as CachedGrokCliStatus['source']
+      : undefined,
+  };
+}
+
+function grokCliSourceLabel(status: CachedGrokCliStatus | null): string | null {
+  const source = status?.source;
+  if (!source) return null;
+  const repository = source.repository
+    ?.replace(/^https?:\/\/github\.com\//i, '')
+    .replace(/\.git$/i, '');
+  const revision = source.sourceVersion || source.testedStableVersion;
+  return [repository, revision].filter(Boolean).join(' · ') || null;
+}
+
+function grokCliCapabilityLabels(status: CachedGrokCliStatus | null): string[] {
+  const capabilities = status?.capabilities;
+  if (!capabilities) return [];
+  const labels: string[] = [];
+  if (capabilities.headless && capabilities.structuredOutput) labels.push('Structured headless');
+  else if (capabilities.headless) labels.push('Headless');
+  if (capabilities.acpStdio || capabilities.acpWebSocket) {
+    const transports = [
+      capabilities.acpStdio ? 'stdio' : '',
+      capabilities.acpWebSocket ? 'WebSocket' : '',
+    ].filter(Boolean).join(' + ');
+    labels.push(`ACP (${transports})`);
+  }
+  if (capabilities.selfVerification) labels.push('Verification harness');
+  return labels;
+}
 
 function readProviderStatusCache(): ProviderStatusCache | null {
   if (typeof window === 'undefined') return null;
@@ -674,7 +737,7 @@ export default function ShibaStudio() {
   }
   const [folderBrowseFor, setFolderBrowseFor] = useState<'obsidian' | 'workspace' | 'mcp' | null>(null);
   const [mcpBrowsePath, setMcpBrowsePath] = useState<string | null>(null);
-  const [grokCliStatus, setGrokCliStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(
+  const [grokCliStatus, setGrokCliStatus] = useState<CachedGrokCliStatus | null>(
     () => getProvidersUiSnapshot()?.grokCli ?? null,
   );
 
@@ -764,17 +827,17 @@ export default function ShibaStudio() {
 
     loadClientJson<any>('/api/grok-cli/status', { maxAgeMs: 10 * 60_000 })
       .then((data) => {
-        const next = {
-          installed: !!data.installed,
-          version: data.version as string | undefined,
-          path: data.path as string | undefined,
-        };
+        const next = normalizeGrokCliStatus(data);
         setGrokCliStatus(next);
         writeProviderStatusCache({ grokCli: next });
         patchProvidersUiSnapshot({ grokCli: next });
       })
       .catch(() => {
-        const next = { installed: false as const };
+        const next: CachedGrokCliStatus = {
+          installed: false,
+          ready: false,
+          error: 'Grok CLI status could not be checked',
+        };
         setGrokCliStatus(next);
         writeProviderStatusCache({ grokCli: next });
         patchProvidersUiSnapshot({ grokCli: next });
@@ -855,6 +918,10 @@ export default function ShibaStudio() {
     setCliUpdate({ checking: true });
     try {
       const data = await fetch('/api/grok-cli/status?checkUpdate=1').then((r) => r.json());
+      const nextStatus = normalizeGrokCliStatus(data);
+      setGrokCliStatus(nextStatus);
+      writeProviderStatusCache({ grokCli: nextStatus });
+      patchProvidersUiSnapshot({ grokCli: nextStatus });
       const u = data.update;
       if (!u || !u.ok) {
         setCliUpdate({ checking: false, text: u?.error || 'Update check failed' });
@@ -928,7 +995,12 @@ export default function ShibaStudio() {
         const mapped: ModelOption[] = data.models.map((m: ModelOption) => ({
           id: m.id,
           label: m.label || modelDisplayName(m.id),
-          provider: m.provider || (m.id.startsWith('local:') ? 'local' : 'cloud'),
+          provider: m.provider
+            || (m.id.startsWith('local:')
+              ? 'local'
+              : m.id.startsWith('cli:') || m.id.startsWith('grok-cli:')
+                ? 'cli'
+                : 'cloud'),
           reasoning: m.reasoning,
         }));
         setAvailableModels(mapped);
@@ -950,7 +1022,11 @@ export default function ShibaStudio() {
         setAgentForm((f: any) => ({ ...f, model: pickDefaultModel(f.model, mapped) }));
       } else {
         setAvailableModels([]);
-        const errMsg = data.error || (data.hasCloudAuth || data.localEnabled ? 'No models returned' : 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings');
+        const errMsg = data.error || (
+          data.hasCloudAuth || data.localEnabled || grokCliStatus?.ready
+            ? 'No models returned'
+            : 'Add xAI API key, sign in with X (OAuth), enable local models, or configure Grok CLI in Settings'
+        );
         setModelsError(errMsg);
         patchProvidersUiSnapshot({ availableModels: [], modelsError: errMsg });
         // Failed / empty model list with local enabled → mark Local offline
@@ -981,7 +1057,7 @@ export default function ShibaStudio() {
     if (modelsLoading && availableModels.length === 0) {
       opts.push(<option key="_loading" value={currentValue || ''}>Loading models…</option>);
     } else if (availableModels.length === 0) {
-      opts.push(<option key="_empty" value={currentValue || ''}>{modelsError || 'Configure a cloud key or local models in Settings'}</option>);
+      opts.push(<option key="_empty" value={currentValue || ''}>{modelsError || 'Configure cloud, local, or Grok CLI models in Settings'}</option>);
     } else {
       const cloud = availableModels.filter(m => m.provider === 'cloud');
       const local = availableModels.filter(m => m.provider === 'local');
@@ -1231,12 +1307,13 @@ export default function ShibaStudio() {
   useEffect(() => {
     const cloud = !!(config as any)?.hasCloudAuth;
     const local = !!(localGrokEnabled || (config as any)?.localGrokEnabled);
-    if (!cloud && !local) return;
+    const cli = grokCliStatus?.ready === true;
+    if (!cloud && !local && !cli) return;
     if (modelsBootstrappedRef.current && availableModels.length > 0) return;
     modelsBootstrappedRef.current = true;
     void loadModels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled, localGrokEnabled]);
+  }, [(config as any)?.hasCloudAuth, (config as any)?.localGrokEnabled, localGrokEnabled, grokCliStatus?.ready]);
 
   // Local reachability and Settings model choices share one probe decision.
   // Keeping these in separate effects caused two identical POST probes when
@@ -3254,13 +3331,14 @@ export default function ShibaStudio() {
           const hasKey = !!(config as any)?.hasKey || isMaskedSecret(apiKeyInput);
           const oauthOn = !!oauthStatus.connected;
           const oauthExpired = !!oauthStatus.expired && !oauthOn;
-          const cliOn = !!grokCliStatus?.installed;
+          const cliInstalled = grokCliStatus?.installed === true;
+          const cliOn = grokCliStatus?.ready === true;
           const localOn = !!(localGrokEnabled || (config as any)?.localGrokEnabled);
           const localOk = localOn && localGrokReachable;
           const activeCloud = ((config as any)?.activeCloudSource as 'api_key' | 'oauth' | null | undefined) || null;
           const keyIsActive = hasKey && activeCloud !== 'oauth';
           const oauthIsActive = oauthOn && activeCloud === 'oauth';
-          const ready = !!(config as any)?.hasCloudAuth || hasKey || oauthOn || localOk;
+          const ready = !!(config as any)?.hasCloudAuth || hasKey || oauthOn || localOk || cliOn;
           type SourceTone = 'active' | 'on' | 'warn' | 'off';
           const sources: Array<{
             id: string;
@@ -3287,12 +3365,14 @@ export default function ShibaStudio() {
               id: 'cli',
               label: 'CLI',
               short: 'C',
-              tone: cliOn ? 'on' : 'off',
+              tone: cliOn ? 'on' : cliInstalled ? 'warn' : 'off',
               detail: cliOn
-                ? (grokCliStatus?.version
-                  ? grokCliStatus.version.replace(/^grok\s*/i, '').split(/\s+/)[0]
+                ? (grokCliStatus?.versionNumber || grokCliStatus?.version
+                  ? (grokCliStatus.versionNumber || grokCliStatus.version || '').replace(/^grok\s*/i, '').split(/\s+/)[0]
                   : 'On')
-                : 'Off',
+                : cliInstalled
+                  ? (grokCliStatus?.authenticated === false ? 'Sign in' : 'Setup')
+                  : 'Off',
             },
             {
               id: 'local',
@@ -3454,7 +3534,10 @@ export default function ShibaStudio() {
                   Shows until every step is done (or dismissed); state derives
                   from live data, so it survives reloads without bookkeeping. */}
               {config && !welcomeDismissed && (() => {
-                const connected = !!(config as any).hasCloudAuth || oauthStatus.connected || localGrokEnabled;
+                const connected = !!(config as any).hasCloudAuth
+                  || oauthStatus.connected
+                  || localGrokEnabled
+                  || grokCliStatus?.ready === true;
                 const hasAgent = agents.length > 0;
                 const hasRun = runs.length > 0;
                 if (connected && hasAgent && hasRun) return null;
@@ -3496,12 +3579,12 @@ export default function ShibaStudio() {
                                 onClick={() => navigateToTab('settings')}
                                 className="text-xs text-dim underline underline-offset-2 hover:text-primary"
                               >
-                                or use an xAI API key / local model in Settings
+                                or use an xAI API key, local model, or Grok CLI in Settings
                               </button>
                             </div>
                           </>
                         ) : (
-                          <div className="text-xs text-success mt-0.5">Connected — Grok is ready.</div>
+                          <div className="text-xs text-success mt-0.5">Connected — a model source is ready.</div>
                         )}
                       </div>
                     </li>
@@ -4907,7 +4990,7 @@ export default function ShibaStudio() {
                     <button onClick={saveDefaultModel} className="grok-btn grok-btn-primary text-sm">Save Default Model</button>
                   </div>
                   <div className="text-xs mt-1 text-dim">
-                    Used for Grok Chat and new agents. Pick Cloud (xAI) or Local (this machine) — the badge shows which is active.
+                    Used for Grok Chat and new agents. Pick Cloud (xAI), Local (this machine), or a ready Grok CLI model.
                     {availableModels.length > 0 && ` ${availableModels.length} model(s) available.`}
                   </div>
                   {defaultModelInput && (
@@ -5002,24 +5085,66 @@ export default function ShibaStudio() {
                     <Terminal size={16} className="opacity-70 shrink-0" />
                     <div>
                       <div className="font-medium text-sm">Grok Build CLI</div>
-                      <div className="text-[11px] text-dim">Detected automatically from PATH on this machine.</div>
+                      <div className="text-[11px] text-dim">Detected and capability-checked automatically on this machine.</div>
                     </div>
                   </div>
                   <div className="text-xs mt-2 flex items-center gap-2 flex-wrap">
                     <Terminal size={14} className="opacity-70" />
-                    {grokCliStatus?.installed ? (
+                    {grokCliStatus?.ready ? (
                       <span className="text-success">
-                        Installed{grokCliStatus.version ? ` · ${grokCliStatus.version}` : ''}
+                        Ready{(grokCliStatus.versionNumber || grokCliStatus.version)
+                          ? ` · ${grokCliStatus.versionNumber || grokCliStatus.version}`
+                          : ''}
                         {grokCliStatus.path ? ` · ${grokCliStatus.path}` : ''}
                       </span>
+                    ) : grokCliStatus?.installed ? (
+                      <span className="text-warning">
+                        Installed, but not ready
+                        {grokCliStatus.authenticated === false ? ' · authentication required' : ''}
+                        {grokCliStatus.error ? ` · ${grokCliStatus.error}` : ''}
+                      </span>
                     ) : (
-                      <span className="text-dim">Not detected on PATH — install with: curl -fsSL https://x.ai/cli/install.sh | bash</span>
+                      <span className="text-dim">
+                        Not detected on PATH — install the official Grok Build CLI from xai-org/grok-build.
+                        {grokCliStatus?.error ? ` ${grokCliStatus.error}` : ''}
+                      </span>
                     )}
                   </div>
                   <div className="text-xs text-dim mt-1">
-                    When installed, Grok Chat can route through the CLI (API/CLI toggle) and agents gain a <span className="font-mono">grok_cli</span> tool
-                    with effort levels, self-verification (<span className="font-mono">check</span>), best-of-N runs, and structured JSON output.
+                    When ready, Grok Chat can route through the CLI and agents gain a <span className="font-mono">grok_cli</span> tool.
+                    Shiba only advertises harnesses and transports confirmed by the detected CLI.
                   </div>
+                  {grokCliStatus?.installed && (
+                    <div className="text-[11px] text-dim mt-2 flex items-center gap-x-3 gap-y-1 flex-wrap">
+                      <span>
+                        Auth: {grokCliStatus.authenticated === true
+                          ? `ready${grokCliStatus.authMode ? ` (${grokCliStatus.authMode})` : ''}`
+                          : grokCliStatus.authenticated === false
+                            ? `required${grokCliStatus.authMode ? ` (${grokCliStatus.authMode})` : ''}`
+                            : grokCliStatus.authMode || 'reported by CLI'}
+                      </span>
+                      {grokCliStatus.channel && <span>Channel: {grokCliStatus.channel}</span>}
+                      {grokCliSourceLabel(grokCliStatus) && <span>Compatibility target: {grokCliSourceLabel(grokCliStatus)}</span>}
+                      {grokCliStatus.discovery && (
+                        <span>
+                          Binary: {grokCliStatus.discovery === 'explicit'
+                            ? 'explicitly trusted path'
+                            : grokCliStatus.discovery === 'path'
+                              ? 'PATH (credentials isolated)'
+                              : 'not found'}
+                        </span>
+                      )}
+                      {grokCliCapabilityLabels(grokCliStatus).map((label) => (
+                        <span key={label} className="font-medium text-primary">{label}</span>
+                      ))}
+                    </div>
+                  )}
+                  {grokCliStatus?.ready && (grokCliStatus.models?.length || grokCliStatus.defaultModel) && (
+                    <div className="text-[11px] text-dim mt-1">
+                      Models: {grokCliStatus.models?.join(', ') || grokCliStatus.defaultModel}
+                      {grokCliStatus.defaultModel ? ` · default ${grokCliStatus.defaultModel}` : ''}
+                    </div>
+                  )}
                   {grokCliStatus?.installed && (
                     <div className="mt-3 flex items-center gap-2 flex-wrap">
                       <button
@@ -5988,8 +6113,8 @@ export default function ShibaStudio() {
                   </select>
                   <div className="text-xs text-dim mt-0.5">
                     {availableModels.length > 0
-                      ? `${availableModels.length} models — Cloud (xAI) and/or Local (this machine).`
-                      : modelsError || 'Add xAI API key, sign in with X (OAuth), or enable local models in Settings.'}
+                      ? `${availableModels.length} models — Cloud (xAI), Local (this machine), and/or Grok CLI.`
+                      : modelsError || 'Add xAI API key, sign in with X (OAuth), enable local models, or configure Grok CLI in Settings.'}
                   </div>
                   {agentForm.model && (
                     <div className="text-[10px] text-dim mt-1">

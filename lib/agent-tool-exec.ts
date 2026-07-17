@@ -723,8 +723,22 @@ async function executeAgentToolScoped(
       }
       case 'grok_cli': {
         const cli = await detectGrokCli();
-        if (!cli.installed) {
-          return { result: { error: 'Grok CLI is not installed on this machine' }, sideEffect: 'grok_cli unavailable' };
+        if (!cli.ready) {
+          const error = !cli.installed
+            ? `Grok CLI is not installed on this machine${cli.error ? `: ${cli.error}` : ''}`
+            : cli.authenticated === false
+              ? `Grok CLI is installed but not authenticated${cli.authMode ? ` (${cli.authMode})` : ''}${cli.error ? `: ${cli.error}` : ''}`
+              : `Grok CLI is installed but not ready${cli.versionNumber ? ` (${cli.versionNumber})` : ''}${cli.error ? `: ${cli.error}` : ''}`;
+          return {
+            result: {
+              error,
+              installed: cli.installed,
+              ready: cli.ready,
+              authenticated: cli.authenticated,
+              authMode: cli.authMode,
+            },
+            sideEffect: 'grok_cli unavailable',
+          };
         }
         const out = await runGrokCliPrompt({
           prompt: String(args.prompt || ''),
@@ -735,6 +749,9 @@ async function executeAgentToolScoped(
           check: !!args.check,
           bestOfN: args.best_of_n ? Number(args.best_of_n) : undefined,
           jsonSchema: args.json_schema ? String(args.json_schema) : undefined,
+          // Invoking the grok_cli tool is the parent agent's explicit
+          // authorization for an unattended coding delegation.
+          permissionMode: 'bypassPermissions',
           signal,
         });
         return {

@@ -10,10 +10,72 @@ const GROK_ISOLATED_HOME_PREFIX = 'shiba-grok-isolated-';
 const GROK_PROMPT_FILE_PREFIX = 'shiba-grok-cli-prompt-';
 const DEFAULT_TEMPORARY_RESOURCE_AGE_MS = 7 * 24 * 60 * 60_000;
 
+/**
+ * Exact public source snapshot used to verify this adapter.
+ *
+ * xAI's stable 0.2.103 binary was published after the public 0.2.102 source
+ * snapshot, so source and release provenance stay separate here.
+ */
+export const GROK_BUILD_OPEN_SOURCE = {
+  repository: 'https://github.com/xai-org/grok-build',
+  branch: 'main',
+  commit: '98c3b2438aa922fbbe6178a5c0a4c48f85edc8ce',
+  sourceRevision: '124d85bc5dc6e7805560215fcc6d5413944920e1',
+  sourceVersion: '0.2.102',
+  testedStableVersion: '0.2.103',
+  syncedAt: '2026-07-17',
+  license: 'Apache-2.0',
+} as const;
+
+export interface GrokCliCapabilities {
+  headless: boolean;
+  streamingJson: boolean;
+  acpStdio: boolean;
+  acpWebSocket: boolean;
+  sessions: boolean;
+  worktrees: boolean;
+  toolFiltering: boolean;
+  permissionRules: boolean;
+  sandbox: boolean;
+  mcp: boolean;
+  plugins: boolean;
+  selfVerification: boolean;
+  bestOfN: boolean;
+  structuredOutput: boolean;
+}
+
+const EMPTY_GROK_CLI_CAPABILITIES: GrokCliCapabilities = {
+  headless: false,
+  streamingJson: false,
+  acpStdio: false,
+  acpWebSocket: false,
+  sessions: false,
+  worktrees: false,
+  toolFiltering: false,
+  permissionRules: false,
+  sandbox: false,
+  mcp: false,
+  plugins: false,
+  selfVerification: false,
+  bestOfN: false,
+  structuredOutput: false,
+};
+
 export interface GrokCliStatus {
   installed: boolean;
+  ready: boolean;
   path?: string;
+  /** True only when the operator pinned the executable with SHIBA_GROK_CLI_PATH. */
+  explicitlyTrusted: boolean;
+  discovery: 'explicit' | 'path' | 'missing';
   version?: string;
+  versionNumber?: string;
+  revision?: string;
+  channel?: string;
+  authenticated?: boolean;
+  authMode?: string;
+  capabilities: GrokCliCapabilities;
+  source: typeof GROK_BUILD_OPEN_SOURCE;
   error?: string;
 }
 
@@ -35,14 +97,73 @@ export interface GrokCliRunOptions {
   bestOfN?: number;
   /** JSON Schema string constraining output to structured JSON — CLI --json-schema */
   jsonSchema?: string;
-  /** Never default to bypassPermissions; callers must opt into an allowed CLI mode. */
-  permissionMode?: 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan';
+  /**
+   * Current Grok Build only applies `default` and `bypassPermissions` from the
+   * CLI flag. Callers must explicitly opt into unattended tool approval.
+   */
+  permissionMode?: 'default' | 'bypassPermissions';
+  /** Repeatable documented permission rules. Deny rules win inside Grok Build. */
+  allowRules?: string[];
+  denyRules?: string[];
+  /** Kernel-enforced Grok sandbox profile where supported by the host OS. */
+  sandboxProfile?: 'off' | 'workspace' | 'devbox' | 'read-only' | 'strict' | string;
+  /** Named agent/profile used by the headless harness (for example `explore`). */
+  agent?: string;
+  /** Current headless session and worktree controls. */
+  sessionId?: string;
+  resumeSessionId?: string;
+  continueSession?: boolean;
+  forkSession?: boolean;
+  worktree?: true | string;
+  worktreeRef?: string;
   /** Remove memory, subagents, web search, and ambient tool surfaces for scoped handoffs. */
   isolated?: boolean;
   /** Per-chat automatic tool switch. False removes every CLI tool surface. */
   toolsEnabled?: boolean;
   /** Additional non-secret environment entries for a scoped child process. */
   env?: Record<string, string>;
+}
+
+export function parseGrokCliVersion(text: string): {
+  version?: string;
+  revision?: string;
+  channel?: string;
+} {
+  const firstLine = String(text || '').trim().split(/\r?\n/).find(Boolean) || '';
+  const match = firstLine.match(
+    /(?:^|\b)grok(?:\s+build)?\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s*(?:\(([^)]+)\))?\s*(?:\[([^\]]+)\])?/i,
+  );
+  if (!match) return {};
+  return {
+    version: match[1],
+    ...(match[2]?.trim() ? { revision: match[2].trim() } : {}),
+    ...(match[3]?.trim() ? { channel: match[3].trim() } : {}),
+  };
+}
+
+export function detectGrokCliCapabilities(
+  rootHelp: string,
+  agentHelp = '',
+): GrokCliCapabilities {
+  const root = String(rootHelp || '');
+  const agent = String(agentHelp || '');
+  const has = (haystack: string, value: string) => haystack.includes(value);
+  return {
+    headless: (has(root, '--single') || has(root, '--prompt-file')) && has(root, '--output-format'),
+    streamingJson: /streaming-json/i.test(root),
+    acpStdio: /\bstdio\b/i.test(agent),
+    acpWebSocket: /\bserve\b/i.test(agent) && /\bheadless\b/i.test(agent),
+    sessions: has(root, '--session-id') && has(root, '--resume'),
+    worktrees: has(root, '--worktree'),
+    toolFiltering: has(root, '--tools') && has(root, '--disallowed-tools'),
+    permissionRules: has(root, '--permission-mode') && has(root, '--allow') && has(root, '--deny'),
+    sandbox: has(root, '--sandbox'),
+    mcp: /^\s*mcp\s+/im.test(root),
+    plugins: /^\s*plugin\s+/im.test(root),
+    selfVerification: has(root, '--check'),
+    bestOfN: has(root, '--best-of-n'),
+    structuredOutput: has(root, '--json-schema'),
+  };
 }
 
 /** CLI flags that make `/tools off` a real boundary instead of prompt advice. */
@@ -69,33 +190,105 @@ export function grokCliToolControlArgs(
 let cachedStatus: { at: number; value: GrokCliStatus } | null = null;
 const CACHE_MS = 30_000;
 
-async function runExec(command: string, timeout = 8000): Promise<{ stdout: string; stderr: string }> {
-  const { exec } = await import('child_process');
-  const { promisify } = await import('util');
-  const execAsync = promisify(exec);
-  return execAsync(command, { timeout }) as Promise<{ stdout: string; stderr: string }>;
+interface GrokCliExecResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+  error?: string;
+}
+
+export function buildGrokCliEnvironment(opts: {
+  isolated?: boolean;
+  env?: Record<string, string>;
+  forwardApiKey?: boolean;
+} = {}): NodeJS.ProcessEnv {
+  const safeKeys = [
+    'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC',
+    'TMP', 'TEMP', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM',
+    'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  ];
+  if (!opts.isolated) {
+    safeKeys.push(
+      'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA',
+      // GROK_HOME contains CLI-owned config. Never forward XAI_API_KEY merely
+      // because an executable named `grok` appeared on PATH.
+      'GROK_HOME',
+    );
+    if (opts.forwardApiKey) safeKeys.push('XAI_API_KEY');
+  }
+  const env: NodeJS.ProcessEnv = {
+    NODE_ENV: process.env.NODE_ENV,
+    GROK_DISABLE_AUTOUPDATER: '1',
+  };
+  for (const key of safeKeys) {
+    if (process.env[key] != null) env[key] = process.env[key];
+  }
+  for (const [key, value] of Object.entries(opts.env || {})) {
+    if (
+      /^[A-Z][A-Z0-9_]{0,63}$/i.test(key)
+      && !/(TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|COOKIE|AUTH)/i.test(key)
+    ) {
+      env[key] = value.slice(0, 4_000);
+    }
+  }
+  return env;
+}
+
+async function runFile(
+  executable: string,
+  args: string[],
+  timeout = 8_000,
+  env = buildGrokCliEnvironment(),
+): Promise<GrokCliExecResult> {
+  const { execFile } = await import('child_process');
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        executable,
+        args,
+        {
+          timeout,
+          windowsHide: true,
+          shell: false,
+          env,
+          maxBuffer: 2 * 1024 * 1024,
+        },
+        (error, stdout, stderr) => {
+          const numericCode = typeof (error as NodeJS.ErrnoException | null)?.code === 'number'
+            ? Number((error as NodeJS.ErrnoException).code)
+            : error ? 1 : 0;
+          resolve({
+            stdout: String(stdout || ''),
+            stderr: String(stderr || ''),
+            code: numericCode,
+            ...(error ? { error: error.message } : {}),
+          });
+        },
+      );
+    } catch (error) {
+      resolve({
+        stdout: '',
+        stderr: '',
+        code: 1,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 }
 
 async function spawnCli(
   executable: string,
   args: string[],
-  opts: { cwd?: string; signal?: AbortSignal; env?: Record<string, string>; isolated?: boolean },
+  opts: {
+    cwd?: string;
+    signal?: AbortSignal;
+    env?: Record<string, string>;
+    isolated?: boolean;
+    forwardApiKey?: boolean;
+  },
 ): Promise<ChildProcess> {
   const { spawn } = await import('child_process');
-  const safeKeys = [
-    'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC',
-    'TMP', 'TEMP', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM',
-  ];
-  if (!opts.isolated) safeKeys.push('HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA');
-  const env: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV };
-  for (const key of safeKeys) {
-    if (process.env[key] != null) env[key] = process.env[key];
-  }
-  for (const [key, value] of Object.entries(opts.env || {})) {
-    if (/^[A-Z][A-Z0-9_]{0,63}$/i.test(key) && !/(TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|COOKIE|AUTH)/i.test(key)) {
-      env[key] = value.slice(0, 4_000);
-    }
-  }
+  const env = buildGrokCliEnvironment(opts);
   let isolatedHome: string | undefined;
   if (opts.isolated) {
     const [{ mkdtemp, rm }, os, path] = await Promise.all([
@@ -199,49 +392,102 @@ export async function reconcileGrokCliTemporaryResources(options: {
 export interface GrokCliModels {
   models: string[];
   defaultModel?: string;
+  authenticated?: boolean;
+  authMode?: string;
+  error?: string;
 }
 
 let cachedModels: { at: number; value: GrokCliModels } | null = null;
 const MODELS_CACHE_MS = 5 * 60_000;
 
+export function parseGrokCliModelsOutput(
+  stdout: string,
+  stderr = '',
+  exitCode = 0,
+): GrokCliModels {
+  const models: string[] = [];
+  let defaultModel: string | undefined;
+  const output = `${stdout || ''}\n${stderr || ''}`.trim();
+  for (const line of String(stdout || '').split(/\r?\n/)) {
+    const defMatch = line.match(/^\s*Default model:\s*(\S+)/i);
+    if (defMatch) defaultModel = defMatch[1];
+    const itemMatch = line.match(/^\s*[*-]\s+([^\s(]+)/);
+    if (itemMatch) {
+      models.push(itemMatch[1]);
+      if (/\(default\)/i.test(line)) defaultModel = itemMatch[1];
+    }
+  }
+  if (defaultModel && !models.includes(defaultModel)) models.unshift(defaultModel);
+
+  const loggedIn = output.match(
+    /\b(?:you are\s+)?logged in with\s+([^\r\n]+?)(?:\.\s*)?(?:\r?\n|$)/i,
+  );
+  const advertisedAuth = output.match(/^\s*Authentication:\s*([^\r\n]+)/im);
+  const apiKey = /\b(?:using|authenticated (?:with|via))\s+(?:an?\s+)?(?:xai\s+)?api key\b/i.test(output);
+  const authFailure = /\b(?:not authenticated|authentication required|please (?:log in|sign in)|no (?:valid )?credentials?)\b/i.test(output);
+  const authenticated = authFailure
+    ? false
+    : loggedIn || apiKey || models.length > 0
+      ? true
+      : undefined;
+  const authMode = loggedIn?.[1]?.trim() || advertisedAuth?.[1]?.trim() || (apiKey ? 'api-key' : undefined);
+  const uniqueModels = [...new Set(models)];
+  const commandError = exitCode === 0
+    ? undefined
+    : (String(stderr || '').trim() || `grok models exited with code ${exitCode}`);
+  return {
+    models: uniqueModels,
+    ...(defaultModel ? { defaultModel } : uniqueModels[0] ? { defaultModel: uniqueModels[0] } : {}),
+    ...(authenticated !== undefined ? { authenticated } : {}),
+    ...(authMode ? { authMode } : {}),
+    ...(commandError ? { error: commandError } : {}),
+  };
+}
+
+export function isGrokCliReady(input: {
+  versionExitCode: number;
+  modelsExitCode: number;
+  capabilities: GrokCliCapabilities;
+  modelProbe: GrokCliModels;
+}): boolean {
+  return input.versionExitCode === 0
+    && input.modelsExitCode === 0
+    && !input.modelProbe.error
+    && input.capabilities.headless
+    && input.capabilities.streamingJson
+    && input.modelProbe.authenticated === true
+    && input.modelProbe.models.length > 0;
+}
+
 /**
  * Ask the installed Grok CLI which models it supports (`grok models`).
- * The CLI ships with a small fixed list (e.g. grok-composer-2.5-fast, grok-build)
- * that differs from the cloud API catalog, so it must be discovered dynamically.
+ * The catalog differs from the cloud API and doubles as the documented soft
+ * authentication/readiness probe, so it must be discovered dynamically.
  */
 export async function listGrokCliModels(force = false): Promise<GrokCliModels> {
   if (!force && cachedModels && Date.now() - cachedModels.at < MODELS_CACHE_MS) {
     return cachedModels.value;
   }
-  const status = await detectGrokCli();
+  const status = await detectGrokCli(force);
   if (!status.installed || !status.path) {
-    const value = { models: [] };
+    const value: GrokCliModels = {
+      models: [],
+      authenticated: false,
+      error: status.error || 'Grok CLI not installed',
+    };
     cachedModels = { at: Date.now(), value };
     return value;
   }
-  try {
-    const isWin = process.platform === 'win32';
-    const quote = isWin ? `"${status.path.replace(/"/g, '\\"')}"` : `"${status.path}"`;
-    const { stdout } = await runExec(`${quote} models`, 15000);
-    const models: string[] = [];
-    let defaultModel: string | undefined;
-    for (const line of stdout.split(/\r?\n/)) {
-      const defMatch = line.match(/^\s*Default model:\s*(\S+)/i);
-      if (defMatch) defaultModel = defMatch[1];
-      const itemMatch = line.match(/^\s*[*-]\s+(\S+)/);
-      if (itemMatch) {
-        models.push(itemMatch[1]);
-        if (/\(default\)/i.test(line)) defaultModel = itemMatch[1];
-      }
-    }
-    const value = { models, defaultModel: defaultModel || models[0] };
-    cachedModels = { at: Date.now(), value };
-    return value;
-  } catch {
-    const value = { models: [] };
-    cachedModels = { at: Date.now(), value };
-    return value;
-  }
+  if (cachedModels) return cachedModels.value;
+  const result = await runFile(
+    status.path,
+    ['models'],
+    15_000,
+    buildGrokCliEnvironment({ forwardApiKey: status.explicitlyTrusted }),
+  );
+  const value = parseGrokCliModelsOutput(result.stdout, result.stderr, result.code);
+  cachedModels = { at: Date.now(), value };
+  return value;
 }
 
 export async function detectGrokCli(force = false): Promise<GrokCliStatus> {
@@ -249,31 +495,128 @@ export async function detectGrokCli(force = false): Promise<GrokCliStatus> {
     return cachedStatus.value;
   }
 
-  try {
-    const isWin = process.platform === 'win32';
-    const whichCmd = isWin ? 'where grok' : 'which grok';
-    const { stdout: whichOut } = await runExec(whichCmd);
-    const cliPath = whichOut.trim().split(/\r?\n/).find((l) => l.trim())?.trim();
-    if (!cliPath) {
-      const value = { installed: false, error: 'grok not found on PATH' };
-      cachedStatus = { at: Date.now(), value };
-      return value;
+  const configuredPath = String(process.env.SHIBA_GROK_CLI_PATH || '').trim();
+  let cliPath: string | undefined;
+  let discovery: GrokCliStatus['discovery'] = 'missing';
+  let locateError = '';
+  if (configuredPath) {
+    const [path, fs, constants] = await Promise.all([
+      import('path'),
+      import('fs/promises'),
+      import('fs').then((module) => module.constants),
+    ]);
+    if (path.isAbsolute(configuredPath)) {
+      try {
+        if (process.platform === 'win32' && path.extname(configuredPath).toLowerCase() !== '.exe') {
+          throw new Error('Windows Grok Build paths must point to a .exe file');
+        }
+        const file = await fs.stat(configuredPath);
+        if (!file.isFile()) throw new Error('path is not a file');
+        await fs.access(configuredPath, constants.X_OK);
+        cliPath = configuredPath;
+        discovery = 'explicit';
+      } catch (error) {
+        locateError = `SHIBA_GROK_CLI_PATH is not an executable file: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      }
+    } else {
+      locateError = 'SHIBA_GROK_CLI_PATH must be an absolute path';
     }
-
-    const quote = isWin ? `"${cliPath.replace(/"/g, '\\"')}"` : `"${cliPath}"`;
-    const { stdout } = await runExec(`${quote} --version`);
-    const version = stdout.trim().split(/\r?\n/)[0] || 'unknown';
-    const value: GrokCliStatus = { installed: true, path: cliPath, version };
-    cachedStatus = { at: Date.now(), value };
-    return value;
-  } catch (e: unknown) {
+  } else {
+    const locator = process.platform === 'win32' ? 'where.exe' : 'which';
+    const located = await runFile(locator, ['grok']);
+    cliPath = located.stdout.trim().split(/\r?\n/).find((line) => line.trim())?.trim();
+    if (cliPath && located.code === 0) discovery = 'path';
+    else locateError = located.error || located.stderr.trim() || 'grok not found on PATH';
+  }
+  const explicitlyTrusted = discovery === 'explicit';
+  if (!cliPath) {
     const value: GrokCliStatus = {
       installed: false,
-      error: e instanceof Error ? e.message : 'Grok CLI not detected',
+      ready: false,
+      explicitlyTrusted: false,
+      discovery,
+      capabilities: { ...EMPTY_GROK_CLI_CAPABILITIES },
+      source: GROK_BUILD_OPEN_SOURCE,
+      error: locateError || 'grok not found on PATH',
     };
     cachedStatus = { at: Date.now(), value };
+    cachedModels = null;
     return value;
   }
+
+  const [versionResult, helpResult, agentHelpResult, modelResult] = await Promise.all([
+    runFile(cliPath, ['--version']),
+    runFile(cliPath, ['--help']),
+    runFile(cliPath, ['agent', '--help']),
+    runFile(
+      cliPath,
+      ['models'],
+      15_000,
+      buildGrokCliEnvironment({ forwardApiKey: explicitlyTrusted }),
+    ),
+  ]);
+  const versionLine = versionResult.stdout.trim().split(/\r?\n/).find(Boolean) || '';
+  const parsedVersion = parseGrokCliVersion(versionLine);
+  const capabilities = detectGrokCliCapabilities(helpResult.stdout, agentHelpResult.stdout);
+  const modelProbe = parseGrokCliModelsOutput(modelResult.stdout, modelResult.stderr, modelResult.code);
+  cachedModels = { at: Date.now(), value: modelProbe };
+
+  if (explicitlyTrusted && versionResult.code !== 0) {
+    const value: GrokCliStatus = {
+      installed: false,
+      ready: false,
+      path: cliPath,
+      explicitlyTrusted: true,
+      discovery,
+      capabilities: { ...EMPTY_GROK_CLI_CAPABILITIES },
+      source: GROK_BUILD_OPEN_SOURCE,
+      error: versionResult.error || versionResult.stderr.trim() || 'Configured Grok CLI is not executable',
+    };
+    cachedStatus = { at: Date.now(), value };
+    cachedModels = null;
+    return value;
+  }
+
+  const contractReady = capabilities.headless && capabilities.streamingJson;
+  const authenticated = modelProbe.authenticated;
+  const ready = isGrokCliReady({
+    versionExitCode: versionResult.code,
+    modelsExitCode: modelResult.code,
+    capabilities,
+    modelProbe,
+  });
+  let error: string | undefined;
+  if (versionResult.code !== 0) {
+    error = versionResult.error || versionResult.stderr.trim() || 'grok --version failed';
+  } else if (!contractReady) {
+    error = 'Installed Grok CLI does not expose the required headless streaming contract';
+  } else if (modelResult.code !== 0 || modelProbe.error) {
+    error = modelProbe.error || `grok models exited with code ${modelResult.code}`;
+  } else if (authenticated === false) {
+    error = 'Grok CLI authentication required; run `grok login`';
+  } else if (modelProbe.models.length === 0) {
+    error = 'Grok CLI reported no available models';
+  }
+  const value: GrokCliStatus = {
+    installed: true,
+    ready,
+    path: cliPath,
+    explicitlyTrusted,
+    discovery,
+    version: versionLine || parsedVersion.version || 'unknown',
+    ...(parsedVersion.version ? { versionNumber: parsedVersion.version } : {}),
+    ...(parsedVersion.revision ? { revision: parsedVersion.revision } : {}),
+    ...(parsedVersion.channel ? { channel: parsedVersion.channel } : {}),
+    ...(authenticated !== undefined ? { authenticated } : {}),
+    ...(modelProbe.authMode ? { authMode: modelProbe.authMode } : {}),
+    capabilities,
+    source: GROK_BUILD_OPEN_SOURCE,
+    ...(error ? { error } : {}),
+  };
+  cachedStatus = { at: Date.now(), value };
+  return value;
 }
 
 export function grokCliModelId(modelRef?: string): string | undefined {
@@ -295,17 +638,22 @@ export function grokCliModelId(modelRef?: string): string | undefined {
  */
 const PROMPT_INLINE_MAX_BYTES = 4_000;
 
-function buildCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): string[] {
+export function buildGrokCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): string[] {
   const args = [
     '--output-format', opts.outputFormat || 'plain',
-    '--permission-mode', opts.permissionMode || 'acceptEdits',
+    '--permission-mode', opts.permissionMode || 'default',
+    '--no-auto-update',
   ];
   args.push(...grokCliToolControlArgs(opts));
   if (opts.cwd) args.push('--cwd', opts.cwd);
+  if (opts.agent?.trim()) args.push('--agent', opts.agent.trim());
   const model = grokCliModelId(opts.model);
   if (model) args.push('-m', model);
   if (opts.reasoningEffort) args.push('--reasoning-effort', opts.reasoningEffort);
-  if (opts.maxTurns != null) args.push('--max-turns', String(opts.maxTurns));
+  if (!opts.reasoningEffort && opts.effort?.trim()) args.push('--effort', opts.effort.trim());
+  if (opts.maxTurns != null && Number.isFinite(opts.maxTurns)) {
+    args.push('--max-turns', String(Math.max(1, Math.min(10_000, Math.floor(opts.maxTurns)))));
+  }
   // Keep system overrides short when inlined — oversized ones also hit the
   // spawn limit. Long system context is already folded into `prompt` by the
   // stream route via buildCliPromptFromMessages.
@@ -315,9 +663,24 @@ function buildCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): string[] {
       args.push('--system-prompt-override', sys);
     }
   }
-  if (opts.effort && ['low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) {
-    args.push('--effort', opts.effort);
+  for (const rule of (opts.allowRules || []).slice(0, 100)) {
+    const value = String(rule || '').trim();
+    if (value) args.push('--allow', value);
   }
+  for (const rule of (opts.denyRules || []).slice(0, 100)) {
+    const value = String(rule || '').trim();
+    if (value) args.push('--deny', value);
+  }
+  if (opts.sandboxProfile?.trim()) args.push('--sandbox', opts.sandboxProfile.trim());
+  if (opts.sessionId?.trim()) args.push('--session-id', opts.sessionId.trim());
+  if (opts.resumeSessionId?.trim()) args.push('--resume', opts.resumeSessionId.trim());
+  if (opts.continueSession) args.push('--continue');
+  if (opts.forkSession) args.push('--fork-session');
+  if (opts.worktree === true) args.push('--worktree');
+  else if (typeof opts.worktree === 'string' && opts.worktree.trim()) {
+    args.push(`--worktree=${opts.worktree.trim()}`);
+  }
+  if (opts.worktreeRef?.trim() && opts.worktree) args.push('--worktree-ref', opts.worktreeRef.trim());
   if (opts.check) args.push('--check');
   if (opts.bestOfN && opts.bestOfN >= 2) args.push('--best-of-n', String(Math.min(4, Math.floor(opts.bestOfN))));
   if (opts.jsonSchema?.trim()) args.push('--json-schema', opts.jsonSchema.trim());
@@ -325,11 +688,12 @@ function buildCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): string[] {
 }
 
 /** Materialize CLI args, spilling long prompts to a temp file. Caller must run cleanup(). */
-async function materializeCliArgs(opts: GrokCliRunOptions): Promise<{
+export async function materializeGrokCliArgs(opts: GrokCliRunOptions): Promise<{
   args: string[];
   cleanup: () => Promise<void>;
+  promptFile?: string;
 }> {
-  const base = buildCliArgsBase(opts);
+  const base = buildGrokCliArgsBase(opts);
   const prompt = opts.prompt || '';
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
 
@@ -347,6 +711,7 @@ async function materializeCliArgs(opts: GrokCliRunOptions): Promise<{
   await fs.writeFile(file, prompt, 'utf8');
   return {
     args: ['--prompt-file', file, ...base],
+    promptFile: file,
     cleanup: async () => {
       try { await fs.unlink(file); } catch { /* best-effort */ }
     },
@@ -378,12 +743,15 @@ export async function checkGrokCliUpdate(): Promise<GrokCliUpdateInfo> {
   const status = await detectGrokCli();
   if (!status.installed || !status.path) return { ok: false, error: 'Grok CLI not installed' };
   try {
-    const isWin = process.platform === 'win32';
-    const quote = isWin ? `"${status.path.replace(/"/g, '\\"')}"` : `"${status.path}"`;
-    const { stdout } = await runExec(`${quote} update --check --json`, 30_000);
+    const { stdout, stderr, code, error } = await runFile(
+      status.path,
+      ['update', '--check', '--json'],
+      30_000,
+    );
+    if (code !== 0) throw new Error(stderr.trim() || error || `update check exited with code ${code}`);
     try {
       const data = JSON.parse(stdout.trim());
-      const current = data.currentVersion || data.current_version || data.current || status.version;
+      const current = data.currentVersion || data.current_version || data.current || status.versionNumber || status.version;
       const latest = data.latestVersion || data.latest_version || data.latest || undefined;
       return {
         ok: true,
@@ -441,22 +809,28 @@ export async function runGrokCliPrompt(opts: GrokCliRunOptions): Promise<{
     return { ok: false, stdout: '', stderr: 'Aborted', code: -1 };
   }
   const status = await detectGrokCli();
-  if (!status.installed) {
+  if (!status.installed || !status.ready) {
     return {
       ok: false,
       stdout: '',
-      stderr: status.error || 'Grok CLI is not installed',
-      code: 127,
+      stderr: status.error || 'Grok CLI is not ready',
+      code: status.installed ? 126 : 127,
     };
   }
 
-  const { args, cleanup } = await materializeCliArgs({
+  const { args, cleanup } = await materializeGrokCliArgs({
     ...opts,
     prompt: sanitizeCliPromptContent(opts.prompt),
   });
   const executable = status.path || 'grok';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const child = await spawnCli(executable, args, { cwd: opts.cwd, signal: opts.signal, env: opts.env, isolated: opts.isolated });
+  const child = await spawnCli(executable, args, {
+    cwd: opts.cwd,
+    signal: opts.signal,
+    env: opts.env,
+    isolated: opts.isolated,
+    forwardApiKey: status.explicitlyTrusted,
+  });
 
   return new Promise((resolve) => {
     let stdout = '';
@@ -516,12 +890,102 @@ function isCliModelError(stderr: string): boolean {
   return /couldn'?t set model|unknown variant|invalid model/i.test(stderr);
 }
 
+export interface ParsedGrokCliStreamLine {
+  events: ChatStreamEvent[];
+  terminal?: 'end' | 'error';
+  malformed?: boolean;
+}
+
+function grokStreamText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && typeof (value as { text?: unknown }).text === 'string') {
+    return String((value as { text: string }).text);
+  }
+  return '';
+}
+
+/**
+ * Map one official `--output-format streaming-json` NDJSON record into Shiba's
+ * SSE chat envelope. Unknown records are ignored because xAI documents this
+ * event set as non-exhaustive.
+ */
+export function parseGrokCliStreamLine(line: string): ParsedGrokCliStreamLine {
+  const trimmed = String(line || '').trim();
+  if (!trimmed) return { events: [] };
+  let record: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { events: [] };
+    record = parsed as Record<string, unknown>;
+  } catch {
+    return { events: [], malformed: true };
+  }
+
+  const type = String(record.type || '');
+  if (type === 'text') {
+    const delta = grokStreamText(record.data ?? record.text ?? record.content);
+    return { events: delta ? [{ type: 'content', delta }] : [] };
+  }
+  if (type === 'thought') {
+    const delta = grokStreamText(record.data ?? record.text ?? record.content);
+    return { events: delta ? [{ type: 'thinking', delta }] : [] };
+  }
+
+  const usage: Record<string, unknown> = record.usage
+    && typeof record.usage === 'object'
+    && !Array.isArray(record.usage)
+    ? { ...(record.usage as Record<string, unknown>) }
+    : {};
+  for (const key of [
+    'num_turns', 'modelUsage', 'total_cost_usd', 'total_cost_usd_ticks',
+    'cost_is_partial', 'usage_is_incomplete', 'sessionId', 'requestId', 'stopReason',
+  ]) {
+    if (record[key] !== undefined) usage[key] = record[key];
+  }
+  const usageEvents: ChatStreamEvent[] = Object.keys(usage).length
+    ? [{ type: 'usage', usage }]
+    : [];
+
+  if (type === 'end') {
+    const modelUsage = record.modelUsage && typeof record.modelUsage === 'object'
+      ? Object.keys(record.modelUsage as Record<string, unknown>)[0]
+      : undefined;
+    const bareModel = String(record.model || modelUsage || 'default').replace(/^(?:cli|grok-cli):/i, '');
+    return {
+      events: [...usageEvents, { type: 'done', model: `cli:${bareModel || 'default'}` }],
+      terminal: 'end',
+    };
+  }
+  if (type === 'error') {
+    return {
+      events: [
+        ...usageEvents,
+        {
+          type: 'error',
+          message: String(record.message || record.error || 'Grok CLI reported an error'),
+        },
+      ],
+      terminal: 'error',
+    };
+  }
+  if (type === 'max_turns_reached') {
+    return {
+      events: [{ type: 'thinking', delta: 'Grok CLI reached its configured turn limit.\n' }],
+    };
+  }
+  return { events: [] };
+}
+
 export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<ChatStreamEvent> {
   const status = await detectGrokCli();
-  if (!status.installed) {
+  if (!status.installed || !status.ready) {
     yield {
       type: 'error',
-      message: 'Grok CLI is not installed. Install: curl -fsSL https://x.ai/cli/install.sh | bash',
+      message: status.error || (
+        status.installed
+          ? 'Grok CLI is installed but not ready. Run `grok login`, then verify with `grok models`.'
+          : 'Grok CLI is not installed. See Settings for the Windows and macOS/Linux install commands.'
+      ),
     };
     return;
   }
@@ -536,74 +1000,118 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
 
   for (let attempt = 0; attempt < modelAttempts.length; attempt++) {
     const model = modelAttempts[attempt];
-    const { args, cleanup } = await materializeCliArgs({ ...opts, model, prompt: safePrompt });
-    const child = await spawnCli(executable, args, { cwd: opts.cwd, signal: opts.signal, env: opts.env, isolated: opts.isolated });
+    const { args, cleanup } = await materializeGrokCliArgs({
+      ...opts,
+      model,
+      prompt: safePrompt,
+      outputFormat: 'streaming-json',
+    });
+    const child = await spawnCli(executable, args, {
+      cwd: opts.cwd,
+      signal: opts.signal,
+      env: opts.env,
+      isolated: opts.isolated,
+      forwardApiKey: status.explicitlyTrusted,
+    });
 
     let stderr = '';
     let exitCode: number | null = null;
-    let gotStdout = false;
-    const buffer: string[] = [];
+    let spawnError = '';
+    let timedOut = false;
+    let aborted = false;
+    let terminal: 'end' | 'error' | undefined;
+    let malformedLines = 0;
+    let lineRemainder = '';
+    const chunks: string[] = [];
     let wake: (() => void) | null = null;
     let closed = false;
     let stopping: Promise<void> | null = null;
 
-    const wait = () => new Promise<void>((resolve) => {
-      wake = resolve;
-    });
+    const notify = () => {
+      const resolve = wake;
+      wake = null;
+      resolve?.();
+    };
+    const wait = () => {
+      if (closed || chunks.length) return Promise.resolve();
+      return new Promise<void>((resolve) => { wake = resolve; });
+    };
 
     const stopChild = () => {
       if (!stopping) {
         stopping = terminateProcessTree(child).finally(() => {
           closed = true;
-          wake?.();
+          notify();
         });
       }
       return stopping;
     };
 
     const timer = setTimeout(() => {
+      timedOut = true;
       stderr += `\n(Grok CLI timed out after ${timeoutMs}ms)`;
       void stopChild();
     }, timeoutMs);
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      gotStdout = true;
-      buffer.push(chunk.toString());
-      wake?.();
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      chunks.push(String(chunk));
+      notify();
     });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-      wake?.();
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += String(chunk);
+      notify();
     });
     child.on('error', (err) => {
-      stderr += friendlySpawnError(err);
+      spawnError = friendlySpawnError(err);
+      stderr += spawnError;
       closed = true;
-      wake?.();
+      notify();
     });
     child.on('close', (code) => {
       exitCode = code;
       closed = true;
       clearTimeout(timer);
-      wake?.();
+      notify();
     });
 
     const onAbort = () => {
-      closed = true;
-      wake?.();
+      aborted = true;
       void stopChild();
     };
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     if (opts.signal?.aborted) onAbort();
 
     try {
-      while (!closed || buffer.length) {
-        if (buffer.length) {
-          yield { type: 'content', delta: buffer.shift()! };
-        } else if (!closed) {
+      while (!closed || chunks.length) {
+        if (!chunks.length) {
           await wait();
-          wake = null;
-        } else {
-          break;
+          continue;
+        }
+        lineRemainder += chunks.shift()!;
+        const lines = lineRemainder.split(/\r?\n/);
+        lineRemainder = lines.pop() || '';
+        for (const line of lines) {
+          const parsed = parseGrokCliStreamLine(line);
+          if (parsed.malformed) {
+            malformedLines += 1;
+            continue;
+          }
+          if (parsed.terminal) terminal = parsed.terminal;
+          for (const event of parsed.events) {
+            if (event.type === 'error') stderr += `${stderr ? '\n' : ''}${event.message}`;
+            yield event;
+          }
+        }
+      }
+      if (lineRemainder.trim()) {
+        const parsed = parseGrokCliStreamLine(lineRemainder);
+        if (parsed.malformed) malformedLines += 1;
+        if (parsed.terminal) terminal = parsed.terminal;
+        for (const event of parsed.events) {
+          if (event.type === 'error') stderr += `${stderr ? '\n' : ''}${event.message}`;
+          yield event;
         }
       }
     } finally {
@@ -614,14 +1122,21 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
       await cleanup();
     }
 
-    if (exitCode === 0 || gotStdout) {
-      // Prefer cli: so the model badge shows "CLI" (legacy grok-cli: still parses).
+    if (aborted) return;
+    if (timedOut) {
+      yield { type: 'error', message: stderr.trim() || `Grok CLI timed out after ${timeoutMs}ms` };
+      return;
+    }
+    if (exitCode === 0) {
+      // A current CLI sends `end`; retain a graceful fallback for older builds
+      // whose help advertised streaming JSON but omitted the terminal record.
+      if (terminal === 'error' || terminal === 'end') return;
       const bare = model ? grokCliModelId(model) : 'default';
       yield { type: 'done', model: `cli:${bare || 'default'}` };
       return;
     }
 
-    if (attempt === 0 && model && isCliModelError(stderr)) {
+    if (attempt === 0 && model && terminal !== 'error' && isCliModelError(stderr)) {
       yield {
         type: 'thinking',
         delta: `Local Grok CLI (${status.version || 'installed version'}) does not support model "${grokCliModelId(model)}" — retrying with the CLI's default model.\n`,
@@ -629,7 +1144,15 @@ export async function* streamGrokCli(opts: GrokCliRunOptions): AsyncGenerator<Ch
       continue;
     }
 
-    yield { type: 'error', message: stderr.trim() || `Grok CLI exited with code ${exitCode}` };
+    if (terminal !== 'error') {
+      const malformedHint = malformedLines
+        ? ` (${malformedLines} malformed streaming record${malformedLines === 1 ? '' : 's'})`
+        : '';
+      yield {
+        type: 'error',
+        message: stderr.trim() || spawnError || `Grok CLI exited with code ${exitCode}${malformedHint}`,
+      };
+    }
     return;
   }
 }

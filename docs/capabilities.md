@@ -59,8 +59,35 @@ Filterable, grouped, and annotated with what unlocks each tool (local agents onl
 | **Memory** | `memory_save`, `memory_recall`, `memory_forget` — scoped facts persist across runs; relevant memories are recalled automatically and optional post-run learning feeds the Memories review queue |
 | **AI Generation** | `generate_image` — xAI image generation; saves to the workspace and shows in the trace |
 | **Integrations** | the agent-scoped service tools above; Linear and Jira sync through Board rather than direct agent tools |
-| **Orchestration** | `schedule_task`, `send_to_peer`, `grok_cli` (headless Grok CLI delegation with effort levels, self-verification `check`, best-of-N, and JSON-schema structured output) |
+| **Orchestration** | `schedule_task`, `send_to_peer`, `grok_cli` (one-shot official Grok Build delegation with plain or JSON-schema-constrained output, turn limits, reasoning effort, self-verification, and best-of-N) |
 | **MCP** | `mcp_list_tools`, `mcp_invoke` |
+
+## Grok Build and coding harnesses
+
+Shiba targets the official open-source
+[`xai-org/grok-build`](https://github.com/xai-org/grok-build) CLI. The audited
+public snapshot is commit
+[`98c3b2438aa922fbbe6178a5c0a4c48f85edc8ce`](https://github.com/xai-org/grok-build/commit/98c3b2438aa922fbbe6178a5c0a4c48f85edc8ce):
+its source crates declare `0.2.102`, its `SOURCE_REV` is
+`124d85bc5dc6e7805560215fcc6d5413944920e1`, and the stable released binary
+exercised by Shiba is `0.2.103`. These are distinct provenance values, not a
+single version string. Unrelated community CLIs with similar names are not the
+compatibility target.
+
+The active Shiba capability is a managed one-shot process:
+`grok --no-auto-update -p … --output-format <format>`. CLI-routed chat selects
+`streaming-json` and projects its NDJSON events into Shiba's live stream. The
+`grok_cli` delegation tool uses plain output, or schema-constrained output when
+requested. Both paths use `grok models` for authenticated readiness, bind the
+selected workspace, and stop on completion, cancellation, or timeout.
+
+The official binary separately offers `grok agent stdio`, a persistent Agent
+Client Protocol (ACP) server for IDE clients. Shiba documents that upstream IDE
+harness but does not currently launch it for the Monaco IDE or reuse it for
+chat turns. Likewise, Shiba external harness grants are scoped attachment and
+authenticated callback contracts; issuing a grant does not discover or launch
+an ambient host CLI. See [Grok Build harnesses](grok-build-harnesses.md) for the
+complete boundary.
 
 # Native companion nodes
 

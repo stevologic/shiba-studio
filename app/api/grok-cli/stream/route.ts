@@ -3,11 +3,13 @@ import { projectRoot } from '@/lib/data-paths';
 import { encodeSseEvent } from '@/lib/sse-events';
 import type { ChatMessagePayload } from '@/lib/chat-types';
 import { resolveChatToolsEnabled } from '@/lib/chat-tool-mode';
+import { loadConfig } from '@/lib/persistence';
 
 import { buildCliPromptFromMessages, streamGrokCli } from '@/lib/grok-cli';
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
+  const cfg = await loadConfig();
   const requestChatSession = body.sessionId
     ? await (await import('@/lib/chat-sessions')).getChatSession(String(body.sessionId))
     : null;
@@ -74,6 +76,13 @@ export async function POST(req: NextRequest) {
       'Answer only from the conversation and supplied context.',
       'Do not claim to browse, inspect files, run commands, use memory, or delegate work. The user can run `/tools on` to restore those capabilities.',
     ].join('\n'));
+  } else if (cfg.toolApprovalMode !== 'yolo') {
+    systemParts.push([
+      '## Headless approval mode',
+      'Shiba is in Ask-before-act mode. Read-only operations and existing explicit Grok permission rules may run.',
+      'Any tool call that would require an interactive approval is denied because this headless process cannot display approval prompts.',
+      'The user can explicitly enable YOLO in Settings to authorize unattended coding actions.',
+    ].join('\n'));
   }
 
   const prompt = buildCliPromptFromMessages(chatMessages, systemParts);
@@ -96,6 +105,11 @@ export async function POST(req: NextRequest) {
           reasoningEffort: body.reasoningEffort,
           cwd,
           toolsEnabled,
+          // Headless runs cannot display approval prompts. The legacy
+          // tools-enabled default is capability, not unattended consent.
+          permissionMode: toolsEnabled && cfg.toolApprovalMode === 'yolo'
+            ? 'bypassPermissions'
+            : 'default',
           // More turns when coding in a bound workspace so work finishes before the reply.
           maxTurns: toolsEnabled ? (body.maxTurns ?? (cwd !== projectRoot() ? 20 : undefined)) : 1,
           signal: ac.signal,

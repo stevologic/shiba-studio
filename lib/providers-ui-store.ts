@@ -18,8 +18,45 @@ export type CachedOauthStatus = {
 
 export type CachedGrokCliStatus = {
   installed: boolean;
+  /** True only when the binary, supported command surface, and auth are usable. */
+  ready: boolean;
+  explicitlyTrusted?: boolean;
+  discovery?: 'explicit' | 'path' | 'missing';
+  authenticated?: boolean;
+  authMode?: string;
   version?: string;
+  versionNumber?: string;
+  channel?: string;
   path?: string;
+  error?: string;
+  models?: string[];
+  defaultModel?: string;
+  capabilities?: {
+    headless?: boolean;
+    streamingJson?: boolean;
+    acpStdio?: boolean;
+    acpWebSocket?: boolean;
+    sessions?: boolean;
+    worktrees?: boolean;
+    toolFiltering?: boolean;
+    permissionRules?: boolean;
+    sandbox?: boolean;
+    mcp?: boolean;
+    plugins?: boolean;
+    selfVerification?: boolean;
+    bestOfN?: boolean;
+    structuredOutput?: boolean;
+  };
+  source?: {
+    repository?: string;
+    branch?: string;
+    commit?: string;
+    sourceRevision?: string;
+    sourceVersion?: string;
+    testedStableVersion?: string;
+    syncedAt?: string;
+    license?: string;
+  };
 };
 
 export type CachedModelOption = {
