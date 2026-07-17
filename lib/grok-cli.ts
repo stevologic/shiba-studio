@@ -118,8 +118,18 @@ export interface GrokCliRunOptions {
   worktreeRef?: string;
   /** Remove memory, subagents, web search, and ambient tool surfaces for scoped handoffs. */
   isolated?: boolean;
+  /**
+   * Apply the scoped headless flags without replacing the CLI home directory.
+   * This preserves the operator's authenticated session while removing memory,
+   * subagents, and web tools from a one-shot task.
+   */
+  scoped?: boolean;
   /** Per-chat automatic tool switch. False removes every CLI tool surface. */
   toolsEnabled?: boolean;
+  /** Exact built-in tool clamp for a one-shot headless task. */
+  allowedTools?: string[];
+  /** Built-in tools (and Agent entries) removed after the allowlist. */
+  disallowedTools?: string[];
   /** Additional non-secret environment entries for a scoped child process. */
   env?: Record<string, string>;
 }
@@ -168,7 +178,10 @@ export function detectGrokCliCapabilities(
 
 /** CLI flags that make `/tools off` a real boundary instead of prompt advice. */
 export function grokCliToolControlArgs(
-  opts: Pick<GrokCliRunOptions, 'toolsEnabled' | 'isolated'>,
+  opts: Pick<
+    GrokCliRunOptions,
+    'toolsEnabled' | 'isolated' | 'scoped' | 'allowedTools' | 'disallowedTools'
+  >,
 ): string[] {
   if (opts.toolsEnabled === false) {
     // The CLI rejects an empty --tools value. Its documented order applies the
@@ -184,7 +197,20 @@ export function grokCliToolControlArgs(
       '--deny', 'Grep', '--deny', 'WebFetch', '--deny', 'MCPTool',
     ];
   }
-  return opts.isolated ? ['--no-memory', '--no-subagents', '--disable-web-search'] : [];
+  const args: string[] = [];
+  const cleanToolList = (values: string[] | undefined) => [...new Set(
+    (values || [])
+      .map((value) => String(value || '').trim())
+      .filter((value) => /^[A-Za-z0-9:_-]{1,100}(?:\([A-Za-z0-9:_ -]{1,100}\))?$/.test(value)),
+  )].slice(0, 100);
+  const allowed = cleanToolList(opts.allowedTools);
+  const disallowed = cleanToolList(opts.disallowedTools);
+  if (allowed.length) args.push('--tools', allowed.join(','));
+  if (disallowed.length) args.push('--disallowed-tools', disallowed.join(','));
+  if (opts.isolated || opts.scoped) {
+    args.push('--no-memory', '--no-subagents', '--disable-web-search');
+  }
+  return args;
 }
 
 let cachedStatus: { at: number; value: GrokCliStatus } | null = null;

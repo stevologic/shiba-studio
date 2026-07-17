@@ -1147,6 +1147,8 @@ Finish by giving a short summary when task is complete.`;
 
 export type AgentRunOpts = {
   scheduled?: boolean;
+  /** Durable task kind when this run was launched by the background dispatcher. */
+  taskKind?: import('./task-types').TaskKind;
   /** No interactive approver watches this run (scheduler, board, background,
    *  channel replies). Most gated tools proceed because dispatch is the
    *  authorization; native GUI actions are denied without a live approver,
@@ -1164,6 +1166,12 @@ export type AgentRunOpts = {
     max_tokens?: number;
     usageContext?: GrokUsageContext;
   }) => Promise<{ choices: Array<{ message?: { role?: string; content?: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }; finish_reason?: string }>; usage?: unknown }>;
+  /** Injectable structured CLI stream for deterministic runtime verification. */
+  grokCliStreamFn?: (
+    opts: import('./grok-cli').GrokCliRunOptions,
+  ) => AsyncIterable<import('./chat-types').ChatStreamEvent>;
+  /** Injectable readiness snapshot paired with grokCliStreamFn in tests. */
+  grokCliStatusOverride?: GrokCliStatus;
   scheduleId?: string;
   scheduleInstructions?: string;
   /** Preallocated durable task/run identity. Retries keep taskId and increment attemptNo. */
@@ -1415,7 +1423,9 @@ async function* agentRunGenerator(
     if (modelRef.provider !== 'cloud' || cloudAuth.source !== 'oauth') return cloudAuth;
     return resolveCloudBearer(cfg, modelRef.authSource);
   };
-  const cliModelStatus = modelRef.provider === 'cli' ? await detectGrokCli() : null;
+  const cliModelStatus = modelRef.provider === 'cli'
+    ? (opts.grokCliStatusOverride || await detectGrokCli())
+    : null;
   let modelError = modelRef.provider === 'local'
     ? (!cfg.localGrokEnabled ? 'Local Grok is disabled. Enable it in Settings or switch this agent to a Cloud model.' : null)
     : modelRef.provider === 'cli'
@@ -1532,7 +1542,7 @@ async function* agentRunGenerator(
   }
 
   const tools = getToolDefinitions(agent.integrations, agent.peers.length > 0);
-  const cliStatus = await detectGrokCli();
+  const cliStatus = opts.grokCliStatusOverride || await detectGrokCli();
   if (cliStatus.ready) tools.push(grokCliToolDefinition());
   const mcpServers = await listEnabledMcpServers();
   if (mcpServers.length) tools.push(...mcpToolDefinitions());
@@ -1564,36 +1574,143 @@ async function* agentRunGenerator(
       });
       let finalOutput = '';
       let cliStatusOut: AgentRun['status'] = 'completed';
-      const cliSideEffects: string[] = [`grok_cli headless run in ${workDir}`];
+      const cliSideEffects: string[] = [];
       try {
-        const { runGrokCliPrompt } = await import('./grok-cli');
-        const out = await runGrokCliPrompt({
+        const [{ captureGitWorkspaceSnapshot, collectGitWorkspaceChanges }, { assessCliAgentCompletion }] = await Promise.all([
+          import('./workspace-change-tracker'),
+          import('./cli-agent-outcome'),
+        ]);
+        const unattendedBoardRun = opts.autonomous === true && opts.taskKind === 'board';
+        if (unattendedBoardRun && cfg.toolApprovalMode !== 'yolo') {
+          throw new Error(
+            'Grok CLI Board work cannot run unattended while tool approval is set to Ask. '
+            + 'No live approval window exists for a background card, so Shiba will not auto-grant host actions. '
+            + 'Switch Tool Approval to YOLO for this trusted workspace, or assign the card to a Cloud/Local agent.',
+          );
+        }
+        const workspaceBefore = await captureGitWorkspaceSnapshot(workDir);
+        const cliStream = opts.grokCliStreamFn || (await import('./grok-cli')).streamGrokCli;
+        const boardTools = unattendedBoardRun
+          ? (opts.readOnly
+              ? ['read_file', 'grep', 'list_dir']
+              : ['read_file', 'grep', 'list_dir', 'search_replace', 'run_terminal_cmd'])
+          : undefined;
+        const boardCompatEnvironment = unattendedBoardRun
+          ? {
+              GROK_CURSOR_SKILLS_ENABLED: 'false',
+              GROK_CURSOR_RULES_ENABLED: 'false',
+              GROK_CURSOR_AGENTS_ENABLED: 'false',
+              GROK_CURSOR_MCPS_ENABLED: 'false',
+              GROK_CURSOR_HOOKS_ENABLED: 'false',
+              GROK_CURSOR_SESSIONS_ENABLED: 'false',
+              GROK_CLAUDE_SKILLS_ENABLED: 'false',
+              GROK_CLAUDE_RULES_ENABLED: 'false',
+              GROK_CLAUDE_AGENTS_ENABLED: 'false',
+              GROK_CLAUDE_MCPS_ENABLED: 'false',
+              GROK_CLAUDE_HOOKS_ENABLED: 'false',
+              GROK_CLAUDE_SESSIONS_ENABLED: 'false',
+            }
+          : undefined;
+        let answer = '';
+        let reasoning = '';
+        let sawDone = false;
+        const cliErrors: string[] = [];
+        for await (const event of cliStream({
           prompt: effectivePrompt,
           cwd: workDir,
           model: agent.model,
           maxTurns: 18,
-          // Respect Shiba's global approval policy. In Ask/read-only mode,
-          // headless Grok converts would-prompt actions into denied tool calls.
+          check: true,
+          // A headless Board job has no interactive CLI approval path. Only
+          // the user's explicit global YOLO setting reaches this point.
           permissionMode: !opts.readOnly && cfg.toolApprovalMode === 'yolo'
             ? 'bypassPermissions'
             : 'default',
+          allowedTools: boardTools,
+          disallowedTools: unattendedBoardRun ? ['Agent'] : undefined,
+          scoped: unattendedBoardRun,
+          denyRules: unattendedBoardRun ? ['MCPTool', 'WebFetch'] : undefined,
+          env: boardCompatEnvironment,
+          // Grok Build currently kernel-enforces these profiles on Linux and
+          // macOS. Windows receives no sandbox flag and reaches this path only
+          // after the explicit YOLO prerequisite above.
+          sandboxProfile: process.platform === 'linux' || process.platform === 'darwin'
+            ? (opts.readOnly ? 'read-only' : 'workspace')
+            : undefined,
           signal: runSignal,
-        });
+        })) {
+          if (event.type === 'content') answer += event.delta;
+          else if (event.type === 'thinking') reasoning = `${reasoning}${event.delta}`.slice(-4_000);
+          else if (event.type === 'error') cliErrors.push(event.message);
+          else if (event.type === 'done') sawDone = true;
+          await pollDurableRunControls();
+          await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
+          assertRunNotAborted();
+        }
         await pollDurableRunControls();
         await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
         assertRunNotAborted();
-        finalOutput = (out.stdout || '').trim().slice(-6000);
-        if (!out.ok) {
+        if (reasoning.trim()) {
+          yield emit({
+            id: uuidv4(),
+            ts: new Date().toISOString(),
+            type: 'think',
+            content: `Grok CLI reasoning:\n${reasoning.trim().slice(-3_500)}`,
+          });
+        }
+
+        const workspaceChanges = await collectGitWorkspaceChanges(workspaceBefore);
+        for (const change of workspaceChanges) {
+          const action = change.kind === 'deleted' ? 'Deleted' : 'Changed';
+          cliSideEffects.push(`${action.toLowerCase()} ${change.path}`);
+          yield emit({
+            id: uuidv4(),
+            ts: new Date().toISOString(),
+            type: 'result',
+            content: `${action} workspace file: ${change.path}`,
+            tool: {
+              name: 'workspace_change',
+              args: { path: change.path },
+              result: { path: change.path, kind: change.kind },
+            },
+          });
+        }
+
+        const deliveredText = answer.trim().slice(-6_000);
+        const assessment = assessCliAgentCompletion(deliveredText);
+        if (cliErrors.length) {
           cliStatusOut = 'error';
-          finalOutput = finalOutput
-            || `Grok CLI exited with code ${out.code}: ${(out.stderr || '').slice(0, 800)}`;
-        } else if (!finalOutput) {
+          finalOutput = deliveredText || cliErrors.join('\n').slice(0, 2_000);
+        } else if (!sawDone) {
+          cliStatusOut = 'error';
           finalOutput = 'Grok CLI finished without output — see the workspace for changes.';
+        }
+        if (!cliErrors.length && sawDone && !assessment.complete) {
+          cliStatusOut = 'error';
+          const stoppedAt = deliveredText || reasoning.trim().slice(-1_500) || '(no final answer)';
+          finalOutput = [
+            'Grok CLI stopped before delivering completed work. This card was not promoted to review.',
+            '',
+            `Last response: ${stoppedAt}`,
+            '',
+            workspaceChanges.length
+              ? `${workspaceChanges.length} workspace change${workspaceChanges.length === 1 ? '' : 's'} were captured below, but the run did not provide a completed result and validation.`
+              : 'No completed result or workspace changes were recorded.',
+          ].join('\n');
+        } else if (cliStatusOut === 'completed') {
+          finalOutput = deliveredText;
         }
         yield emit({
           id: uuidv4(), ts: new Date().toISOString(), type: cliStatusOut === 'error' ? 'error' : 'result',
           content: finalOutput.slice(0, 2000),
-          tool: { name: 'grok_cli', args: { prompt: effectivePrompt.slice(0, 200) } },
+          tool: {
+            name: 'grok_cli',
+            args: { prompt: effectivePrompt.slice(0, 200) },
+            result: {
+              complete: cliStatusOut === 'completed',
+              changedFiles: workspaceChanges.length,
+            },
+          },
         });
       } catch (e) {
         cliStatusOut = 'error';

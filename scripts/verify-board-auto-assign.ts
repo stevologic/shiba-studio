@@ -52,6 +52,47 @@ async function main() {
 
   console.log('=== BOARD AUTO-ASSIGNMENT VERIFICATION ===');
 
+  const promptFixture = {
+    key: 'SHIB-CLI',
+    title: 'Implement the requested Board change',
+    description: 'Update the repository and prove the requested behavior works.',
+    labels: ['engineering'],
+    feedback: 'Keep the existing behavior for cloud agents.',
+    previousOutcome: 'The first pass only described what it planned to do.',
+  };
+  const cliPrompt = runner.buildBoardCardPrompt(promptFixture, 'cli:grok-build');
+  assert(cliPrompt.includes(promptFixture.description), 'CLI Board prompt includes the full authoritative brief');
+  assert(
+    cliPrompt.includes('Do not try to pull or re-read the story from Shiba Studio'),
+    'CLI Board prompt forbids trying to fetch the already embedded card',
+  );
+  assert(
+    cliPrompt.includes('Do not call, search for, or try to discover board_get_task'),
+    'CLI Board prompt does not advertise unavailable Shiba board tools',
+  );
+  assert(
+    cliPrompt.includes('Execute the work now')
+      && cliPrompt.includes('Do not stop after stating a plan')
+      && cliPrompt.includes('changed file paths')
+      && cliPrompt.includes('validation commands and results'),
+    'CLI Board prompt requires execution and concrete validated evidence',
+  );
+  assert(
+    !cliPrompt.includes('Work the card to completion. You have board tools:'),
+    'CLI Board prompt omits the non-CLI board-tool contract',
+  );
+  assert(
+    runner.buildBoardCardPrompt(promptFixture, 'grok-cli:grok-build').includes('Execute the work now'),
+    'legacy Grok CLI model references receive the CLI Board contract',
+  );
+  const cloudPrompt = runner.buildBoardCardPrompt(promptFixture, 'cloud:grok-4');
+  assert(
+    cloudPrompt.includes('Work the card to completion. You have board tools:')
+      && cloudPrompt.includes('board_update_task')
+      && cloudPrompt.includes('board_get_task / board_list_tasks'),
+    'non-CLI Board agents retain Shiba board-tool instructions',
+  );
+
   const manualCard = await board.createBoardTask({ title: 'Manual-only assignment', status: 'todo' });
   const manualAssigned = await board.updateBoardTask(manualCard.id, { assigneeAgentId: 'agent-manual' });
   assert(manualAssigned.autoAssignment?.status === 'disabled', 'opted-out assignment is durably dismissed');

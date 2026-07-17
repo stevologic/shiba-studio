@@ -140,6 +140,7 @@ function launchTaskExecution(task: TaskRecord, agentForRun: Agent, runId: string
         taskId: task.id,
         runId,
         attemptNo: task.retryCount + 1,
+        taskKind: task.kind,
       };
       if (task.kind === 'board' && task.projectId) {
         runOptions.projectId = task.projectId;

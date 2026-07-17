@@ -125,7 +125,14 @@ run is cancelled. Prompt sizes are bounded for cross-platform process limits.
 Because headless Grok cannot show approval prompts, CLI-routed chat and
 CLI-model runs opt into `bypassPermissions` only when Shiba's global approval
 mode is explicitly set to **YOLO**. In Ask mode, operations that would require
-an interactive prompt are denied. A `grok_cli` tool call may run unattended
+an interactive prompt are denied. Autonomous CLI-model Board cards fail before
+the CLI launches in Ask mode, so a permission-blocked promise cannot be saved
+as completed work. Use a Cloud/Local agent or explicitly enable YOLO for a
+trusted workspace when unattended Board execution is intended. YOLO Board
+runs use a built-in coding-tool allowlist, disable memory/subagents/web and
+vendor compatibility discovery, and deny ambient MCP calls; the upstream
+workspace sandbox is available on Linux/macOS but not Windows. A `grok_cli`
+tool call may run unattended
 after the parent agent's normal Shiba approval gate authorizes that delegation.
 Upstream deny rules, hooks, and administrative locks continue to apply, and
 read-only runs never opt in.

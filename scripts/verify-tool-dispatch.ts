@@ -139,9 +139,16 @@ async function main() {
     'Grok CLI gates unattended approval on explicit YOLO plus the chat tool boundary',
   );
   assert(
-    agentRuntimeSource.includes("!opts.readOnly && cfg.toolApprovalMode === 'yolo'")
+    agentRuntimeSource.includes("const unattendedBoardRun = opts.autonomous === true && opts.taskKind === 'board'")
+      && agentRuntimeSource.includes("cfg.toolApprovalMode !== 'yolo'")
+      && agentRuntimeSource.includes('cannot run unattended while tool approval is set to Ask')
+      && agentRuntimeSource.includes("permissionMode: !opts.readOnly && cfg.toolApprovalMode === 'yolo'")
+      && agentRuntimeSource.includes('allowedTools: boardTools')
+      && agentRuntimeSource.includes("denyRules: unattendedBoardRun ? ['MCPTool', 'WebFetch']")
+      && agentRuntimeSource.includes('scoped: unattendedBoardRun')
+      && agentRuntimeSource.includes("? (opts.readOnly ? 'read-only' : 'workspace')")
       && agentToolExecSource.includes("permissionMode: 'bypassPermissions'"),
-    'CLI-model runs respect YOLO/read-only policy and approved tool delegations are explicit',
+    'CLI-model Board runs fail closed in Ask and clamp ambient surfaces in explicit YOLO mode',
   );
   await fs.mkdir(SCRATCH, { recursive: true }).catch(() => {});
   await fs.writeFile(

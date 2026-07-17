@@ -58,6 +58,19 @@ This is the harness behind `/api/grok-cli/stream` and the local-agent
 Because headless mode cannot display approval prompts, a tools-enabled chat or
 CLI-model run receives `bypassPermissions` only when Shiba's global approval
 mode is explicitly set to **YOLO**. In Ask mode, would-prompt actions are denied.
+An autonomous Board card has no live approval surface, so a CLI-model Board run
+fails before launching in Ask mode instead of recording a permission-blocked
+response as completed work. Assign that card to a Cloud/Local agent, or
+explicitly enable YOLO for a trusted workspace, when unattended CLI execution
+is intended.
+
+YOLO Board runs are still clamped to Grok's built-in coding tools. Shiba starts
+them without cross-session memory, subagents, or web search, denies ambient MCP
+and web-fetch calls, and disables Claude/Cursor compatibility discovery for
+rules, skills, agents, MCP servers, hooks, and sessions. Grok's workspace
+sandbox is requested on Linux and macOS. Grok Build does not provide that
+kernel boundary on Windows, which is why Windows Board execution requires the
+operator's explicit YOLO choice.
 The `grok_cli` tool may also receive unattended approval after the parent
 agent's normal Shiba approval gate authorizes that delegation. Tools-off and
 read-only runs never receive the bypass mode. Upstream deny rules, hooks, and

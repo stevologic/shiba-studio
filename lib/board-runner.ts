@@ -3,6 +3,7 @@
 // owns execution, while this reconciler projects ledger truth back to Board.
 
 import { randomUUID } from 'node:crypto';
+import { parseModelRef } from './model-providers';
 import type { Agent } from './types';
 import type { BoardTask } from './board-types';
 import type { TaskRecord } from './task-types';
@@ -32,9 +33,9 @@ interface CardPromptInput {
   previousOutcome?: string;
 }
 
-function buildCardPrompt(task: CardPromptInput): string {
+export function buildBoardCardPrompt(task: CardPromptInput, model: string): string {
   const refining = !!task.feedback;
-  return [
+  const cardBrief = [
     'You are working a Kanban card from the Shiba Studio board.',
     '',
     `Card ${task.key}: ${task.title}`,
@@ -48,11 +49,22 @@ function buildCardPrompt(task: CardPromptInput): string {
       ? `\nThe reviewer sent this work back with feedback. Address it specifically while keeping what was already right:\n${task.feedback}`
       : '',
     '',
-    'Work the card to completion. You have board tools:',
-    '- board_update_task to post progress notes at meaningful milestones',
-    '- board_get_task / board_list_tasks to re-read the card or see the rest of the board',
-    `When you finish, post a clear summary of ${refining ? 'what changed in response to the feedback' : 'the outcome'} on ${task.key}. Do not move the card to done — successful work lands in review automatically.`,
-  ].filter((line) => line !== '').join('\n');
+  ];
+  const instructions = parseModelRef(model).provider === 'cli'
+    ? [
+        `The complete, authoritative brief for ${task.key} is already included above. Do not try to pull or re-read the story from Shiba Studio.`,
+        'Shiba Studio board tools are not available inside Grok CLI. Do not call, search for, or try to discover board_get_task, board_list_tasks, or board_update_task.',
+        'Execute the work now in the assigned workspace using the repository, filesystem, and terminal tools available to you. Do not stop after stating a plan or promising to start.',
+        'Inspect the relevant code, make the required changes, and run appropriate validation. If you are blocked, report the exact blocker and supporting evidence.',
+        `When finished, return a concrete summary of ${refining ? 'what changed in response to the feedback' : 'the completed outcome'}, the changed file paths, validation commands and results, and any remaining limitations. Shiba Studio will post that result to ${task.key} and move successful work to review automatically.`,
+      ]
+    : [
+        'Work the card to completion. You have board tools:',
+        '- board_update_task to post progress notes at meaningful milestones',
+        '- board_get_task / board_list_tasks to re-read the card or see the rest of the board',
+        `When you finish, post a clear summary of ${refining ? 'what changed in response to the feedback' : 'the outcome'} on ${task.key}. Do not move the card to done — successful work lands in review automatically.`,
+      ];
+  return [...cardBrief, ...instructions].filter((line) => line !== '').join('\n');
 }
 
 function previousAgentOutcome(task: BoardTask): string | undefined {
@@ -87,11 +99,11 @@ async function resolveTaskContext(task: BoardTask, agent: Agent): Promise<{
     }
   }
   const feedback = task.activeWork?.feedback;
-  const prompt = buildCardPrompt({
+  const prompt = buildBoardCardPrompt({
     ...task,
     feedback,
     previousOutcome: feedback ? previousAgentOutcome(task) : undefined,
-  });
+  }, agent.model);
   return {
     prompt,
     workspacePath,

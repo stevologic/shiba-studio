@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw, Check, RotateCcw,
-  FileText, Image as ImageIcon, File, Copy, PackageOpen, FolderKanban,
+  FileText, Image as ImageIcon, File, Copy, PackageOpen, FolderKanban, AlertTriangle,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
@@ -386,7 +386,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     }
   }
 
-  /** Open the delivered-work modal: answer + files the runs created. */
+  /** Open the delivered-work modal: completion state, evidence, answer, and changed files. */
   async function viewWork(task: BoardTask) {
     setWorkOpen(true);
     setWorkLoading(true);
@@ -1160,11 +1160,33 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                 <div className="kb-col-empty">No agent runs are linked to this card yet.</div>
               )}
 
+              {!workLoading
+                && work
+                && work.runs.length > 0
+                && work.files.length === 0
+                && work.runs.every((run) => run.deliveryState === 'not_delivered')
+                && (
+                  <div className="kb-work-delivery-alert" role="alert">
+                    <AlertTriangle size={16} />
+                    <div>
+                      <strong>No completed work was delivered</strong>
+                      <span>The linked runs did not record a completed result. There are no changes or finished outputs to review yet.</span>
+                    </div>
+                  </div>
+                )}
+
               {!workLoading && work && work.runs.map((run, i) => (
-                <section key={run.runId} className="kb-work-run">
+                <section key={run.runId} className={`kb-work-run kb-work-run-${run.deliveryState}`}>
                   <div className="kb-work-run-head">
                     <span className="kb-work-run-label">
-                      {i === 0 ? 'Answer' : 'Earlier pass'} — {run.agentName}
+                      {i === 0 ? 'Latest run' : 'Earlier run'} — {run.agentName}
+                    </span>
+                    <span className={`kb-work-delivery-state kb-work-delivery-state-${run.deliveryState}`}>
+                      {run.deliveryState === 'delivered'
+                        ? 'Delivered'
+                        : run.deliveryState === 'partial'
+                          ? 'Partial'
+                          : 'Not delivered'}
                     </span>
                     {run.completedAt && (
                       <span className="kb-activity-ts" title={run.completedAt}>{timeAgo(run.completedAt)}</span>
@@ -1178,7 +1200,35 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                       <ExternalLink size={11} /> trace
                     </button>
                   </div>
-                  <div className="kb-work-answer" onClick={openAnswerFileLink}>
+
+                  {run.deliveryMessage && (
+                    <div className={`kb-work-run-notice kb-work-run-notice-${run.deliveryState}`}>
+                      {run.deliveryState === 'not_delivered' && <AlertTriangle size={14} />}
+                      <span>{run.deliveryMessage}</span>
+                    </div>
+                  )}
+
+                  {run.evidence.length > 0 && (
+                    <div className="kb-work-evidence">
+                      <div className="kb-work-run-label">Work performed ({run.evidence.length})</div>
+                      <ul className="kb-work-evidence-list">
+                        {run.evidence.map((item) => (
+                          <li key={`${item.kind}:${item.label}`} className={`kb-work-evidence-${item.kind}`}>
+                            <span className="kb-work-evidence-dot" aria-hidden />
+                            <span>{item.label}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="kb-work-response-label">
+                    {run.deliveryState === 'not_delivered' ? 'Recorded response' : 'Final answer'}
+                  </div>
+                  <div
+                    className={`kb-work-answer ${run.deliveryState === 'not_delivered' ? 'kb-work-answer-incomplete' : ''}`}
+                    onClick={openAnswerFileLink}
+                  >
                     <ChatMarkdown content={run.finalOutput || '_(no output recorded)_'} />
                   </div>
                 </section>
@@ -1187,10 +1237,10 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
               {!workLoading && work && (
                 <section className="kb-work-files">
                   <div className="kb-work-run-label">
-                    Files created {work.files.length > 0 ? `(${work.files.length})` : ''}
+                    Files {work.files.length > 0 ? `(${work.files.length})` : ''}
                   </div>
                   {work.files.length === 0 && (
-                    <div className="kb-work-nofiles">No files were written by this card&apos;s runs.</div>
+                    <div className="kb-work-nofiles">No changed or referenced files were recorded for this card.</div>
                   )}
                   {work.files.map((f) => (
                     <div key={f.absPath} className={`kb-file-row kb-file-row-stacked ${f.exists ? '' : 'kb-file-missing'}`}>

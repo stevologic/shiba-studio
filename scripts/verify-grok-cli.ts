@@ -195,6 +195,28 @@ Commands:
   assert(baseArgs.includes('--check'), 'headless argv enables the verification harness');
   assert(valueAfter(baseArgs, '--best-of-n') === '3', 'headless argv preserves best-of-N');
   assert(valueAfter(baseArgs, '--json-schema') === schema, 'headless argv preserves JSON schema');
+  const scopedArgs = buildGrokCliArgsBase({
+    scoped: true,
+    allowedTools: ['read_file', 'grep', 'search_replace', 'run_terminal_cmd', 'not a tool'],
+    disallowedTools: ['Agent', 'also/not-valid'],
+    denyRules: ['MCPTool', 'WebFetch'],
+  });
+  assert(
+    valueAfter(scopedArgs, '--tools') === 'read_file,grep,search_replace,run_terminal_cmd',
+    'scoped headless argv clamps the built-in tool allowlist and drops invalid names',
+  );
+  assert(
+    valueAfter(scopedArgs, '--disallowed-tools') === 'Agent',
+    'scoped headless argv applies the built-in tool denylist after the allowlist',
+  );
+  for (const flag of ['--no-memory', '--no-subagents', '--disable-web-search']) {
+    assert(scopedArgs.includes(flag), `scoped headless argv includes ${flag}`);
+  }
+  assert(
+    scopedArgs.some((value, index) => value === 'MCPTool' && scopedArgs[index - 1] === '--deny')
+      && scopedArgs.some((value, index) => value === 'WebFetch' && scopedArgs[index - 1] === '--deny'),
+    'scoped headless argv retains explicit MCP and web permission denies',
+  );
   const automationArgs = buildGrokCliArgsBase({ permissionMode: 'bypassPermissions' });
   assert(
     valueAfter(automationArgs, '--permission-mode') === 'bypassPermissions',
