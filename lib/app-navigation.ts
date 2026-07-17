@@ -7,6 +7,7 @@ export const APP_TABS = [
   'agents',
   'memories',
   'workspace',
+  'code',
   'files',
   'automations',
   'integrations',
@@ -28,6 +29,7 @@ export function isAppTab(value: string | undefined): value is AppTab {
  */
 const PATH_ALIASES: Record<string, AppTab> = {
   capabilities: 'integrations',
+  ide: 'code',
   routines: 'automations',
 };
 

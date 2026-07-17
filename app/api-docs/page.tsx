@@ -67,12 +67,17 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'Content', method: 'GET', path: '/api/workspace', summary: 'List files in a directory.', query: [{ name: 'dir', desc: 'Directory path (default cwd)', example: '' }] },
   { group: 'Content', method: 'GET', path: '/api/fs/browse', summary: 'Folder browser — subdirectories of a path (git repos badged).', query: [{ name: 'dir', desc: 'Directory to list (default home)', example: '' }] },
 
+  // --- Code IDE ---
+  { group: 'Code IDE', method: 'GET', path: '/api/ide/files', summary: 'Load the contained workspace root and its first directory level.', query: [{ name: 'action', desc: 'bootstrap|list|read|search', example: 'bootstrap' }, { name: 'workspace', desc: 'Workspace root (default configured workspace)', example: '' }] },
+  { group: 'Code IDE', method: 'GET', path: '/api/ide/git', summary: 'Structured Git status, branches, upstream state, remotes, and recent commits.', query: [{ name: 'view', desc: 'snapshot|diff', example: 'snapshot' }, { name: 'workspace', desc: 'Workspace root (default configured workspace)', example: '' }] },
+  { group: 'Code IDE', method: 'GET', path: '/api/ide/github', summary: 'Open pull requests, issues, and workflow runs for the workspace origin.', query: [{ name: 'workspace', desc: 'Workspace root (default configured workspace)', example: '' }] },
+
   // --- CLI & backup ---
   { group: 'CLI & Backup', method: 'GET', path: '/api/grok-cli/status', summary: 'Grok CLI detection: installed, version, path, models.', query: [{ name: 'checkUpdate', desc: '1 = also check for a newer CLI release' }] },
   { group: 'CLI & Backup', method: 'GET', path: '/api/backup', summary: 'Download a full studio backup. Sensitive: the encryption key is included unless omitted.', sensitive: true, query: [{ name: 'key', desc: 'Use "omit" unless you explicitly need a portable secret-bearing backup', example: 'omit' }] },
 ];
 
-const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Automations', 'Observability', 'Content', 'CLI & Backup'];
+const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Automations', 'Observability', 'Content', 'Code IDE', 'CLI & Backup'];
 
 export default function ApiDocsPage() {
   const [selected, setSelected] = useState<Endpoint>(ENDPOINTS[0]);

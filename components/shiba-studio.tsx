@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Code2
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -32,6 +32,7 @@ const McpPanel = dynamic(() => import('@/components/mcp-panel'), { loading: pane
 const SkillsBrowser = dynamic(() => import('@/components/skills-browser'), { loading: panelLoading });
 const WorkspaceDiffPanel = dynamic(() => import('@/components/workspace-diff-panel'), { loading: panelLoading });
 const WorkspacePage = dynamic(() => import('@/components/workspace-page'), { loading: panelLoading });
+const IdePanel = dynamic(() => import('@/components/ide-panel'), { loading: panelLoading });
 const KanbanBoard = dynamic(() => import('@/components/kanban-board'), { loading: panelLoading });
 const FilesPanel = dynamic(() => import('@/components/files-panel'), { loading: panelLoading });
 const MemoriesPanel = dynamic(() => import('@/components/memories-panel'), { loading: panelLoading });
@@ -138,7 +139,7 @@ type RunSummaryLite = {
 // One source of truth for tab display names (nav, top bar, document titles).
 const TAB_LABELS: Record<string, string> = {
   dashboard: 'Dashboard', attention: 'Attention', chat: 'Grok Chat', projects: 'Projects', board: 'Board', agents: 'Agents',
-  memories: 'Memories', workspace: 'Workspace', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
+  memories: 'Memories', workspace: 'Workspace', code: 'Code', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
   usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
 
@@ -2963,6 +2964,7 @@ export default function ShibaStudio() {
       { id: 'agents', label: 'Agents' },
       { id: 'memories', label: 'Memories' },
       { id: 'workspace', label: 'Workspace' },
+      { id: 'code', label: 'Code' },
       { id: 'files', label: 'Files' },
       { id: 'automations', label: 'Automations' },
       { id: 'integrations', label: 'Capabilities' },
@@ -3041,6 +3043,7 @@ export default function ShibaStudio() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        if (e.target instanceof Element && e.target.closest('.monaco-editor')) return;
         e.preventDefault();
         setShowCommandPalette((v) => !v);
       }
@@ -3165,6 +3168,7 @@ export default function ShibaStudio() {
             { id: 'agents', label: 'Agents', icon: Users, stat: agents.length > 0 ? String(agents.length) : null },
             { id: 'memories', label: 'Memories', icon: Brain, stat: navStats.memories > 0 ? String(navStats.memories) : null },
             { id: 'workspace', label: 'Workspace', icon: FolderOpen, stat: navStats.workspaceFiles > 0 ? String(navStats.workspaceFiles) : null },
+            { id: 'code', label: 'Code', icon: Code2, stat: null as string | null },
             { id: 'files', label: 'Files', icon: FileText, stat: null as string | null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
             { id: 'integrations', label: 'Capabilities', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
@@ -3433,7 +3437,7 @@ export default function ShibaStudio() {
         {/* Content surfaces — workspace locks outer scroll; lists scroll inside */}
         <div
           className={
-            tab === 'workspace' || tab === 'files' || tab === 'board'
+            tab === 'workspace' || tab === 'code' || tab === 'files' || tab === 'board'
               ? 'flex-1 min-h-0 overflow-hidden p-3 sm:p-5 relative z-[1] flex flex-col'
               : 'flex-1 overflow-auto p-3 sm:p-5 space-y-5 relative z-[1]'
           }
@@ -3843,6 +3847,11 @@ export default function ShibaStudio() {
                 if (a) openEditAgent(a);
               }}
             />
+          )}
+
+          {/* CODE — full local IDE with Monaco, Git, GitHub, search, and terminal access */}
+          {tab === 'code' && (
+            <IdePanel defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''} />
           )}
 
           {/* FILES — every deliverable agents have written, across all runs */}

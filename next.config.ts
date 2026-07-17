@@ -51,6 +51,9 @@ const allowedDevOrigins = [...new Set([...mdnsDevOrigins, ...lanIPv4Origins(), '
 
 const nextConfig: NextConfig = {
   allowedDevOrigins,
+  outputFileTracingIncludes: {
+    '/api/monaco/\\[\\.\\.\\.asset\\]': ['./node_modules/monaco-editor/min/vs/**/*'],
+  },
   // Real npm packages only — never Node builtins like `child_process`.
   // Listing builtins confuses Turbopack's import map and can panic with
   // "Next.js package not found" during HMR (especially when loading Chat).

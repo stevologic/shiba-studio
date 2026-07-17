@@ -6,6 +6,15 @@ All notable changes to Shiba Studio. The format follows
 migrates itself (`PRAGMA user_version` ladder) and legacy data directories
 are carried over automatically.
 
+## [Unreleased]
+
+### Added
+
+- **Code IDE** — a dedicated Monaco editor with multi-file tabs, repository
+  search, diagnostics, structured Git staging/branches/history, live GitHub
+  pull requests/issues/workflows, and access to the persistent host terminal.
+- Workspace-contained file APIs and argument-safe Git operations for IDE use.
+
 ## [0.2.0] — 2026-07-10
 
 ### Added

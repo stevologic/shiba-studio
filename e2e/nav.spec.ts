@@ -14,6 +14,7 @@ const PAGES: Array<{ path: string; marker: string | RegExp }> = [
   { path: '/settings', marker: /Settings/ },
   { path: '/projects', marker: /Projects/ },
   { path: '/workspace', marker: /Workspace/ },
+  { path: '/code', marker: /Code|Explorer/i },
   { path: '/files', marker: /Files/ },
   { path: '/board', marker: /Board/ },
   { path: '/companion', marker: /Companion/i },
@@ -40,6 +41,7 @@ test('primary navigation keeps the simplified product surface', async ({ page })
   const sidebar = page.locator('.sidebar');
 
   await expect(sidebar.getByRole('link', { name: 'Dashboard', exact: true })).toHaveAttribute('href', '/');
+  await expect(sidebar.getByRole('link', { name: 'Code', exact: true })).toHaveAttribute('href', '/code');
   await expect(sidebar.getByRole('link', { name: 'Automations', exact: true })).toHaveAttribute('href', '/automations');
 
   for (const retiredLabel of ['Dispatch', 'Routines', 'Meetings', 'Doctor']) {
