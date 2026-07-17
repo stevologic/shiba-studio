@@ -319,6 +319,69 @@
   flex-shrink: 0;
 }
 
+.workspacePicker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  color: var(--ide-muted);
+}
+
+.workspacePicker > svg:first-child {
+  position: absolute;
+  left: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.workspacePicker select {
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  padding: 0 20px 0 20px;
+  overflow: hidden;
+  color: var(--ide-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  outline: 0;
+  appearance: none;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.workspacePicker select:hover:not(:disabled),
+.workspacePicker select:focus-visible {
+  color: var(--ide-text);
+  background: var(--ide-card);
+  border-color: var(--ide-border-light);
+}
+
+.workspacePicker select:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.workspacePicker select option,
+.workspacePicker select optgroup {
+  color: var(--ide-text);
+  background: var(--ide-card);
+  font-size: 11px;
+  text-transform: none;
+}
+
+.workspacePickerChevron {
+  position: absolute;
+  right: 4px;
+  pointer-events: none;
+}
+
 .selectionActions .iconButton {
   width: 23px;
   height: 23px;

@@ -4,7 +4,9 @@ The **Code** page turns any local workspace into a full editing surface inside S
 
 ## Open a workspace
 
-Code starts in the default workspace from **Settings → Agent behavior & workspace**. Change that setting when you want Code and local agents to work in a different project.
+Use the workspace picker at the top of the Explorer to open the configured default workspace, a folder saved as a **Project**, or a discovered Git worktree. The default workspace from **Settings → Agent behavior & workspace** is always available, including when no projects have been created.
+
+Project folders that no longer exist remain visible but disabled so they can be repaired from Projects. If any editor has unsaved changes, Code asks for confirmation before switching workspaces.
 
 The Explorer loads folders only when you expand them, so large repositories remain responsive. Common generated directories such as `.git`, `node_modules`, `.next`, `dist`, `build`, and `coverage` stay out of the tree. Dotfiles such as `.gitignore` and folders such as `.github` remain visible.
 

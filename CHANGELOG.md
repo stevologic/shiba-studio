@@ -12,7 +12,8 @@ are carried over automatically.
 
 - **Code IDE** — a dedicated Monaco editor with multi-file tabs, repository
   search, diagnostics, structured Git staging/branches/history, live GitHub
-  pull requests/issues/workflows, and access to the persistent host terminal.
+  pull requests/issues/workflows, access to the persistent host terminal, and
+  a picker for the default workspace, saved projects, and Git worktrees.
 - Workspace-contained file APIs and argument-safe Git operations for IDE use.
 
 ## [0.2.0] — 2026-07-10

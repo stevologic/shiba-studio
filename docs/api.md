@@ -174,6 +174,7 @@ There is no standalone Meetings page. The meeting-named endpoints remain as the 
 | GET | `/api/fs/browse` | Folder browser — subdirectories of `?dir=` (git repos badged). |
 | GET/POST | `/api/projects`, `/api/projects/context`, `/api/projects/upload` | Project CRUD, context, and file uploads. |
 | POST | `/api/git` | Git actions (status/checkout/commit/pr) against a workspace. |
+| GET | `/api/ide/workspaces` | Workspace-picker options for the configured default workspace, saved project folders, and discovered Git worktrees, including folder availability. |
 | GET/POST | `/api/ide/files` | Contained IDE directory listing, text reads/search, conflict-aware saves, create, rename, and delete. |
 | GET/POST | `/api/ide/git` | Structured status/branches/history/diffs plus per-file stage, unstage, discard, commit, fetch, pull, push, and branch actions. |
 | GET/POST | `/api/ide/github` | GitHub repository activity plus pull-request and issue creation using the configured server-side token. |

@@ -20,6 +20,7 @@ const CHAIN = [
   'verify-theme.ts',
   'verify-page-chrome.ts',
   'verify-ide-files.ts',
+  'verify-ide-workspaces.ts',
   'verify-ide-git.ts',
   'verify-ide-github.ts',
   'verify-client-loading.ts',

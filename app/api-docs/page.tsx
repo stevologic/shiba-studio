@@ -68,6 +68,7 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'Content', method: 'GET', path: '/api/fs/browse', summary: 'Folder browser — subdirectories of a path (git repos badged).', query: [{ name: 'dir', desc: 'Directory to list (default home)', example: '' }] },
 
   // --- Code IDE ---
+  { group: 'Code IDE', method: 'GET', path: '/api/ide/workspaces', summary: 'Default workspace, saved project folders, and discovered Git worktrees for the Code workspace picker.' },
   { group: 'Code IDE', method: 'GET', path: '/api/ide/files', summary: 'Load the contained workspace root and its first directory level.', query: [{ name: 'action', desc: 'bootstrap|list|read|search', example: 'bootstrap' }, { name: 'workspace', desc: 'Workspace root (default configured workspace)', example: '' }] },
   { group: 'Code IDE', method: 'GET', path: '/api/ide/git', summary: 'Structured Git status, branches, upstream state, remotes, and recent commits.', query: [{ name: 'view', desc: 'snapshot|diff', example: 'snapshot' }, { name: 'workspace', desc: 'Workspace root (default configured workspace)', example: '' }] },
   { group: 'Code IDE', method: 'GET', path: '/api/ide/github', summary: 'Open pull requests, issues, and workflow runs for the workspace origin.', query: [{ name: 'workspace', desc: 'Workspace root (default configured workspace)', example: '' }] },

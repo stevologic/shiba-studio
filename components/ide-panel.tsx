@@ -20,7 +20,6 @@ import {
   AlertTriangle,
   Braces,
   Check,
-  ChevronDown,
   CircleDot,
   Code2,
   Command,
@@ -49,8 +48,13 @@ import {
   X,
 } from 'lucide-react';
 import { createClientId } from '@/lib/client-id';
+import type {
+  IdeWorkspaceOption,
+  IdeWorkspaceOptionsResponse,
+} from '@/lib/ide-workspace-options-types';
 import { setTerminalOpen } from '@/lib/terminal-ui-store';
 import { FileTree, type IdeFileNode } from '@/components/ide/file-tree';
+import { WorkspacePicker } from '@/components/ide/workspace-picker';
 import styles from './ide-panel.module.css';
 
 if (typeof window !== 'undefined') {
@@ -300,12 +304,17 @@ interface MutationDialogState {
   targetPath?: string;
 }
 
+interface WorkspaceRefreshRequest {
+  id: number;
+  path: string;
+}
+
 interface CommandItem {
   id: string;
   label: string;
   hint?: string;
   keywords?: string[];
-  run: () => void | Promise<void>;
+  path?: string;
 }
 
 export interface IdePanelProps {
@@ -316,6 +325,22 @@ export interface IdePanelProps {
 function basename(value: string): string {
   const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
   return normalized.split('/').pop() || normalized || 'workspace';
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  const normalize = (value: string) => value
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  const bothWindowsPaths = (
+    (/^[A-Za-z]:\//.test(normalizedLeft) && /^[A-Za-z]:\//.test(normalizedRight))
+    || (normalizedLeft.startsWith('//') && normalizedRight.startsWith('//'))
+  );
+  if (bothWindowsPaths) {
+    return normalizedLeft.toLowerCase() === normalizedRight.toLowerCase();
+  }
+  return normalizedLeft === normalizedRight;
 }
 
 function parentPath(value: string): string {
@@ -547,9 +572,15 @@ const configureMonaco: BeforeMount = (monaco) => {
 export default function IdePanel({ defaultWorkspace, className }: IdePanelProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const paletteInputRef = useRef<HTMLInputElement>(null);
+  const workspaceLoadSequenceRef = useRef(0);
+  const workspaceOptionsLoadSequenceRef = useRef(0);
+  const workspaceContentSequenceRef = useRef(0);
 
   const [workspace, setWorkspace] = useState(defaultWorkspace.trim());
   const [workspaceName, setWorkspaceName] = useState(basename(defaultWorkspace));
+  const [workspaceOptions, setWorkspaceOptions] = useState<IdeWorkspaceOption[]>([]);
+  const [workspaceOptionsLoading, setWorkspaceOptionsLoading] = useState(true);
+  const [workspaceRefreshRequest, setWorkspaceRefreshRequest] = useState<WorkspaceRefreshRequest | null>(null);
   const [tree, setTree] = useState<IdeFileNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
   const [treeTruncated, setTreeTruncated] = useState(false);
@@ -570,6 +601,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
   const [searchTruncated, setSearchTruncated] = useState(false);
 
   const [git, setGit] = useState<GitSnapshot | null>(null);
+  const [gitRefreshRequest, setGitRefreshRequest] = useState(0);
   const [gitLoading, setGitLoading] = useState(false);
   const [gitError, setGitError] = useState<string | null>(null);
   const [gitBusy, setGitBusy] = useState<string | null>(null);
@@ -578,6 +610,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
   const [newBranchName, setNewBranchName] = useState('');
 
   const [github, setGithub] = useState<GitHubSnapshot | null>(null);
+  const [githubRefreshRequest, setGithubRefreshRequest] = useState(0);
   const [githubLoading, setGithubLoading] = useState(false);
   const [githubSection, setGithubSection] = useState<'pulls' | 'issues' | 'actions'>('pulls');
   const [prComposerOpen, setPrComposerOpen] = useState(false);
@@ -636,81 +669,211 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
     setOutput((current) => [...current.slice(-149), entry]);
   }, []);
 
-  const loadBootstrap = useCallback(async () => {
+  const loadWorkspaceOptions = useCallback(async () => {
+    const sequence = ++workspaceOptionsLoadSequenceRef.current;
+    setWorkspaceOptionsLoading(true);
+    try {
+      const data = await requestJson<IdeWorkspaceOptionsResponse & ApiEnvelope>(
+        '/api/ide/workspaces',
+      );
+      if (sequence !== workspaceOptionsLoadSequenceRef.current) return;
+      setWorkspaceOptions(data.options);
+    } catch (error) {
+      if (sequence !== workspaceOptionsLoadSequenceRef.current) return;
+      addOutput(
+        'warning',
+        'Could not refresh workspace choices',
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      if (sequence === workspaceOptionsLoadSequenceRef.current) {
+        setWorkspaceOptionsLoading(false);
+      }
+    }
+  }, [addOutput]);
+
+  const loadBootstrap = useCallback(async (
+    workspacePath: string,
+    preserveCurrentOnError = false,
+  ) => {
+    const requestedWorkspace = workspacePath.trim() || defaultWorkspace.trim() || '.';
+    const sequence = ++workspaceLoadSequenceRef.current;
     setTreeLoading(true);
     setFatalError(null);
     try {
-      const requestedWorkspace = defaultWorkspace.trim() || '.';
       const data = await requestJson<FilesBootstrapResponse>(
         filesUrl('bootstrap', requestedWorkspace),
       );
+      if (sequence !== workspaceLoadSequenceRef.current) return false;
       const nextWorkspace = data.workspace?.trim() || requestedWorkspace;
       setWorkspace(nextWorkspace);
       setWorkspaceName(data.root?.name || basename(nextWorkspace));
       setTree(normalizeEntries(data));
       setTreeTruncated(Boolean(data.truncated));
       addOutput('success', `Opened ${data.root?.name || basename(nextWorkspace)}`, nextWorkspace);
+      return true;
     } catch (error) {
+      if (sequence !== workspaceLoadSequenceRef.current) return false;
       const message = error instanceof Error ? error.message : 'Could not open workspace';
-      setFatalError(message);
+      if (!preserveCurrentOnError) setFatalError(message);
       addOutput('error', 'Workspace failed to open', message);
+      return false;
     } finally {
-      setTreeLoading(false);
+      if (sequence === workspaceLoadSequenceRef.current) setTreeLoading(false);
     }
   }, [addOutput, defaultWorkspace]);
 
-  const loadGit = useCallback(async () => {
-    if (!workspace) return;
-    setGitLoading(true);
-    setGitError(null);
-    const params = new URLSearchParams({ workspace, view: 'snapshot' });
-    try {
-      const data = await requestJson<GitResponse>(`/api/ide/git?${params.toString()}`);
-      setGit(data.snapshot || null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Git is unavailable';
-      setGit(null);
-      setGitError(message);
-    } finally {
-      setGitLoading(false);
-    }
-  }, [workspace]);
+  const loadGit = useCallback(() => {
+    setGitRefreshRequest((current) => current + 1);
+  }, []);
 
-  const loadGitHub = useCallback(async () => {
-    if (!workspace) return;
-    setGithubLoading(true);
-    const params = new URLSearchParams({ workspace });
-    try {
-      const data = await requestJson<GitHubSnapshot>(`/api/ide/github?${params.toString()}`);
-      setGithub(data);
-      if (data.repository?.defaultBranch) {
-        setPrBase((current) => current || data.repository?.defaultBranch || '');
-      }
-    } catch (error) {
-      setGithub({
-        ok: false,
-        configured: false,
-        connected: false,
-        error: error instanceof Error ? error.message : 'GitHub is unavailable',
-      });
-    } finally {
-      setGithubLoading(false);
-    }
+  const loadGitHub = useCallback(() => {
+    setGithubRefreshRequest((current) => current + 1);
+  }, []);
+
+  const requestWorkspaceRefresh = useCallback(() => {
+    setWorkspaceRefreshRequest((current) => ({
+      id: (current?.id || 0) + 1,
+      path: workspace,
+    }));
   }, [workspace]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadBootstrap(), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadBootstrap]);
-
-  useEffect(() => {
-    if (!workspace) return;
     const timer = window.setTimeout(() => {
-      void loadGit();
-      void loadGitHub();
+      void loadBootstrap(defaultWorkspace.trim() || '.');
+      void loadWorkspaceOptions();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadGit, loadGitHub, workspace]);
+  }, [defaultWorkspace, loadBootstrap, loadWorkspaceOptions]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    let cancelled = false;
+    const params = new URLSearchParams({ workspace, view: 'snapshot' });
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setGitLoading(true);
+      setGitError(null);
+      void requestJson<GitResponse>(`/api/ide/git?${params.toString()}`)
+        .then((data) => {
+          if (!cancelled) setGit(data.snapshot || null);
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          const message = error instanceof Error ? error.message : 'Git is unavailable';
+          setGit(null);
+          setGitError(message);
+        })
+        .finally(() => {
+          if (!cancelled) setGitLoading(false);
+        });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [gitRefreshRequest, workspace]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    let cancelled = false;
+    const params = new URLSearchParams({ workspace });
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setGithubLoading(true);
+      void requestJson<GitHubSnapshot>(`/api/ide/github?${params.toString()}`)
+        .then((data) => {
+          if (cancelled) return;
+          setGithub(data);
+          if (data.repository?.defaultBranch) {
+            setPrBase((current) => current || data.repository?.defaultBranch || '');
+          }
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          setGithub({
+            ok: false,
+            configured: false,
+            connected: false,
+            error: error instanceof Error ? error.message : 'GitHub is unavailable',
+          });
+        })
+        .finally(() => {
+          if (!cancelled) setGithubLoading(false);
+        });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [githubRefreshRequest, workspace]);
+
+  useEffect(() => {
+    if (!workspaceRefreshRequest) return;
+    const requestedPath = workspaceRefreshRequest.path;
+    void (async () => {
+      await Promise.all([
+        loadBootstrap(requestedPath),
+        loadWorkspaceOptions(),
+      ]);
+      loadGit();
+      loadGitHub();
+    })();
+  }, [
+    loadBootstrap,
+    loadGit,
+    loadGitHub,
+    loadWorkspaceOptions,
+    workspaceRefreshRequest,
+  ]);
+
+  const switchWorkspace = useCallback(async (option: IdeWorkspaceOption) => {
+    if (!option.available || sameWorkspacePath(option.path, workspace)) return;
+    if (
+      dirtyTabs.length > 0
+      && !window.confirm(
+        `Open ${option.label} and discard ${dirtyTabs.length} unsaved ${
+          dirtyTabs.length === 1 ? 'file' : 'files'
+        }?`,
+      )
+    ) return;
+
+    const opened = await loadBootstrap(option.path, true);
+    if (!opened) return;
+
+    workspaceContentSequenceRef.current += 1;
+    setExpanded(new Set());
+    setLoadingPaths(new Set());
+    setSelectedNodePath(null);
+    setTabs([]);
+    setActiveTabId(null);
+    setBusyFilePaths(new Set());
+    setCursor({ line: 1, column: 1 });
+    setMarkersByPath({});
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchLoading(false);
+    setSearchTruncated(false);
+    setGit(null);
+    setGitLoading(false);
+    setGitError(null);
+    setGitBusy(null);
+    setCommitMessage('');
+    setBranchMenuOpen(false);
+    setNewBranchName('');
+    setGithub(null);
+    setGithubLoading(false);
+    setPrComposerOpen(false);
+    setPrTitle('');
+    setPrBody('');
+    setPrBase('');
+    setIssueComposerOpen(false);
+    setIssueTitle('');
+    setIssueBody('');
+    setMutationDialog(null);
+    setMutationBusy(false);
+    setPaletteMode(null);
+  }, [dirtyTabs.length, loadBootstrap, workspace]);
 
   useEffect(() => {
     if (activity !== 'search') return;
@@ -747,6 +910,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
   }, [paletteMode]);
 
   const openFile = useCallback(async (path: string, revealLine?: number) => {
+    const workspaceSequence = workspaceContentSequenceRef.current;
     const normalizedPath = path.replace(/\\/g, '/').replace(/^\/+/, '');
     const id = `file:${normalizedPath}`;
     const existing = tabs.find((tab) => tab.id === id);
@@ -778,6 +942,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       const data = await requestJson<FileReadResponse>(
         filesUrl('read', workspace, { path: normalizedPath }),
       );
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       setTabs((current) => current.map((tab) => (
         tab.id === id && tab.kind === 'file'
           ? {
@@ -791,21 +956,25 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
           : tab
       )));
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       const message = error instanceof Error ? error.message : 'Could not read file';
       setTabs((current) => current.filter((tab) => tab.id !== id));
       setActiveTabId((current) => current === id ? null : current);
       addOutput('error', `Could not open ${basename(normalizedPath)}`, message);
     } finally {
-      setBusyFilePaths((current) => {
-        const next = new Set(current);
-        next.delete(normalizedPath);
-        return next;
-      });
+      if (workspaceSequence === workspaceContentSequenceRef.current) {
+        setBusyFilePaths((current) => {
+          const next = new Set(current);
+          next.delete(normalizedPath);
+          return next;
+        });
+      }
     }
   }, [addOutput, tabs, workspace]);
 
   const saveFile = useCallback(async (tab: FileEditorTab) => {
     if (tab.loading || tab.binary || tab.content === tab.savedContent) return true;
+    const workspaceSequence = workspaceContentSequenceRef.current;
     setBusyFilePaths((current) => new Set(current).add(tab.path));
     try {
       const data = await requestJson<FileReadResponse>('/api/ide/files', {
@@ -818,6 +987,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
           ...(tab.version ? { expectedVersion: tab.version } : {}),
         }),
       });
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return false;
       setTabs((current) => current.map((candidate) => (
         candidate.id === tab.id && candidate.kind === 'file'
           ? {
@@ -833,17 +1003,20 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       void loadGit();
       return true;
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return false;
       const message = error instanceof Error ? error.message : 'Save failed';
       addOutput('error', `Could not save ${tab.name}`, message);
       setBottomPanel('output');
       setBottomOpen(true);
       return false;
     } finally {
-      setBusyFilePaths((current) => {
-        const next = new Set(current);
-        next.delete(tab.path);
-        return next;
-      });
+      if (workspaceSequence === workspaceContentSequenceRef.current) {
+        setBusyFilePaths((current) => {
+          const next = new Set(current);
+          next.delete(tab.path);
+          return next;
+        });
+      }
     }
   }, [addOutput, loadGit, workspace]);
 
@@ -879,6 +1052,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
   }, [tabs]);
 
   const toggleDirectory = useCallback(async (node: IdeFileNode) => {
+    const workspaceSequence = workspaceContentSequenceRef.current;
     if (node.type !== 'directory') return;
     if (expanded.has(node.path)) {
       setExpanded((current) => {
@@ -895,15 +1069,19 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       const data = await requestJson<FilesBootstrapResponse>(
         filesUrl('list', workspace, { path: node.path }),
       );
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       setTree((current) => replaceNodeChildren(current, node.path, normalizeEntries(data)));
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       addOutput('error', `Could not open ${node.name}`, error instanceof Error ? error.message : String(error));
     } finally {
-      setLoadingPaths((current) => {
-        const next = new Set(current);
-        next.delete(node.path);
-        return next;
-      });
+      if (workspaceSequence === workspaceContentSequenceRef.current) {
+        setLoadingPaths((current) => {
+          const next = new Set(current);
+          next.delete(node.path);
+          return next;
+        });
+      }
     }
   }, [addOutput, expanded, workspace]);
 
@@ -922,6 +1100,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
     if (!mutationDialog || !workspace) return;
     const value = mutationDialog.value.trim();
     if (!value) return;
+    const workspaceSequence = workspaceContentSequenceRef.current;
     setMutationBusy(true);
     try {
       if (mutationDialog.type === 'rename' && mutationDialog.targetPath) {
@@ -936,6 +1115,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
             newPath: nextPath,
           }),
         });
+        if (workspaceSequence !== workspaceContentSequenceRef.current) return;
         setTabs((current) => current.map((tab) => {
           if (tab.kind !== 'file') return tab;
           if (tab.path !== oldPath && !tab.path.startsWith(`${oldPath}/`)) return tab;
@@ -966,16 +1146,20 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
             ...(mutationDialog.type === 'file' ? { content: '' } : {}),
           }),
         });
+        if (workspaceSequence !== workspaceContentSequenceRef.current) return;
         addOutput('success', `Created ${value}`, nextPath);
         if (mutationDialog.type === 'file') void openFile(nextPath);
       }
       setMutationDialog(null);
-      await loadBootstrap();
+      await loadBootstrap(workspace);
       void loadGit();
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       addOutput('error', 'File operation failed', error instanceof Error ? error.message : String(error));
     } finally {
-      setMutationBusy(false);
+      if (workspaceSequence === workspaceContentSequenceRef.current) {
+        setMutationBusy(false);
+      }
     }
   }, [
     addOutput,
@@ -993,6 +1177,8 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       ? `Delete ${selectedNode.name} and everything inside it?`
       : `Delete ${selectedNode.name}?`;
     if (!window.confirm(message)) return;
+    const workspaceSequence = workspaceContentSequenceRef.current;
+    setMutationBusy(true);
     try {
       await requestJson<ApiEnvelope>('/api/ide/files', {
         method: 'POST',
@@ -1003,6 +1189,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
           ...(selectedNode.type === 'directory' ? { recursive: true } : {}),
         }),
       });
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       setTabs((current) => current.filter((tab) => (
         tab.kind !== 'file'
         || (tab.path !== selectedNode.path && !tab.path.startsWith(`${selectedNode.path}/`))
@@ -1017,14 +1204,20 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       });
       setSelectedNodePath(null);
       addOutput('success', `Deleted ${selectedNode.name}`, selectedNode.path);
-      await loadBootstrap();
+      await loadBootstrap(workspace);
       void loadGit();
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       addOutput('error', `Could not delete ${selectedNode.name}`, error instanceof Error ? error.message : String(error));
+    } finally {
+      if (workspaceSequence === workspaceContentSequenceRef.current) {
+        setMutationBusy(false);
+      }
     }
   }, [addOutput, loadBootstrap, loadGit, selectedNode, tabs, workspace]);
 
   const reloadCleanEditorFiles = useCallback(async () => {
+    const workspaceSequence = workspaceContentSequenceRef.current;
     const cleanFiles = tabs.filter(
       (tab): tab is FileEditorTab => (
         tab.kind === 'file'
@@ -1050,6 +1243,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
         .filter((item): item is NonNullable<typeof item> => item !== null)
         .map((item) => [item.tab.id, item.data]),
     );
+    if (workspaceSequence !== workspaceContentSequenceRef.current) return;
     setTabs((current) => current.map((candidate) => {
       if (candidate.kind !== 'file' || candidate.content !== candidate.savedContent) return candidate;
       const data = byId.get(candidate.id);
@@ -1069,12 +1263,14 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
   ) => {
     if (!workspace) return false;
     if (action === 'discard' && !window.confirm('Discard the selected working-tree changes?')) return false;
+    const workspaceSequence = workspaceContentSequenceRef.current;
     setGitBusy(action);
     try {
       const data = await requestJson<GitResponse>('/api/ide/git', {
         method: 'POST',
         body: JSON.stringify({ workspace, action, ...(values || {}) }),
       });
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return false;
       if (data.snapshot) setGit(data.snapshot);
       const staleDiffIds = new Set(
         tabs.filter((tab) => tab.kind === 'diff').map((tab) => tab.id),
@@ -1097,7 +1293,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
         || action === 'checkout'
         || action === 'createBranch'
       ) {
-        await loadBootstrap();
+        await loadBootstrap(workspace);
         await reloadCleanEditorFiles();
       }
       if (action === 'push' || action === 'pull' || action === 'fetch' || action === 'commit') {
@@ -1105,6 +1301,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       }
       return true;
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return false;
       const message = error instanceof Error ? error.message : `Git ${action} failed`;
       addOutput('error', `Git ${action} failed`, message);
       setGitError(message);
@@ -1112,11 +1309,14 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       setBottomOpen(true);
       return false;
     } finally {
-      setGitBusy(null);
+      if (workspaceSequence === workspaceContentSequenceRef.current) {
+        setGitBusy(null);
+      }
     }
   }, [addOutput, loadBootstrap, loadGitHub, reloadCleanEditorFiles, tabs, workspace]);
 
   const openDiff = useCallback(async (change: GitStatusEntry, area: GitDiffArea) => {
+    const workspaceSequence = workspaceContentSequenceRef.current;
     const id = `diff:${area}:${change.path}`;
     const existing = tabs.find((tab) => tab.id === id);
     if (existing) {
@@ -1147,6 +1347,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
     });
     try {
       const data = await requestJson<GitDiffResponse>(`/api/ide/git?${params.toString()}`);
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       setTabs((current) => current.map((tab) => (
         tab.id === id && tab.kind === 'diff'
           ? {
@@ -1161,6 +1362,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
           : tab
       )));
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       setTabs((current) => current.filter((tab) => tab.id !== id));
       setActiveTabId((current) => current === id ? null : current);
       addOutput('error', `Could not open diff for ${change.path}`, error instanceof Error ? error.message : String(error));
@@ -1170,6 +1372,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
   const createPullRequest = useCallback(async () => {
     const title = prTitle.trim();
     if (!title || !workspace) return;
+    const workspaceSequence = workspaceContentSequenceRef.current;
     setGithubLoading(true);
     try {
       const data = await requestJson<ApiEnvelope & { result?: { number: number; url: string } }>(
@@ -1185,6 +1388,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
           }),
         },
       );
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       addOutput(
         'success',
         data.result ? `Opened pull request #${data.result.number}` : 'Opened pull request',
@@ -1195,15 +1399,19 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       setPrComposerOpen(false);
       await Promise.all([loadGit(), loadGitHub()]);
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       addOutput('error', 'Could not create pull request', error instanceof Error ? error.message : String(error));
     } finally {
-      setGithubLoading(false);
+      if (workspaceSequence === workspaceContentSequenceRef.current) {
+        setGithubLoading(false);
+      }
     }
   }, [addOutput, loadGit, loadGitHub, prBase, prBody, prTitle, workspace]);
 
   const createIssue = useCallback(async () => {
     const title = issueTitle.trim();
     if (!title || !workspace) return;
+    const workspaceSequence = workspaceContentSequenceRef.current;
     setGithubLoading(true);
     try {
       const data = await requestJson<ApiEnvelope & { result?: { number: number; url: string } }>(
@@ -1218,6 +1426,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
           }),
         },
       );
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       addOutput(
         'success',
         data.result ? `Opened issue #${data.result.number}` : 'Opened issue',
@@ -1228,9 +1437,12 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
       setIssueComposerOpen(false);
       await loadGitHub();
     } catch (error) {
+      if (workspaceSequence !== workspaceContentSequenceRef.current) return;
       addOutput('error', 'Could not create issue', error instanceof Error ? error.message : String(error));
     } finally {
-      setGithubLoading(false);
+      if (workspaceSequence === workspaceContentSequenceRef.current) {
+        setGithubLoading(false);
+      }
     }
   }, [addOutput, issueBody, issueTitle, loadGitHub, workspace]);
 
@@ -1305,129 +1517,170 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirtyTabs.length]);
 
-  const commands = useMemo<CommandItem[]>(() => [
+  const runCommand = useCallback((id: string) => {
+    switch (id) {
+      case 'save':
+        if (activeFileTab) void saveFile(activeFileTab);
+        break;
+      case 'save-all':
+        void saveAll();
+        break;
+      case 'quick-open':
+        openPalette('files');
+        break;
+      case 'new-file':
+        setMutationDialog({ type: 'file', value: '' });
+        break;
+      case 'new-folder':
+        setMutationDialog({ type: 'directory', value: '' });
+        break;
+      case 'explorer':
+        setActivity('explorer');
+        break;
+      case 'source-control':
+        setActivity('source-control');
+        break;
+      case 'github':
+        setActivity('github');
+        break;
+      case 'toggle-panel':
+        setBottomOpen((value) => !value);
+        break;
+      case 'terminal':
+        setTerminalOpen(true);
+        break;
+      case 'refresh':
+        requestWorkspaceRefresh();
+        break;
+      case 'git-pull':
+        void runGitAction('pull');
+        break;
+      case 'git-push':
+        void runGitAction('push');
+        break;
+      case 'git-fetch':
+        void runGitAction('fetch');
+        break;
+      default:
+        break;
+    }
+  }, [
+    activeFileTab,
+    openPalette,
+    requestWorkspaceRefresh,
+    runGitAction,
+    saveAll,
+    saveFile,
+  ]);
+
+  const commands: CommandItem[] = [
     {
       id: 'save',
       label: 'File: Save',
       hint: 'Ctrl+S',
       keywords: ['write', 'file'],
-      run: () => activeFileTab && saveFile(activeFileTab),
     },
     {
       id: 'save-all',
       label: 'File: Save All',
       hint: 'Ctrl+Shift+S',
       keywords: ['write', 'files'],
-      run: saveAll,
     },
     {
       id: 'quick-open',
       label: 'File: Quick Open',
       hint: 'Ctrl+P',
       keywords: ['find', 'file'],
-      run: () => openPalette('files'),
     },
     {
       id: 'new-file',
       label: 'File: New File',
       keywords: ['create'],
-      run: () => setMutationDialog({ type: 'file', value: '' }),
     },
     {
       id: 'new-folder',
       label: 'File: New Folder',
       keywords: ['create', 'directory'],
-      run: () => setMutationDialog({ type: 'directory', value: '' }),
     },
     {
       id: 'explorer',
       label: 'View: Show Explorer',
       hint: 'Ctrl+Shift+E',
-      run: () => setActivity('explorer'),
     },
     {
       id: 'source-control',
       label: 'View: Show Source Control',
       hint: 'Ctrl+Shift+G',
-      run: () => setActivity('source-control'),
     },
     {
       id: 'github',
       label: 'View: Show GitHub',
-      run: () => setActivity('github'),
     },
     {
       id: 'toggle-panel',
       label: 'View: Toggle Bottom Panel',
       hint: 'Ctrl+J',
-      run: () => setBottomOpen((value) => !value),
     },
     {
       id: 'terminal',
       label: 'Terminal: Open Host Terminal',
       hint: 'Ctrl+`',
       keywords: ['shell', 'pty'],
-      run: () => setTerminalOpen(true),
     },
     {
       id: 'refresh',
       label: 'Developer: Refresh Workspace',
       keywords: ['reload', 'files', 'git'],
-      run: async () => {
-        await loadBootstrap();
-        await Promise.all([loadGit(), loadGitHub()]);
-      },
     },
     {
       id: 'git-pull',
       label: 'Git: Pull',
-      run: () => runGitAction('pull'),
     },
     {
       id: 'git-push',
       label: 'Git: Push',
-      run: () => runGitAction('push'),
     },
     {
       id: 'git-fetch',
       label: 'Git: Fetch',
-      run: () => runGitAction('fetch'),
     },
-  ], [
-    activeFileTab,
-    loadBootstrap,
-    loadGit,
-    loadGitHub,
-    openPalette,
-    runGitAction,
-    saveAll,
-    saveFile,
-  ]);
+  ];
 
-  const paletteEntries = useMemo(() => {
-    const query = paletteQuery.trim().toLowerCase();
-    if (paletteMode === 'files') {
-      return allFiles
-        .filter((file) => !query || file.path.toLowerCase().includes(query))
-        .slice(0, 100)
-        .map((file) => ({
-          id: `palette-file:${file.path}`,
-          label: file.name,
-          hint: parentPath(file.path),
-          run: () => openFile(file.path),
-        }));
-    }
-    if (!query) return commands;
-    const matches: CommandItem[] = [];
-    for (const command of commands) {
-      const searchable = [command.label, command.hint, ...(command.keywords || [])]
+  const normalizedPaletteQuery = paletteQuery.trim().toLowerCase();
+  let paletteEntries: CommandItem[];
+  if (paletteMode === 'files') {
+    paletteEntries = allFiles
+      .filter((file) => (
+        !normalizedPaletteQuery
+        || file.path.toLowerCase().includes(normalizedPaletteQuery)
+      ))
+      .slice(0, 100)
+      .map((file) => ({
+        id: `palette-file:${file.path}`,
+        label: file.name,
+        hint: parentPath(file.path),
+        path: file.path,
+      }));
+  } else if (!normalizedPaletteQuery) {
+    paletteEntries = commands;
+  } else {
+    paletteEntries = commands.filter((command) => (
+      [command.label, command.hint, ...(command.keywords || [])]
         .filter(Boolean)
         .join(' ')
-        .toLowerCase();
-      if (searchable.includes(query)) matches.push(command);
+        .toLowerCase()
+        .includes(normalizedPaletteQuery)
+    ));
+  }
+
+  const runPaletteEntry = useCallback((entry: CommandItem) => {
+    setPaletteMode(null);
+    if (entry.path) {
+      void openFile(entry.path);
+      return;
     }
-    return matches;
-  }, [allFiles, commands, openFile, paletteMode, paletteQuery]);
+    runCommand(entry.id);
+  }, [openFile, runCommand]);
 
   const stagedChanges = useMemo(
     () => git?.status.filter((change) => change.staged) || [],
@@ -1580,7 +1833,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
                   title="Refresh Explorer"
                   aria-label="Refresh Explorer"
                   disabled={treeLoading}
-                  onClick={() => void loadBootstrap()}
+                  onClick={requestWorkspaceRefresh}
                 >
                   <RefreshCw size={14} className={treeLoading ? styles.spin : ''} />
                 </button>
@@ -1627,10 +1880,21 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
             )}
 
             <div className={styles.explorerToolbar}>
-              <span className={styles.repoLabel} title={workspace}>
-                <ChevronDown size={13} aria-hidden />
-                {workspaceName || 'Workspace'}
-              </span>
+              <WorkspacePicker
+                currentPath={workspace}
+                currentLabel={workspaceName || 'Workspace'}
+                options={workspaceOptions}
+                loading={
+                  workspaceOptionsLoading
+                  || treeLoading
+                  || Boolean(gitBusy)
+                  || mutationBusy
+                  || busyFilePaths.size > 0
+                  || loadingPaths.size > 0
+                  || tabs.some((tab) => tab.loading)
+                }
+                onSelect={(option) => void switchWorkspace(option)}
+              />
               <div className={styles.selectionActions}>
                 <button
                   type="button"
@@ -1667,7 +1931,11 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
                   <AlertCircle size={22} />
                   <strong>Workspace unavailable</strong>
                   <span>{fatalError}</span>
-                  <button type="button" className={styles.secondaryButton} onClick={() => void loadBootstrap()}>
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    onClick={() => void loadBootstrap(workspace || defaultWorkspace || '.')}
+                  >
                     Try again
                   </button>
                 </div>
@@ -2568,8 +2836,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
                   } else if (event.key === 'Enter' && paletteEntries[paletteIndex]) {
                     event.preventDefault();
                     const entry = paletteEntries[paletteIndex];
-                    setPaletteMode(null);
-                    void entry.run();
+                    runPaletteEntry(entry);
                   }
                 }}
               />
@@ -2587,10 +2854,7 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
                   key={entry.id}
                   className={index === paletteIndex ? styles.paletteItemActive : ''}
                   onMouseEnter={() => setPaletteIndex(index)}
-                  onClick={() => {
-                    setPaletteMode(null);
-                    void entry.run();
-                  }}
+                  onClick={() => runPaletteEntry(entry)}
                 >
                   <span>{entry.label}</span>
                   {entry.hint && <small>{entry.hint}</small>}
