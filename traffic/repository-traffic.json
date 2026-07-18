@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "repository": "stevologic/shiba-studio",
+  "scope": "repository",
+  "window": "rolling-14-days",
+  "generatedAt": "2026-07-18T07:22:26Z",
+  "views": {
+    "count": 100,
+    "uniques": 14,
+    "daily": [
+      { "timestamp": "2026-07-04T00:00:00Z", "count": 0, "uniques": 0 },
+      { "timestamp": "2026-07-05T00:00:00Z", "count": 0, "uniques": 0 },
+      { "timestamp": "2026-07-06T00:00:00Z", "count": 0, "uniques": 0 },
+      { "timestamp": "2026-07-07T00:00:00Z", "count": 36, "uniques": 4 },
+      { "timestamp": "2026-07-08T00:00:00Z", "count": 23, "uniques": 4 },
+      { "timestamp": "2026-07-09T00:00:00Z", "count": 9, "uniques": 2 },
+      { "timestamp": "2026-07-10T00:00:00Z", "count": 3, "uniques": 2 },
+      { "timestamp": "2026-07-11T00:00:00Z", "count": 14, "uniques": 5 },
+      { "timestamp": "2026-07-12T00:00:00Z", "count": 3, "uniques": 1 },
+      { "timestamp": "2026-07-13T00:00:00Z", "count": 4, "uniques": 1 },
+      { "timestamp": "2026-07-14T00:00:00Z", "count": 3, "uniques": 1 },
+      { "timestamp": "2026-07-15T00:00:00Z", "count": 2, "uniques": 1 },
+      { "timestamp": "2026-07-16T00:00:00Z", "count": 0, "uniques": 0 },
+      { "timestamp": "2026-07-17T00:00:00Z", "count": 3, "uniques": 2 }
+    ]
+  },
+  "clones": {
+    "count": 890,
+    "uniques": 219,
+    "daily": [
+      { "timestamp": "2026-07-04T00:00:00Z", "count": 0, "uniques": 0 },
+      { "timestamp": "2026-07-05T00:00:00Z", "count": 0, "uniques": 0 },
+      { "timestamp": "2026-07-06T00:00:00Z", "count": 0, "uniques": 0 },
+      { "timestamp": "2026-07-07T00:00:00Z", "count": 158, "uniques": 72 },
+      { "timestamp": "2026-07-08T00:00:00Z", "count": 122, "uniques": 56 },
+      { "timestamp": "2026-07-09T00:00:00Z", "count": 43, "uniques": 21 },
+      { "timestamp": "2026-07-10T00:00:00Z", "count": 113, "uniques": 25 },
+      { "timestamp": "2026-07-11T00:00:00Z", "count": 102, "uniques": 19 },
+      { "timestamp": "2026-07-12T00:00:00Z", "count": 140, "uniques": 29 },
+      { "timestamp": "2026-07-13T00:00:00Z", "count": 64, "uniques": 19 },
+      { "timestamp": "2026-07-14T00:00:00Z", "count": 100, "uniques": 25 },
+      { "timestamp": "2026-07-15T00:00:00Z", "count": 16, "uniques": 7 },
+      { "timestamp": "2026-07-16T00:00:00Z", "count": 3, "uniques": 2 },
+      { "timestamp": "2026-07-17T00:00:00Z", "count": 29, "uniques": 8 }
+    ]
+  }
+}
