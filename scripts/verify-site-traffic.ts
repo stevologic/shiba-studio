@@ -216,6 +216,10 @@ async function main() {
     navigation.includes("'traffic'"),
     'Traffic is a canonical Shiba Studio route',
   );
+  check(
+    types.includes("['index.html', 'docs.html', 'traffic/index.html']"),
+    'tracker installation covers the public traffic page',
+  );
 
   await fs.mkdir(GOAL_SCRATCH, { recursive: true });
   await fs.writeFile(

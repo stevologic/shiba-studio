@@ -1,7 +1,7 @@
 export const SITE_TRAFFIC_URL = 'https://shiba-studio.io';
 export const SITE_TRAFFIC_REPOSITORY = 'stevologic/shiba-studio';
 export const SITE_TRAFFIC_BRANCH = 'gh-pages';
-export const SITE_TRAFFIC_PAGE_FILES = ['index.html', 'docs.html'] as const;
+export const SITE_TRAFFIC_PAGE_FILES = ['index.html', 'docs.html', 'traffic/index.html'] as const;
 export const SITE_TRAFFIC_DAY_OPTIONS = [7, 30, 90] as const;
 
 export type SiteTrafficDays = (typeof SITE_TRAFFIC_DAY_OPTIONS)[number];
