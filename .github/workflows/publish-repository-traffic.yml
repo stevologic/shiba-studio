@@ -1,0 +1,56 @@
+name: Publish repository traffic
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TRAFFIC_TOKEN: ${{ secrets.REPOSITORY_TRAFFIC_TOKEN }}
+    steps:
+      - name: Explain missing setup
+        if: env.TRAFFIC_TOKEN == ''
+        run: |
+          echo "::error::Add the REPOSITORY_TRAFFIC_TOKEN repository secret to publish traffic snapshots."
+          exit 1
+
+      - name: Check out source
+        if: env.TRAFFIC_TOKEN != ''
+        uses: actions/checkout@v6
+        with:
+          path: source
+          persist-credentials: false
+
+      - name: Check out public site
+        if: env.TRAFFIC_TOKEN != ''
+        uses: actions/checkout@v6
+        with:
+          ref: gh-pages
+          path: site
+          token: ${{ env.TRAFFIC_TOKEN }}
+
+      - name: Build traffic snapshot
+        if: env.TRAFFIC_TOKEN != ''
+        env:
+          REPOSITORY_TRAFFIC_TOKEN: ${{ env.TRAFFIC_TOKEN }}
+        run: node source/.github/scripts/publish-repository-traffic.mjs site/traffic/repository-traffic.json
+
+      - name: Publish updated snapshot
+        if: env.TRAFFIC_TOKEN != ''
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add traffic/repository-traffic.json
+          if git diff --cached --quiet; then
+            echo "Traffic snapshot is already current."
+            exit 0
+          fi
+          git commit -m "chore(pages): refresh repository traffic snapshot"
+          git push origin HEAD:gh-pages
