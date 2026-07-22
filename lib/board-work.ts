@@ -447,6 +447,12 @@ function isInsidePath(root: string, candidate: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+async function canonicalPathKey(value: string): Promise<string> {
+  const normalized = path.normalize(value);
+  const realPath = await fs.realpath(normalized).catch(() => normalized);
+  return path.normalize(realPath).toLowerCase();
+}
+
 async function loadWorkspaceBoundary(workDir: string): Promise<WorkspaceBoundary | null> {
   const lexicalRoot = path.resolve(workDir);
   const realRoot = await fs.realpath(lexicalRoot).catch(() => null);
@@ -665,7 +671,7 @@ export async function collectCardWork(idOrKey: string): Promise<CardWork | null>
 export async function resolveCardDeliverable(idOrKey: string, absPath: string): Promise<WorkFile | null> {
   const work = await collectCardWork(idOrKey);
   if (!work) return null;
-  const wanted = path.normalize(absPath).toLowerCase();
+  const wanted = await canonicalPathKey(absPath);
   return work.files.find((f) => f.exists && f.absPath.toLowerCase() === wanted) || null;
 }
 
@@ -730,7 +736,7 @@ export async function collectAllCreatedFiles(): Promise<CreatedFile[]> {
 /** Capability check for serving a Files-page file: only paths that really are
  *  tracked created files may be read through the endpoint. */
 export async function resolveCreatedFile(absPath: string): Promise<CreatedFile | null> {
-  const wanted = path.normalize(absPath).toLowerCase();
+  const wanted = await canonicalPathKey(absPath);
   const runs = await loadRuns();
   const ordered = [...runs].sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
   const agentsById = await loadAgentWorkspaceMap(ordered);

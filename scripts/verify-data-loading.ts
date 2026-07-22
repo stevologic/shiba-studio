@@ -84,6 +84,8 @@ async function main() {
     const unrelated = Array.from({ length: 24 }, (_, index) => path.join(workspace, `unrelated-${index}.txt`));
     await fs.writeFile(target, `# Current target\n${'x'.repeat(768_000)}`, 'utf8');
     await Promise.all(unrelated.map((file, index) => fs.writeFile(file, `# Unrelated ${index}\nbody`, 'utf8')));
+    const canonicalTarget = path.normalize(await fs.realpath(target));
+    const canonicalTargetKey = canonicalTarget.toLowerCase();
 
     const { getDb, closeDb } = await import('../lib/db');
     const db = getDb();
@@ -125,7 +127,7 @@ async function main() {
 
     const resolved = await resolveCreatedFile(target);
     assert(resolved?.runId === 'run-newest', 'path-specific resolver returns the newest producing run');
-    assert(statPaths.length === 1 && statPaths[0] === path.resolve(target), 'path-specific resolver stats only the requested file');
+    assert(statPaths.length === 1 && statPaths[0] === canonicalTarget, 'path-specific resolver stats only the requested file');
     assert(readPaths.length === 0, 'path-specific resolver does not read previews or unrelated files');
 
     const { inspectFile } = await import('../lib/serve-file');
@@ -145,10 +147,10 @@ async function main() {
     statPaths.length = 0;
     readPaths.length = 0;
     const files = await collectAllCreatedFiles();
-    const targetRows = files.filter((file) => path.resolve(file.absPath) === path.resolve(target));
+    const targetRows = files.filter((file) => path.normalize(file.absPath).toLowerCase() === canonicalTargetKey);
     assert(targetRows.length === 1 && targetRows[0].runId === 'run-newest', 'created-file list dedupes newest-first');
-    assert(statPaths.filter((file) => file === path.resolve(target)).length === 1, 'duplicate paths are statted once');
-    assert(!readPaths.includes(path.resolve(target)), 'text previews do not read the whole file into memory');
+    assert(statPaths.filter((file) => file === canonicalTarget).length === 1, 'duplicate paths are statted once');
+    assert(!readPaths.includes(canonicalTarget), 'text previews do not read the whole file into memory');
 
     // Legacy runs without a workspace snapshot previously reloaded agents.json
     // once per run. The shared map should perform one read for the whole scan.
