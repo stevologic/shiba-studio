@@ -10,28 +10,65 @@ import { buildCliPromptFromMessages, streamGrokCli } from '@/lib/grok-cli';
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const cfg = await loadConfig();
-  const requestChatSession = body.sessionId
-    ? await (await import('@/lib/chat-sessions')).getChatSession(String(body.sessionId))
+  const suppliedSessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
+  const requestChatSession = suppliedSessionId
+    ? await (await import('@/lib/chat-sessions')).getChatSession(suppliedSessionId)
     : null;
-  const toolsEnabled = resolveChatToolsEnabled(body.toolsEnabled, requestChatSession?.toolsEnabled);
-  let messages: ChatMessagePayload[] = Array.isArray(body.messages) ? body.messages : [];
+  if (suppliedSessionId && !requestChatSession) {
+    return new Response(JSON.stringify({ error: 'Chat session not found' }), { status: 404 });
+  }
+  if (requestChatSession?.chatTarget === 'all') {
+    return new Response(JSON.stringify({ error: 'Chat target now requires multi-agent mode' }), { status: 409 });
+  }
+  const durableSessionHistory = (await import('@/lib/context-engine')).modelRequestChatHistory(
+    requestChatSession?.messages || null,
+    body.messages,
+  );
+  const toolsEnabled = requestChatSession
+    ? requestChatSession.toolsEnabled !== false
+    : resolveChatToolsEnabled(body.toolsEnabled);
+  let messages: ChatMessagePayload[] = durableSessionHistory;
+  const projectId = requestChatSession?.projectId || null;
+  let verifiedProjectContext = '';
+  let verifiedWorkspaceDir = requestChatSession?.workspaceDir?.trim() || '';
+  if (projectId) {
+    const { buildProjectChatContext, getProject, resolveProjectWorkspace } = await import('@/lib/projects');
+    const project = await getProject(projectId);
+    if (!project) {
+      return new Response(JSON.stringify({ error: 'Chat project not found' }), { status: 409 });
+    }
+    verifiedProjectContext = await buildProjectChatContext(project, cfg.defaultWorkspace);
+    if (!verifiedWorkspaceDir) verifiedWorkspaceDir = resolveProjectWorkspace(project, cfg.defaultWorkspace);
+  }
 
   const systemParts: string[] = [];
-  if (body.system) systemParts.push(String(body.system));
-  const globalUploadsContext = body.globalUploadsContext
+  if (!requestChatSession && body.system) systemParts.push(String(body.system));
+  if (requestChatSession) {
+    const target = requestChatSession.chatTarget?.trim();
+    if (target && target !== 'grok' && target !== 'all') {
+      const { loadAgents } = await import('@/lib/persistence');
+      const agent = (await loadAgents()).find((candidate) => candidate.id === target);
+      if (!agent) {
+        return new Response(JSON.stringify({ error: 'Chat agent no longer exists' }), { status: 409 });
+      }
+      const { buildAgentChatSystem } = await import('@/lib/chat-skill');
+      systemParts.push(buildAgentChatSystem(agent));
+    }
+  }
+  const globalUploadsContext = !requestChatSession && body.globalUploadsContext
     ? String(body.globalUploadsContext)
     : await (await import('@/lib/workspace')).buildGlobalUploadsChatContext();
   systemParts.push(globalUploadsContext);
-  if (body.projectContext) systemParts.push(String(body.projectContext));
+  const projectContext = requestChatSession ? verifiedProjectContext : String(body.projectContext || '');
+  if (projectContext) systemParts.push(projectContext);
 
   if (messages.length) {
-    const projectId = requestChatSession?.projectId || null;
     const { prepareSessionContext } = await import('@/lib/context-engine');
     const prepared = prepareSessionContext({
-      sessionId: body.sessionId ? String(body.sessionId) : null,
+      sessionId: requestChatSession?.id || null,
       projectId,
       messages,
-      model: body.model ? String(body.model) : undefined,
+      model: requestChatSession?.chatModel || (body.model ? String(body.model) : undefined),
     });
     messages = prepared.replayMessages;
     if (prepared.systemContext) systemParts.push(prepared.systemContext);
@@ -54,11 +91,11 @@ export async function POST(req: NextRequest) {
 
   // Prefer chat/project workspace so CLI coding runs where the user is working.
   let cwd = projectRoot();
-  if (body.workspaceDir) {
-    const requested = String(body.workspaceDir).trim();
+  const requestedWorkspace = requestChatSession ? verifiedWorkspaceDir : String(body.workspaceDir || '').trim();
+  if (requestedWorkspace) {
     try {
       const fs = await import('fs');
-      if (requested && fs.statSync(requested).isDirectory()) cwd = requested;
+      if (fs.statSync(requestedWorkspace).isDirectory()) cwd = requestedWorkspace;
     } catch { /* stale path — fall back to project root */ }
   }
   if (cwd !== projectRoot() && toolsEnabled) {
@@ -101,8 +138,8 @@ export async function POST(req: NextRequest) {
         }
         for await (const event of streamGrokCli({
           prompt,
-          model: body.model,
-          reasoningEffort: body.reasoningEffort,
+          model: requestChatSession?.chatModel || body.model,
+          reasoningEffort: requestChatSession?.reasoningEffort || body.reasoningEffort,
           cwd,
           toolsEnabled,
           // Headless runs cannot display approval prompts. The legacy

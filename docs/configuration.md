@@ -29,6 +29,8 @@ Settings is a card grid; each card maps to a concern:
 | `SHIBA_SECRET_KEY_FILE` | `~/.shiba-studio/shiba-studio.key` | Overrides the machine key-file path; the Docker image sets this to `/data/shiba-studio.key` so secrets survive container replacement |
 | `SHIBA_SECRET_KEY` | `~/.shiba-studio/shiba-studio.key` file | 64-hex-char AES key for headless deployments (overrides the key file) |
 | `SHIBA_GIT_COMMIT` | resolved via `git rev-parse` | Overrides the commit shown in the sidebar/footer for non-git installs |
+| `SHIBA_PUBLIC_ORIGIN` | unset | Exact browser-visible `http://` or `https://` root origin when Studio is behind an authenticated reverse proxy. The proxy must preserve this Host. Wildcards, paths, credentials, queries, and fragments are rejected. Forwarded headers are never trusted for this setting. |
+| `SHIBA_PUBLIC_TERMINAL_PROXY` | unset | Set to `1` only after the authenticated proxy routes `/api/terminal/ws` separately to the terminal bridge with WebSocket upgrades. Without this explicit opt-in, public requests never receive a terminal WebSocket URL. |
 | `PUPPETEER_SKIP_DOWNLOAD` | unset | Set to `1` before `npm install` to skip the ~150 MB Chromium download (slim install). Browser tools then explain how to fetch it on first use |
 | `SHIBA_TEST_DATA_DIR` | unset | Persistent data dir for `npm test` (default: a fresh temp dir per run, so tests never touch your live data) |
 | `SHIBA_MDNS_HOST` | `shiba.local` | The `.local` name(s) the app advertises via mDNS — comma-separated; a bare label gets `.local` appended |

@@ -9,28 +9,52 @@ import { normalizeAgent } from '@/lib/types';
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const cfg = await loadConfig();
-  const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
+  const suppliedSessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
+  const requestChatSession = suppliedSessionId
+    ? await (await import('@/lib/chat-sessions')).getChatSession(suppliedSessionId)
+    : null;
+  if (suppliedSessionId && !requestChatSession) {
+    return new Response(JSON.stringify({ error: 'Chat session not found' }), { status: 404 });
+  }
+  if (requestChatSession && requestChatSession.chatTarget !== 'all') {
+    return new Response(JSON.stringify({ error: 'Chat target no longer uses multi-agent mode' }), { status: 409 });
+  }
+  const durableSessionHistory = (await import('@/lib/context-engine')).modelRequestChatHistory(
+    requestChatSession?.messages || null,
+    body.messages,
+  );
+  const rawModel = requestChatSession?.chatModel
+    || (body.model && String(body.model).trim())
+    || cfg.defaultGrokModel
+    || 'cloud:grok-4';
   const model = parseModelRef(rawModel).encoded;
+  const projectId = requestChatSession?.projectId || null;
+  let verifiedProjectContext = '';
+  if (projectId) {
+    const { buildProjectChatContext, getProject } = await import('@/lib/projects');
+    const project = await getProject(projectId);
+    if (!project) {
+      return new Response(JSON.stringify({ error: 'Chat project not found' }), { status: 409 });
+    }
+    verifiedProjectContext = await buildProjectChatContext(project, cfg.defaultWorkspace);
+  }
 
   const messages: ChatMessagePayload[] = [];
-  const globalUploadsContext = body.globalUploadsContext
+  const globalUploadsContext = !requestChatSession && body.globalUploadsContext
     ? String(body.globalUploadsContext)
     : await buildGlobalUploadsChatContext();
   messages.push({ role: 'system', content: globalUploadsContext });
-  if (body.projectContext) {
-    messages.push({ role: 'system', content: String(body.projectContext) });
+  const projectContext = requestChatSession ? verifiedProjectContext : String(body.projectContext || '');
+  if (projectContext) {
+    messages.push({ role: 'system', content: projectContext });
   }
-  if (Array.isArray(body.messages) && body.messages.length > 0) {
-    let projectId: string | null = null;
-    if (body.sessionId) {
-      const { getChatSession } = await import('@/lib/chat-sessions');
-      projectId = (await getChatSession(String(body.sessionId)))?.projectId || null;
-    }
+  const trustedHistory = durableSessionHistory;
+  if (Array.isArray(trustedHistory) && trustedHistory.length > 0) {
     const { prepareSessionContext } = await import('@/lib/context-engine');
     const prepared = prepareSessionContext({
-      sessionId: body.sessionId ? String(body.sessionId) : null,
+      sessionId: requestChatSession?.id || null,
       projectId,
-      messages: body.messages,
+      messages: trustedHistory,
       model,
     });
     if (prepared.systemContext) messages.push({ role: 'system', content: prepared.systemContext });
@@ -64,7 +88,7 @@ export async function POST(req: NextRequest) {
           signal: req.signal,
           agents,
           messages,
-          reasoningEffort: body.reasoningEffort,
+          reasoningEffort: requestChatSession?.reasoningEffort || body.reasoningEffort,
         })) {
           controller.enqueue(encoder.encode(encodeSseEvent(event)));
         }

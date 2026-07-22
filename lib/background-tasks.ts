@@ -26,6 +26,7 @@ export interface BackgroundTaskInfo {
   taskId: string;
   runId: string | null;
   sessionId: string | null;
+  projectId: string | null;
   prompt: string;
   agentName: string;
   status: TaskStatus;
@@ -58,6 +59,8 @@ function syntheticWorker(model: string, workspaceDir: string | undefined): Agent
 export interface StartBackgroundTaskOpts {
   prompt: string;
   sessionId?: string | null;
+  projectId?: string | null;
+  projectContext?: string;
   agent?: Agent | null;
   workspaceDir?: string;
   model: string;
@@ -68,6 +71,7 @@ function toInfo(task: TaskRecord): BackgroundTaskInfo {
     taskId: task.id,
     runId: task.runId || null,
     sessionId: task.sessionId || null,
+    projectId: task.projectId || null,
     prompt: task.description,
     agentName: String(task.metadata.agentName || 'Background Task'),
     status: task.status,
@@ -80,6 +84,26 @@ function toInfo(task: TaskRecord): BackgroundTaskInfo {
     ...(task.error != null ? { error: task.error } : {}),
   };
 }
+
+function runScopeForTask(task: TaskRecord): {
+  projectId?: string;
+  projectContext?: string;
+  workspacePathOverride?: string;
+} {
+  const ownedWorkspace = task.workspaceRoots.find((root) => root.permission === 'write')?.path
+    || task.workspaceRoots[0]?.path;
+  return {
+    ...(task.projectId ? { projectId: task.projectId } : {}),
+    ...(typeof task.metadata.projectContext === 'string' && task.metadata.projectContext.trim()
+      ? { projectContext: task.metadata.projectContext }
+      : {}),
+    ...(ownedWorkspace && (task.kind === 'board' || task.originType === 'chat')
+      ? { workspacePathOverride: ownedWorkspace }
+      : {}),
+  };
+}
+
+export const backgroundTaskTestHooks = { runScopeForTask };
 
 function deferTaskForCapacity(taskId: string): void {
   let current = getTask(taskId);
@@ -141,15 +165,8 @@ function launchTaskExecution(task: TaskRecord, agentForRun: Agent, runId: string
         runId,
         attemptNo: task.retryCount + 1,
         taskKind: task.kind,
+        ...runScopeForTask(task),
       };
-      if (task.kind === 'board' && task.projectId) {
-        runOptions.projectId = task.projectId;
-        runOptions.workspacePathOverride = task.workspaceRoots.find((root) => root.permission === 'write')?.path
-          || task.workspaceRoots[0]?.path;
-        if (typeof task.metadata.projectContext === 'string' && task.metadata.projectContext.trim()) {
-          runOptions.projectContext = task.metadata.projectContext;
-        }
-      }
       const run = await runAgentOnce(agentForRun, task.description, runOptions);
       if (run.status === 'error' && /Concurrent-run limit reached/i.test(run.finalOutput || '')) {
         deferTaskForCapacity(task.id);
@@ -368,13 +385,18 @@ export function startBackgroundTask(opts: StartBackgroundTaskOpts): BackgroundTa
     originType: 'chat',
     originId: opts.sessionId || taskId,
     sessionId: opts.sessionId || undefined,
+    projectId: opts.projectId || undefined,
     agentId: agentForRun.id,
     runId,
     workspaceRoots: opts.workspaceDir
       ? [{ id: 'chat-workspace', path: opts.workspaceDir, permission: 'write' }]
       : [],
     maxRetries: 1,
-    metadata: { agentName: agentForRun.name, model: agentForRun.model },
+    metadata: {
+      agentName: agentForRun.name,
+      model: agentForRun.model,
+      ...(opts.projectContext?.trim() ? { projectContext: opts.projectContext.trim() } : {}),
+    },
   });
   return launchTaskExecution(getTask(taskId)!, agentForRun, runId);
 }

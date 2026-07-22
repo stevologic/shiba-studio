@@ -1,10 +1,23 @@
 # docker compose up -d  →  http://127.0.0.1:3000
 services:
   shiba-studio:
-    build: .
+    build:
+      context: .
+      args:
+        # Export SHIBA_GIT_COMMIT="$(git rev-parse HEAD)" before building so
+        # the footer and OCI image metadata identify the exact source tree.
+        SHIBA_GIT_COMMIT: ${SHIBA_GIT_COMMIT:-unreleased}
+        SHIBA_IMAGE_SOURCE: ${SHIBA_IMAGE_SOURCE:-https://github.com/stevologic/shiba-studio}
+    environment:
+      # Leave blank for localhost-only operation. Reverse-proxy deployments
+      # must set one exact root origin, for example https://studio.example.com.
+      SHIBA_PUBLIC_ORIGIN: ${SHIBA_PUBLIC_ORIGIN:-}
+      # Public terminal proxying is intentionally NOT enabled here. See README:
+      # it also requires TERMINAL_WS_HOST=0.0.0.0 and a loopback-only 3911 map.
     ports:
-      # Loopback-only publish — the studio's APIs are unauthenticated by
-      # design (single user). Change to "3000:3000" only behind your own auth.
+      # Keep this loopback-only: a same-host proxy can use it directly. Put a
+      # containerized proxy on a private Docker network instead of publishing
+      # Studio on every host interface.
       - "127.0.0.1:3000:3000"
     volumes:
       # Everything lives here: config, Shiba-encrypted credentials + machine

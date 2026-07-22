@@ -12,15 +12,43 @@ import { resolveChatToolsEnabled, shouldUseChatTools } from '@/lib/chat-tool-mod
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const requestChatSession = body.sessionId
-    ? await (await import('@/lib/chat-sessions')).getChatSession(String(body.sessionId))
+  const suppliedSessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
+  const requestChatSession = suppliedSessionId
+    ? await (await import('@/lib/chat-sessions')).getChatSession(suppliedSessionId)
     : null;
+  if (suppliedSessionId && !requestChatSession) {
+    return new Response(JSON.stringify({ error: 'Chat session not found' }), { status: 404 });
+  }
+  if (requestChatSession?.chatTarget === 'all') {
+    return new Response(JSON.stringify({ error: 'Chat target now requires multi-agent mode' }), { status: 409 });
+  }
+  const durableSessionHistory = (await import('@/lib/context-engine')).modelRequestChatHistory(
+    requestChatSession?.messages || null,
+    body.messages,
+  );
   const ephemeralSession = !!requestChatSession?.ephemeral;
   const backgroundSessionId = requestChatSession && !ephemeralSession ? requestChatSession.id : null;
-  const toolsEnabled = resolveChatToolsEnabled(body.toolsEnabled, requestChatSession?.toolsEnabled);
+  const toolsEnabled = requestChatSession
+    ? requestChatSession.toolsEnabled !== false
+    : resolveChatToolsEnabled(body.toolsEnabled);
   const cfg = await loadConfig();
+  const sessionProjectId = requestChatSession?.projectId || null;
+  let verifiedProjectContext = '';
+  let verifiedWorkspaceDir = requestChatSession?.workspaceDir?.trim() || '';
+  if (sessionProjectId) {
+    const { buildProjectChatContext, getProject, resolveProjectWorkspace } = await import('@/lib/projects');
+    const project = await getProject(sessionProjectId);
+    if (!project) {
+      return new Response(JSON.stringify({ error: 'Chat project not found' }), { status: 409 });
+    }
+    verifiedProjectContext = await buildProjectChatContext(project, cfg.defaultWorkspace);
+    if (!verifiedWorkspaceDir) verifiedWorkspaceDir = resolveProjectWorkspace(project, cfg.defaultWorkspace);
+  }
   let integrationCreds = cfg.integrations || {};
-  const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
+  const rawModel = requestChatSession?.chatModel
+    || (body.model && String(body.model).trim())
+    || cfg.defaultGrokModel
+    || 'cloud:grok-4';
   const parsedModel = parseModelRef(rawModel);
   const model = parsedModel.encoded;
   // Honor the model's pinned credential source (OAuth-tagged vs Token-tagged).
@@ -58,17 +86,20 @@ export async function POST(req: NextRequest) {
     "- When unsure whether context applies, answer the user's question directly first.",
   ].join('\n'));
 
-  if (body.system) systemParts.push(String(body.system));
+  // Durable-session identity and specialty are read from disk. A stale panel
+  // may not override them with another chat's client payload.
+  if (!requestChatSession && body.system) systemParts.push(String(body.system));
   const globalInstructions = await buildGlobalInstructionsContext(cfg);
   if (globalInstructions) systemParts.push(globalInstructions);
-  const globalUploadsContext = body.globalUploadsContext
+  const globalUploadsContext = !requestChatSession && body.globalUploadsContext
     ? String(body.globalUploadsContext)
     : await buildGlobalUploadsChatContext();
   if (globalUploadsContext.trim()) {
     systemParts.push(asBackgroundContext('global uploads', globalUploadsContext));
   }
-  if (body.projectContext) {
-    systemParts.push(asBackgroundContext('project', String(body.projectContext)));
+  const projectContext = requestChatSession ? verifiedProjectContext : String(body.projectContext || '');
+  if (projectContext) {
+    systemParts.push(asBackgroundContext('project', projectContext));
   }
   const activePackCommands = await (await import('@/lib/capability-packs')).listActiveCapabilityPackCommands();
   if (activePackCommands.length) {
@@ -84,13 +115,26 @@ export async function POST(req: NextRequest) {
   // same knowledge the agent gets during autonomous runs.
   let agentName: string | null = null;
   let chatAgent: import('@/lib/types').Agent | null = null;
-  if (body.agentId) {
+  const sessionTarget = requestChatSession?.chatTarget?.trim() || '';
+  const trustedAgentId = requestChatSession
+    ? (sessionTarget && sessionTarget !== 'grok' && sessionTarget !== 'all' ? sessionTarget : '')
+    : (body.agentId ? String(body.agentId) : '');
+  if (trustedAgentId) {
+    const { loadAgents } = await import('@/lib/persistence');
+    const agent = (await loadAgents()).find((candidate) => candidate.id === trustedAgentId) || null;
+    if (requestChatSession && !agent) {
+      return new Response(JSON.stringify({ error: 'Chat agent no longer exists' }), { status: 409 });
+    }
+    if (agent) {
+      chatAgent = agent;
+      agentName = agent.name;
+      if (requestChatSession) {
+        const { buildAgentChatSystem } = await import('@/lib/chat-skill');
+        systemParts.push(buildAgentChatSystem(agent));
+      }
+    }
     try {
-      const { loadAgents } = await import('@/lib/persistence');
-      const agent = (await loadAgents()).find((a) => a.id === String(body.agentId));
       if (agent) {
-        chatAgent = agent;
-        agentName = agent.name;
         const packModule = await import('@/lib/capability-packs');
         const packSkills = (await packModule.listActiveCapabilityPackSkills())
           .filter((skill) => (agent.skills || []).includes(skill.id));
@@ -118,9 +162,10 @@ export async function POST(req: NextRequest) {
   // Grok uses shared-chat memory; chatting as an agent uses that agent's scope.
   if (!ephemeralSession) {
     try {
-      const latestText = Array.isArray(body.messages)
-        ? [...body.messages].reverse().find((message) => message?.role === 'user')?.content
-        : body.prompt;
+      const latestText = [...durableSessionHistory]
+        .reverse()
+        .find((message) => message?.role === 'user')?.content
+        || (!requestChatSession ? body.prompt : undefined);
       const shouldRecall = !chatAgent || chatAgent.learning?.autoRecall !== false;
       if (shouldRecall && latestText) {
         const { CHAT_MEMORY_SCOPE, buildMemoryContext, recallRelevantMemories } = await import('@/lib/agent-memory');
@@ -141,8 +186,8 @@ export async function POST(req: NextRequest) {
   }
   // Chat workspace: a folder the user bound this chat to (usually a cloned
   // repo). Validated here; fs tools + the system prompt are rooted in it.
-  let workspaceDir = '';
-  if (body.workspaceDir) {
+  let workspaceDir = verifiedWorkspaceDir;
+  if (!requestChatSession && body.workspaceDir) {
     const requested = String(body.workspaceDir).trim();
     try {
       if (requested && fs.statSync(requested).isDirectory()) workspaceDir = requested;
@@ -229,8 +274,9 @@ export async function POST(req: NextRequest) {
   }
 
   let preparedSessionContext: import('@/lib/context-types').PreparedSessionContext | null = null;
-  if (Array.isArray(body.messages) && body.messages.length > 0) {
-    const incoming = body.messages
+  const trustedHistory = durableSessionHistory;
+  if (Array.isArray(trustedHistory) && trustedHistory.length > 0) {
+    const incoming = trustedHistory
       .filter((message: { role?: string }) => message?.role === 'user' || message?.role === 'assistant' || message?.role === 'system')
       .map((message: import('@/lib/chat-types').ChatMessagePayload) => ({
         id: message.id ? String(message.id) : undefined,
@@ -239,10 +285,9 @@ export async function POST(req: NextRequest) {
         thinking: message.thinking ? String(message.thinking) : undefined,
         attachments: Array.isArray(message.attachments) ? message.attachments : undefined,
       }));
-    const sessionProjectId = requestChatSession?.projectId || null;
     const { prepareSessionContext } = await import('@/lib/context-engine');
     preparedSessionContext = prepareSessionContext({
-      sessionId: body.sessionId ? String(body.sessionId) : null,
+      sessionId: requestChatSession?.id || null,
       projectId: sessionProjectId,
       messages: incoming,
       model,
@@ -295,7 +340,7 @@ export async function POST(req: NextRequest) {
   const { audit } = await import('@/lib/audit-log');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   audit('chat', 'message sent', (lastUser?.content || '').slice(0, 120), {
-    model, agent: agentName, agentId: body.agentId || null, turns: messages.length,
+    model, agent: agentName, agentId: trustedAgentId || null, turns: messages.length,
     toolsEnabled,
     workspace: workspaceDir || null,
     contextMeter: preparedSessionContext?.meter || null,
@@ -510,6 +555,16 @@ export async function POST(req: NextRequest) {
             let browserUsed = false;
             let wroteContent = false;
             let completionNudges = 0;
+            const chatToolAuthorization: import('@/lib/agent-tool-exec').AgentToolAuthorization = {
+              contextScope: requestChatSession
+                ? {
+                    kind: 'session',
+                    sessionId: requestChatSession.id,
+                    projectId: sessionProjectId,
+                  }
+                : { kind: 'global' },
+            };
+            const trustedToolRun = sessionProjectId ? { projectId: sessionProjectId } : {};
 
             if (workspaceDir) {
               send({
@@ -678,7 +733,17 @@ export async function POST(req: NextRequest) {
                     : (!agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
                       ? workspaceAgent
                       : agent);
-                  const res = await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID, integrationCreds, req.signal)
+                  const res = await executeAgentTool(
+                    fn.name,
+                    args,
+                    execAgent,
+                    trustedToolRun,
+                    workDir,
+                    SUBBROWSER_RUN_ID,
+                    integrationCreds,
+                    req.signal,
+                    chatToolAuthorization,
+                  )
                     .catch((e: unknown) => ({ result: { error: e instanceof Error ? e.message : String(e) }, sideEffect: '' }));
                   preExecuted.set(tc.id, res as { result: unknown; sideEffect?: string; screenshot?: string });
                 }));
@@ -703,6 +768,8 @@ export async function POST(req: NextRequest) {
                       const t = bg.startBackgroundTask({
                         prompt: taskPrompt,
                         sessionId: backgroundSessionId,
+                        projectId: sessionProjectId,
+                        projectContext: verifiedProjectContext || undefined,
                         agent: chatAgent,
                         workspaceDir: workspaceDir || undefined,
                         model,
@@ -755,7 +822,17 @@ export async function POST(req: NextRequest) {
                     ? workspaceAgent
                     : agent);
                 const out = preExecuted.get(tc.id)
-                  ?? await executeAgentTool(fn.name, args, execAgent, {}, workDir, SUBBROWSER_RUN_ID, integrationCreds, req.signal);
+                  ?? await executeAgentTool(
+                    fn.name,
+                    args,
+                    execAgent,
+                    trustedToolRun,
+                    workDir,
+                    SUBBROWSER_RUN_ID,
+                    integrationCreds,
+                    req.signal,
+                    chatToolAuthorization,
+                  );
                 toolsUsed.push(fn.name);
                 // Files written this turn get linked under the response so the
                 // user can open them in the in-chat viewer.

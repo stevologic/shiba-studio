@@ -1,5 +1,10 @@
 node_modules
 .next
+playwright-report
+test-results
+.env
+.env.*
+!.env.example
 .git
 .github
 .worktrees

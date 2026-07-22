@@ -5,7 +5,7 @@
  * Disconnecting the browser does NOT kill the shell — reconnect resumes the same
  * session (with scrollback replay). Chat `terminal_exec` writes into this PTY.
  */
-import type { Server as HttpServer } from 'http';
+import type { IncomingMessage, Server as HttpServer } from 'http';
 import os from 'node:os';
 import type { Duplex } from 'stream';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -15,6 +15,7 @@ import {
   type TerminalShell,
 } from './terminal-shell';
 import { advertisedHostnames } from './mdns';
+import { configuredPublicOrigin, publicTerminalProxyEnabled } from './public-origin';
 
 export const DEFAULT_TERMINAL_WS_PORT = 3911;
 export const MAIN_SESSION_ID = 'main';
@@ -468,10 +469,16 @@ export function restartMainSession(): { ok: boolean; error?: string; pid?: numbe
   }
 }
 
-/** True for loopback, or this app's exact trusted-LAN Studio origin. */
-function isAllowedTerminalOrigin(origin: string): boolean {
+/** True for loopback, this app's exact public origin, or trusted-LAN Studio. */
+export function isAllowedTerminalOrigin(origin: string): boolean {
   try {
     const parsed = new URL(origin);
+    const publicOrigin = configuredPublicOrigin();
+    if (
+      publicOrigin
+      && publicTerminalProxyEnabled()
+      && parsed.origin === publicOrigin.origin
+    ) return true;
     const host = parsed.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return true;
     if (process.env.SHIBA_LAN_STUDIO !== '1') return advertisedHostnames().includes(host);
@@ -490,6 +497,30 @@ function isAllowedTerminalOrigin(origin: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isLoopbackSocketAddress(address: string | undefined): boolean {
+  const normalized = (address || '').toLowerCase();
+  return normalized === '::1'
+    || normalized === 'localhost'
+    || /^127(?:\.\d{1,3}){3}$/.test(normalized)
+    || /^::ffff:127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
+function attachAuthorizedClient(ws: WebSocket, req: IncomingMessage): void {
+  // When public proxying is enabled, require a browser Origin even though the
+  // final proxy-to-terminal hop is loopback. Otherwise an origin-less public
+  // client would be indistinguishable from a trusted local process.
+  const origin = req.headers.origin;
+  const missingRequiredOrigin = !origin && (
+    publicTerminalProxyEnabled() || !isLoopbackSocketAddress(req.socket.remoteAddress)
+  );
+  if (missingRequiredOrigin || (origin && !isAllowedTerminalOrigin(origin))) {
+    console.warn(`[shiba-studio] rejected terminal WS from origin ${origin || '(missing)'}`);
+    ws.close(1008, 'Forbidden origin');
+    return;
+  }
+  attachClient(ws);
 }
 
 /**
@@ -518,18 +549,9 @@ export function startTerminalServer(): { port: number; host: string; shell: Term
   });
 
   wss.on('connection', (ws, req) => {
-    // Browsers always send Origin on WebSocket upgrades and are NOT subject to
-    // CORS here — without this check any web page could open
-    // ws://127.0.0.1:3911 and drive the shell. Only the app's own loopback
-    // origin (any port) may attach; non-browser clients (no Origin) are local
-    // processes and stay allowed.
-    const origin = req.headers.origin;
-    if (origin && !isAllowedTerminalOrigin(origin)) {
-      console.warn(`[shiba-studio] rejected terminal WS from origin ${origin}`);
-      ws.close(1008, 'Forbidden origin');
-      return;
-    }
-    attachClient(ws);
+    // WebSockets are not subject to CORS. Validate browser Origin here; the
+    // shared helper also rejects missing Origin once a public proxy is enabled.
+    attachAuthorizedClient(ws, req);
   });
 
   wss.on('error', (err: NodeJS.ErrnoException) => {
@@ -592,7 +614,7 @@ export function attachTerminalUpgrade(server: HttpServer) {
       wss.emit('connection', ws, req);
     });
   });
-  wss.on('connection', (ws) => attachClient(ws));
+  wss.on('connection', (ws, req) => attachAuthorizedClient(ws, req));
   st.wss = wss;
   st.started = true;
   try {

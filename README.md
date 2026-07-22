@@ -85,6 +85,123 @@ Also reachable by name at **http://shiba.local** — the app advertises that nam
 
 In regular LAN mode, network peers reach only the authenticated Companion/native-node gateway. Full-Studio LAN mode is a separate explicit opt-in and has no per-user login or isolation: every trusted peer gets the host user's Studio powers. See [Security](SECURITY.md) before enabling it.
 
+### Docker
+
+The included Compose file keeps the application on host loopback and persists
+all state in the `shiba-data` volume. Stamp local images with the exact source
+revision so the footer and OCI metadata remain useful when `.git` is not in the
+image:
+
+```sh
+export SHIBA_GIT_COMMIT="$(git rev-parse HEAD)"
+docker compose build --pull
+docker compose up -d
+```
+
+PowerShell users can set the build value with
+`$env:SHIBA_GIT_COMMIT = (git rev-parse HEAD)` before running the same Compose
+commands. `docker compose exec shiba-studio printenv SHIBA_GIT_COMMIT` shows the
+revision embedded in the running image.
+
+### Reverse proxy deployment
+
+Shiba Studio has no built-in multi-user login boundary. A public-origin setup
+must keep port 3000 on loopback (or a private container network), terminate TLS
+at the proxy, and require authentication there. Treat every authenticated user
+as having the same file, credential, model-spend, and shell privileges as the
+host account.
+
+Use this deployment checklist:
+
+1. Choose one exact HTTPS root origin, such as `https://studio.example.com`. Paths,
+   wildcards, credentials, query strings, and fragments are not accepted.
+2. Set `SHIBA_PUBLIC_ORIGIN=https://studio.example.com` in the Compose/Unraid
+   environment. Keep the existing `127.0.0.1:3000:3000` publish (or use a
+   private Docker network); do not publish Studio directly to the internet.
+3. Put TLS and an authentication/access proxy in front of Shiba. Preserve the
+   browser-visible `Host` header exactly. Do not rewrite it to `localhost`.
+   Shiba intentionally does not trust `Forwarded` or `X-Forwarded-*` as proof
+   of the public origin.
+4. Disable response buffering and caching for Studio routes so chat/SSE token
+   streams arrive immediately. Allow long-lived responses and WebSocket
+   upgrades through every proxy or tunnel in the path.
+5. For Google Drive OAuth, register the exact public callback shown by
+   Settings: `https://studio.example.com/api/google-oauth/callback`. xAI's
+   installed-app OAuth client accepts only a random `127.0.0.1` callback, so
+   complete xAI OAuth in a browser on the Shiba host; for remote-only installs,
+   use an xAI API key or the authenticated Grok Build CLI instead.
+6. Rebuild after updating the checkout so the image contains the new source and
+   revision, then recreate the container so runtime environment changes apply:
+
+   ```sh
+   export SHIBA_PUBLIC_ORIGIN="https://studio.example.com"
+   export SHIBA_GIT_COMMIT="$(git rev-parse HEAD)"
+   docker compose build --pull
+   docker compose up -d --force-recreate
+   ```
+
+7. Through the authenticated public URL, verify `/api/health`, `/api/version`,
+   a streaming Grok response, and Google OAuth if used; verify xAI OAuth from
+   the host browser. The version response should report the exported commit
+   with `source: "env"`.
+
+A minimal nginx application location looks like this; add your authentication
+directive or access-proxy integration to the same protected server:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+}
+```
+
+The terminal WebSocket is a separate, especially sensitive service: `next
+start` does not forward `/api/terminal/ws` to it. In the stock Docker setup the
+terminal therefore remains unavailable through the public URL. To opt in, all
+of the following are required together:
+
+- set `SHIBA_PUBLIC_TERMINAL_PROXY=1` and `TERMINAL_WS_HOST=0.0.0.0` on the
+  Shiba container;
+- map container port 3911 only to host loopback (`127.0.0.1:3911:3911`), never
+  to a public interface; and
+- add an exact `/api/terminal/ws` proxy location to `http://127.0.0.1:3911`
+  with WebSocket Upgrade headers and buffering disabled, behind the same TLS
+  and authentication gate.
+
+For Compose, put the opt-in in `docker-compose.override.yml`; exporting these
+names alone does not add them to the container or publish the terminal port:
+
+```yaml
+services:
+  shiba-studio:
+    environment:
+      SHIBA_PUBLIC_TERMINAL_PROXY: "1"
+      TERMINAL_WS_HOST: "0.0.0.0"
+    ports:
+      - "127.0.0.1:3911:3911"
+```
+
+```nginx
+location = /api/terminal/ws {
+    proxy_pass http://127.0.0.1:3911;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+}
+```
+
+If the proxy runs in Docker, use a private network rather than public port
+publishing for both upstreams. Restart/recreate the container after enabling or
+disabling terminal proxying.
+
 Then open **Settings** and connect a model source (any one works):
 
 | Source | How |

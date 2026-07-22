@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeOAuthCode } from '@/lib/xai-oauth';
 import { buildHandbackHtml } from '@/lib/oauth-loopback';
+import { publicOriginForRequestHost } from '@/lib/public-origin';
 
 /**
  * Legacy/manual-path callback on the app's own origin. The primary sign-in
@@ -10,7 +11,9 @@ import { buildHandbackHtml } from '@/lib/oauth-loopback';
  * self-closing hand-back page.
  */
 function page(req: NextRequest, kind: 'connected' | 'error', message?: string): NextResponse {
-  return new NextResponse(buildHandbackHtml(kind, req.nextUrl.origin, message), {
+  const origin = publicOriginForRequestHost(req.headers.get('host') || req.nextUrl.host)?.origin
+    || req.nextUrl.origin;
+  return new NextResponse(buildHandbackHtml(kind, origin, message), {
     status: 200,
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });

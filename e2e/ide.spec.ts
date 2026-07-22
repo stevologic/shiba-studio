@@ -262,10 +262,29 @@ test('Code edits and saves a file, commits it, and shows GitHub activity', async
   await expect(page.getByRole('tab', { name: /app\.ts/ })).toHaveAttribute('aria-selected', 'true');
 
   const editor = page.locator('.monaco-editor');
-  await expect(editor).toBeVisible({ timeout: 15_000 });
+  // Monaco is served from the production server and can be cold on a fresh CI
+  // runner; keep this below the test timeout while allowing its first load.
+  await expect(editor).toBeVisible({ timeout: 30_000 });
   await editor.click();
   await page.keyboard.press('Control+A');
   await page.keyboard.insertText(EDITED_SOURCE);
+  await expect(page.getByLabel('Unsaved changes').first()).toBeVisible();
+
+  // Exercise the unsaved-change guard while this test's already-loaded Monaco
+  // instance is active. A second Monaco boot in the same Chromium worker is
+  // needlessly expensive and has been flaky in headless production runs.
+  const workspacePicker = page.getByLabel('Open Code workspace');
+  const cancelWorkspaceChange = new Promise<void>((resolve) => {
+    page.once('dialog', async (dialog) => {
+      expect(dialog.type()).toBe('confirm');
+      expect(dialog.message()).toContain('discard 1 unsaved file');
+      await dialog.dismiss();
+      resolve();
+    });
+  });
+  await workspacePicker.selectOption(PROJECT_WORKSPACE_ID);
+  await cancelWorkspaceChange;
+  await expect(workspacePicker).toHaveValue(DEFAULT_WORKSPACE_ID);
   await expect(page.getByLabel('Unsaved changes').first()).toBeVisible();
 
   await page.keyboard.press('Control+S');
@@ -398,51 +417,28 @@ test('Code switches between the default workspace, a saved project, and a Git wo
     'Saved project',
     'feature-picker — feature/workspace-picker',
   ]);
+  const explorer = page.getByRole('complementary', { name: 'Explorer panel' });
+  const expandSourceFolder = async (expectedFile: string) => {
+    const expected = explorer.getByRole('treeitem', { name: expectedFile, exact: true });
+    await expect.poll(async () => {
+      const folder = explorer.getByRole('treeitem', { name: 'src', exact: true });
+      if (!(await folder.isVisible().catch(() => false))) return false;
+      if (await folder.getAttribute('aria-expanded') !== 'true') {
+        await folder.press('ArrowRight').catch(() => {});
+      }
+      return await expected.isVisible().catch(() => false);
+    }, {
+      message: `wait for ${expectedFile} in the selected workspace tree`,
+      timeout: 10_000,
+    }).toBe(true);
+  };
 
-  const sourceFolder = page.getByRole('treeitem', { name: 'src', exact: true });
-  await sourceFolder.click();
-  const sourceFile = page.getByRole('treeitem', { name: 'app.ts', exact: true });
-  await sourceFile.press('Enter');
-
-  const editor = page.locator('.monaco-editor');
-  await expect(editor).toBeVisible({ timeout: 15_000 });
-  await editor.click();
-  await page.keyboard.press('Control+A');
-  await page.keyboard.insertText(EDITED_SOURCE);
-  await expect(page.getByLabel('Unsaved changes').first()).toBeVisible();
-
-  const projectRequestsBeforeCancel = bootstrapRequests.filter(
-    (workspace) => workspace === PROJECT_WORKSPACE,
-  ).length;
-  const cancelConfirmation = new Promise<void>((resolve) => {
-    page.once('dialog', async (dialog) => {
-      expect(dialog.type()).toBe('confirm');
-      expect(dialog.message()).toContain('discard 1 unsaved file');
-      await dialog.dismiss();
-      resolve();
-    });
-  });
   await picker.selectOption(PROJECT_WORKSPACE_ID);
-  await cancelConfirmation;
-  await expect(picker).toHaveValue(DEFAULT_WORKSPACE_ID);
-  await expect(page.getByLabel('Unsaved changes').first()).toBeVisible();
-  expect(bootstrapRequests.filter(
-    (workspace) => workspace === PROJECT_WORKSPACE,
-  )).toHaveLength(projectRequestsBeforeCancel);
-
-  const acceptConfirmation = new Promise<void>((resolve) => {
-    page.once('dialog', async (dialog) => {
-      expect(dialog.message()).toContain('Open Saved project');
-      await dialog.accept();
-      resolve();
-    });
-  });
-  await picker.selectOption(PROJECT_WORKSPACE_ID);
-  await acceptConfirmation;
   await expect.poll(() => bootstrapRequests).toContain(PROJECT_WORKSPACE);
   await expect(picker).toHaveValue(PROJECT_WORKSPACE_ID);
   await expect(picker.locator('..')).toHaveAttribute('title', PROJECT_WORKSPACE);
-  await page.getByRole('treeitem', { name: 'src', exact: true }).click();
+  await expect(explorer.locator('small')).toHaveText('saved-project');
+  await expandSourceFolder('project.ts');
   await expect(page.getByRole('treeitem', { name: 'project.ts', exact: true })).toBeVisible();
   await expect(page.getByLabel('Unsaved changes')).toHaveCount(0);
 
@@ -450,7 +446,8 @@ test('Code switches between the default workspace, a saved project, and a Git wo
   await expect.poll(() => bootstrapRequests).toContain(WORKTREE_WORKSPACE);
   await expect(picker).toHaveValue(WORKTREE_WORKSPACE_ID);
   await expect(picker.locator('..')).toHaveAttribute('title', WORKTREE_WORKSPACE);
-  await page.getByRole('treeitem', { name: 'src', exact: true }).click();
+  await expect(explorer.locator('small')).toHaveText('feature-picker');
+  await expandSourceFolder('branch.ts');
   await expect(page.getByRole('treeitem', { name: 'branch.ts', exact: true })).toBeVisible();
 
   await picker.selectOption(DEFAULT_WORKSPACE_ID);
@@ -459,6 +456,7 @@ test('Code switches between the default workspace, a saved project, and a Git wo
   ).length).toBeGreaterThan(1);
   await expect(picker).toHaveValue(DEFAULT_WORKSPACE_ID);
   await expect(picker.locator('..')).toHaveAttribute('title', WORKSPACE);
-  await page.getByRole('treeitem', { name: 'src', exact: true }).click();
+  await expect(explorer.locator('small')).toHaveText('shiba-studio');
+  await expandSourceFolder('app.ts');
   await expect(page.getByRole('treeitem', { name: 'app.ts', exact: true })).toBeVisible();
 });

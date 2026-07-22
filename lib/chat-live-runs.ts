@@ -256,7 +256,7 @@ export function updateLiveChatRun(
 export async function finishLiveChatRun(
   sessionId: string,
   messages: LiveChatUiMessage[],
-  opts?: { error?: string; keepEntryMs?: number },
+  opts?: { error?: string; keepEntryMs?: number; autoTitle?: boolean },
 ) {
   const pendingPersist = persistTimers.get(sessionId);
   if (pendingPersist) {
@@ -273,19 +273,21 @@ export async function finishLiveChatRun(
   await persistSessionNow(sessionId, messages, false);
 
   // Auto-title after first completed exchange (same as panel used to do).
-  try {
-    const saved = liveMessagesToProject(messages);
-    const userCount = saved.filter((m) => m.role === 'user').length;
-    const hasAssistant = saved.some((m) => m.role === 'assistant' && !m.streaming && m.content);
-    if (userCount >= 1 && hasAssistant) {
-      await fetch('/api/chat-sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'autotitle', id: sessionId }),
-      });
+  if (opts?.autoTitle !== false) {
+    try {
+      const saved = liveMessagesToProject(messages);
+      const userCount = saved.filter((m) => m.role === 'user').length;
+      const hasAssistant = saved.some((m) => m.role === 'assistant' && !m.streaming && m.content);
+      if (userCount >= 1 && hasAssistant) {
+        await fetch('/api/chat-sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'autotitle', id: sessionId }),
+        });
+      }
+    } catch {
+      /* ignore */
     }
-  } catch {
-    /* ignore */
   }
 
   emit(sessionId, { global: true });

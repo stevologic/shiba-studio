@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import { advertisedHostnames } from './lib/mdns';
+import { publicOriginForRequestHost } from './lib/public-origin';
 
 const CLIENT_CLASS_HEADER = 'x-shiba-client-class';
 const PROXY_SECRET_HEADER = 'x-shiba-lan-proxy-secret';
@@ -47,7 +48,14 @@ function allowedRequestHostnames(): Set<string> {
 /** Browser-visible origin after validating Host against names owned by Studio. */
 function visibleRequestOrigin(req: NextRequest): string | null {
   const rawHost = (req.headers.get('host') || req.nextUrl.host).trim();
-  if (!rawHost || /[\s\\/@?#]/.test(rawHost)) return null;
+  if (!rawHost || /[\s\\/@?#%]/.test(rawHost)) return null;
+
+  // A reverse proxy must preserve the exact browser-visible Host. Its scheme
+  // comes from the operator-owned setting, never X-Forwarded-* supplied by a
+  // client. Local/mDNS/LAN origins continue through the existing path below.
+  const publicOrigin = publicOriginForRequestHost(rawHost);
+  if (publicOrigin) return publicOrigin.origin;
+
   let protocol = req.nextUrl.protocol.toLowerCase();
   if (hasTrustedLanProxySecret(req)) {
     const forwarded = (req.headers.get('x-forwarded-proto') || '').toLowerCase();

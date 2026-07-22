@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Code2, Activity
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Code2
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -3251,7 +3251,6 @@ export default function ShibaStudio() {
             { id: 'files', label: 'Files', icon: FileText, stat: null as string | null },
             { id: 'automations', label: 'Automations', icon: Clock, stat: navStats.automationsScheduled > 0 ? String(navStats.automationsScheduled) : null },
             { id: 'integrations', label: 'Capabilities', icon: Plug, stat: navStats.integrationsConfigured > 0 ? String(navStats.integrationsConfigured) : null },
-            { id: 'traffic', label: 'Traffic', icon: Activity, stat: null as string | null },
             {
               id: 'usage',
               label: 'Usage',
@@ -3286,7 +3285,7 @@ export default function ShibaStudio() {
               >
                 <Icon size={16} strokeWidth={1.75} className="nav-item-icon" aria-hidden />
                 <span className="nav-item-label">{item.label}</span>
-                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'traffic' && item.id !== 'logs' && (
+                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
                   <span className="data-spinner nav-item-meta ml-auto" aria-label={`Loading ${item.label} count`} />
                 )}
                 {!navCollapsed && item.stat != null && (
@@ -3763,6 +3762,7 @@ export default function ShibaStudio() {
                 modelsError={modelsError}
                 onRefreshModels={loadModels}
                 agents={agents}
+                agentsReady={agentsReady}
                 defaultWorkspace={config?.defaultWorkspace || defaultWorkspaceInput || ''}
               />
             </div>
@@ -5494,6 +5494,13 @@ export default function ShibaStudio() {
               title="Interactive API explorer — send real requests against your instance"
             >
               API
+            </Link>
+            <Link
+              href="/traffic"
+              className="hover:text-primary"
+              title="Repository traffic and visitor statistics"
+            >
+              Traffic
             </Link>
             <a
               href="https://github.com/stevologic/shiba-studio/issues/new?template=feature_request.md"

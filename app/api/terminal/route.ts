@@ -6,6 +6,10 @@ import {
   startTerminalServer,
   writeTerminal,
 } from '@/lib/terminal-server';
+import {
+  publicOriginForRequestHost,
+  publicTerminalWebSocketUrlForRequestHost,
+} from '@/lib/public-origin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,18 +19,29 @@ export async function GET(req: NextRequest) {
   try {
     startTerminalServer();
     const info = getTerminalServerInfo();
-    const forwardedProtocol = (req.headers.get('x-forwarded-proto') || req.nextUrl.protocol).toLowerCase();
     const requestHost = (req.headers.get('host') || req.nextUrl.host).trim();
+    const publicOrigin = publicOriginForRequestHost(requestHost);
+    const publicWsUrl = publicTerminalWebSocketUrlForRequestHost(requestHost);
+    const publicTerminalEnabled = !!publicWsUrl;
+    const forwardedProtocol = (req.headers.get('x-forwarded-proto') || req.nextUrl.protocol).toLowerCase();
     const lanStudioWsUrl = process.env.SHIBA_LAN_STUDIO === '1' && requestHost
       ? `${forwardedProtocol.startsWith('https') ? 'wss' : 'ws'}://${requestHost}/api/terminal/ws`
       : info.wsUrl;
+    const wsUrl = publicOrigin
+      ? publicWsUrl
+      : lanStudioWsUrl;
+    const note = publicOrigin
+      ? publicTerminalEnabled
+        ? 'Shared host PTY through the operator-configured authenticated reverse-proxy WebSocket route.'
+        : 'Public terminal access is disabled. Configure the authenticated WebSocket route, then set SHIBA_PUBLIC_TERMINAL_PROXY=1.'
+      : process.env.SHIBA_LAN_STUDIO === '1'
+        ? 'Shared host PTY via the authenticated LAN boundary; session survives reconnects.'
+        : 'Shared host PTY via node-pty. Localhost WebSocket; session survives reconnects.';
     return NextResponse.json({
       ok: true,
       ...info,
-      wsUrl: lanStudioWsUrl,
-      note: process.env.SHIBA_LAN_STUDIO === '1'
-        ? 'Shared host PTY via the authenticated LAN boundary; session survives reconnects.'
-        : 'Shared host PTY via node-pty. Localhost WebSocket; session survives reconnects.',
+      wsUrl,
+      note,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

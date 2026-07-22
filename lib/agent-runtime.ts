@@ -918,15 +918,12 @@ export function getToolDefinitions(
     type: 'function',
     function: {
       name: 'session_search',
-      description: 'Search durable earlier chat, project, and run context, or retrieve one exact cited source by source_id. Returns bounded exact excerpts, stable source citations, and adjacent conversation bookends instead of an ungrounded summary.',
+      description: 'Search durable context within the current server-owned chat, project, or run scope, or retrieve one exact in-scope citation by source_id. Returns bounded exact excerpts, stable source citations, and adjacent conversation bookends instead of an ungrounded summary.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Words or phrase to retrieve' },
-          source_id: { type: 'string', description: 'Stable source citation to retrieve exactly' },
-          session_id: { type: 'string', description: 'Optional exact chat session id' },
-          project_id: { type: 'string', description: 'Optional project id; current run project is used by default' },
-          run_id: { type: 'string', description: 'Optional exact agent run id' },
+          source_id: { type: 'string', description: 'Stable in-scope source citation to retrieve exactly' },
           limit: { type: 'number', description: 'Maximum results, 1-20 (default 8)' },
         },
         required: [],
@@ -1936,7 +1933,16 @@ async function* agentRunGenerator(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- model-produced JSON, coerced per tool by the executor
             let args: any = {};
             try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
-            const res = await executeTool(fn.name, args, agent, { id: runId, taskId }, workDir, runId, integrationCreds, runSignal)
+            const res = await executeTool(
+              fn.name,
+              args,
+              agent,
+              { id: runId, taskId, projectId: opts.projectId },
+              workDir,
+              runId,
+              integrationCreds,
+              runSignal,
+            )
               .catch((e: unknown) => ({
                 result: { error: e instanceof Error ? e.message : String(e) },
                 sideEffect: '',
@@ -2086,7 +2092,7 @@ async function* agentRunGenerator(
 
         const execRes = preExecuted.get(tc.id)
           ?? await executeTool(
-            fn.name, args, agent, { id: runId, taskId }, workDir, runId, integrationCreds, runSignal,
+            fn.name, args, agent, { id: runId, taskId, projectId: opts.projectId }, workDir, runId, integrationCreds, runSignal,
             liveTaskShellApproval || redditSubmitAuthorized
               ? {
                   ...(liveTaskShellApproval ? { liveTaskShellApproval: true } : {}),

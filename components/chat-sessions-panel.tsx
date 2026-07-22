@@ -72,6 +72,7 @@ interface ChatSessionsPanelProps {
   onSessionChange: (id: string) => void;
   onStatsChange?: () => void;
   agents: Agent[];
+  agentsReady?: boolean;
   availableModels: ModelOption[];
   modelsLoading: boolean;
   modelsError: string | null;
@@ -86,6 +87,7 @@ export default function ChatSessionsPanel({
   onSessionChange,
   onStatsChange,
   agents,
+  agentsReady = true,
   availableModels,
   modelsLoading,
   modelsError,
@@ -974,6 +976,7 @@ export default function ChatSessionsPanel({
           modelsError={modelsError}
           onRefreshModels={onRefreshModels}
           agents={agents}
+          agentsReady={agentsReady}
           defaultWorkspace={defaultWorkspace}
         />
       )}

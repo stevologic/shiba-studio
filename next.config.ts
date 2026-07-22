@@ -2,6 +2,7 @@ import type { NextConfig } from 'next';
 import { execSync } from 'child_process';
 import { isIP } from 'node:net';
 import os from 'os';
+import { configuredPublicOrigin } from './lib/public-origin';
 
 // Initial bake only — the UI prefers live SHAs from GET /api/version which
 // re-reads git HEAD from the process project root (keeps pace with local commits
@@ -47,7 +48,15 @@ function lanIPv4Origins(): string[] {
   return out;
 }
 
-const allowedDevOrigins = [...new Set([...mdnsDevOrigins, ...lanIPv4Origins(), '127.0.0.1'])];
+// Parsing here makes an invalid reverse-proxy origin fail at process startup,
+// before Studio can accidentally serve with a partially applied boundary.
+const publicDevHostname = configuredPublicOrigin()?.hostname;
+const allowedDevOrigins = [...new Set([
+  ...mdnsDevOrigins,
+  ...lanIPv4Origins(),
+  '127.0.0.1',
+  ...(publicDevHostname ? [publicDevHostname] : []),
+])];
 
 const nextConfig: NextConfig = {
   allowedDevOrigins,
