@@ -100,9 +100,17 @@ function sameFingerprint(
 export async function captureGitWorkspaceSnapshot(
   workDir: string,
 ): Promise<GitWorkspaceSnapshot> {
-  const resolvedWorkDir = path.resolve(workDir);
+  const requestedWorkDir = path.resolve(workDir);
+  // Git reports the physical repository path while Node may preserve a
+  // filesystem alias supplied by the caller (for example /var versus
+  // /private/var on macOS, or a short 8.3 path on Windows). Keep one
+  // canonical path identity so containment checks do not reject valid work.
+  const resolvedWorkDir = await fs.realpath(requestedWorkDir).catch(() => requestedWorkDir);
   const rootRaw = await git(resolvedWorkDir, ['rev-parse', '--show-toplevel']);
-  const gitRoot = rootRaw?.trim() ? path.resolve(rootRaw.trim()) : null;
+  const requestedGitRoot = rootRaw?.trim() ? path.resolve(rootRaw.trim()) : null;
+  const gitRoot = requestedGitRoot
+    ? await fs.realpath(requestedGitRoot).catch(() => requestedGitRoot)
+    : null;
   if (!gitRoot) {
     return {
       workDir: resolvedWorkDir,
