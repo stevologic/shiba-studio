@@ -35,6 +35,7 @@ async function main() {
   const remote = path.join(root, 'origin.git');
   try {
     await fs.mkdir(repository, { recursive: true });
+    const canonicalRepository = await fs.realpath(repository);
     await fs.writeFile(path.join(repository, 'tracked.txt'), 'base\n');
     await fs.writeFile(path.join(repository, 'leave.txt'), 'base\n');
     await fs.writeFile(path.join(repository, 'rename-source.txt'), 'rename me\n');
@@ -77,7 +78,11 @@ async function main() {
     await fs.writeFile(path.join(repository, 'untracked-dir', 'child.txt'), 'keep\n');
 
     const conflictedSnapshot = await getIdeGitSnapshot(repository);
-    assert.equal(conflictedSnapshot.repoRoot, path.resolve(repository));
+    assert.equal(
+      await fs.realpath(conflictedSnapshot.repoRoot),
+      canonicalRepository,
+      'repository roots are compared after resolving platform path aliases',
+    );
     assert.equal(conflictedSnapshot.head.branch, 'main');
     assert.equal(conflictedSnapshot.upstream, 'origin/main');
     assert.equal(conflictedSnapshot.ahead, 0);
@@ -177,7 +182,12 @@ async function main() {
     assert.equal(response.status, 200);
     const payload = await response.json() as { ok?: boolean; snapshot?: { repoRoot?: string } };
     assert.equal(payload.ok, true);
-    assert.equal(payload.snapshot?.repoRoot, path.resolve(repository));
+    assert.ok(payload.snapshot?.repoRoot);
+    assert.equal(
+      await fs.realpath(payload.snapshot.repoRoot),
+      canonicalRepository,
+      'API repository roots are compared after resolving platform path aliases',
+    );
 
     console.log('IDE Git verification passed');
   } finally {

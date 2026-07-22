@@ -14,11 +14,10 @@ jobs:
     env:
       TRAFFIC_TOKEN: ${{ secrets.REPOSITORY_TRAFFIC_TOKEN }}
     steps:
-      - name: Explain missing setup
+      - name: Skip when publishing is not configured
         if: env.TRAFFIC_TOKEN == ''
         run: |
-          echo "::error::Add the REPOSITORY_TRAFFIC_TOKEN repository secret to publish traffic snapshots."
-          exit 1
+          echo "::notice::REPOSITORY_TRAFFIC_TOKEN is not configured; keeping the existing public snapshot."
 
       - name: Check out source
         if: env.TRAFFIC_TOKEN != ''
