@@ -28,6 +28,53 @@ export interface AgentToolAuthorization {
   liveTaskShellApproval?: boolean;
   /** Issued only by the agent-run approval/autonomous dispatch path. */
   redditSubmitAuthorized?: boolean;
+  /**
+   * Server-owned durable-context boundary. Model tool arguments must never
+   * choose a chat, project, or run to search.
+   */
+  contextScope?:
+    | { kind: 'session'; sessionId: string; projectId?: string | null }
+    | { kind: 'project'; projectId: string }
+    | { kind: 'run'; runId: string }
+    | { kind: 'global' };
+}
+
+type TrustedContextScope = NonNullable<AgentToolAuthorization['contextScope']>;
+
+async function trustedContextScope(
+  run: Partial<AgentRun>,
+  authorization?: AgentToolAuthorization,
+): Promise<TrustedContextScope> {
+  if (authorization?.contextScope) return authorization.contextScope;
+
+  // Autonomous/background workers carry a durable task id. Resolve their
+  // ownership from the ledger instead of trusting model-produced tool args.
+  if (run.taskId) {
+    const { getTask } = await import('./task-ledger');
+    const task = getTask(run.taskId);
+    if (task?.sessionId) {
+      return { kind: 'session', sessionId: task.sessionId, projectId: task.projectId || null };
+    }
+    if (task?.projectId) return { kind: 'project', projectId: task.projectId };
+  }
+  if (run.projectId) return { kind: 'project', projectId: run.projectId };
+
+  // Standalone agents historically searched shared durable context. Keep that
+  // behavior, but ignore all model-supplied scope selectors below.
+  return { kind: 'global' };
+}
+
+function contextSourceIsAuthorized(
+  source: { scopeType: string; scopeId: string; projectId?: string; runId?: string },
+  scope: TrustedContextScope,
+): boolean {
+  if (scope.kind === 'global') return true;
+  if (scope.kind === 'session') {
+    return source.scopeType === 'session' && source.scopeId === scope.sessionId;
+  }
+  if (scope.kind === 'project') return source.projectId === scope.projectId;
+  return source.runId === scope.runId
+    || (source.scopeType === 'run' && source.scopeId === scope.runId);
 }
 
 export function executeAgentTool(
@@ -264,22 +311,34 @@ async function executeAgentToolScoped(
       }
       case 'session_search': {
         const { getContextSource, searchContext } = await import('./context-engine');
+        const scope = await trustedContextScope(run, authorization);
         const citedSourceId = args.source_id ? String(args.source_id) : '';
         if (citedSourceId) {
-          const result = getContextSource(citedSourceId);
+          let result: ReturnType<typeof getContextSource>;
+          try {
+            result = getContextSource(citedSourceId);
+          } catch {
+            // Use the same response for absent and out-of-scope citations so a
+            // caller cannot probe another chat's source ids.
+            throw new Error('Context source is not available in this execution scope');
+          }
+          if (!contextSourceIsAuthorized(result.source, scope)) {
+            throw new Error('Context source is not available in this execution scope');
+          }
           return {
             result,
             sideEffect: `retrieved durable context source ${citedSourceId.slice(0, 120)}`,
           };
         }
-        const sessionId = args.session_id ? String(args.session_id) : undefined;
-        const explicitProjectId = args.project_id ? String(args.project_id) : undefined;
-        const runId = args.run_id ? String(args.run_id) : undefined;
         const result = searchContext({
           query: String(args.query || ''),
-          ...(sessionId ? { scopeType: 'session' as const, scopeId: sessionId } : {}),
-          projectId: explicitProjectId || run.projectId || undefined,
-          runId,
+          ...(scope.kind === 'session'
+            ? { scopeType: 'session' as const, scopeId: scope.sessionId }
+            : scope.kind === 'project'
+              ? { projectId: scope.projectId }
+              : scope.kind === 'run'
+                ? { runId: scope.runId }
+                : {}),
           maxResults: args.limit == null ? undefined : Number(args.limit),
         });
         return {

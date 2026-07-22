@@ -14,8 +14,34 @@ import type {
   ContextWindowMeter,
   PreparedSessionContext,
 } from './context-types';
+
 import type { Project, ProjectChatMessage } from './project-types';
 import type { AgentRun } from './types';
+
+/**
+ * A live-run persistence can win the race immediately before its model request
+ * and leave an empty/partial assistant placeholder at the end of the durable
+ * row. Placeholders are UI state, never conversation input.
+ */
+export function modelReadyChatHistory<T extends { role?: string; content?: string; streaming?: boolean }>(
+  messages: readonly T[],
+): T[] {
+  return messages.filter((message) => !(
+    message?.role === 'assistant'
+    && (message.streaming === true || !String(message.content || '').trim())
+  ));
+}
+
+/** A durable session transcript always wins over a client-supplied transcript. */
+export function modelRequestChatHistory<T extends { role?: string; content?: string; streaming?: boolean }>(
+  durableSessionMessages: readonly T[] | null,
+  requestedMessages: unknown,
+): T[] {
+  const source = durableSessionMessages !== null
+    ? durableSessionMessages
+    : (Array.isArray(requestedMessages) ? requestedMessages as T[] : []);
+  return modelReadyChatHistory(source);
+}
 
 const CONTEXT_ALGORITHM = 'extractive-v1';
 const MAX_SOURCE_CHARS = 20_000;

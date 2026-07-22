@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { startOAuthFlow } from '@/lib/xai-oauth';
+import { publicOriginForRequestHost } from '@/lib/public-origin';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const origin = typeof body.origin === 'string' ? body.origin : req.nextUrl.origin;
+    const publicOrigin = publicOriginForRequestHost(req.headers.get('host') || req.nextUrl.host);
+    const origin = publicOrigin?.origin
+      || (typeof body.origin === 'string' ? body.origin : req.nextUrl.origin);
     const started = await startOAuthFlow(origin);
     return NextResponse.json({
       ok: true,

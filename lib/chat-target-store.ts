@@ -1,9 +1,9 @@
 /**
- * Sticky Grok Chat agent/target selection.
+ * Legacy direct-chat agent/target selection.
  *
- * Switching chat sessions must NOT re-load a different agent into the picker.
- * The choice is global for the Chat tab: load once, keep until the user picks
- * a new agent in the dropdown (and a send persists it onto that session).
+ * Durable chat sessions own and restore their own `chatTarget`; this small
+ * browser-local store remains only for older direct/project chat surfaces that
+ * do not have a session row.
  */
 'use client';
 

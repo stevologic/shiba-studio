@@ -44,7 +44,8 @@ test('primary navigation keeps the simplified product surface', async ({ page })
   await expect(sidebar.getByRole('link', { name: 'Dashboard', exact: true })).toHaveAttribute('href', '/');
   await expect(sidebar.getByRole('link', { name: 'Code', exact: true })).toHaveAttribute('href', '/code');
   await expect(sidebar.getByRole('link', { name: 'Automations', exact: true })).toHaveAttribute('href', '/automations');
-  await expect(sidebar.getByRole('link', { name: 'Traffic', exact: true })).toHaveAttribute('href', '/traffic');
+  await expect(sidebar.getByRole('link', { name: 'Traffic', exact: true })).toHaveCount(0);
+  await expect(page.locator('.footer-bar').getByRole('link', { name: 'Traffic', exact: true })).toHaveAttribute('href', '/traffic');
 
   for (const retiredLabel of ['Dispatch', 'Routines', 'Meetings', 'Doctor']) {
     await expect(sidebar.getByRole('link', { name: retiredLabel, exact: true })).toHaveCount(0);

@@ -74,3 +74,106 @@ jobs:
       # Production dependencies are currently clean; retain a high/critical
       # gate so newly disclosed severe issues fail CI immediately.
       - run: npm audit --audit-level=high
+
+  e2e:
+    name: Playwright · Chromium · Node 24
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      NODE_OPTIONS: --max-old-space-size=4096
+      PUPPETEER_SKIP_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install (lockfile-exact)
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build production app
+        run: npm run build
+
+      - name: Browser E2E
+        run: npm run test:e2e
+        env:
+          SHIBA_E2E_DATA_DIR: ${{ runner.temp }}/shiba-e2e
+
+      - name: Upload Playwright failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-failure-${{ github.run_attempt }}
+          path: test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker:
+    name: Docker image · provenance + smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IMAGE_NAME: shiba-studio:ci
+      IMAGE_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build image with source provenance
+        shell: bash
+        run: |
+          docker build \
+            --build-arg "SHIBA_GIT_COMMIT=${GITHUB_SHA}" \
+            --build-arg "SHIBA_IMAGE_SOURCE=${IMAGE_SOURCE}" \
+            --tag "${IMAGE_NAME}" \
+            .
+
+      - name: Verify image metadata and runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          container=shiba-studio-smoke
+          cleanup() {
+            code=$?
+            if [ "$code" -ne 0 ]; then docker logs "$container" || true; fi
+            docker rm --force "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          revision="$(docker image inspect "$IMAGE_NAME" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          source="$(docker image inspect "$IMAGE_NAME" --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')"
+          test "$revision" = "$GITHUB_SHA"
+          test "$source" = "$IMAGE_SOURCE"
+
+          docker run --detach \
+            --name "$container" \
+            --publish 127.0.0.1:3000:3000 \
+            --tmpfs /data:rw,noexec,nosuid,size=128m \
+            "$IMAGE_NAME"
+
+          ready=0
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent --show-error http://127.0.0.1:3000/api/health >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = 1
+
+          version_json="$(curl --fail --silent --show-error http://127.0.0.1:3000/api/version)"
+          VERSION_JSON="$version_json" node - <<'NODE'
+          const version = JSON.parse(process.env.VERSION_JSON || '{}');
+          if (version.ok !== true) throw new Error('Version endpoint was not healthy.');
+          if (version.commit !== process.env.GITHUB_SHA) {
+            throw new Error(`Expected ${process.env.GITHUB_SHA}, received ${version.commit}.`);
+          }
+          if (version.source !== 'env') {
+            throw new Error(`Expected env provenance, received ${version.source}.`);
+          }
+          NODE

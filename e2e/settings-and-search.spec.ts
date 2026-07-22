@@ -1,12 +1,31 @@
 import { test, expect } from '@playwright/test';
 
-test('Cost & safety settings save round-trip', async ({ page }) => {
+test('Cost & safety settings save round-trip', async ({ page, request }) => {
+  const seeded = await request.post('/api/config', { data: { dailyBudgetUsd: 6 } });
+  expect(seeded.ok()).toBeTruthy();
+
   await page.goto('/settings', { waitUntil: 'domcontentloaded' });
   const card = page.locator('.settings-card', { hasText: 'Cost & safety' });
   await expect(card).toBeVisible();
 
-  await card.getByLabel(/Daily budget/i).fill('7');
+  const dailyBudget = card.getByLabel(/Daily budget/i);
+  await expect(dailyBudget).toHaveValue('6');
+  await dailyBudget.fill('7');
+  const saved = page.waitForResponse((response) => {
+    if (
+      new URL(response.url()).pathname !== '/api/config'
+      || response.request().method() !== 'POST'
+      || !response.ok()
+    ) return false;
+    try {
+      const payload = response.request().postDataJSON() as { dailyBudgetUsd?: number };
+      return payload.dailyBudgetUsd === 7;
+    } catch {
+      return false;
+    }
+  });
   await card.getByRole('button', { name: /Save Cost & Safety/i }).click();
+  await saved;
 
   const cfg = await page.evaluate(() => fetch('/api/config').then((r) => r.json()));
   expect(cfg.dailyBudgetUsd).toBe(7);

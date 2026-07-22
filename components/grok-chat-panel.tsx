@@ -115,6 +115,8 @@ interface GrokChatPanelProps {
   modelsError: string | null;
   onRefreshModels: () => void;
   agents: Agent[];
+  /** True once the persisted agent roster has loaded, so stale targets can be rejected. */
+  agentsReady?: boolean;
   project?: Project | null;
   onProjectUpdated?: () => void;
   session?: ChatSession | null;
@@ -280,13 +282,21 @@ function sessionToInitialState(
   session: ChatSession | null | undefined,
   project: Project | null | undefined,
   agents: Agent[],
-  /** Sticky agent picker — never taken from session.chatTarget on switch. */
+  agentsReady: boolean,
+  /** Legacy sticky picker for direct, non-session chat surfaces. */
   stickyTarget: ChatTarget = 'grok',
 ) {
-  // Agent/target is sticky across chat sessions (picker + send). Session disk
-  // still records chatTarget when a turn is sent, but opening another chat
-  // must not flip the dropdown.
-  const target = stickyTarget;
+  const isAvailableTarget = (value: string | null | undefined): value is ChatTarget =>
+    value === 'grok'
+    || value === 'all'
+    || (!agentsReady && Boolean(value))
+    || agents.some((agent) => agent.id === value);
+  // Every durable chat owns its specialty. Reopening or switching back to it
+  // must restore the persisted target, not whichever chat was used last.
+  const requestedTarget = session
+    ? (session.chatTarget?.trim() || project?.defaultAgentId?.trim() || 'grok')
+    : stickyTarget;
+  const target = isAvailableTarget(requestedTarget) ? requestedTarget : 'grok';
   // Multi-agent mode never routes through the local CLI — clamp at the source
   // so every state-set path (init + session sync) holds the invariant.
   const useGrokCli = !!session?.useGrokCli && target !== 'all';
@@ -320,6 +330,7 @@ export default function GrokChatPanel({
   modelsError,
   onRefreshModels,
   agents,
+  agentsReady = true,
   project = null,
   onProjectUpdated,
   session = null,
@@ -330,13 +341,14 @@ export default function GrokChatPanel({
 }: GrokChatPanelProps) {
   const router = useRouter();
   const isSessionMode = !!session && !onProjectUpdated;
-  // Sticky agent for session chats — survives remount when switching sessions.
-  // Project/direct mode still uses local init only.
+  // Durable chats restore their own specialty in sessionToInitialState. The
+  // sticky picker remains only for legacy direct, non-session chat surfaces.
   const init = sessionToInitialState(
     session,
     project,
     agents,
-    isSessionMode ? (getStickyChatTarget() as ChatTarget) : ((session?.chatTarget || 'grok') as ChatTarget),
+    agentsReady,
+    session ? 'grok' : (getStickyChatTarget() as ChatTarget),
   );
   const [chatTarget, setChatTarget] = useState<ChatTarget>(init.target);
   const [messages, setMessages] = useState<UiMessage[]>(init.messages);
@@ -1770,7 +1782,14 @@ export default function GrokChatPanel({
   useEffect(() => {
     if (!autoSpeak || !dictationSupported) return;
     const t = window.setTimeout(() => {
-      if (autoSpeakRef.current && !streamingRef.current) {
+      // Turning voice on already opens the mic immediately. This delayed
+      // fallback must not restart dictation after the user begins typing,
+      // because a fresh dictation session intentionally clears the composer.
+      if (
+        autoSpeakRef.current
+        && !streamingRef.current
+        && !inputRef.current.trim()
+      ) {
         startDictation({ quiet: true, fresh: true });
       }
     }, 150);
@@ -1993,9 +2012,8 @@ export default function GrokChatPanel({
     toast.success('Chat exported as Markdown');
   }
 
-  // Resync messages from disk when the session snapshot changes.
-  // Never re-apply chatTarget/agent from the session — sticky picker owns that.
-  // Live background turns win over disk snapshots until they finish.
+  // Resync messages and session-owned specialty from disk when the session
+  // snapshot changes. Live background turns win until they finish.
   const sessionSyncKeyRef = useRef<string | null>(session ? `${session.id}:${session.updatedAt}` : null);
   const sessionIdOnlyRef = useRef<string | null>(session?.id ?? null);
   useEffect(() => {
@@ -2008,20 +2026,20 @@ export default function GrokChatPanel({
     const sessionIdChanged = sessionIdOnlyRef.current !== session.id;
     sessionIdOnlyRef.current = session.id;
 
-    // Keep the sticky agent; only session-local prefs rehydrate on switch.
     const next = sessionToInitialState(
       session,
       project,
       agents,
-      getStickyChatTarget() as ChatTarget,
+      agentsReady,
+      'grok',
     );
     if (sessionIdChanged) {
-      // Workspace / reasoning / tools / CLI are per-session; agent picker is not.
+      // Workspace, reasoning, tools, CLI, and target are all per-session.
       setUseGrokCli(next.useGrokCli);
       setToolsEnabled(next.toolsEnabled);
       setReasoningEffort(next.reasoningEffort);
       setWorkspaceDir(next.workspaceDir);
-      // Re-bind local state to sticky on remount paths (key=session.id).
+      // Re-bind local state to the target selected by sessionToInitialState.
       setChatTarget(next.target);
     }
     setMessages(next.messages);
@@ -2039,7 +2057,25 @@ export default function GrokChatPanel({
         ),
       }, { notify: false });
     }
-  }, [session, project, agents, streaming]);
+  }, [session, project, agents, agentsReady, streaming]);
+
+  // The initial render may precede the agent roster. Once it is authoritative,
+  // replace a deleted/stale durable specialty with Grok so the select never
+  // holds an option that does not exist. The next atomic turn lock persists it.
+  useEffect(() => {
+    if (!session || !agentsReady || streaming) return;
+    const validatedTarget = sessionToInitialState(
+      session,
+      project,
+      agents,
+      true,
+      'grok',
+    ).target;
+    if (chatTargetRef.current === validatedTarget) return;
+    chatTargetRef.current = validatedTarget;
+    setChatTarget(validatedTarget);
+    if (validatedTarget === 'all') setUseGrokCli(false);
+  }, [session, project, agents, agentsReady, streaming]);
 
   // Same guard for non-session (direct / project) mode: only reset when the
   // conversation scope really changes, never mid-stream.
@@ -2110,6 +2146,42 @@ export default function GrokChatPanel({
     }
   }
 
+  /** Persist the exact transcript and routing knobs before any session model call. */
+  async function lockDurableSessionTurn(
+    history: UiMessage[],
+    options: {
+      target: ChatTarget;
+      useCli: boolean;
+      model: string;
+      cliModel?: string;
+    },
+  ): Promise<boolean> {
+    if (!isSessionMode || !session) return false;
+    const durableHistory = uiToProjectMessages(history);
+    const response = await fetch('/api/chat-sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update',
+        id: session.id,
+        patch: {
+          chatTarget: options.target,
+          useGrokCli: options.useCli,
+          cliModel: options.useCli ? options.cliModel : undefined,
+          chatModel: options.model,
+          reasoningEffort,
+          toolsEnabled,
+          workspaceDir,
+          messages: durableHistory,
+          title: deriveSessionTitle(durableHistory, session.title),
+        },
+      }),
+    }).catch(() => null);
+    if (!response?.ok) return false;
+    invalidateChatSessionReads(session.id);
+    return true;
+  }
+
   /**
    * Synchronous message updates for stream deltas. Uses the live-run snapshot
    * (or messagesRef) as source of truth so chunks stay ordered under React
@@ -2133,12 +2205,12 @@ export default function GrokChatPanel({
 
   /**
    * User explicitly picked Grok / an agent / All in the chat chrome.
-   * Updates the sticky global picker immediately; session.chatTarget is only
-   * written when a turn is actually sent.
+   * Updates the legacy direct-chat sticky picker immediately; a durable
+   * session writes its own chatTarget when a turn is actually sent.
    */
   function updateChatTarget(next: ChatTarget) {
     setChatTarget(next);
-    if (isSessionMode) setStickyChatTarget(next);
+    if (!session) setStickyChatTarget(next);
     if (next === 'all') setUseGrokCli(false);
     // Seed TTS voice only on explicit agent pick (not on session select/remount).
     if (next !== 'grok' && next !== 'all') {
@@ -2553,8 +2625,12 @@ export default function GrokChatPanel({
     opts?: { continuation?: boolean },
   ) {
     if (voiceGroupBusyRef.current || streamingRef.current) return;
+    if (!isSessionMode || !session) {
+      toast.error('Live voice groups require a saved chat session.');
+      return;
+    }
     const pool = agentsRef.current; // all agents welcome
-    if (pool.length < 1) return;
+    if (pool.length < 2) return;
 
     const pick = pickNextVoiceGroupAgent(
       pool,
@@ -2571,6 +2647,17 @@ export default function GrokChatPanel({
     const agent = pick.agent;
     const useModel = agent.model || chatModelRef.current;
 
+    const locked = await lockDurableSessionTurn(history, {
+      target: 'all',
+      useCli: false,
+      model: chatModelRef.current,
+    });
+    if (!locked) {
+      voiceGroupBusyRef.current = false;
+      toast.error('Could not lock this voice turn to its chat session. Please try again.');
+      return;
+    }
+
     const placeholder: UiMessage = {
       id: assistantId,
       role: 'assistant',
@@ -2582,8 +2669,9 @@ export default function GrokChatPanel({
       agentName: agent.name,
     };
 
-    setMessages([...history, placeholder]);
-    messagesRef.current = [...history, placeholder];
+    const turnMessages = [...history, placeholder];
+    setMessages(turnMessages);
+    messagesRef.current = turnMessages;
     setStreaming(true);
     patchVoiceAgentUi({
       phase: 'thinking',
@@ -2594,24 +2682,18 @@ export default function GrokChatPanel({
     });
 
     abortRef.current?.abort();
-    const ac = new AbortController();
+    const ac = beginLiveChatRun(session.id, toLiveMessages(turnMessages));
     abortRef.current = ac;
 
+    let turnError: string | undefined;
     try {
       const res = await fetch('/api/grok/voice-group-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          sessionId: session.id,
           agentId: agent.id,
-          participantIds: pool.map((a) => a.id),
           continuation: !!opts?.continuation,
-          model: useModel,
-          messages: history.map((m) => ({
-            role: m.role,
-            content: m.content,
-            agentId: m.agentId,
-            agentName: m.agentName,
-          })),
         }),
         signal: ac.signal,
       });
@@ -2628,11 +2710,10 @@ export default function GrokChatPanel({
         agentName: data.agent?.name || agent.name,
         model: data.agent?.model || useModel,
       };
-      setMessages((msgs) => {
-        const updated = msgs.map((m) => (m.id === assistantId ? nextMsg : m));
-        messagesRef.current = updated.filter((m) => m.id !== 'welcome');
-        return updated;
-      });
+      mapMessages(
+        (msgs) => msgs.map((message) => (message.id === assistantId ? nextMsg : message)),
+        { persist: false },
+      );
 
       if (autoSpeakRef.current && content) {
         // Always use the chat voice dropdown (seeded from agent default on switch).
@@ -2651,16 +2732,18 @@ export default function GrokChatPanel({
     } catch (e: unknown) {
       const aborted = e instanceof Error && e.name === 'AbortError';
       const msg = e instanceof Error ? e.message : 'Agent turn failed';
-      setMessages((msgs) =>
-        msgs.map((m) =>
-          m.id === assistantId
+      if (!aborted) turnError = msg;
+      mapMessages(
+        (msgs) => msgs.map((message) =>
+          message.id === assistantId
             ? {
-                ...m,
-                content: aborted ? (m.content || '') : (m.content || `Error: ${msg}`),
+                ...message,
+                content: aborted ? (message.content || '') : (message.content || `Error: ${msg}`),
                 streaming: false,
               }
-            : m,
+            : message,
         ),
+        { persist: false },
       );
       if (!aborted && autoSpeakRef.current) {
         resumeListeningAfterVoice();
@@ -2668,12 +2751,14 @@ export default function GrokChatPanel({
     } finally {
       setStreaming(false);
       voiceGroupBusyRef.current = false;
-      if (isSessionMode) {
-        setMessages((msgs) => {
-          void persistSessionMessages(msgs);
-          return msgs;
-        });
-      }
+      const finalMessages = getLiveChatRun(session.id)?.messages?.length
+        ? (getLiveChatRun(session.id)!.messages as UiMessage[])
+        : messagesRef.current;
+      await finishLiveChatRun(session.id, toLiveMessages(finalMessages), {
+        error: turnError,
+        autoTitle: !opts?.continuation && (!session.title || session.title === 'New chat'),
+      });
+      onSessionUpdated?.();
     }
   }
 
@@ -2710,26 +2795,24 @@ export default function GrokChatPanel({
     setStreaming(true);
     setExpandedThinking((prev) => ({ ...prev, [assistantId]: true }));
 
-    // Persist the agent/target binding only when a turn is actually used — not
-    // when browsing sessions or flipping the dropdown alone. Skip onSessionUpdated
-    // here so we don't re-hydrate the panel mid-send (finish path refreshes later).
+    // Persist the binding before opening the model stream. The API derives its
+    // agent/project scope from this durable row, so a fire-and-forget patch can
+    // otherwise race the request and run under another session's old target.
     if (isSessionMode && session) {
-      void fetch('/api/chat-sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update',
-          id: session.id,
-          patch: {
-            chatTarget,
-            useGrokCli,
-            cliModel: useCli ? (cliModel || cliDefaultModel || undefined) : undefined,
-            chatModel: useModel,
-          },
-        }),
-      }).then((response) => {
-        if (response.ok) invalidateChatSessionReads(session.id);
-      }).catch(() => { /* ignore */ });
+      const locked = await lockDurableSessionTurn(history, {
+        target: chatTarget,
+        useCli,
+        model: useModel,
+        cliModel: useCli ? (cliModel || cliDefaultModel || undefined) : undefined,
+      });
+      if (!locked) {
+        messagesRef.current = history.filter((message) => message.id !== 'welcome');
+        setMessages(history);
+        setStreaming(false);
+        toast.error('Could not lock this turn to its chat session. Please try again.');
+        return;
+      }
+      invalidateChatSessionReads(session.id);
     }
 
     // Voice mode: reset progressive TTS so we can speak mid-stream.
@@ -3831,7 +3914,10 @@ export default function GrokChatPanel({
           value={input}
           onChange={(e) => {
             if (dictating) stopDictation();
-            setInput(e.target.value);
+            const nextInput = e.target.value;
+            // Keep voice timers/effects in sync before React's next render.
+            inputRef.current = nextInput;
+            setInput(nextInput);
             setSlashIdx(0);
             setSlashDismissed(false);
           }}

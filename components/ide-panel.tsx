@@ -739,8 +739,14 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
   }, [workspace]);
 
   useEffect(() => {
+    const scheduledAtWorkspaceSequence = workspaceLoadSequenceRef.current;
     const timer = window.setTimeout(() => {
-      void loadBootstrap(defaultWorkspace.trim() || '.');
+      // The picker can become interactive before this deferred bootstrap runs.
+      // Do not let that stale default request replace a project/worktree the
+      // user already selected in the meantime.
+      if (workspaceLoadSequenceRef.current === scheduledAtWorkspaceSequence) {
+        void loadBootstrap(defaultWorkspace.trim() || '.');
+      }
       void loadWorkspaceOptions();
     }, 0);
     return () => window.clearTimeout(timer);

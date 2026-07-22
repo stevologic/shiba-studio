@@ -23,6 +23,7 @@ type TerminalInfo = {
   pid?: number | null;
   sessionId?: string;
   error?: string;
+  note?: string;
 };
 
 const HEIGHT_KEY = 'shiba-terminal-height';
@@ -139,8 +140,9 @@ async function connectWs() {
     runtime.info = meta;
     if (!res.ok || !meta.wsUrl) {
       runtime.connecting = false;
-      setRuntimeStatus('error', meta.error || 'Terminal API failed', meta);
-      runtime.term?.writeln(`\r\n\x1b[31m[shiba] ${meta.error || 'Terminal API failed'}\x1b[0m`);
+      const message = meta.error || meta.note || 'Terminal API failed';
+      setRuntimeStatus('error', message, meta);
+      runtime.term?.writeln(`\r\n\x1b[31m[shiba] ${message}\x1b[0m`);
       return;
     }
   } catch (e) {
