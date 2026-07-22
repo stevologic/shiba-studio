@@ -83,7 +83,6 @@ jobs:
       CI: 'true'
       NODE_OPTIONS: --max-old-space-size=4096
       PUPPETEER_SKIP_DOWNLOAD: '1'
-      SHIBA_E2E_DATA_DIR: ${{ runner.temp }}/shiba-e2e
     steps:
       - uses: actions/checkout@v6
 
@@ -103,6 +102,8 @@ jobs:
 
       - name: Browser E2E
         run: npm run test:e2e
+        env:
+          SHIBA_E2E_DATA_DIR: ${{ runner.temp }}/shiba-e2e
 
       - name: Upload Playwright failure evidence
         if: failure()
