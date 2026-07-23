@@ -663,6 +663,7 @@ export default function ShibaStudio() {
   const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>('ask');
   const [globalInstructionsInput, setGlobalInstructionsInput] = useState('');
   const [useAgentsMd, setUseAgentsMd] = useState(true);
+  const [serveLocalName, setServeLocalName] = useState(true);
 
   // Direct Grok Chat
   const [chatModel, setChatModel] = useState<GrokModel>('grok-4');
@@ -1154,6 +1155,9 @@ export default function ShibaStudio() {
     if (cfg.toolApprovalMode) setToolApprovalMode(cfg.toolApprovalMode);
     if (cfg.globalInstructions != null) setGlobalInstructionsInput(cfg.globalInstructions);
     if (cfg.useAgentsMd != null) setUseAgentsMd(!!cfg.useAgentsMd);
+    if ((cfg as { serveLocalName?: boolean }).serveLocalName !== undefined) {
+      setServeLocalName((cfg as { serveLocalName?: boolean }).serveLocalName !== false);
+    }
     setCostSettings({
       usageBudgetUsd: cfg.usageBudgetUsd ? String(cfg.usageBudgetUsd) : '',
       usageCostSource: (cfg.usageCostSource === 'xai' || cfg.usageCostSource === 'local' ? cfg.usageCostSource : 'auto') as 'auto' | 'xai' | 'local',
@@ -2639,6 +2643,25 @@ export default function ShibaStudio() {
     setWsPath(path);
     toast.success('Default workspace saved');
     await loadUploads();
+  }
+
+  /** Instant-apply toggle for mDNS shiba.local advertising + port-80 redirect. */
+  async function toggleServeLocalName(next: boolean) {
+    setServeLocalName(next);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serveLocalName: next }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || 'save failed');
+      setConfig((c: any) => ({ ...c, serveLocalName: next }));
+      toast.success(next ? 'Serving as shiba.local' : 'Local-network serving stopped');
+    } catch {
+      setServeLocalName(!next);
+      toast.error('Could not update local-network serving');
+    }
   }
 
   async function resolveToolApproval(approvalId: string, approved: boolean) {
@@ -5256,6 +5279,28 @@ export default function ShibaStudio() {
                   </div>
                   <div className="text-xs text-dim mt-1">
                     Root folder for global uploads, new agents, and workspace explorer. Use Browse to pick a directory on this machine.
+                  </div>
+                </div>
+
+                <div className="grok-card p-5 settings-card">
+                  <div className="settings-card-head">
+                    <Globe size={16} className="opacity-70 shrink-0" />
+                    <div>
+                      <div className="font-medium text-sm">Local network serving</div>
+                      <div className="text-[11px] text-dim">Reach this Studio as http://shiba.local from this machine (and the LAN in LAN mode).</div>
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm mt-2">
+                    <input
+                      type="checkbox"
+                      checked={serveLocalName}
+                      onChange={(e) => void toggleServeLocalName(e.target.checked)}
+                    />
+                    Serve this instance as shiba.local
+                  </label>
+                  <div className="text-xs text-dim mt-1">
+                    Controls the mDNS name announcement and the bare-name port-80 redirect. Applies immediately — no restart.
+                    Turning it off keeps the app fully reachable at localhost:3000.
                   </div>
                 </div>
 

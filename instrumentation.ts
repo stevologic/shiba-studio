@@ -15,9 +15,12 @@ export async function register() {
     throw error;
   }
   let safeMode = false;
+  let serveLocalName = true;
   try {
     const { loadConfig } = await import('./lib/persistence');
-    safeMode = !!(await loadConfig()).safeMode;
+    const bootConfig = await loadConfig();
+    safeMode = !!bootConfig.safeMode;
+    serveLocalName = bootConfig.serveLocalName !== false;
     if (safeMode) console.warn('[shiba-studio] safe mode active: optional network listeners are disabled');
   } catch {
     /* core startup continues with normal defaults */
@@ -148,7 +151,9 @@ export async function register() {
     console.error('[shiba-studio] failed to start retention pruning', e);
   }
   // Advertise the app on the LAN by name (mDNS) — e.g. http://shiba.local:3000.
-  if (!safeMode) try {
+  // The Settings "serve on local network" toggle gates both listeners and can
+  // also start/stop them later without a restart (see /api/config).
+  if (!safeMode && serveLocalName) try {
     const { startMdns } = await import('./lib/mdns');
     startMdns();
   } catch (e) {
@@ -156,7 +161,7 @@ export async function register() {
   }
   // Let bare http://shiba.local (port 80) redirect to the app's real port, so
   // users don't have to remember to type the port after the name.
-  if (!safeMode) try {
+  if (!safeMode && serveLocalName) try {
     const { startPort80Redirect } = await import('./lib/port80-redirect');
     startPort80Redirect();
   } catch (e) {

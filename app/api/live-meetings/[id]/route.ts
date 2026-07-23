@@ -20,6 +20,13 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     deleteLiveMeeting(id);
     return Response.json({ ok: true });
   } catch (error) {
-    return Response.json({ ok: false, error: error instanceof Error ? error.message : 'Could not delete the meeting' }, { status: 400 });
+    const message = error instanceof Error ? error.message : 'Could not delete the meeting';
+    // Not found → 404; summarizing / concurrent version races → 409; other validation → 400.
+    const status = /not found/i.test(message)
+      ? 404
+      : /concurrently|minutes to finish/i.test(message)
+        ? 409
+        : 400;
+    return Response.json({ ok: false, error: message }, { status });
   }
 }

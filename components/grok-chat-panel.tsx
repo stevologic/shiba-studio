@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, FileText, FolderGit2, GitBranch, Mic, MicOff,
+  Brain, Check, ChevronDown, ChevronUp, Copy, Crosshair, Download, Eraser, FileText, FolderGit2, GitBranch, ListOrdered, Mic, MicOff,
   Paperclip, Pencil, RefreshCw, RotateCcw, Send, Sparkles, Square, Terminal, Volume2, VolumeX, X, Zap,
 } from 'lucide-react';
 import {
@@ -359,6 +359,11 @@ export default function GrokChatPanel({
   // (reading storage in useState causes React hydration mismatches).
   const [input, setInput] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  /** Outbound user turns waiting for the current reply to finish. */
+  type QueuedOutbound = { id: string; text: string; attachments?: ChatAttachment[] };
+  const [messageQueue, setMessageQueue] = useState<QueuedOutbound[]>([]);
+  const messageQueueRef = useRef<QueuedOutbound[]>([]);
+  const drainingQueueRef = useRef(false);
   const [streaming, setStreaming] = useState(false);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(init.reasoningEffort);
   const [toolsEnabled, setToolsEnabled] = useState(init.toolsEnabled);
@@ -1894,13 +1899,22 @@ export default function GrokChatPanel({
   }, []);
 
   // Pin to the latest bubble on every message/stream update while stick is on.
-  // Use rAF so layout has applied the new content height first.
+  // Double-rAF so layout has applied the new content height (thinking growth
+  // can land after the first paint).
   useEffect(() => {
     if (!stickToBottomRef.current) return;
-    const id = requestAnimationFrame(() => {
-      if (stickToBottomRef.current) scrollToBottom(false);
+    let cancelled = false;
+    let id2 = 0;
+    const id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => {
+        if (!cancelled && stickToBottomRef.current) scrollToBottom(false);
+      });
     });
-    return () => cancelAnimationFrame(id);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id1);
+      if (id2) cancelAnimationFrame(id2);
+    };
   }, [messages, streaming, scrollToBottom]);
 
   // When a stream starts, re-pin so the user always sees the new reply.
@@ -1909,6 +1923,27 @@ export default function GrokChatPanel({
     stickToBottomRef.current = true;
     setAwayFromLatest(false);
     scrollToBottom(false);
+  }, [streaming, scrollToBottom]);
+
+  // Reasoning / tool traces grow without always flipping a React dependency
+  // that re-renders the outer list cleanly (e.g. live-run reattach, character
+  // data inside a stable bubble). Watch the DOM and keep stick-to-bottom alive.
+  useEffect(() => {
+    if (!streaming) return;
+    const el = scrollRef.current;
+    if (!el || typeof MutationObserver === 'undefined') return;
+    const pin = () => {
+      if (stickToBottomRef.current) scrollToBottom(false);
+    };
+    const mo = new MutationObserver(() => {
+      requestAnimationFrame(pin);
+    });
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    const iv = window.setInterval(pin, 200);
+    return () => {
+      mo.disconnect();
+      window.clearInterval(iv);
+    };
   }, [streaming, scrollToBottom]);
 
   useEffect(() => {
@@ -2395,7 +2430,7 @@ export default function GrokChatPanel({
         ];
 
   async function clearChatContext() {
-    if (!hasChatHistory && !pendingAttachments.length && !input.trim()) return;
+    if (!hasChatHistory && !pendingAttachments.length && !input.trim() && !messageQueueRef.current.length) return;
     const scope = project ? `project "${project.name}"` : 'this chat';
     const ok = await confirmDialog({
       title: `Clear ${scope} history?`,
@@ -2409,6 +2444,9 @@ export default function GrokChatPanel({
     setStreaming(false);
     setInput('');
     setPendingAttachments([]);
+    messageQueueRef.current = [];
+    setMessageQueue([]);
+    drainingQueueRef.current = false;
     setExpandedThinking({});
     const reset = resetChatMessages(project, chatTarget, agents);
     setMessages(reset);
@@ -2477,7 +2515,9 @@ export default function GrokChatPanel({
   ) {
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || res.statusText);
+      const raw = err.error || res.statusText || `Request failed (${res.status})`;
+      const { formatUserFacingStreamError } = await import('@/lib/stream-errors');
+      throw new Error(formatUserFacingStreamError(String(raw)) || String(raw));
     }
 
     const reader = res.body?.getReader();
@@ -2485,6 +2525,8 @@ export default function GrokChatPanel({
 
     const decoder = new TextDecoder();
     let buffer = '';
+    let sawContent = false;
+    let sawDone = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -2499,6 +2541,8 @@ export default function GrokChatPanel({
           if (!trimmed.startsWith('data:')) continue;
           const payload = trimmed.slice(5).trim();
           if (!payload) continue;
+          // Skip bare [DONE] keepalives; never treat non-JSON frames as content.
+          if (payload === '[DONE]') continue;
           let event: {
             type: string;
             delta?: string;
@@ -2513,6 +2557,7 @@ export default function GrokChatPanel({
           try {
             event = JSON.parse(payload);
           } catch {
+            // Truncated or proxy-injected frames — ignore rather than dump into the bubble.
             continue;
           }
 
@@ -2550,6 +2595,7 @@ export default function GrokChatPanel({
               { streaming: true },
             );
           } else if (event.type === 'content' && event.delta) {
+            sawContent = true;
             mapMessages((msgs) =>
               msgs.map((m) =>
                 m.id === assistantId ? { ...m, content: m.content + event.delta } : m,
@@ -2572,16 +2618,38 @@ export default function GrokChatPanel({
               );
             }
           } else if (event.type === 'error') {
-            throw new Error(event.message || 'Stream error');
-          } else if (event.type === 'done' && event.model) {
-            mapMessages((msgs) =>
-              msgs.map((m) =>
-                m.id === assistantId ? { ...m, model: event.model, streaming: false } : m,
-              ),
-              { streaming: true },
-            );
+            const { formatUserFacingStreamError } = await import('@/lib/stream-errors');
+            throw new Error(formatUserFacingStreamError(event.message || 'Stream error') || 'Stream error');
+          } else if (event.type === 'done') {
+            sawDone = true;
+            if (event.model) {
+              mapMessages((msgs) =>
+                msgs.map((m) =>
+                  m.id === assistantId ? { ...m, model: event.model, streaming: false } : m,
+                ),
+                { streaming: true },
+              );
+            }
           }
         }
+      }
+    }
+
+    // Stream closed without a final bubble (proxy kill / idle timeout) — recover cleanly.
+    if (!sawContent) {
+      const current = messagesRef.current.find((m) => m.id === assistantId);
+      if (!current?.content?.trim()) {
+        const note = sawDone
+          ? 'I finished without a text reply. Try again or rephrase.'
+          : 'The stream ended before a reply arrived (often a timeout). Send “continue” or try again.';
+        mapMessages(
+          (msgs) =>
+            msgs.map((m) =>
+              m.id === assistantId ? { ...m, content: note, streaming: false } : m,
+            ),
+          { streaming: false },
+        );
+        return;
       }
     }
 
@@ -2759,6 +2827,9 @@ export default function GrokChatPanel({
         autoTitle: !opts?.continuation && (!session.title || session.title === 'New chat'),
       });
       onSessionUpdated?.();
+      if (messageQueueRef.current.length) {
+        queueMicrotask(() => { void drainMessageQueue(); });
+      }
     }
   }
 
@@ -2901,15 +2972,20 @@ export default function GrokChatPanel({
       await consumeStream(res, assistantId);
     } catch (e: unknown) {
       const aborted = e instanceof Error && e.name === 'AbortError';
-      const msg = e instanceof Error ? e.message : 'Request failed';
-      if (!aborted) turnError = msg;
+      const { formatUserFacingStreamError, isAbortLikeError } = await import('@/lib/stream-errors');
+      const friendly = formatUserFacingStreamError(e);
+      const quietAbort = aborted || (isAbortLikeError(e) && !friendly);
+      if (!quietAbort && friendly) turnError = friendly;
       mapMessages(
         (msgs) =>
           msgs.map((m) =>
             m.id === assistantId
               ? {
                   ...m,
-                  content: aborted ? m.content : m.content || `Error: ${msg}`,
+                  // Keep partial answer if we already streamed something; otherwise a clean note.
+                  content: quietAbort
+                    ? m.content
+                    : (m.content?.trim() ? m.content : (friendly || m.content || 'Request failed')),
                   streaming: false,
                 }
               : m,
@@ -2933,6 +3009,11 @@ export default function GrokChatPanel({
         void persistProjectChat(msgs);
         return msgs;
       });
+    }
+
+    // Fire the next queued user message after this turn settles.
+    if (messageQueueRef.current.length) {
+      queueMicrotask(() => { void drainMessageQueue(); });
     }
   }
 
@@ -3286,14 +3367,22 @@ export default function GrokChatPanel({
     return false;
   }
 
-  async function sendChat() {
-    // Prefer live composer ref so voice auto-send isn't racing a stale state close.
-    const text = (inputRef.current || input).trim();
-    const liveBusy = !!(session?.id && getLiveChatRun(session.id)?.streaming);
-    if ((!text && pendingAttachments.length === 0) || streaming || liveBusy) {
-      sendingFromVoiceRef.current = false;
-      return;
-    }
+  function enqueueOutbound(text: string, attachments: ChatAttachment[]): void {
+    const item: QueuedOutbound = {
+      id: uuidv4(),
+      text,
+      attachments: attachments.length ? attachments : undefined,
+    };
+    messageQueueRef.current = [...messageQueueRef.current, item];
+    setMessageQueue(messageQueueRef.current);
+  }
+
+  function removeQueuedOutbound(id: string): void {
+    messageQueueRef.current = messageQueueRef.current.filter((q) => q.id !== id);
+    setMessageQueue(messageQueueRef.current);
+  }
+
+  async function dispatchOutbound(text: string, attachments: ChatAttachment[]): Promise<void> {
     // Always follow the new reply as it streams (user can scroll up to unpin).
     stickToBottomRef.current = true;
     setAwayFromLatest(false);
@@ -3311,12 +3400,12 @@ export default function GrokChatPanel({
       }
     }
 
-    if (chatTarget === 'all' && pendingAttachments.length > 0) {
+    if (chatTarget === 'all' && attachments.length > 0) {
       toast.error('Multi-agent mode does not support file attachments yet — send text only.');
       sendingFromVoiceRef.current = false;
       return;
     }
-    if (useGrokCli && pendingAttachments.length > 0) {
+    if (useGrokCli && attachments.length > 0) {
       toast.error('Grok CLI mode is text-only — remove attachments or switch back to API chat.');
       sendingFromVoiceRef.current = false;
       return;
@@ -3326,19 +3415,88 @@ export default function GrokChatPanel({
       id: uuidv4(),
       role: 'user',
       content: text || '(see attachments)',
-      attachments: pendingAttachments.length ? [...pendingAttachments] : undefined,
+      attachments: attachments.length ? attachments : undefined,
     };
 
-    const history = [...messages.filter((m) => m.id !== 'welcome'), userMsg];
-    setInput('');
-    inputRef.current = '';
-    setPendingAttachments([]);
+    const base = messagesRef.current.length
+      ? messagesRef.current.filter((m) => m.id !== 'welcome')
+      : messages.filter((m) => m.id !== 'welcome');
+    const history = [...base, userMsg];
     sendingFromVoiceRef.current = false;
     // User contribution resets the agent free-talk chain.
     clearVoiceGroupSilenceTimer();
     voiceGroupChainRef.current = 0;
     messagesRef.current = history;
     await runAssistantTurn(history);
+  }
+
+  async function drainMessageQueue(): Promise<void> {
+    if (drainingQueueRef.current) return;
+    if (streamingRef.current) return;
+    if (session?.id && getLiveChatRun(session.id)?.streaming) return;
+    const next = messageQueueRef.current[0];
+    if (!next) return;
+    drainingQueueRef.current = true;
+    try {
+      messageQueueRef.current = messageQueueRef.current.slice(1);
+      setMessageQueue(messageQueueRef.current);
+      await dispatchOutbound(next.text, next.attachments || []);
+    } finally {
+      drainingQueueRef.current = false;
+      // If more items landed while we were sending, keep draining.
+      if (messageQueueRef.current.length && !streamingRef.current) {
+        void drainMessageQueue();
+      }
+    }
+  }
+
+  async function sendChat() {
+    // Prefer live composer ref so voice auto-send isn't racing a stale state close.
+    const text = (inputRef.current || input).trim();
+    const attachments = pendingAttachments.length ? [...pendingAttachments] : [];
+    if (!text && attachments.length === 0) {
+      sendingFromVoiceRef.current = false;
+      return;
+    }
+
+    const liveBusy = !!(session?.id && getLiveChatRun(session.id)?.streaming);
+    const busy = streaming || liveBusy || drainingQueueRef.current;
+
+    // While a turn is in flight, queue instead of blocking the composer.
+    if (busy) {
+      // Slash commands are immediate side-effects — don't park them behind a reply.
+      if (text.startsWith('/')) {
+        toast.info('Wait for the current reply to finish before running a slash command.');
+        sendingFromVoiceRef.current = false;
+        return;
+      }
+      if (chatTarget === 'all' && attachments.length > 0) {
+        toast.error('Multi-agent mode does not support file attachments yet — send text only.');
+        sendingFromVoiceRef.current = false;
+        return;
+      }
+      if (useGrokCli && attachments.length > 0) {
+        toast.error('Grok CLI mode is text-only — remove attachments or switch back to API chat.');
+        sendingFromVoiceRef.current = false;
+        return;
+      }
+      if (messageQueueRef.current.length >= 20) {
+        toast.error('Message queue is full (20). Wait for replies or cancel queued items.');
+        sendingFromVoiceRef.current = false;
+        return;
+      }
+      enqueueOutbound(text, attachments);
+      setInput('');
+      inputRef.current = '';
+      setPendingAttachments([]);
+      sendingFromVoiceRef.current = false;
+      return;
+    }
+
+    setInput('');
+    inputRef.current = '';
+    setPendingAttachments([]);
+    await dispatchOutbound(text, attachments);
   }
   sendChatRef.current = () => { void sendChat(); };
 
@@ -3540,7 +3698,7 @@ export default function GrokChatPanel({
         <button
           type="button"
           onClick={clearChatContext}
-          disabled={streaming || (!hasChatHistory && !pendingAttachments.length && !input.trim())}
+          disabled={streaming || (!hasChatHistory && !pendingAttachments.length && !input.trim() && !messageQueue.length)}
           className="grok-btn grok-btn-ghost text-xs py-1"
           title="Clear chat history (workspace and project uploads stay in context)"
         >
@@ -3848,6 +4006,47 @@ export default function GrokChatPanel({
       )}
       </div>
 
+      {messageQueue.length > 0 && (
+        <div className="grok-chat-message-queue mt-2 px-1" aria-label="Queued messages">
+          <div className="grok-chat-message-queue-label">
+            <ListOrdered size={12} />
+            <span>
+              {messageQueue.length} queued — will send when the current reply finishes
+            </span>
+            <button
+              type="button"
+              className="grok-chat-message-queue-clear"
+              onClick={() => {
+                messageQueueRef.current = [];
+                setMessageQueue([]);
+              }}
+              title="Cancel all queued messages"
+            >
+              Clear queue
+            </button>
+          </div>
+          {messageQueue.map((q, i) => (
+            <div key={q.id} className="chat-attachment-chip chat-queue-chip">
+              <span className="chat-queue-index">{i + 1}</span>
+              <span className="chat-attachment-name" title={q.text}>
+                {q.text
+                  ? (q.text.length > 72 ? `${q.text.slice(0, 72)}…` : q.text)
+                  : '(attachments)'}
+                {q.attachments?.length ? ` · ${q.attachments.length} file(s)` : ''}
+              </span>
+              <button
+                type="button"
+                className="chat-attachment-remove"
+                onClick={() => removeQueuedOutbound(q.id)}
+                title="Remove from queue"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {pendingAttachments.length > 0 && (
         <div className="grok-chat-pending-attachments mt-2 px-1">
           {pendingAttachments.map((att) => (
@@ -4150,27 +4349,31 @@ export default function GrokChatPanel({
             <Terminal size={15} />
           </button>
         )}
-        {streaming ? (
+        {streaming && (
           <button
             type="button"
             onClick={stopStreaming}
-            className="grok-btn grok-btn-secondary ml-auto"
-            title="Stop generating"
+            className="grok-btn grok-btn-secondary"
+            title="Stop generating (queued messages stay and send next)"
           >
             <Square size={14} />
             Stop
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={sendChat}
-            disabled={uploading || (!input.trim() && pendingAttachments.length === 0)}
-            className="grok-btn grok-btn-primary ml-auto"
-          >
-            <Send size={15} />
-            Send
-          </button>
         )}
+        <button
+          type="button"
+          onClick={() => { void sendChat(); }}
+          disabled={uploading || (!input.trim() && pendingAttachments.length === 0)}
+          className={`grok-btn grok-btn-primary ${streaming ? '' : 'ml-auto'}`}
+          title={
+            streaming
+              ? 'Queue this message — it will send when the current reply finishes'
+              : 'Send message'
+          }
+        >
+          <Send size={15} />
+          {streaming ? 'Queue' : 'Send'}
+        </button>
       </div>
 
       <div className="text-[10px] text-center text-dim mt-1">

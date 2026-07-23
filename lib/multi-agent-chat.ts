@@ -50,7 +50,27 @@ export async function* multiAgentChatStream(params: MultiAgentChatParams): Async
   const { loadConfig } = await import('./persistence');
   const cfg = await loadConfig();
 
-  await Promise.all(
+  // Real-time fan-out: emit each agent-perspective as soon as that agent
+  // finishes, instead of waiting for Promise.all. The chat UI already
+  // appends perspectives mid-stream.
+  type QueueItem = ChatStreamEvent | { type: '__agent_done' };
+  const queue: QueueItem[] = [];
+  let wake: (() => void) | null = null;
+  const push = (item: QueueItem) => {
+    queue.push(item);
+    wake?.();
+    wake = null;
+  };
+  const waitForItem = () => new Promise<void>((resolve) => {
+    if (queue.length) {
+      resolve();
+      return;
+    }
+    wake = resolve;
+  });
+
+  let remaining = agents.length;
+  const fanOut = Promise.all(
     agents.map(async (agent) => {
       try {
         // Each agent answers with live context from its own enabled integrations.
@@ -85,23 +105,36 @@ export async function* multiAgentChatStream(params: MultiAgentChatParams): Async
           usageContext: { source: 'chat', sourceId: `agent:${agent.id}` },
         });
         const content = resp.choices?.[0]?.message?.content?.trim() || '(no response)';
-        perspectives.push({ agentId: agent.id, name: agent.name, content });
+        const perspective = { agentId: agent.id, name: agent.name, content };
+        perspectives.push(perspective);
+        push({ type: 'agent-perspective', agentId: agent.id, name: agent.name, content });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : 'failed';
-        perspectives.push({
+        const perspective = {
           agentId: agent.id,
           name: agent.name,
           content: `(Error: ${msg})`,
-        });
+        };
+        perspectives.push(perspective);
+        push({ type: 'agent-perspective', agentId: agent.id, name: agent.name, content: perspective.content });
+      } finally {
+        remaining -= 1;
+        push({ type: '__agent_done' });
       }
     }),
   );
 
-  perspectives.sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const p of perspectives) {
-    yield { type: 'agent-perspective', agentId: p.agentId, name: p.name, content: p.content };
+  while (remaining > 0 || queue.some((item) => item.type !== '__agent_done')) {
+    if (!queue.length) await waitForItem();
+    const item = queue.shift();
+    if (!item) continue;
+    if (item.type === '__agent_done') continue;
+    yield item;
   }
+  await fanOut;
+
+  // Stable order for synthesis prompt (UI already received real-time order).
+  perspectives.sort((a, b) => a.name.localeCompare(b.name));
 
   yield { type: 'thinking', delta: '\nSynthesizing unified answer…\n' };
 

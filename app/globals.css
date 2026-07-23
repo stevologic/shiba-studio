@@ -3978,6 +3978,58 @@ body::before {
   flex-shrink: 0;
 }
 
+/* ── Queued outbound messages (send while a reply is still streaming) ── */
+.grok-chat-message-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 9rem;
+  overflow-y: auto;
+}
+.grok-chat-message-queue-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+.grok-chat-message-queue-label svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.grok-chat-message-queue-clear {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+}
+.grok-chat-message-queue-clear:hover {
+  text-decoration: underline;
+}
+.chat-queue-chip {
+  max-width: 100%;
+}
+.chat-queue-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  flex-shrink: 0;
+}
+
 /* Grok Voice agent toggle — brand mark, not a speaker cone */
 .grok-voice-toggle {
   position: relative;

@@ -30,9 +30,11 @@ import {
 import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { subscribeLiveEvents } from '@/lib/live-events';
+import { splitSpeechChunks, takeNextUtterance } from '@/lib/xai-tts';
 import type { Agent } from '@/lib/types';
 import type {
   LiveMeetingRecord,
+  LiveMeetingStreamEvent,
   LiveMeetingTurn,
   MeetingDiagramVisual,
   MeetingVisual,
@@ -239,6 +241,55 @@ function AnnotationLayer({ strokes, active, onAddStroke }: {
 
 /* ── Stage: whatever the agent is currently presenting ── */
 
+interface MarkdownSection { title: string; body: string }
+
+/** Split a markdown body at #/##/### headings so the stage can lay sections
+ *  out as cards instead of one tall prose column. */
+function splitMarkdownSections(body: string): MarkdownSection[] {
+  const lines = body.split(/\r?\n/);
+  const sections: Array<{ title: string; lines: string[] }> = [];
+  let current: { title: string; lines: string[] } = { title: '', lines: [] };
+  let sawHeading = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,3}\s+(.+?)\s*$/);
+    if (heading) {
+      if (current.title || current.lines.some((entry) => entry.trim())) sections.push(current);
+      current = { title: heading[1], lines: [] };
+      sawHeading = true;
+    } else {
+      current.lines.push(line);
+    }
+  }
+  sections.push(current);
+  const cleaned = sections
+    .map((section) => ({ title: section.title, body: section.lines.join('\n').trim() }))
+    .filter((section) => section.title || section.body);
+  return sawHeading && cleaned.length > 1 ? cleaned : [{ title: '', body: body.trim() }];
+}
+
+/** Markdown visual as rich cards: sections side by side, no scroll unless the
+ *  content genuinely exceeds the stage. */
+function MarkdownStage({ body }: { body: string }) {
+  const sections = useMemo(() => splitMarkdownSections(body), [body]);
+  if (sections.length <= 1) {
+    return (
+      <div className="rounded-lg border border-default p-4" style={{ background: 'var(--bg-elev)' }}>
+        <ChatMarkdown content={sections[0]?.body || body} />
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))' }}>
+      {sections.map((section, index) => (
+        <div key={index} className="rounded-lg border border-default p-4 min-w-0" style={{ background: 'var(--bg-elev)' }}>
+          {section.title && <div className="text-sm font-medium text-primary mb-2">{section.title}</div>}
+          <ChatMarkdown content={section.body} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function VisualStage({ visual }: { visual: MeetingVisual | null }) {
   if (!visual) {
     return (
@@ -260,7 +311,7 @@ function VisualStage({ visual }: { visual: MeetingVisual | null }) {
     );
   }
   if (visual.kind === 'diagram') return <DiagramView visual={visual} />;
-  if (visual.kind === 'markdown') return <ChatMarkdown content={visual.body} />;
+  if (visual.kind === 'markdown') return <MarkdownStage body={visual.body} />;
   return (
     <div>
       <div className="flex items-center gap-2 mb-2 text-xs text-dim">
@@ -412,6 +463,11 @@ function MinutesView({ meeting, onMeetingChanged, onOpenBoard }: {
                 <div className={`text-sm ${todo.boardTaskId ? 'text-muted' : 'text-primary'}`}>
                   {todo.text}
                   {todo.priority && <span className="ml-2 text-[10px] uppercase tracking-wide text-dim border border-default rounded px-1 py-px">{todo.priority}</span>}
+                  {todo.owner && (
+                    <span className="ml-2 text-[10px] text-dim" title={`Assigned in the meeting to ${todo.owner} — the Board card is assigned when the name matches an agent`}>
+                      → {todo.owner}
+                    </span>
+                  )}
                 </div>
                 {todo.detail && <div className="text-xs text-dim mt-0.5">{todo.detail}</div>}
               </div>
@@ -440,6 +496,10 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
   const [busy, setBusy] = useState(false);
   const [ending, setEnding] = useState(false);
   const [stageTurnId, setStageTurnId] = useState<string | null>(null);
+  /** Progressive spoken text for the in-flight agent turn (SSE `say` deltas). */
+  const [streamingSay, setStreamingSay] = useState('');
+  /** TTS queue is playing — gates mic restart so the agent never hears itself. */
+  const [speaking, setSpeaking] = useState(false);
   const [annotating, setAnnotating] = useState(false);
   const [stageStrokes, setStageStrokes] = useState<Record<string, AnnotationStroke[]>>({});
   const [annotationNote, setAnnotationNote] = useState('');
@@ -481,12 +541,17 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
   }, [onMeetingChanged]);
 
   const speakDoneRef = useRef<(() => void) | null>(null);
+  /** Queued utterances; `audio` is the prefetched synthesis promise. */
+  const speakQueueRef = useRef<Array<{ text: string; audio?: Promise<Blob | null> }>>([]);
+  const ttsActiveRef = useRef(false);
   const stopSpeaking = useCallback(() => {
+    // Drop queued chunks first so the player loop exits after this utterance.
+    speakQueueRef.current.length = 0;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
-    // Settle the in-flight speak() promise so a pending turn never hangs.
+    // Settle the in-flight play promise so a pending turn never hangs.
     speakDoneRef.current?.();
   }, []);
 
@@ -498,41 +563,85 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
     recognitionRef.current = null;
   }, []);
 
-  const speak = useCallback(async (text: string) => {
-    if (!text.trim()) return;
-    stopSpeaking();
-    try {
-      setPhase('speaking');
-      const response = await fetch('/api/tts', {
+  /** Kick synthesis for up to two queued chunks that aren't in flight yet, so
+   *  the next utterance's audio is (usually) ready the moment this one ends. */
+  const pumpSynthesis = useCallback(() => {
+    let inFlight = 0;
+    for (const item of speakQueueRef.current) {
+      if (item.audio) {
+        inFlight += 1;
+        if (inFlight >= 2) break;
+        continue;
+      }
+      item.audio = fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice_id: voiceIdRef.current, fast: true }),
-      });
-      if (!response.ok) throw new Error('Voice synthesis unavailable');
-      const url = URL.createObjectURL(await response.blob());
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const done = () => {
-          if (settled) return;
-          settled = true;
-          URL.revokeObjectURL(url);
-          if (speakDoneRef.current === done) speakDoneRef.current = null;
-          resolve();
-        };
-        speakDoneRef.current = done;
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        audio.onended = done;
-        audio.onerror = done;
-        void audio.play().catch(done);
-      });
-    } catch {
-      /* silent fallback to text-only */
+        body: JSON.stringify({ text: item.text, voice_id: voiceIdRef.current, fast: true }),
+      })
+        .then(async (response) => (response.ok ? response.blob() : null))
+        .catch(() => null);
+      inFlight += 1;
+      if (inFlight >= 2) break;
+    }
+  }, []);
+
+  /** TTS player with a prefetch pipeline: while a chunk plays, the following
+   *  chunks are already synthesizing, so speech flows without network gaps. */
+  const playSpeechQueue = useCallback(async () => {
+    if (ttsActiveRef.current) return;
+    ttsActiveRef.current = true;
+    setSpeaking(true);
+    setPhase('speaking');
+    try {
+      while (speakQueueRef.current.length) {
+        pumpSynthesis();
+        const item = speakQueueRef.current.shift()!;
+        pumpSynthesis();
+        const blob = await item.audio;
+        if (!blob) {
+          // Silent fallback to text-only for the rest of this reply.
+          speakQueueRef.current.length = 0;
+          break;
+        }
+        const url = URL.createObjectURL(blob);
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const done = () => {
+            if (settled) return;
+            settled = true;
+            URL.revokeObjectURL(url);
+            if (speakDoneRef.current === done) speakDoneRef.current = null;
+            resolve();
+          };
+          speakDoneRef.current = done;
+          const audio = new Audio(url);
+          audioRef.current = audio;
+          audio.onended = done;
+          audio.onerror = done;
+          void audio.play().catch(done);
+        });
+      }
     } finally {
       audioRef.current = null;
+      ttsActiveRef.current = false;
+      setSpeaking(false);
       setPhase(micOnRef.current ? 'listening' : 'idle');
     }
-  }, [stopSpeaking]);
+  }, [pumpSynthesis]);
+
+  const enqueueSpeech = useCallback((chunk: string) => {
+    if (!chunk.trim()) return;
+    speakQueueRef.current.push({ text: chunk });
+    pumpSynthesis();
+    void playSpeechQueue();
+  }, [playSpeechQueue, pumpSynthesis]);
+
+  /** Speak a complete reply (used for the opening turn and replays). */
+  const speakWhole = useCallback((text: string) => {
+    for (const chunk of splitSpeechChunks(text)) speakQueueRef.current.push({ text: chunk });
+    pumpSynthesis();
+    void playSpeechQueue();
+  }, [playSpeechQueue, pumpSynthesis]);
 
   const sendTurn = useCallback(async (text: string | null) => {
     if (busyRef.current || meeting.status !== 'active') return;
@@ -551,29 +660,76 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
       }));
       setInput('');
     }
+    let sayText = '';
+    let spokenUpTo = 0;
+    let sawMeeting = false;
+    let streamFailure: string | null = null;
+    const handleEvent = (event: LiveMeetingStreamEvent) => {
+      if (event.type === 'say') {
+        sayText = event.text;
+        setStreamingSay(event.text);
+        if (voiceOut) {
+          // Feed completed sentences to the TTS queue while the rest streams.
+          for (;;) {
+            const rest = sayText.slice(spokenUpTo);
+            const next = takeNextUtterance(rest, { minChars: 36, maxChars: 220 });
+            if (!next) break;
+            spokenUpTo += rest.indexOf(next) + next.length;
+            enqueueSpeech(next);
+          }
+        }
+      } else if (event.type === 'meeting') {
+        sawMeeting = true;
+        applyMeeting(event.meeting);
+        setStreamingSay('');
+      } else if (event.type === 'error') {
+        streamFailure = event.message;
+      }
+    };
     try {
-      const data = await apiJson<{ meeting: LiveMeetingRecord }>(`/api/live-meetings/${encodeURIComponent(meeting.id)}/turn`, {
+      const response = await fetch(`/api/live-meetings/${encodeURIComponent(meeting.id)}/turn/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // stageTurnId tells the server which visual "this"/"it" refers to.
         body: JSON.stringify({ text: trimmed, stageTurnId: stageTurn?.id }),
       });
-      applyMeeting(data.meeting);
-      const reply = [...data.meeting.turns].reverse().find((turn) => turn.role === 'agent');
-      if (reply && voiceOut) {
-        await speak(reply.text);
-      } else {
-        setPhase(micOnRef.current ? 'listening' : 'idle');
+      if (!response.ok || !response.body) throw new Error('Meeting stream unavailable');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() || '';
+        for (const frame of frames) {
+          for (const line of frame.split('\n')) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine.startsWith('data:')) continue;
+            try {
+              handleEvent(JSON.parse(trimmedLine.slice(5).trim()) as LiveMeetingStreamEvent);
+            } catch { /* skip malformed frame */ }
+          }
+        }
       }
+      if (streamFailure) throw new Error(streamFailure);
+      if (!sawMeeting) throw new Error('Meeting stream ended early');
+      // Speak whatever trailed after the last complete sentence.
+      const tail = sayText.slice(spokenUpTo).trim();
+      if (voiceOut && tail) enqueueSpeech(tail);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'The agent could not respond');
-      setPhase(micOnRef.current ? 'listening' : 'idle');
+      setStreamingSay('');
     } finally {
       busyRef.current = false;
       setBusy(false);
-      // The restart effect below resumes listening once busy flips off.
+      // If nothing is being spoken, settle the phase here; otherwise the
+      // speech queue's finally handles it when audio ends.
+      if (!ttsActiveRef.current) setPhase(micOnRef.current ? 'listening' : 'idle');
+      // The restart effect below resumes listening once busy/speaking clear.
     }
-  }, [meeting.id, meeting.status, voiceOut, applyMeeting, speak, stopSpeaking, stageTurn]);
+  }, [meeting.id, meeting.status, voiceOut, applyMeeting, enqueueSpeech, stopSpeaking, stageTurn]);
 
   const sendTurnRef = useRef(sendTurn);
   useEffect(() => { sendTurnRef.current = sendTurn; }, [sendTurn]);
@@ -626,10 +782,10 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
   // Keep listening while the mic is on: restart after a turn finishes and
   // whenever Chrome ends recognition on silence.
   useEffect(() => {
-    if (!micOn || busy || recognitionRef.current) return;
+    if (!micOn || busy || speaking || recognitionRef.current) return;
     const frame = requestAnimationFrame(() => startRecognition());
     return () => cancelAnimationFrame(frame);
-  }, [micOn, busy, recognitionEpoch, startRecognition]);
+  }, [micOn, busy, speaking, recognitionEpoch, startRecognition]);
 
   function toggleMic() {
     if (micOn) {
@@ -667,7 +823,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
     const opening = initial.turns.length === 1 && initial.turns[0].role === 'agent' ? initial.turns[0] : null;
     if (!opening || !voiceOut) return;
     // rAF keeps setState (speaking phase) out of the synchronous effect body.
-    const frame = requestAnimationFrame(() => { void speak(opening.text); });
+    const frame = requestAnimationFrame(() => { speakWhole(opening.text); });
     return () => cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -687,7 +843,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' });
-  }, [meeting.turns.length, interim]);
+  }, [meeting.turns.length, interim, streamingSay]);
 
   async function endMeeting() {
     const confirmed = await confirmDialog({
@@ -916,8 +1072,17 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
                 )}
               </div>
             ))}
+            {streamingSay && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-dim mb-0.5">{meeting.agentName}</div>
+                <div className="text-sm whitespace-pre-wrap text-primary">
+                  {streamingSay}
+                  <span className="animate-pulse" aria-hidden>▍</span>
+                </div>
+              </div>
+            )}
             {interim && <div className="text-sm text-dim italic">“{interim}”</div>}
-            {busy && (
+            {busy && !streamingSay && (
               <div className="flex items-center gap-2 text-xs text-dim">
                 <Loader2 size={12} className="animate-spin" aria-hidden /> {meeting.agentName} is thinking…
               </div>
@@ -986,6 +1151,20 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
   const [starting, setStarting] = useState(false);
   const [active, setActive] = useState<LiveMeetingRecord | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  /** Lobby list controls: '' = all projects, '__none__' = meetings without one. */
+  const [listProject, setListProject] = useState('');
+  const [listSort, setListSort] = useState<'newest' | 'oldest'>('newest');
+
+  const visibleMeetings = useMemo(() => {
+    const filtered = meetings.filter((meeting) => {
+      if (!listProject) return true;
+      if (listProject === '__none__') return !meeting.projectId;
+      return meeting.projectId === listProject;
+    });
+    return [...filtered].sort((a, b) => listSort === 'newest'
+      ? Date.parse(b.createdAt) - Date.parse(a.createdAt)
+      : Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  }, [meetings, listProject, listSort]);
 
   const refresh = useCallback(async () => {
     try {
@@ -1132,13 +1311,43 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
         )}
       </div>
 
-      <div className="page-section-title mt-6"><ClipboardList size={16} className="opacity-70" aria-hidden /> Past meetings</div>
+      <div className="flex items-center justify-between gap-3 flex-wrap mt-6">
+        <div className="page-section-title"><ClipboardList size={16} className="opacity-70" aria-hidden /> Past meetings</div>
+        {meetings.length > 1 && (
+          <div className="flex items-center gap-2">
+            <label className="sr-only" htmlFor="meetings-list-project">Filter meetings by project</label>
+            <select
+              id="meetings-list-project"
+              className="grok-select text-xs"
+              value={listProject}
+              onChange={(event) => setListProject(event.target.value)}
+            >
+              <option value="">All projects</option>
+              <option value="__none__">No project</option>
+              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+            <label className="sr-only" htmlFor="meetings-list-sort">Sort meetings by date</label>
+            <select
+              id="meetings-list-sort"
+              className="grok-select text-xs"
+              value={listSort}
+              onChange={(event) => setListSort(event.target.value === 'oldest' ? 'oldest' : 'newest')}
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+          </div>
+        )}
+      </div>
       {!loaded && <div className="text-sm text-dim mt-2">Loading…</div>}
       {loaded && meetings.length === 0 && (
         <div className="text-sm text-dim mt-2">No meetings yet — start your first review above.</div>
       )}
+      {loaded && meetings.length > 0 && visibleMeetings.length === 0 && (
+        <div className="text-sm text-dim mt-2">No meetings match this filter.</div>
+      )}
       <div className="grid gap-3 mt-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-        {meetings.map((meeting) => (
+        {visibleMeetings.map((meeting) => (
           <div key={meeting.id} className="grok-card p-4 flex flex-col gap-2">
             <div className="flex items-start justify-between gap-2">
               <div className="text-sm text-primary font-medium leading-snug">{meeting.title}</div>

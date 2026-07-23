@@ -338,9 +338,13 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
 
   let base = XAI_BASE;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  // Tool-loop chat turns often need multi-minute completions (search + read +
+  // synthesize). 5 minutes was cutting long agentic turns mid-flight and
+  // surfacing raw AbortSignal noise as the assistant bubble.
+  const COMPLETION_TIMEOUT_MS = 900_000;
   const signal = params.signal
-    ? AbortSignal.any([params.signal, AbortSignal.timeout(300_000)])
-    : AbortSignal.timeout(300_000);
+    ? AbortSignal.any([params.signal, AbortSignal.timeout(COMPLETION_TIMEOUT_MS)])
+    : AbortSignal.timeout(COMPLETION_TIMEOUT_MS);
 
   if (ref.provider === 'local') {
     const { loadConfig } = await import('./persistence');
@@ -351,33 +355,50 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
     base = normalizeLocalBase(cfg.localGrokBaseUrl);
   }
 
-  const res = ref.provider === 'local'
-    ? await fetch(`${base}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal,
-      })
-    : await (async () => {
-        const { fetchCloudWithAuth } = await import('./xai-oauth');
-        return fetchCloudWithAuth(`${base}/chat/completions`, {
+  let res: Response;
+  try {
+    res = ref.provider === 'local'
+      ? await fetch(`${base}/chat/completions`, {
           method: 'POST',
           headers,
           body: JSON.stringify(body),
           signal,
-        }, {
-          keyOverride: params.cloudKey || keyOverride || undefined,
-          keySource: params.cloudAuthSource,
-          preferSource: ref.authSource,
-        });
-      })();
+        })
+      : await (async () => {
+          const { fetchCloudWithAuth } = await import('./xai-oauth');
+          return fetchCloudWithAuth(`${base}/chat/completions`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+            signal,
+          }, {
+            keyOverride: params.cloudKey || keyOverride || undefined,
+            keySource: params.cloudAuthSource,
+            preferSource: ref.authSource,
+          });
+        })();
+  } catch (e: unknown) {
+    const { formatUserFacingStreamError } = await import('./stream-errors');
+    throw new Error(formatUserFacingStreamError(e) || (e instanceof Error ? e.message : 'Request failed'));
+  }
 
   if (!res.ok) {
     const txt = await res.text();
     const src = ref.provider === 'local' ? 'Local server' : 'Grok API';
-    throw new Error(`${src} error ${res.status}: ${txt}`);
+    // Keep the thrown message short — full HTML/JSON bodies become chat gibberish.
+    const clipped = txt
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 240);
+    throw new Error(`${src} error ${res.status}${clipped ? `: ${clipped}` : ''}`);
   }
-  const data: GrokChatResponse = await res.json();
+  let data: GrokChatResponse;
+  try {
+    data = await res.json() as GrokChatResponse;
+  } catch {
+    throw new Error(`${ref.provider === 'local' ? 'Local server' : 'Grok API'} returned a non-JSON body`);
+  }
   const usageModel = ref.encoded;
   if (params.usageContext && data.usage) {
     const { recordUsage } = await import('./usage');

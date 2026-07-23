@@ -386,8 +386,20 @@ async function fetchPinnedHttps(target: Awaited<ReturnType<typeof validateRemote
       headers: { 'User-Agent': 'ShibaStudio-PackWorkshop/1', Accept: 'application/json, text/plain;q=0.9' },
       // Pin the address that passed the private/reserved-range check. TLS SNI
       // and Host still use the original hostname, closing the DNS-rebinding
-      // gap without weakening certificate validation.
-      lookup: (_hostname, _options, callback) => callback(null, target.address, target.family),
+      // gap without weakening certificate validation. Node 20+ happy-eyeballs
+      // (autoSelectFamily) calls lookup with `all: true` and requires an ARRAY
+      // — answering with a bare string there fails as "Invalid IP address:
+      // undefined", so both callback shapes must be served.
+      lookup: (_hostname, options, callback) => {
+        if ((options as { all?: boolean } | undefined)?.all) {
+          (callback as unknown as (err: null, addresses: Array<{ address: string; family: number }>) => void)(
+            null,
+            [{ address: target.address, family: target.family }],
+          );
+          return;
+        }
+        callback(null, target.address, target.family);
+      },
     }, (response) => {
       const status = response.statusCode || 0;
       const declared = Number(response.headers['content-length'] || 0);

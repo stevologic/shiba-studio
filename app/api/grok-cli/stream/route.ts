@@ -7,6 +7,9 @@ import { loadConfig } from '@/lib/persistence';
 
 import { buildCliPromptFromMessages, streamGrokCli } from '@/lib/grok-cli';
 
+export const maxDuration = 3600;
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const cfg = await loadConfig();
