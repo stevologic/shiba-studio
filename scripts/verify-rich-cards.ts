@@ -71,6 +71,25 @@ async function main() {
   assert.equal(bars.items.length, 1, 'negative magnitudes are dropped');
   assert.equal(bars.unit, 'runs');
 
+  // Timechart: ≥2 finite points required; null gaps kept; series cap 4; x ticks clipped.
+  const timechart = parseRichCard(JSON.stringify({
+    kind: 'timechart',
+    title: 'Score',
+    xLabel: 'iter',
+    yLabel: 'pts',
+    x: ['1', '2', '3', '4'],
+    series: [
+      { label: 'A', values: [1, null, 3, 4] },
+      { label: 'Too short', values: [9] },
+      { label: 'B', values: [2, 2, 5, 7] },
+    ],
+  }));
+  assert(timechart && timechart.kind === 'timechart');
+  assert.equal(timechart.series.length, 2, 'series without two finite samples are dropped');
+  assert.deepEqual(timechart.series[0].values, [1, null, 3, 4], 'null gaps are preserved');
+  assert.equal(timechart.xLabel, 'iter');
+  assert.equal(parseRichCard('{"kind":"timechart","series":[{"label":"A","values":[1]}]}'), null, 'timechart needs ≥2 points');
+
   // Malformed payloads must return null (renderers fall back to plain code).
   for (const bad of ['not json', '[1,2]', '{"kind":"stats","stats":[]}', '{"kind":"unknown"}', '{"kind":"callout","title":""}']) {
     assert.equal(parseRichCard(bad), null, `rejects: ${bad}`);
@@ -84,6 +103,13 @@ async function main() {
   const chatSkill = await fs.readFile(path.join(root, 'lib/chat-skill.ts'), 'utf8');
   assert(chatSkill.includes('RICH_CARD_PROMPT'), 'agent chat system prompt teaches the card fence');
   assert(RICH_CARD_PROMPT.includes(RICH_CARD_FENCE), 'prompt names the fence language');
+
+  // Renderer must discriminant-narrow callout and timechart (CI broke when callout
+  // fell through with RichCalloutCard | RichTimechartCard and read card.tone).
+  const richCardView = await fs.readFile(path.join(root, 'components/rich-card.tsx'), 'utf8');
+  assert(richCardView.includes("card.kind === 'callout'"), 'RichCardView narrows callout by kind');
+  assert(richCardView.includes("card.kind === 'timechart'"), 'RichCardView handles timechart by kind');
+  assert(richCardView.includes('function Timechart'), 'Timechart renderer is present');
 
   console.log('verify-rich-cards: OK');
 }

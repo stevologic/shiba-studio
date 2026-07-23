@@ -23,8 +23,154 @@ import type {
   RichCalloutTone,
   RichCard,
   RichChecklistState,
+  RichTimechartCard,
   RichTimelineState,
 } from '@/lib/rich-cards';
+
+const TIMECHART_COLORS = [
+  'var(--accent-3)',
+  'var(--accent-2)',
+  'var(--fun-orange)',
+  'var(--success)',
+] as const;
+
+/** Multi-series line chart with axes, optional X ticks, null = gap. */
+function Timechart({ card }: { card: RichTimechartCard }) {
+  const width = 360;
+  const height = 160;
+  const padL = 36;
+  const padR = 56;
+  const padT = 12;
+  const padB = 28;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const n = Math.max(...card.series.map((s) => s.values.length), 2);
+  const finite = card.series.flatMap((s) => s.values.filter((v): v is number => v != null && Number.isFinite(v)));
+  const minY = finite.length ? Math.min(...finite) : 0;
+  const maxY = finite.length ? Math.max(...finite) : 1;
+  const spanY = maxY - minY || 1;
+  const xAt = (index: number) => padL + (n <= 1 ? 0 : (index / (n - 1)) * plotW);
+  const yAt = (value: number) => padT + (1 - (value - minY) / spanY) * plotH;
+  const xTicks = card.x?.length
+    ? card.x.slice(0, n)
+    : Array.from({ length: Math.min(n, 6) }, (_, i) => {
+        const idx = n <= 1 ? 0 : Math.round((i / Math.max(Math.min(n, 6) - 1, 1)) * (n - 1));
+        return String(idx + 1);
+      });
+  const yTicks = [maxY, (minY + maxY) / 2, minY].map((v) =>
+    Number.isInteger(v) ? String(v) : v.toFixed(1),
+  );
+
+  return (
+    <div className="my-2 p-4" style={CARD_SHELL}>
+      <CardTitle title={card.title} />
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        style={{ maxWidth: width, height: 'auto' }}
+        role="img"
+        aria-label={card.title || 'Time chart'}
+      >
+        <title>{card.title || 'Time chart'}</title>
+        {/* axes */}
+        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke="var(--border)" strokeWidth={1} />
+        <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke="var(--border)" strokeWidth={1} />
+        {yTicks.map((label, i) => {
+          const y = padT + (i / 2) * plotH;
+          return (
+            <g key={`y-${i}`}>
+              <line x1={padL} y1={y} x2={padL + plotW} y2={y} stroke="var(--border)" strokeWidth={0.5} opacity={0.5} />
+              <text x={padL - 6} y={y + 3} textAnchor="end" fontSize={9} fill="var(--text-dim)">{label}</text>
+            </g>
+          );
+        })}
+        {xTicks.map((label, i) => {
+          const idx = card.x?.length
+            ? i
+            : n <= 1
+              ? 0
+              : Math.round((i / Math.max(xTicks.length - 1, 1)) * (n - 1));
+          const x = xAt(Math.min(idx, n - 1));
+          return (
+            <text key={`x-${i}`} x={x} y={height - 8} textAnchor="middle" fontSize={9} fill="var(--text-dim)">
+              {label}
+            </text>
+          );
+        })}
+        {card.yLabel && (
+          <text
+            x={12}
+            y={padT + plotH / 2}
+            textAnchor="middle"
+            fontSize={9}
+            fill="var(--text-dim)"
+            transform={`rotate(-90 12 ${padT + plotH / 2})`}
+          >
+            {card.yLabel}
+          </text>
+        )}
+        {card.xLabel && (
+          <text x={padL + plotW / 2} y={height - 2} textAnchor="middle" fontSize={9} fill="var(--text-dim)">
+            {card.xLabel}
+          </text>
+        )}
+        {card.series.map((series, sIdx) => {
+          const color = TIMECHART_COLORS[sIdx % TIMECHART_COLORS.length];
+          // Split into contiguous polylines so null gaps break the stroke.
+          const segments: Array<Array<[number, number]>> = [];
+          let current: Array<[number, number]> = [];
+          series.values.forEach((sample, index) => {
+            if (sample == null || !Number.isFinite(sample)) {
+              if (current.length) segments.push(current);
+              current = [];
+              return;
+            }
+            current.push([xAt(index), yAt(sample)]);
+          });
+          if (current.length) segments.push(current);
+          let lastIdx = -1;
+          let lastFinite: number | null = null;
+          for (let i = series.values.length - 1; i >= 0; i--) {
+            const v = series.values[i];
+            if (v != null && Number.isFinite(v)) {
+              lastIdx = i;
+              lastFinite = v;
+              break;
+            }
+          }
+          return (
+            <g key={sIdx}>
+              {segments.map((pts, segIdx) => (
+                <polyline
+                  key={segIdx}
+                  points={pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ))}
+              {lastFinite != null && lastIdx >= 0 && (
+                <>
+                  <circle cx={xAt(lastIdx)} cy={yAt(lastFinite)} r={2.5} fill={color} />
+                  <text
+                    x={xAt(lastIdx) + 6}
+                    y={yAt(lastFinite) + 3}
+                    fontSize={9}
+                    fill={color}
+                  >
+                    {series.label}
+                  </text>
+                </>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
 
 /** Word-sized trend line: single hue, no axes — the headline value carries the
  *  reading and the line shows shape. Native tooltip exposes min/max/latest. */
@@ -280,22 +426,32 @@ export default function RichCardView({ card }: { card: RichCard }) {
     );
   }
 
-  const tone = CALLOUT_TONE[card.tone];
-  return (
-    <div
-      className="my-2 p-3.5 flex items-start gap-2.5"
-      style={{
-        ...CARD_SHELL,
-        borderLeft: `3px solid ${tone.color}`,
-        background: `color-mix(in srgb, ${tone.color} 6%, var(--bg-elev))`,
-      }}
-      role={card.tone === 'error' || card.tone === 'warning' ? 'alert' : 'note'}
-    >
-      <span className="mt-0.5 flex-shrink-0" style={{ color: tone.color }}>{tone.icon}</span>
-      <div className="min-w-0">
-        <div className="text-sm font-medium text-primary">{card.title}</div>
-        {card.body && <div className="text-xs text-muted mt-0.5 whitespace-pre-wrap">{card.body}</div>}
+  if (card.kind === 'timechart') {
+    return <Timechart card={card} />;
+  }
+
+  // Discriminated callout — must not fall through from other kinds (timechart
+  // was previously unhandled and poisoned `card.tone` / `card.body` access).
+  if (card.kind === 'callout') {
+    const tone = CALLOUT_TONE[card.tone];
+    return (
+      <div
+        className="my-2 p-3.5 flex items-start gap-2.5"
+        style={{
+          ...CARD_SHELL,
+          borderLeft: `3px solid ${tone.color}`,
+          background: `color-mix(in srgb, ${tone.color} 6%, var(--bg-elev))`,
+        }}
+        role={card.tone === 'error' || card.tone === 'warning' ? 'alert' : 'note'}
+      >
+        <span className="mt-0.5 flex-shrink-0" style={{ color: tone.color }}>{tone.icon}</span>
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-primary">{card.title}</div>
+          {card.body && <div className="text-xs text-muted mt-0.5 whitespace-pre-wrap">{card.body}</div>}
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  return null;
 }
