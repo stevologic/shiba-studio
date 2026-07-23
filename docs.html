@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Shiba Studio Docs — install, chat, agents, automations, configuration</title>
-<meta name="description" content="Complete documentation for Shiba Studio: installation on Windows/macOS/Linux, Grok Chat with slash commands and workspaces, the shared Board with Linear/Jira sync, agents, automations, capabilities, sync, and configuration." />
+<meta name="description" content="Complete documentation for Shiba Studio: installation on Windows/macOS/Linux, Grok Chat with rich cards and message queue, Meetings beta, Board Gantt and Linear/Jira sync, Code IDE, agents, automations, capabilities, sync, and configuration." />
 <link rel="icon" href="favicon.ico" sizes="32x32" />
 <link rel="icon" type="image/svg+xml" href="logo.svg" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
@@ -115,7 +115,9 @@
     <a href="#commands">Slash commands</a>
     <a href="#workspaces">Chat workspaces</a>
     <a href="#annotate">Annotation sub-browser</a>
+    <a href="#meetings">Meetings (Beta)</a>
     <a href="#board">Board</a>
+    <a href="#code">Code IDE</a>
     <a href="#agents">Agents</a>
     <a href="#automations">Automations</a>
     <a href="#capabilities">Capabilities</a>
@@ -130,7 +132,7 @@
     <h1>Shiba Studio documentation</h1>
     <p class="lead">
       Everything you need to install, drive, and configure the localhost Grok agent studio —
-      from your first chat to headless scheduled agents.
+      from your first chat and Meetings beta reviews to headless scheduled agents and the Code IDE.
     </p>
 
     <section id="getting-started">
@@ -177,11 +179,14 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
 
     <section id="chat">
       <h2>Grok Chat</h2>
-      <p>Chat is a working surface, not just a conversation: it streams reasoning, renders markdown with syntax highlighting, shows images inline (click for a lightbox), accepts drag-and-drop / pasted attachments, and can act on your repo, your vault, and the web.</p>
+      <p>Chat is a working surface, not just a conversation: it streams reasoning, renders markdown with syntax highlighting and <strong>rich cards</strong>, shows images inline (click for a lightbox), accepts drag-and-drop / pasted attachments, and can act on your repo, your vault, and the web.</p>
       <ul>
         <li><strong>Sessions</strong> live in a collapsible, searchable rail on the left; each keeps its own model, target, reasoning effort, workspace, and history. New chats are <strong>auto-titled</strong> by a low-cost model after the first exchange.</li>
         <li><strong>Chat targets</strong> — talk to plain Grok, to a specific agent (with its personality and live integration context), or to <em>all agents</em> at once with a synthesized answer.</li>
         <li><strong>Models &amp; reasoning</strong> — switch cloud/local models per session from the composer pill; reasoning-capable models get an effort selector (off/low/med/high). A terminal toggle routes the session through the local Grok CLI instead of the API.</li>
+        <li><strong>Message queue</strong> — keep typing while a reply streams; up to 20 messages queue and fire in order when the turn settles. Stick-to-bottom tracks growing reasoning.</li>
+        <li><strong>Rich cards</strong> — a fenced <code>shiba-card</code> JSON block becomes live stats, progress, checklists, timelines, callouts, media, sparklines, bars, or multi-series timecharts. Malformed payloads fall back to code, never losing content.</li>
+        <li><strong>Stream resilience</strong> — long tool-using turns get extended timeouts; HTML/proxy dumps and aborts normalize to short user-facing recovery text.</li>
         <li><strong>Quota</strong> — the QUOTA pill reports live spend against your monthly budget from Settings.</li>
         <li><strong>Housekeeping</strong> — export any conversation as Markdown (with reasoning and token counts), edit-and-resend your messages, regenerate the last answer.</li>
       </ul>
@@ -199,10 +204,13 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
         <tr><td><code>/annotate</code></td><td>Open the annotation sub-browser</td></tr>
         <tr><td><code>/workspace</code></td><td>Open the folder picker — bind this chat to a repo/folder</td></tr>
         <tr><td><code>/workspace &lt;path&gt;</code></td><td>Bind directly to a path; <code>/workspace off</code> detaches</td></tr>
+        <tr><td><code>/task &lt;title&gt; | &lt;description&gt;</code></td><td>Create a card in the shared Board backlog</td></tr>
+        <tr><td><code>/board [status|query]</code></td><td>List or filter Board cards</td></tr>
         <tr><td><code>/search &lt;query&gt;</code></td><td>Web search (keyless) — results with links</td></tr>
         <tr><td><code>/fetch &lt;url&gt;</code></td><td>Read a page as clean text into the conversation</td></tr>
         <tr><td><code>/remember &lt;key&gt; | &lt;content&gt;</code></td><td>Save a fact that persists across every chat</td></tr>
         <tr><td><code>/recall [keyword]</code></td><td>List saved memories</td></tr>
+        <tr><td><code>/forget &lt;key&gt;</code></td><td>Delete one exact memory key</td></tr>
         <tr><td><code>/note &lt;path&gt; | &lt;content&gt;</code></td><td>Create an Obsidian note in your vault</td></tr>
         <tr><td><code>/x &lt;text&gt;</code></td><td>Post to X through the configured integration</td></tr>
         <tr><td><code>/help</code></td><td>The full reference, in chat</td></tr>
@@ -234,15 +242,35 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
       <p>It drives a real headless Chrome (no window ever appears), so it works with any URL — cross-origin dev servers included.</p>
     </section>
 
+    <section id="meetings">
+      <h2>Meetings (Beta)</h2>
+      <p>Meetings turns an agent into a colleague you sit down with. Hold a spoken project review: the agent leads — presenting what it has been building — while you steer with your voice or text. Turns stream over SSE; the room has a visual stage and a conversation rail.</p>
+      <ul>
+        <li><strong>Stage visuals</strong> — real workspace code excerpts (never model-invented), SVG diagrams, markdown notes, and live screenshots via the studio browser. Recent visuals stay in context so &ldquo;explain this&rdquo; works.</li>
+        <li><strong>Steering</strong> — AI suggestion chips each turn; annotate the stage with a sketch layer and share markup into the transcript.</li>
+        <li><strong>Minutes</strong> — end the meeting for summary, direction, decisions, and todos. Confirm to create Board cards (idempotent); deleting a meeting never deletes those cards.</li>
+        <li><strong>Privacy</strong> — no audio is stored for live meetings (browser STT only); only text reaches the server.</li>
+      </ul>
+      <div class="callout">Full detail lives in the repo guide: <a href="https://github.com/stevologic/shiba-studio/blob/development/docs/meetings.md">docs/meetings.md</a>.</div>
+    </section>
+
     <section id="board">
       <h2>Board</h2>
       <p>The Board is the shared Kanban for people and agents. Cards can be created manually, assigned to an agent, started as agent work, and tracked through Backlog, Todo, In Progress, In Review, Done, or Cancelled.</p>
       <ul>
+        <li><strong>Timeline (Gantt):</strong> open <em>Timeline</em> for a delivered-work chart of Done cards under the current project filter (created → done from activity).</li>
         <li><strong>Linear sync:</strong> connect a Linear API key, choose a team, and pull, push, or two-way sync Board cards with Linear issues.</li>
         <li><strong>Jira sync:</strong> connect a Jira Cloud site, email, and API token, then target a project or Jira Kanban board.</li>
         <li><strong>Modes:</strong> sync task fields only, or task fields plus workflow status/columns.</li>
+        <li><strong>Grok Files snapshots:</strong> optional private backup of safe card fields through xAI Files (send/pull; never deletes local-only cards or live work).</li>
         <li><strong>Boundaries:</strong> Shiba Studio keeps stable <code>SHIB-#</code> refs and syncs title, description, status, and provider links; ordering, assignees, runs, sprints, activity, and deletions stay local/provider-native.</li>
       </ul>
+    </section>
+
+    <section id="code">
+      <h2>Code IDE</h2>
+      <p>The <strong>Code</strong> page is a Monaco workspace on your machine: multi-file tabs, repository search, structured Git staging/branches/history, GitHub PRs/issues/actions, diagnostics, and the real host terminal. Open the default workspace, a Project folder, or a discovered git worktree from the picker.</p>
+      <div class="callout">Repo guide: <a href="https://github.com/stevologic/shiba-studio/blob/development/docs/code.md">docs/code.md</a>.</div>
     </section>
 
     <section id="agents">
@@ -261,10 +289,10 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
     <section id="automations">
       <h2>Automations</h2>
       <ul>
-        <li><strong>Cron schedules</strong> per agent, with plain-language descriptions and per-schedule instructions.</li>
-        <li><strong>Headless operation</strong> — schedules arm at server start and fire as long as the server is up; the browser can stay closed.</li>
-        <li><strong>Live execution traces</strong> — watch each step (thought → tool call → result) stream as the agent works; run history is browsable per schedule.</li>
-        <li><strong>Self-cleaning</strong> — deleting an agent retires its schedules automatically; runs from deleted agents show a 🛸 avatar in logs.</li>
+        <li><strong>Durable definitions</strong> — recurring cron, one-time, webhooks, integration events, filesystem watches, and health checks; each names an agent as execution owner.</li>
+        <li><strong>Headless operation</strong> — the Automation engine arms at server start and fires as long as the server is up; the browser can stay closed.</li>
+        <li><strong>Live execution traces</strong> — watch each step (thought → tool call → result) stream as the agent works; run history deep-links to full provenance.</li>
+        <li><strong>Self-cleaning</strong> — removing an execution owner safely retires its Automations while preserving history.</li>
       </ul>
     </section>
 
