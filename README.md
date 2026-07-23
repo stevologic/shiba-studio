@@ -34,15 +34,16 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 - **Artifact Studio** — checkpoint-backed HTML/PDF/Office previews with anchored review, visual verification, rollback, and revocable publishing.
 - **Remote and native companions** — a paired, scoped, encrypted-offline PWA for pending approvals and voice requests, and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
 
-- **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Bind any chat to a **workspace folder** (a cloned repo, say) and Grok reads, writes, and searches its files directly.
+- **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, **rich cards** (`shiba-card` fences for stats, progress, checklists, timelines, callouts, media, sparklines, bars, timecharts), inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Queue more messages while a reply streams; stick-to-bottom tracks growing reasoning; transport failures surface as short friendly copy instead of HTML dumps. Bind any chat to a **workspace folder** and Grok reads, writes, and searches its files directly.
+- **Meetings (Beta)** — spoken, agent-led project reviews: the agent presents real code, diagrams, markdown, and live screenshots on a stage while you steer by voice or text; minutes convert to Board cards with one confirmation.
 - **Code IDE** — a first-class Monaco workspace with multi-file tabs, VS Code-grade syntax services, repository search, structured Git staging/branches/history, GitHub pull requests/issues/actions, diagnostics, and the real host terminal.
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, and peers. Automations select an agent as the execution owner; timing and triggers do not live in agent configuration. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Learning & Memories** — agents automatically recall relevant local knowledge before runs and can extract durable facts, decisions, procedures, preferences, and lessons afterward in **Review** or **Automatic** mode. The Memories page provides search, approval, editing, pinning, archiving, scope moves, provenance, and deletion.
 - **Automations** — one durable home for recurring schedules, one-time work, webhooks, integration events, filesystem watches, and health checks, with live traces, retry controls, and headless operation.
-- **Board** — a shared Kanban where people and agents work the same cards, with optional pull, push, or two-way sync to Linear teams and Jira projects/Kanban boards.
+- **Board** — a shared Kanban where people and agents work the same cards, with a **delivered-work Gantt** (Timeline), optional pull/push/two-way sync to Linear teams and Jira projects/Kanban boards, and private Grok Files snapshots.
 - **Annotation sub-browser** — load the web app *you're* building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot straight into chat for code refinement.
 - **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Reddit through a Devvit companion, Obsidian, Vercel, and Netlify agent integrations; Linear/Jira Board sync; custom skills; MCP servers; and a live catalog of 40+ built-in agent tools (web search, workspace grep, persistent memory, image generation, social posting, PRs, deploys, …).
-- **Everything local** — Shiba-managed credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, one-file backup & restore, and zero telemetry. External CLIs can maintain their own permission-restricted caches (the X MCP bridge is documented below).
+- **Everything local** — Shiba-managed credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, one-file backup & restore, and zero telemetry. Reachable as **http://shiba.local** via mDNS (+ optional port-80 redirect). External CLIs can maintain their own permission-restricted caches (the X MCP bridge is documented below).
 
 All intelligence routes exclusively through **Grok/xAI** — cloud API key,
 OAuth 2.0 with X, the local official Grok Build CLI, or any OpenAI-compatible
@@ -50,25 +51,35 @@ local model server (LM Studio, Ollama, llama.cpp).
 
 ## A look around
 
-| Mission-control dashboard | Automations with run logs |
+| Mission-control dashboard | Grok Chat |
 | :---: | :---: |
-| <img src="docs/images/dashboard.png" alt="Dashboard: hero, readiness badges, quick stats, and recent agent runs with statuses and view-answer links" /> | <img src="docs/images/automations.png" alt="Automations: durable trigger-based work with Active/Paused states, Run/Edit/Delete controls, and run-log access" /> |
-| Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Recurring, one-time, monitored, and event-driven work in one place — active Automations keep running headless while the server is up. |
+| <img src="docs/images/dashboard.png" alt="Dashboard: hero, readiness badges, quick stats, and recent agent runs with statuses and view-answer links" /> | <img src="docs/images/chat.png" alt="Grok Chat: session rail, streaming replies, workspace binding, voice and model controls" /> |
+| Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Sessions with tools, voice, project context — Grok, a single agent, or the whole team. Queue messages while a reply streams. |
 
-| Shared Board | Capabilities |
+| Meetings (Beta) | Shared Board |
 | :---: | :---: |
-| <img src="docs/images/board.png" alt="Board page: Linear-style Kanban full of agent work — labeled research cards across Backlog and Todo, a card under review with View work / Validate / Refine, and a Done column of delivered assessments" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the built-in tool catalog" /> |
-| A shared Kanban for people and agents, with Board-scoped Linear/Jira pull, push, and two-way sync. | Every integration the studio can reach, plus skills, MCP servers, and the built-in agent tool catalog. |
+| <img src="docs/images/meetings.png" alt="Meetings beta: start a spoken agent-led project review with agent, project, and focus; past meetings with minutes" /> | <img src="docs/images/board.png" alt="Board page: Linear-style Kanban with Backlog/Todo/In Progress/In Review columns, Timeline Gantt, and Sync" /> |
+| Spoken agent-led reviews with a visual stage; minutes become Board cards after you confirm. | People and agents share one Kanban — Timeline Gantt for delivered work, Linear/Jira sync optional. |
 
-| Agents | Workspace |
+| Automations | Capabilities |
 | :---: | :---: |
-| <img src="docs/images/agents.png" alt="Agents page: local and cloud Grok execution owners with models, workspaces, integration scopes, and skills" /> | <img src="docs/images/workspace.png" alt="Workspace page: local files, global uploads, cloud files, and workspace sync controls" /> |
-| Local and cloud execution owners with their own model, workspace, worktree, integration scopes, skills, and peers. | Local files, uploads, and cloud workspace context in one place. |
+| <img src="docs/images/automations.png" alt="Automations: durable trigger-based work with Active/Paused states, Run/Edit/Delete controls, and run-log access" /> | <img src="docs/images/capabilities.png" alt="Capabilities: core integrations including Linear and Jira Board sync, skills, MCP servers, and the built-in tool catalog" /> |
+| Recurring, one-time, monitored, and event-driven work — headless while the server is up. | Integrations, skills, MCP servers, and the live agent tool catalog. |
 
-| Interactive API explorer | Settings |
+| Agents | Code IDE |
 | :---: | :---: |
-| <img src="docs/images/api-docs.png" alt="API Explorer at /api-docs: grouped endpoints with GET/POST badges and a live request/response panel" /> | <img src="docs/images/settings.png" alt="Settings: model sources, agent behavior, cost and safety guardrails, backup and restore" /> |
-| Send real same-origin requests against your instance from `/api-docs` — GET is safe, POST warns first. | Model sources, ask-before-act default, cost & safety guardrails, and one-file backup/restore. |
+| <img src="docs/images/agents.png" alt="Agents page: local and cloud Grok execution owners with models, workspaces, integration scopes, and skills" /> | <img src="docs/images/code.png" alt="Code IDE: Monaco explorer, multi-file workspace, problems panel, and terminal" /> |
+| Local and cloud execution owners with model, workspace, worktree, scopes, skills, and peers. | Monaco editing, Git, GitHub, diagnostics, and the host terminal in one surface. |
+
+| Workspace | Settings |
+| :---: | :---: |
+| <img src="docs/images/workspace.png" alt="Workspace page: local files, global uploads, cloud files, and workspace sync controls" /> | <img src="docs/images/settings.png" alt="Settings: model sources, agent behavior, cost and safety guardrails, backup and restore" /> |
+| Local files, uploads, and cloud workspace context in one place. | Model sources, ask-before-act, cost & safety, serveLocalName / port-80, backup/restore. |
+
+| Interactive API explorer | Usage |
+| :---: | :---: |
+| <img src="docs/images/api-docs.png" alt="API Explorer at /api-docs: grouped endpoints with GET/POST badges and a live request/response panel" /> | <img src="docs/images/usage.png" alt="Usage dashboard: spend, model mix, and metering against budgets" /> |
+| Same-origin requests against your instance — GET is safe, POST warns first. | Studio metering plus optional xAI billing backport against your budgets. |
 
 ## Quick start
 
@@ -236,10 +247,10 @@ tested `grok 0.2.103` binary.
 | Guide | Covers |
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install on Windows/macOS/Linux, first run, connecting model sources |
-| [Grok Chat](docs/chat.md) | Sessions, models & reasoning, attachments, slash commands, the annotation sub-browser, quotas |
-| [Meetings (Beta)](docs/meetings.md) | Spoken agent-led project reviews with a visual stage, AI steering, and minutes that become Board cards |
+| [Grok Chat](docs/chat.md) | Sessions, models & reasoning, rich cards, message queue, attachments, slash commands, annotation sub-browser, quotas |
+| [Meetings (Beta)](docs/meetings.md) | Spoken agent-led project reviews with a visual stage, streaming turns, AI steering, and minutes → Board cards |
 | [Code IDE](docs/code.md) | Monaco editing, workspace search, Git staging and branches, GitHub activity, keyboard shortcuts, and terminal access |
-| [Board](docs/board.md) | Shared Kanban, agent-run cards, Linear/Jira mirroring, and private Grok Files snapshots |
+| [Board](docs/board.md) | Shared Kanban, delivered-work Gantt, agent-run cards, Linear/Jira mirroring, and private Grok Files snapshots |
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
 | [Memories](docs/memories.md) | Automatic learning modes, relevance recall, review queue, scopes, safety, and management |
 | [Automations](docs/automations.md) | Recurring, one-time, monitored, and event triggers; traces, retries, and headless operation |
@@ -259,7 +270,10 @@ tested `grok 0.2.103` binary.
 ## Highlights
 
 - **Slash commands with grouped autocomplete** — type `/` in chat for session targeting (`/agent`, `/model`, `/project`, `/clear`), Board work (`/task`, `/board`), Git (`/git status|diff|log|checkout|commit|pull|push|pr`), research, memory lifecycle (`/remember`, `/recall`, `/forget`, `/memories`), publishing, and `/help`.
+- **Rich cards in any agent markdown** — fenced `shiba-card` JSON becomes live KPI tiles, progress bars, checklists, timelines, callouts, media layouts, sparklines, bar charts, or multi-series timecharts (chat, meetings, run output).
+- **Message queue + resilient streams** — keep typing while a reply generates; long tool-using turns get longer timeouts; proxy HTML/timeouts collapse to short user-facing recovery text.
 - **Chat workspaces** — point a chat at any folder with `/workspace` (or the topbar folder button); file reads/writes/searches and `/git` commands run inside it, so "fix the failing test in this repo" just works.
+- **Meetings beta** — voice-first delivery reviews with real code excerpts, diagrams, and screenshots on a shared stage; confirm to land todos on the Board.
 - **Auto-titled chats** — a low-end model summarizes each new conversation into a title after the first exchange.
 - **Run provenance everywhere** — dashboard runs, agent history, Automation history, and the audit log all deep-link to full execution traces; removing an execution owner safely retires its Automations while preserving history.
 - **Cost & safety guardrails** — monthly *and* daily spend limits with an optional hard stop, a global concurrent-run cap, per-run token caps, and overlap-suppressed Automation invocations (Settings → Cost & safety).

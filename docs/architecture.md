@@ -7,7 +7,10 @@ below shows the real interaction paths (GitHub renders it inline).
 ```mermaid
 flowchart TB
     subgraph Surfaces["Surfaces — what you touch"]
-        Chat["Grok Chat<br/>slash commands + autocomplete"]
+        Chat["Grok Chat<br/>slash commands · rich cards · message queue"]
+        Meetings["Meetings beta<br/>voice review · stage visuals · minutes"]
+        BoardUI["Board<br/>Kanban · Gantt Timeline · Linear/Jira sync"]
+        CodeIDE["Code IDE<br/>Monaco · Git · GitHub · terminal"]
         SubBrowser["Annotation sub-browser<br/>interact / annotate / scroll"]
         Workspace["Chat workspace<br/>bind a folder or repo"]
         AgentsUI["Agents page<br/>create / edit / configure"]
@@ -21,6 +24,7 @@ flowchart TB
         ToolExec["Tool executor<br/>40+ tools: fs, shell, browser, web,<br/>memory, images, PRs, deploys, MCP"]
         Runtime["Agent runtime<br/>tool-calling loop + trace"]
         AutomationEngine["Durable Automation engine<br/>all triggers, claims, leases, retries"]
+        LiveMeetings["Live meeting engine<br/>brief · turns · minutes · Board convert"]
     end
 
     subgraph Capabilities["Capabilities — what it can reach"]
@@ -28,10 +32,11 @@ flowchart TB
         Skills["Custom skills"]
         MCP["MCP servers"]
         Git["Git actions<br/>status / checkout / commit / PR"]
+        RichCards["Rich cards<br/>shiba-card fence in any markdown"]
     end
 
     subgraph Storage["Storage — what it remembers"]
-        SQLite[("SQLite (~/.shiba-studio)<br/>tasks, runs + traces, audit log,<br/>agent memory, Automation claims")]
+        SQLite[("SQLite (~/.shiba-studio)<br/>tasks, runs + traces, audit log,<br/>agent memory, live meetings, Automation claims")]
         Config[("config.json<br/>credentials sealed AES-256-GCM")]
         Sync["Cloud sync<br/>snapshots in your xAI file storage"]
     end
@@ -40,9 +45,20 @@ flowchart TB
     Chat -->|"/git /x /search /note …"| ToolExec
     Chat -->|"/annotate"| SubBrowser
     Chat -->|"/workspace"| Workspace
+    Chat -->|"markdown + shiba-card"| RichCards
     Workspace -->|"fs tools rooted in the folder"| ToolExec
     SubBrowser -->|"selector + HTML + screenshot"| Chat
     SubBrowser -->|"headless Chrome"| ToolExec
+
+    Meetings --> LiveMeetings
+    LiveMeetings -->|"agent turns"| Gateway
+    LiveMeetings -->|"code / screenshot stage"| ToolExec
+    LiveMeetings -->|"confirm todos"| BoardUI
+    LiveMeetings -->|"minutes + visuals"| SQLite
+
+    BoardUI -->|"start work / validate / refine"| Runtime
+    BoardUI -->|"activity + cards"| SQLite
+    CodeIDE -->|"files / git / github"| ToolExec
 
     AgentsUI -->|"defines execution owners + scopes"| Runtime
     AutomationsUI -->|"create / edit / run / pause"| AutomationEngine

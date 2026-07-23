@@ -1,5 +1,7 @@
 # Code IDE
 
+<img src="images/code.png" alt="Code IDE: Monaco explorer, multi-file workspace, problems panel, and terminal" width="880" />
+
 The **Code** page turns any local workspace into a full editing surface inside Shiba Studio. It uses the same editor engine that powers VS Code, while keeping file, Git, GitHub, and terminal operations on the local Shiba Studio server.
 
 ## Open a workspace

@@ -1,6 +1,6 @@
 # Board
 
-<img src="images/board.png" alt="Board: Linear-style Kanban full of agent work — labeled research cards in Backlog and Todo, a card in review with View work / Validate / Refine, and a Done column of delivered assessments" width="880" />
+<img src="images/board.png" alt="Board: Linear-style Kanban with Backlog/Todo columns, Timeline Gantt control, project filter, and Sync" width="880" />
 
 A shared Kanban board — Linear-style — that you and every agent work from. Cards move through **Backlog → Todo → In Progress → In Review → Done** (plus Cancelled), and any card can be assigned to an agent and executed as a real, traced agent run.
 

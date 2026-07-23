@@ -1,8 +1,8 @@
 # Grok Chat
 
-Grok Chat is a working surface, not just a conversation: it streams reasoning, renders rich markdown, accepts images and files, and can act on your repo, your vault, and the web through slash commands.
+Grok Chat is a working surface, not just a conversation: it streams reasoning, renders rich markdown and **rich cards**, accepts images and files, and can act on your repo, your vault, and the web through slash commands.
 
-<img src="images/chat.png" alt="Grok Chat: session rail, streaming reasoning, slash-command composer, and the annotation sub-browser" width="880" />
+<img src="images/chat.png" alt="Grok Chat: session rail, streaming replies, workspace binding, voice and model controls" width="880" />
 
 ## Sessions
 
@@ -10,6 +10,12 @@ Grok Chat is a working surface, not just a conversation: it streams reasoning, r
 - **Auto-titling:** after the first exchange, a low-end model (grok-code-fast-1) summarizes the conversation into a 3–6 word title.
 - **New Chat** lives in the global top bar on every page.
 - Full history is sent with every prompt, so context always carries across turns.
+
+## Message queue & stick-to-bottom
+
+While a reply is streaming you can keep typing and press **Queue** (the Send button renames itself). Up to **20** outbound messages wait in a chip strip under the composer and fire in order when the current turn settles. Slash commands still require the stream to finish (they are immediate side-effects). **Clear queue** or the × on a chip drops pending items; **Clear chat** also empties the queue.
+
+As reasoning traces and tool activity grow, the transcript **sticks to the bottom** (double-rAF + MutationObserver while streaming). Scroll up to unpin; send another message to re-pin.
 
 ## Chat targets
 
@@ -120,6 +126,28 @@ The killer workflow for building web apps: refine code by *pointing at the page*
 6. Send. Grok sees exactly what you selected and refines the code.
 
 Because it drives a real headless Chrome (puppeteer), it works with any URL — cross-origin dev servers included.
+
+## Rich cards
+
+Any agent markdown (chat, meetings stage, run output) can embed a fenced code block with language `shiba-card` holding **one** JSON object. The renderer turns it into a structured card; invalid payloads fall back to a plain code block so content is never lost.
+
+| `kind` | Purpose |
+| --- | --- |
+| `stats` | KPI tiles with optional delta / up·down·flat tone |
+| `progress` | 0–100 progress bars |
+| `checklist` | done / active / pending / blocked items |
+| `timeline` | milestone list with dates |
+| `callout` | highlighted info / success / warning / error note |
+| `media` | image + body text (`layout`: left / right / top) |
+| `sparkline` | small multi-series trend lines |
+| `bars` | horizontal bar comparison |
+| `timechart` | multi-series Y over X (null = gap), optional axis labels |
+
+Agents learn the fence via the shared rich-card system prompt; prefer a card over a table when it genuinely reads better, and only with real data.
+
+## Stream resilience
+
+Long tool-using turns use an extended completion timeout so multi-minute research does not die mid-flight. Provider HTML error pages, gateway timeouts, and raw JSON dumps are normalized into short, chat-safe messages (tools used may be annotated). User-initiated **Stop** closes quietly without dumping abort noise into the bubble.
 
 ## Export & housekeeping
 
