@@ -77,6 +77,8 @@ export interface LiveMeetingTodo {
   text: string;
   detail?: string;
   priority?: 'low' | 'medium' | 'high';
+  /** Who the work was explicitly assigned to in the meeting (agent name). */
+  owner?: string;
   /** Set once converted — Board card id/key for the created card. */
   boardTaskId?: string;
   boardTaskKey?: string;
@@ -111,3 +113,19 @@ export interface LiveMeetingRecord {
 
 export const LIVE_MEETING_MAX_TURNS = 400;
 export const LIVE_MEETING_MAX_TODOS = 50;
+
+/**
+ * SSE events for `POST /api/live-meetings/:id/turn/stream`.
+ * Mirrors the chat multi-agent stream shape (data: JSON\n\n) so the room can
+ * show progressive spoken text and start TTS before the full JSON turn settles.
+ */
+export type LiveMeetingStreamEvent =
+  | { type: 'status'; phase: 'thinking' | 'settling' }
+  | { type: 'say'; delta: string; text: string }
+  | { type: 'meeting'; meeting: LiveMeetingRecord }
+  | { type: 'error'; message: string }
+  | { type: 'done' };
+
+export function encodeLiveMeetingSseEvent(event: LiveMeetingStreamEvent): string {
+  return `data: ${JSON.stringify(event)}\n\n`;
+}

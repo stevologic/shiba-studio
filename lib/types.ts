@@ -257,6 +257,12 @@ export interface AppConfig {
   /** Recovery mode: keep core data/UI available while optional listeners and packs stay disabled. */
   safeMode?: boolean;
   /**
+   * Serve this instance on the local network by name: mDNS advertising of
+   * shiba.local plus the bare-name port-80 redirect. Default true; turning it
+   * off stops both listeners at runtime (the app stays reachable on localhost).
+   */
+  serveLocalName?: boolean;
+  /**
    * Optional xAI Management API key (Console → Settings → Management Keys).
    * Used to backport authoritative team usage / billing into the Usage page.
    * Separate from the inference API key.

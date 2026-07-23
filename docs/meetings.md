@@ -47,6 +47,8 @@ Every agent turn may put one visual on the stage:
 
 Everything shown **stays in the conversation**: recent visuals keep their full content (the code text, diagram structure, notes) in the agent's context, and each of your turns tells the server which visual is on your stage — so *"now explain this"* right after a snippet appears just works, even if you flipped back to an earlier visual first. The visual history strip lists newest first.
 
+Markdown visuals also render **rich cards**: a fenced ` ```shiba-card ` block holding one JSON object becomes a live card — `stats` (KPI tiles with deltas), `progress` (bars), `checklist` (work states), `timeline` (milestones), or `callout` (highlighted note). The same fence works in Grok chat replies and any other agent markdown; a malformed payload just renders as code, never losing content.
+
 ### Steering
 
 Each agent turn includes 2–4 **suggestion chips** — AI-assisted directions phrased as things you might say (*"Show me the riskiest code path"*). Click one to send it, or ignore them and drive the meeting yourself. If you stay quiet, the agent keeps leading.
@@ -70,3 +72,7 @@ Past meetings (and their minutes) stay in the lobby until you delete them. Delet
 - Meetings live in the local SQLite store (`live_meetings` table) like every other Studio record.
 - Board cards and any other durable outputs require an explicit confirmation click — ending a meeting alone never mutates the Board.
 - Turns are model calls metered under Usage (source `live-meeting`).
+
+## Voice integration scope
+
+For how Live Meetings should reuse `/api/tts` and relate to Companion voice routes (and what must stay separate), see [Live Meetings voice integration scope (SHIB-45)](./research/live-meetings-voice-integration-scope.md).

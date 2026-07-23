@@ -7,8 +7,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw, Check, RotateCcw,
-  FileText, Image as ImageIcon, File, Copy, PackageOpen, FolderKanban, AlertTriangle,
+  FileText, Image as ImageIcon, File, Copy, PackageOpen, FolderKanban, AlertTriangle, BarChart3,
 } from 'lucide-react';
+import BoardGanttModal from '@/components/board-gantt-modal';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import BoardSyncModal from '@/components/board-sync-modal';
@@ -179,6 +180,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<{ col: BoardStatus; beforeId: string | null } | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [ganttOpen, setGanttOpen] = useState(false);
   const [reviewFeedback, setReviewFeedback] = useState('');
   const [reviewBusy, setReviewBusy] = useState(false);
   const [work, setWork] = useState<CardWork | null>(null);
@@ -593,6 +595,14 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
               ))}
             </select>
           </div>
+          <button
+            type="button"
+            className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
+            onClick={() => setGanttOpen(true)}
+            title="Gantt view of delivered cards for the current project filter"
+          >
+            <BarChart3 size={14} /> Timeline
+          </button>
           <button
             type="button"
             className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
@@ -1052,6 +1062,13 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
         open={syncOpen}
         onClose={() => setSyncOpen(false)}
         onSynced={() => void refresh()}
+      />
+
+      <BoardGanttModal
+        open={ganttOpen}
+        onClose={() => setGanttOpen(false)}
+        tasks={filteredTasks}
+        filterLabel={activeProjectFilterLabel}
       />
 
       {tableView && (

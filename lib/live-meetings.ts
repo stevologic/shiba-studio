@@ -17,6 +17,7 @@ import { getDb } from './db';
 import { emitAppEvent } from './app-events';
 import { audit } from './audit-log';
 import { grokChat } from './grok-client';
+import { grokChatStream } from './grok-chat-stream';
 import { loadAgents, loadConfig } from './persistence';
 import { buildProjectChatContext, getProject } from './projects';
 import { createBoardTask, listBoardTasks } from './board';
@@ -31,6 +32,7 @@ import {
   type LiveMeetingMinutes,
   type LiveMeetingRecord,
   type LiveMeetingStatus,
+  type LiveMeetingStreamEvent,
   type LiveMeetingTodo,
   type LiveMeetingTurn,
   type MeetingDiagramVisual,
@@ -162,14 +164,31 @@ export function listLiveMeetings(limit = 100): LiveMeetingRecord[] {
   return rows.map(rowToRecord);
 }
 
+/**
+ * Soft-delete a meeting and scrub its payload.
+ *
+ * Board cards created from minutes are intentionally kept (they are separate
+ * Board ownership). Transcript turns (including any screenshot data URLs),
+ * minutes, and the project brief are wiped so delete frees storage and matches
+ * the lobby confirmation copy.
+ */
 export function deleteLiveMeeting(id: string): void {
   const row = meetingRow(id);
   if (!row) throw new Error('Meeting not found');
   if (row.status === 'summarizing') throw new Error('Wait for the minutes to finish before deleting this meeting');
+  const now = nowIso();
   const result = getDb().prepare(`
-    UPDATE live_meetings SET deletedAt = ?, version = version + 1, updatedAt = ?
-    WHERE id = ? AND version = ? AND deletedAt IS NULL
-  `).run(nowIso(), nowIso(), row.id, row.version);
+    UPDATE live_meetings SET
+      deletedAt = ?,
+      pendingTurn = 0,
+      turns = '[]',
+      minutes = NULL,
+      brief = '',
+      error = NULL,
+      version = version + 1,
+      updatedAt = ?
+    WHERE id = ? AND version = ? AND deletedAt IS NULL AND status != 'summarizing'
+  `).run(now, now, row.id, row.version);
   if (Number(result.changes) !== 1) throw new Error('Meeting changed concurrently; reload and retry');
   audit('run', 'live meeting deleted', row.title, { meetingId: row.id });
   emitAppEvent('meetings');
@@ -291,7 +310,7 @@ const VISUAL_CONTRACT = [
   '"visual" — at most one visual to put on the meeting stage, or null. Show something real every turn or two. One of:',
   '  {"kind":"code","title":"...","path":"relative/path/from/tree","startLine":N,"endLine":M} — the studio reads the REAL file and shows exactly those lines. Only reference paths from the workspace file tree. Keep ranges under 60 lines.',
   '  {"kind":"diagram","title":"...","nodes":[{"id":"a","label":"...","emphasis":true}],"edges":[{"from":"a","to":"b","label":"..."}]} — architecture or flow diagram, 3 to 10 nodes; set emphasis on the nodes you are discussing.',
-  '  {"kind":"markdown","title":"...","body":"..."} — notes, status tables, comparisons, checklists.',
+  '  {"kind":"markdown","title":"...","body":"..."} — notes, status tables, comparisons, checklists. Structure the body with ## section headings (the stage renders each section as a side-by-side card), markdown tables for comparisons, and bullet checklists — never a wall of prose. Shiba-card fences (see the rich-card kinds above) render as live cards on the stage: prefer a stats, progress, checklist, timeline, or callout card whenever the data fits one. Keep sections short enough to read at a glance.',
   '  {"kind":"screenshot","title":"...","url":"http://..."} — live capture of a RUNNING app URL. Only use it when the director said the app is running or asked to see it, with a URL you know.',
   '"suggestions" — 2 to 4 short directions the director could take next, phrased as things they might say (for example "Show me the riskiest code path"). Steer toward review depth, strategy, and decisions.',
 ].join('\n');
@@ -304,6 +323,149 @@ function parseModelJson<T>(content: string): T {
   const end = cleaned.lastIndexOf('}');
   if (start < 0 || end <= start) throw new Error('Meeting model reply did not contain JSON');
   return JSON.parse(cleaned.slice(start, end + 1)) as T;
+}
+
+/**
+ * Progressive spoken-text extractor for partial model JSON.
+ * Models typically emit `"say"` first; as tokens arrive we surface as much of
+ * that string as is safely decodable so the room can stream TTS mid-turn.
+ */
+export function extractPartialSay(raw: string, maxChars = MAX_SAY_CHARS): string {
+  const cleaned = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '');
+  const match = cleaned.match(/"say"\s*:\s*"/);
+  if (!match || match.index == null) return '';
+  let i = match.index + match[0].length;
+  let out = '';
+  while (i < cleaned.length && out.length < maxChars) {
+    const ch = cleaned[i];
+    if (ch === '\\') {
+      if (i + 1 >= cleaned.length) break; // incomplete escape — wait for more tokens
+      const next = cleaned[i + 1];
+      if (next === 'n') { out += '\n'; i += 2; continue; }
+      if (next === 't') { out += '\t'; i += 2; continue; }
+      if (next === 'r') { out += '\r'; i += 2; continue; }
+      if (next === '"' || next === '\\' || next === '/') { out += next; i += 2; continue; }
+      if (next === 'u') {
+        const hex = cleaned.slice(i + 2, i + 6);
+        if (hex.length < 4) break;
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) break;
+        out += String.fromCharCode(parseInt(hex, 16));
+        i += 6;
+        continue;
+      }
+      break;
+    }
+    if (ch === '"') break;
+    out += ch;
+    i += 1;
+  }
+  return out.slice(0, maxChars);
+}
+
+interface PreparedTurn {
+  row: LiveMeetingRow;
+  agent: Agent;
+  model: string;
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+}
+
+/** Claim the meeting and assemble the model prompt for one agent turn. */
+async function prepareLiveMeetingTurn(
+  id: string,
+  creatorTextInput: string | null | undefined,
+  options?: { stageTurnId?: string },
+): Promise<PreparedTurn> {
+  const creatorText = cleanText(creatorTextInput, MAX_SAY_CHARS) || null;
+  // Claim first so concurrent turns fail fast; any failure after the claim
+  // must release pendingTurn so the room is never stuck mid-turn.
+  const row = claimTurn(id, creatorText);
+  try {
+    const agent = await requireAgent(row.agentId);
+    const config = await loadConfig();
+    const model = resolveMeetingModel(agent, config);
+    const turns = parseJson<LiveMeetingTurn[]>(row.turns, []);
+    const history = turns.slice(-MAX_TURN_HISTORY);
+
+    // Everything displayed on the stage is carried into the conversation: the
+    // most recent visuals — and whichever one the director is looking at right
+    // now — keep their full content, so "explain this" has the real thing.
+    const stageTurnId = cleanText(options?.stageTurnId, 160) || null;
+    const fullVisualIds = new Set(
+      history.filter((turn) => turn.visual).map((turn) => turn.id).slice(-FULL_VISUAL_CONTEXT_TURNS),
+    );
+    if (stageTurnId) fullVisualIds.add(stageTurnId);
+    const stageTurn = stageTurnId
+      ? turns.find((turn) => turn.id === stageTurnId && turn.visual) || null
+      : null;
+
+    const system = [
+      buildAgentChatSystem(agent),
+      MEETING_ROLE,
+      row.brief,
+      VISUAL_CONTRACT,
+      ...(stageTurn?.visual
+        ? [`The director's stage currently shows: "${stageTurn.visual.title}" (${stageTurn.visual.kind}). When they say "this" or "it" about something displayed, they mean that visual unless they say otherwise.`]
+        : []),
+    ].join('\n\n');
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: system },
+    ];
+    for (const turn of history) {
+      if (turn.role === 'creator') {
+        messages.push({ role: 'user', content: turn.text });
+        continue;
+      }
+      const parts = [turnSummaryLine(row, turn)];
+      if (turn.visual && fullVisualIds.has(turn.id)) parts.push(visualContextBlock(turn.visual));
+      messages.push({ role: 'assistant', content: parts.join('\n') });
+    }
+    if (!creatorText) {
+      messages.push({
+        role: 'user',
+        content: turns.length === 0
+          ? '(The meeting starts.) Open it: greet the director briefly, then present the current state of the project like a senior engineer opening a delivery review — what was built recently, what is in flight, and what you want feedback on. Put an opening visual on the stage: an architecture diagram of the project or a markdown brief of recent work.'
+          : '(The director is listening.) Continue leading the review with the next most useful part of the project.',
+      });
+    }
+    return { row, agent, model, messages };
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, 4_000);
+    try { settleTurn(row.id, () => {}, message); } catch { /* meeting deleted mid-prep */ }
+    emitAppEvent('meetings');
+    throw error;
+  }
+}
+
+/** Parse a completed model reply, resolve the visual, and settle the claim. */
+async function settleAgentReply(row: LiveMeetingRow, content: string): Promise<LiveMeetingRecord> {
+  let say: string;
+  let visual: MeetingVisual | undefined;
+  let suggestions: string[];
+  try {
+    const payload = parseModelJson<TurnPayload>(content);
+    say = cleanText(payload.say, MAX_SAY_CHARS, true);
+    visual = await resolveVisual(payload.visual, row.workspacePath);
+    suggestions = normalizeSuggestions(payload.suggestions);
+  } catch {
+    // Tolerate an off-contract reply — keep the words, drop the stage update.
+    say = cleanText(content, MAX_SAY_CHARS, true);
+    visual = undefined;
+    suggestions = [];
+  }
+  settleTurn(row.id, (all) => {
+    all.push({
+      id: randomUUID(),
+      role: 'agent',
+      text: say,
+      at: nowIso(),
+      ...(visual ? { visual } : {}),
+      ...(suggestions.length ? { suggestions } : {}),
+    });
+  }, null);
+  emitAppEvent('meetings');
+  const record = getLiveMeeting(row.id);
+  if (!record) throw new Error('Meeting was deleted during the turn');
+  return record;
 }
 
 function languageForPath(filePath: string, fallback: string): string {
@@ -491,106 +653,102 @@ function settleTurn(id: string, apply: (turns: LiveMeetingTurn[]) => void, error
 }
 
 /**
- * Run one agent turn. `creatorText` is the director's spoken/typed input;
- * null means "the agent keeps leading" (opening turn or continuation).
+ * Run one agent turn (non-streaming). `creatorText` is the director's
+ * spoken/typed input; null means "the agent keeps leading" (opening turn or
+ * continuation). Prefer `streamLiveMeetingTurn` for the live room UI.
  */
 export async function runLiveMeetingTurn(
   id: string,
   creatorTextInput?: string | null,
   options?: { stageTurnId?: string },
 ): Promise<LiveMeetingRecord> {
-  const creatorText = cleanText(creatorTextInput, MAX_SAY_CHARS) || null;
-  const row = claimTurn(id, creatorText);
+  let claimedId: string | null = null;
   try {
-    const agent = await requireAgent(row.agentId);
-    const config = await loadConfig();
-    const model = resolveMeetingModel(agent, config);
-    const turns = parseJson<LiveMeetingTurn[]>(row.turns, []);
-    const history = turns.slice(-MAX_TURN_HISTORY);
-
-    // Everything displayed on the stage is carried into the conversation: the
-    // most recent visuals — and whichever one the director is looking at right
-    // now — keep their full content, so "explain this" has the real thing.
-    const stageTurnId = cleanText(options?.stageTurnId, 160) || null;
-    const fullVisualIds = new Set(
-      history.filter((turn) => turn.visual).map((turn) => turn.id).slice(-FULL_VISUAL_CONTEXT_TURNS),
-    );
-    if (stageTurnId) fullVisualIds.add(stageTurnId);
-    const stageTurn = stageTurnId
-      ? turns.find((turn) => turn.id === stageTurnId && turn.visual) || null
-      : null;
-
-    const system = [
-      buildAgentChatSystem(agent),
-      MEETING_ROLE,
-      row.brief,
-      VISUAL_CONTRACT,
-      ...(stageTurn?.visual
-        ? [`The director's stage currently shows: "${stageTurn.visual.title}" (${stageTurn.visual.kind}). When they say "this" or "it" about something displayed, they mean that visual unless they say otherwise.`]
-        : []),
-    ].join('\n\n');
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-      { role: 'system', content: system },
-    ];
-    for (const turn of history) {
-      if (turn.role === 'creator') {
-        messages.push({ role: 'user', content: turn.text });
-        continue;
-      }
-      const parts = [turnSummaryLine(row, turn)];
-      if (turn.visual && fullVisualIds.has(turn.id)) parts.push(visualContextBlock(turn.visual));
-      messages.push({ role: 'assistant', content: parts.join('\n') });
-    }
-    if (!creatorText) {
-      messages.push({
-        role: 'user',
-        content: turns.length === 0
-          ? '(The meeting starts.) Open it: greet the director briefly, then present the current state of the project like a senior engineer opening a delivery review — what was built recently, what is in flight, and what you want feedback on. Put an opening visual on the stage: an architecture diagram of the project or a markdown brief of recent work.'
-          : '(The director is listening.) Continue leading the review with the next most useful part of the project.',
-      });
-    }
-
+    const prepared = await prepareLiveMeetingTurn(id, creatorTextInput, options);
+    claimedId = prepared.row.id;
     const response = await grokChat({
-      model,
+      model: prepared.model,
       temperature: 0.4,
       max_tokens: 4_096,
       usageContext: { source: 'other', sourceId: 'live-meeting' },
-      messages,
+      messages: prepared.messages,
     });
     const content = response.choices[0]?.message?.content || '';
-    let say: string;
-    let visual: MeetingVisual | undefined;
-    let suggestions: string[];
-    try {
-      const payload = parseModelJson<TurnPayload>(content);
-      say = cleanText(payload.say, MAX_SAY_CHARS, true);
-      visual = await resolveVisual(payload.visual, row.workspacePath);
-      suggestions = normalizeSuggestions(payload.suggestions);
-    } catch {
-      // Tolerate an off-contract reply — keep the words, drop the stage update.
-      say = cleanText(content, MAX_SAY_CHARS, true);
-      visual = undefined;
-      suggestions = [];
+    return await settleAgentReply(prepared.row, content);
+  } catch (error) {
+    if (claimedId) {
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, 4_000);
+      try { settleTurn(claimedId, () => {}, message); } catch { /* meeting deleted mid-turn */ }
+      emitAppEvent('meetings');
     }
-    settleTurn(row.id, (all) => {
-      all.push({
-        id: randomUUID(),
-        role: 'agent',
-        text: say,
-        at: nowIso(),
-        ...(visual ? { visual } : {}),
-        ...(suggestions.length ? { suggestions } : {}),
-      });
-    }, null);
-    emitAppEvent('meetings');
-    const record = getLiveMeeting(row.id);
-    if (!record) throw new Error('Meeting was deleted during the turn');
-    return record;
+    throw error;
+  }
+}
+
+/**
+ * Stream one agent turn over the same Grok streaming path multi-agent chat
+ * uses (`grokChatStream` → SSE). Yields progressive `say` deltas as the
+ * model emits JSON, then a final durable `meeting` record with visual +
+ * suggestions once the turn settles.
+ */
+export async function* streamLiveMeetingTurn(
+  id: string,
+  creatorTextInput?: string | null,
+  options?: { stageTurnId?: string; signal?: AbortSignal },
+): AsyncGenerator<LiveMeetingStreamEvent> {
+  let claimedId: string | null = null;
+  try {
+    const prepared = await prepareLiveMeetingTurn(id, creatorTextInput, options);
+    claimedId = prepared.row.id;
+    yield { type: 'status', phase: 'thinking' };
+
+    let content = '';
+    let emittedSay = '';
+    let streamError: string | null = null;
+
+    for await (const event of grokChatStream({
+      model: prepared.model,
+      temperature: 0.4,
+      max_tokens: 4_096,
+      signal: options?.signal,
+      usageContext: { source: 'other', sourceId: 'live-meeting' },
+      messages: prepared.messages,
+    })) {
+      if (options?.signal?.aborted) {
+        throw new Error('Meeting turn cancelled');
+      }
+      if (event.type === 'error') {
+        streamError = event.message || 'Meeting stream failed';
+        break;
+      }
+      if (event.type === 'content' && event.delta) {
+        content += event.delta;
+        const partial = extractPartialSay(content);
+        if (partial.length > emittedSay.length) {
+          const delta = partial.slice(emittedSay.length);
+          emittedSay = partial;
+          yield { type: 'say', delta, text: emittedSay };
+        }
+      }
+    }
+
+    if (streamError) throw new Error(streamError);
+    if (!content.trim() && !emittedSay.trim()) {
+      throw new Error('Meeting model returned an empty reply');
+    }
+
+    yield { type: 'status', phase: 'settling' };
+    const meeting = await settleAgentReply(prepared.row, content || JSON.stringify({ say: emittedSay }));
+    claimedId = null; // settled successfully
+    yield { type: 'meeting', meeting };
+    yield { type: 'done' };
   } catch (error) {
     const message = (error instanceof Error ? error.message : String(error)).slice(0, 4_000);
-    try { settleTurn(row.id, () => {}, message); } catch { /* meeting deleted mid-turn */ }
-    emitAppEvent('meetings');
-    throw error;
+    if (claimedId) {
+      try { settleTurn(claimedId, () => {}, message); } catch { /* meeting deleted mid-turn */ }
+      emitAppEvent('meetings');
+    }
+    yield { type: 'error', message };
   }
 }
 
@@ -642,7 +800,7 @@ interface MinutesPayload {
   summary?: unknown;
   direction?: unknown;
   decisions?: unknown[];
-  todos?: Array<{ text?: unknown; detail?: unknown; priority?: unknown }>;
+  todos?: Array<{ text?: unknown; detail?: unknown; priority?: unknown; owner?: unknown }>;
 }
 
 /** "<Project>: <what the meeting was about>" — the ended-meeting display title. */
@@ -671,11 +829,13 @@ function normalizeMinutes(payload: MinutesPayload): LiveMeetingMinutes {
       if (!text) return [];
       const detail = cleanText(item?.detail, 2_000);
       const priority = priorityOf(item?.priority);
+      const owner = cleanText(item?.owner, 200);
       return [{
         id: `todo-${index + 1}`,
         text,
         ...(detail ? { detail } : {}),
         ...(priority ? { priority } : {}),
+        ...(owner ? { owner } : {}),
       }];
     }),
   };
@@ -703,6 +863,9 @@ export async function endLiveMeeting(id: string): Promise<LiveMeetingRecord> {
     const model = resolveMeetingModel(agent, config);
     const turns = parseJson<LiveMeetingTurn[]>(row.turns, []);
     const transcript = turns.map((turn) => turnSummaryLine(row, turn)).join('\n').slice(0, 120_000);
+    // Roster lets the minutes attribute assignments to real agents, so
+    // "the engineer will take this" becomes a card assignment on conversion.
+    const roster = (await loadAgents()).map((candidate) => candidate.name).filter(Boolean).slice(0, 50);
     const response = await grokChat({
       model,
       temperature: 0.1,
@@ -715,7 +878,7 @@ export async function endLiveMeeting(id: string): Promise<LiveMeetingRecord> {
         },
         {
           role: 'user',
-          content: `Write the minutes for this meeting. Return {"title":"4 to 8 words naming what this meeting actually covered — no project name, no dates","summary":"what was reviewed and discussed","direction":"the agreed direction for the project going forward","decisions":["explicit decisions made"],"todos":[{"text":"actionable item the director requested or both agreed on","detail":"context helpful to whoever picks it up","priority":"low|medium|high"}]}. Todos must come only from explicit requests or agreements in the transcript.\n\nMeeting: ${row.title}\n\n${transcript || '(no conversation happened)'}`,
+          content: `Write the minutes for this meeting. Return {"title":"4 to 8 words naming what this meeting actually covered — no project name, no dates","summary":"what was reviewed and discussed","direction":"the agreed direction for the project going forward","decisions":["explicit decisions made"],"todos":[{"text":"actionable item the director requested or both agreed on","detail":"context helpful to whoever picks it up","priority":"low|medium|high","owner":"who the transcript explicitly assigned this to — use the matching name from the agent roster, omit when nobody was named"}]}. Todos must come only from explicit requests or agreements in the transcript. Agent roster: ${roster.join(', ') || '(none)'}.\n\nMeeting: ${row.title}\n\n${transcript || '(no conversation happened)'}`,
         },
       ],
     });
@@ -761,19 +924,31 @@ export async function convertLiveMeetingTodos(input: {
   const selected = minutes.todos.filter((todo) => wanted.has(todo.id));
   if (!selected.length) throw new Error('Select at least one todo');
   const priorityMap: Record<string, number> = { high: 2, medium: 3, low: 4 };
+  // Owners named in the meeting become real card assignments. Assignment uses
+  // the Board's normal flow, so agent auto-accept opt-ins still govern starts.
+  const agents = (await loadAgents()).map(normalizeAgent);
+  const resolveOwner = (owner: string | undefined): Agent | undefined => {
+    const name = owner?.trim().toLowerCase();
+    if (!name) return undefined;
+    return agents.find((candidate) => candidate.name.toLowerCase() === name)
+      || agents.find((candidate) => candidate.name.toLowerCase().includes(name) || name.includes(candidate.name.toLowerCase()));
+  };
   for (const todo of selected) {
     if (todo.boardTaskId) continue;
+    const assignee = resolveOwner(todo.owner);
     const cardKey = createHash('sha256').update(`${row.id}\0${todo.id}`).digest('hex').slice(0, 32);
     const card = await createBoardTask({
       id: `live-meeting-board-${cardKey}`,
       title: todo.text,
       description: [
         todo.detail || '',
+        todo.owner ? `Owner named in the meeting: ${todo.owner}${assignee ? '' : ' (no matching agent — left unassigned)'}` : '',
         `Requested in meeting “${row.title}” (${new Date(row.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}).`,
       ].filter(Boolean).join('\n\n'),
       status: 'todo',
       priority: todo.priority ? priorityMap[todo.priority] : 0,
       projectId: row.projectId || undefined,
+      assigneeAgentId: assignee?.id,
       labels: ['meeting'],
       createdBy: `meeting ${row.title}`,
     });

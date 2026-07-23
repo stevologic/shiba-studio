@@ -55,6 +55,7 @@ const CHAIN = [
   'verify-sandbox-integrity.ts',
   'verify-meetings.ts',
   'verify-live-meetings.ts',
+  'verify-rich-cards.ts',
   'verify-doctor.ts',
   'verify-harness-grants.ts',
   'verify-task-teams.ts',

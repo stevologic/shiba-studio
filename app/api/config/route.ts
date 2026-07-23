@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
   // must not audit as "settings updated" (they used to spam the log on every
   // page load via the silent local-models probe).
   const changedKeys = body.action ? [] : [
-    'xaiApiKey', 'xaiManagementKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel', 'safeMode',
+    'xaiApiKey', 'xaiManagementKey', 'cloudAuthMode', 'defaultWorkspace', 'defaultGrokModel', 'safeMode', 'serveLocalName',
     'defaultTtsVoice', 'defaultTtsSpeed',
     'localGrokEnabled', 'localGrokBaseUrl', 'localModelAllowlist', 'toolApprovalMode',
     'disabledTools', 'globalInstructions', 'useAgentsMd', 'usageBudgetUsd',
@@ -93,6 +93,23 @@ export async function POST(req: NextRequest) {
   if (body.defaultGrokModel !== undefined) {
     const cfg = await saveConfig({ defaultGrokModel: String(body.defaultGrokModel || '') });
     return NextResponse.json({ ok: true, defaultGrokModel: cfg.defaultGrokModel });
+  }
+  if (body.serveLocalName !== undefined) {
+    const cfg = await saveConfig({ serveLocalName: body.serveLocalName !== false });
+    // Apply at runtime: both listeners are idempotent and best-effort, so the
+    // toggle takes effect without a server restart. Safe mode still wins.
+    try {
+      const { startMdns, stopMdns } = await import('@/lib/mdns');
+      const { startPort80Redirect, stopPort80Redirect } = await import('@/lib/port80-redirect');
+      if (cfg.serveLocalName !== false && !cfg.safeMode) {
+        startMdns();
+        startPort80Redirect();
+      } else {
+        stopMdns();
+        stopPort80Redirect();
+      }
+    } catch { /* listeners are optional conveniences */ }
+    return NextResponse.json({ ok: true, serveLocalName: cfg.serveLocalName !== false });
   }
   if (body.defaultTtsVoice !== undefined || body.defaultTtsSpeed !== undefined) {
     const partial: { defaultTtsVoice?: string; defaultTtsSpeed?: number } = {};

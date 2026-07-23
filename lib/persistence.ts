@@ -291,6 +291,7 @@ export async function mutateAgents<T>(mutate: (agents: Agent[]) => T | Promise<T
 const DEFAULT_CONFIG: AppConfig = {
   xaiApiKey: '',
   safeMode: false,
+  serveLocalName: true,
   integrations: {},
   defaultWorkspace: projectRoot(),
   defaultGrokModel: '',

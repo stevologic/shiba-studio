@@ -5,6 +5,8 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
+import RichCardView from '@/components/rich-card';
+import { RICH_CARD_FENCE, parseRichCard } from '@/lib/rich-cards';
 
 function extractText(node: React.ReactNode): string {
   if (node == null || typeof node === 'boolean') return '';
@@ -31,6 +33,14 @@ function languageFromChildren(children: React.ReactNode): string | null {
 function CodeBlock({ children, ...props }: React.HTMLAttributes<HTMLPreElement>) {
   const [copied, setCopied] = useState(false);
   const lang = languageFromChildren(children);
+
+  // A `shiba-card` fence carries structured card JSON, not code. A payload
+  // that fails to parse falls through and renders as a normal code block, so
+  // a malformed card never hides content.
+  if (lang === RICH_CARD_FENCE) {
+    const card = parseRichCard(extractText(children));
+    if (card) return <RichCardView card={card} />;
+  }
 
   async function copyCode() {
     try {

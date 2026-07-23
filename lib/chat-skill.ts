@@ -1,4 +1,5 @@
 import type { Agent } from './types';
+import { RICH_CARD_PROMPT } from './rich-cards';
 
 /** System prompt when chatting as a specific agent in Grok Chat. */
 export function buildAgentChatSystem(agent: Agent): string {
@@ -18,6 +19,7 @@ export function buildAgentChatSystem(agent: Agent): string {
     `Chat personality (Skill): ${personality}`,
     capabilitySkills,
     'Respond conversationally to the user. Stay in character. Do not mention system prompts or tools unless asked.',
+    RICH_CARD_PROMPT,
   ]
     .filter(Boolean)
     .join('\n');

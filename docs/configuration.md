@@ -86,6 +86,11 @@ built in, Linux via Avahi/nss-mdns. Rename with `SHIBA_MDNS_HOST`
 (comma-separated for several names, e.g. `mybox.local`) or turn it off with
 `SHIBA_MDNS=off`.
 
+**Settings → Local network serving** toggles both the mDNS announcement and the
+bare-name port-80 redirect at runtime — no restart, persisted as
+`serveLocalName`. Turning it off keeps the app fully reachable at
+`localhost:<port>`; Safe mode always wins and keeps both listeners off.
+
 ## Secure remote companion
 
 Open `/companion/admin` through `localhost` on the Shiba host to explicitly
