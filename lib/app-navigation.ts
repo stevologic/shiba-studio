@@ -2,6 +2,7 @@ export const APP_TABS = [
   'dashboard',
   'attention',
   'chat',
+  'meetings',
   'projects',
   'board',
   'agents',

@@ -124,11 +124,11 @@ async function main() {
   check(
     primaryNav.includes("label: 'Dashboard'")
       && primaryNav.includes("label: 'Automations'")
+      && primaryNav.includes("label: 'Meetings'")
       && !primaryNav.includes("label: 'Dispatch'")
       && !primaryNav.includes("label: 'Routines'")
-      && !primaryNav.includes("label: 'Meetings'")
       && !primaryNav.includes("label: 'Doctor'"),
-    'primary navigation exposes Dashboard and Automations without retired surfaces',
+    'primary navigation exposes Dashboard, Automations, and the Meetings beta without retired surfaces',
   );
   const navigation = await source('lib/app-navigation.ts');
   const appTabs = navigation.match(/export const APP_TABS = \[[\s\S]*?\] as const;/)?.[0] || '';
@@ -138,12 +138,12 @@ async function main() {
     'Automations uses its canonical /automations path',
   );
   check(
-    !appTabs.includes("'meetings'") && !appTabs.includes("'doctor'"),
-    'retired Meetings and Doctor routes are absent from the app route contract',
+    appTabs.includes("'meetings'") && !appTabs.includes("'doctor'"),
+    'the Meetings beta route is in the app route contract while retired Doctor routes stay absent',
   );
   check(
-    !studio.includes('MeetingCapturePanel') && !studio.includes('DoctorPage'),
-    'retired Meetings and Doctor panels are not mounted by the app shell',
+    studio.includes('MeetingsPanel') && !studio.includes('MeetingCapturePanel') && !studio.includes('DoctorPage'),
+    'the shell mounts the live Meetings beta panel, not the retired capture or Doctor panels',
   );
 
   const automations = await source('components/routines-panel.tsx');

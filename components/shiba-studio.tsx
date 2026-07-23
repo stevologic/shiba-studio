@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Code2
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Code2, Presentation
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -36,6 +36,7 @@ const WorkspacePage = dynamic(() => import('@/components/workspace-page'), { loa
 const IdePanel = dynamic(() => import('@/components/ide-panel'), { loading: panelLoading });
 const KanbanBoard = dynamic(() => import('@/components/kanban-board'), { loading: panelLoading });
 const FilesPanel = dynamic(() => import('@/components/files-panel'), { loading: panelLoading });
+const MeetingsPanel = dynamic(() => import('@/components/meetings-panel'), { loading: panelLoading });
 const MemoriesPanel = dynamic(() => import('@/components/memories-panel'), { loading: panelLoading });
 const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
 const ToolsCatalog = dynamic(() => import('@/components/tools-catalog'), { loading: panelLoading });
@@ -140,7 +141,7 @@ type RunSummaryLite = {
 
 // One source of truth for tab display names (nav, top bar, document titles).
 const TAB_LABELS: Record<string, string> = {
-  dashboard: 'Dashboard', attention: 'Attention', chat: 'Grok Chat', projects: 'Projects', board: 'Board', agents: 'Agents',
+  dashboard: 'Dashboard', attention: 'Attention', chat: 'Grok Chat', meetings: 'Meetings', projects: 'Projects', board: 'Board', agents: 'Agents',
   memories: 'Memories', workspace: 'Workspace', code: 'Code', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
   traffic: 'Traffic', usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
@@ -3037,6 +3038,7 @@ export default function ShibaStudio() {
       { id: 'dashboard', label: 'Dashboard' },
       { id: 'attention', label: 'Attention' },
       { id: 'chat', label: 'Grok Chat' },
+      { id: 'meetings', label: 'Meetings' },
       { id: 'projects', label: 'Projects' },
       { id: 'board', label: 'Board' },
       { id: 'agents', label: 'Agents' },
@@ -3241,6 +3243,7 @@ export default function ShibaStudio() {
             { id: 'dashboard', label: 'Dashboard', icon: Home, stat: navStats.tasksActive > 0 ? String(navStats.tasksActive) : null },
             { id: 'attention', label: 'Attention', icon: Bell, stat: navStats.attentionOpen > 0 ? String(navStats.attentionOpen) : null },
             { id: 'chat', label: 'Grok Chat', icon: MessageSquare, stat: navStats.chatSessions > 0 ? String(navStats.chatSessions) : null },
+            { id: 'meetings', label: 'Meetings', icon: Presentation, stat: 'beta' },
             { id: 'projects', label: 'Projects', icon: FolderKanban, stat: navStats.projects > 0 ? String(navStats.projects) : null },
             // Open = backlog + todo + in progress: the work still ahead of review.
             { id: 'board', label: 'Board', icon: KanbanSquare, stat: navStats.boardOpen > 0 ? String(navStats.boardOpen) : null },
@@ -3285,7 +3288,7 @@ export default function ShibaStudio() {
               >
                 <Icon size={16} strokeWidth={1.75} className="nav-item-icon" aria-hidden />
                 <span className="nav-item-label">{item.label}</span>
-                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && (
+                {!navCollapsed && !navStatsLoaded && item.id !== 'dashboard' && item.id !== 'settings' && item.id !== 'agents' && item.id !== 'logs' && item.id !== 'meetings' && (
                   <span className="data-spinner nav-item-meta ml-auto" aria-label={`Loading ${item.label} count`} />
                 )}
                 {!navCollapsed && item.stat != null && (
@@ -3296,6 +3299,7 @@ export default function ShibaStudio() {
                     : item.id === 'projects' ? `${item.stat} project(s)`
                     : item.id === 'memories' ? `${item.stat} stored memory item(s)`
                     : item.id === 'workspace' ? `${item.stat} file(s) in workspace`
+                    : item.id === 'meetings' ? 'Meetings is a beta feature'
                     : item.id === 'automations' ? `${item.stat} scheduled automation(s)`
                     : item.id === 'integrations' ? `${item.stat} configured integration(s)`
                     : item.id === 'usage'
@@ -3942,6 +3946,11 @@ export default function ShibaStudio() {
 
           {/* FILES — every deliverable agents have written, across all runs */}
           {tab === 'files' && <FilesPanel />}
+
+          {/* MEETINGS (Beta) — spoken agent-led project reviews with a visual stage */}
+          {tab === 'meetings' && (
+            <MeetingsPanel agents={agents} onOpenBoard={() => navigateToTab('board')} />
+          )}
 
           {/* MEMORIES — cross-run knowledge, review queue, and CRUD */}
           {tab === 'memories' && <MemoriesPanel onDataChanged={() => { void loadNavStats(); }} />}

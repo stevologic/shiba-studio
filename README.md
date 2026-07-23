@@ -237,6 +237,7 @@ tested `grok 0.2.103` binary.
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install on Windows/macOS/Linux, first run, connecting model sources |
 | [Grok Chat](docs/chat.md) | Sessions, models & reasoning, attachments, slash commands, the annotation sub-browser, quotas |
+| [Meetings (Beta)](docs/meetings.md) | Spoken agent-led project reviews with a visual stage, AI steering, and minutes that become Board cards |
 | [Code IDE](docs/code.md) | Monaco editing, workspace search, Git staging and branches, GitHub activity, keyboard shortcuts, and terminal access |
 | [Board](docs/board.md) | Shared Kanban, agent-run cards, Linear/Jira mirroring, and private Grok Files snapshots |
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
