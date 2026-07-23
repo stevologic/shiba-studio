@@ -224,14 +224,26 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
       res = await doFetch();
     }
   } catch (e: unknown) {
-    yield { type: 'error', message: e instanceof Error ? e.message : 'Request failed' };
+    const { formatUserFacingStreamError } = await import('./stream-errors');
+    yield {
+      type: 'error',
+      message: formatUserFacingStreamError(e) || (e instanceof Error ? e.message : 'Request failed'),
+    };
     return;
   }
 
   if (!res.ok) {
     const txt = await res.text();
     const src = ref.provider === 'local' ? 'Local server' : 'Grok API';
-    yield { type: 'error', message: `${src} error ${res.status}: ${txt}` };
+    const clipped = txt
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 240);
+    yield {
+      type: 'error',
+      message: `${src} error ${res.status}${clipped ? `: ${clipped}` : ''}`,
+    };
     return;
   }
 

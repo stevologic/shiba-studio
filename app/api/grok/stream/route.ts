@@ -9,6 +9,11 @@ import { buildGlobalInstructionsContext } from '@/lib/global-instructions';
 import { resolveCloudBearer } from '@/lib/xai-oauth';
 import { clipForModel, environmentFacts } from '@/lib/prompt-hygiene';
 import { resolveChatToolsEnabled, shouldUseChatTools } from '@/lib/chat-tool-mode';
+import { formatUserFacingStreamError, isAbortLikeError } from '@/lib/stream-errors';
+
+/** Long agentic chat turns (tools + multi-minute reasoning) must not hit the default route cap. */
+export const maxDuration = 3600;
+export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -389,6 +394,9 @@ export async function POST(req: NextRequest) {
           const encoder = new TextEncoder();
           const send = (event: Parameters<typeof encodeSseEvent>[0]) =>
             controller.enqueue(encoder.encode(encodeSseEvent(event)));
+          // Hoisted so the catch path can recover without TDZ / scope errors.
+          const toolsUsed: string[] = [];
+          let wroteContent = false;
           try {
             const { grokChat } = await import('@/lib/grok-client');
             const { getToolDefinitions } = await import('@/lib/agent-runtime');
@@ -551,9 +559,7 @@ export async function POST(req: NextRequest) {
             const { SUBBROWSER_RUN_ID, browserViewportShot } = await import('@/lib/browser');
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const msgs: any[] = messages.map((m) => ({ role: m.role, content: m.content }));
-            const toolsUsed: string[] = [];
             let browserUsed = false;
-            let wroteContent = false;
             let completionNudges = 0;
             const chatToolAuthorization: import('@/lib/agent-tool-exec').AgentToolAuthorization = {
               contextScope: requestChatSession
@@ -897,8 +903,19 @@ export async function POST(req: NextRequest) {
             }
             send({ type: 'done', model });
           } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : 'Stream failed';
-            controller.enqueue(encoder.encode(encodeSseEvent({ type: 'error', message: msg })));
+            if (isAbortLikeError(e) && req.signal.aborted) {
+              // User hit Stop — close quietly; client already has partial content.
+            } else {
+              const friendly = formatUserFacingStreamError(e, { toolsUsed });
+              if (friendly) {
+                // Prefer a clean content recovery over dumping raw error bytes into the bubble.
+                if (!wroteContent) {
+                  controller.enqueue(encoder.encode(encodeSseEvent({ type: 'content', delta: friendly })));
+                } else {
+                  controller.enqueue(encoder.encode(encodeSseEvent({ type: 'error', message: friendly })));
+                }
+              }
+            }
           } finally {
             controller.close();
           }
@@ -907,6 +924,7 @@ export async function POST(req: NextRequest) {
     : new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
+      let emittedContent = false;
       try {
         for await (const event of grokChatStream({
           model,
@@ -918,11 +936,22 @@ export async function POST(req: NextRequest) {
           reasoningEffort: body.reasoningEffort,
           usageContext: { source: 'chat' },
         })) {
+          if (event.type === 'content' && event.delta) emittedContent = true;
           controller.enqueue(encoder.encode(encodeSseEvent(event)));
         }
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : 'Stream failed';
-        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'error', message: msg })));
+        if (isAbortLikeError(e) && req.signal.aborted) {
+          // quiet stop
+        } else {
+          const friendly = formatUserFacingStreamError(e);
+          if (friendly) {
+            if (!emittedContent) {
+              controller.enqueue(encoder.encode(encodeSseEvent({ type: 'content', delta: friendly })));
+            } else {
+              controller.enqueue(encoder.encode(encodeSseEvent({ type: 'error', message: friendly })));
+            }
+          }
+        }
       } finally {
         controller.close();
       }
