@@ -18,6 +18,7 @@ const PAGES: Array<{ path: string; marker: string | RegExp }> = [
   { path: '/code', marker: /Code|Explorer/i },
   { path: '/files', marker: /Files/ },
   { path: '/board', marker: /Board/ },
+  { path: '/meetings', marker: /Meeting|Meetings|review/i },
   { path: '/companion', marker: /Companion/i },
 ];
 
@@ -44,15 +45,23 @@ test('primary navigation keeps the simplified product surface', async ({ page })
   await expect(sidebar.getByRole('link', { name: 'Dashboard', exact: true })).toHaveAttribute('href', '/');
   await expect(sidebar.getByRole('link', { name: 'Code', exact: true })).toHaveAttribute('href', '/code');
   await expect(sidebar.getByRole('link', { name: 'Automations', exact: true })).toHaveAttribute('href', '/automations');
+  // Live Meetings beta is a first-class primary surface again.
+  await expect(sidebar.getByRole('link', { name: 'Meetings', exact: true })).toHaveAttribute('href', '/meetings');
   await expect(sidebar.getByRole('link', { name: 'Traffic', exact: true })).toHaveCount(0);
   await expect(page.locator('.footer-bar').getByRole('link', { name: 'Traffic', exact: true })).toHaveAttribute('href', '/traffic');
 
-  for (const retiredLabel of ['Dispatch', 'Routines', 'Meetings', 'Doctor']) {
+  for (const retiredLabel of ['Dispatch', 'Routines', 'Doctor']) {
     await expect(sidebar.getByRole('link', { name: retiredLabel, exact: true })).toHaveCount(0);
   }
 });
 
-for (const retiredPath of ['/meetings', '/doctor']) {
+test('Meetings beta surface is directly reachable', async ({ page }) => {
+  const response = await page.goto('/meetings', { waitUntil: 'domcontentloaded' });
+  expect(response?.status()).toBe(200);
+  await expect(page.locator('body')).toContainText(/Meeting|Meetings|review/i);
+});
+
+for (const retiredPath of ['/doctor']) {
   test(`retired surface ${retiredPath} is not directly reachable`, async ({ page }) => {
     const response = await page.goto(retiredPath, { waitUntil: 'domcontentloaded' });
     expect(response?.status()).toBe(404);
