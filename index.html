@@ -129,31 +129,51 @@
   }
 
   /* Demo reel — rotating live screenshots */
+  .reel { width: 100%; max-width: 100%; }
   .reel-frame {
     border: 1px solid var(--border-light); border-radius: var(--radius); overflow: hidden;
     background: #050505;
     box-shadow: 0 28px 90px rgba(0,0,0,.7), 0 0 60px rgba(255,255,255,.05);
+    width: 100%;
   }
   .reel-frame .term-bar { position: relative; }
   .reel-url {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
     font-style: normal; font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--dim);
     border: 1px solid var(--border); border-radius: 999px; padding: 2px 14px; background: rgba(255,255,255,.03);
+    max-width: min(70%, 280px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .reel-stage { position: relative; aspect-ratio: 1280 / 800; }
+  .reel-stage {
+    position: relative; width: 100%; aspect-ratio: 16 / 10;
+    background: #050505;
+  }
   .reel-img {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; object-position: top center;
     opacity: 0; transition: opacity .6s ease;
+    pointer-events: none; /* taps go to frame / controls, not stacked images */
   }
   .reel-img.active { opacity: 1; }
-  .reel-nav { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
+  /* Label chips under the frame — wrap cleanly; mobile uses a denser grid below */
+  .reel-nav {
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+    margin-top: 16px; width: 100%; max-width: 100%;
+  }
   .reel-dot {
     border: 1px solid var(--border); background: rgba(255,255,255,.03); color: var(--dim);
-    font-size: 12.5px; font-weight: 600; border-radius: 999px; padding: 7px 18px; cursor: pointer; font-family: inherit;
-    transition: color .15s ease, border-color .15s ease, background .15s ease;
+    font-size: 12.5px; font-weight: 600; border-radius: 999px; padding: 8px 16px;
+    cursor: pointer; font-family: inherit; line-height: 1.2;
+    min-height: 36px; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    transition: color .15s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
   }
-  .reel-dot:hover { color: #fff; }
-  .reel-dot.active { color: #000; background: #fff; border-color: #fff; }
+  .reel-dot:hover { color: #fff; border-color: var(--border-light); }
+  .reel-dot:focus-visible {
+    outline: 2px solid #fff; outline-offset: 2px; color: #fff;
+  }
+  .reel-dot.active {
+    color: #000; background: #fff; border-color: #fff;
+    box-shadow: 0 0 0 1px #fff;
+  }
 
   /* Stats strip */
   .stats {
@@ -274,9 +294,16 @@
     background: rgba(255,255,255,.06); padding: 1px 7px; border-radius: 6px;
   }
 
+  /* ── Tablet: keep chip row wrapping without overflow ── */
+  @media (max-width: 900px) {
+    .reel-nav { gap: 8px; }
+    .reel-dot { font-size: 12px; padding: 7px 12px; }
+    .reel-frame { box-shadow: 0 16px 48px rgba(0,0,0,.65); }
+  }
+
   /* ── Mobile ── */
   @media (max-width: 640px) {
-    .wrap { padding: 0 18px; }
+    .wrap { padding: 0 16px; }
     nav { padding: 16px 0 8px; }
     nav .links { margin-left: 0; flex-basis: 100%; }
     .hero { padding: 52px 0 32px; }
@@ -288,6 +315,49 @@
     .term { margin-top: 44px; }
     .term-body { padding: 16px; font-size: 11.5px; }
     section { padding: 64px 0 0; }
+    #demo { padding-top: 48px !important; }
+    #demo h2 { font-size: clamp(26px, 7vw, 36px); }
+    #demo .sub { font-size: 14.5px; margin-bottom: 20px; }
+    /* Screenshots: edge-to-edge feel, full UI visible (no crop) */
+    .reel-frame {
+      border-radius: 10px;
+      margin-inline: 0;
+    }
+    .reel-url {
+      font-size: 10px;
+      padding: 2px 10px;
+      max-width: min(62%, 200px);
+    }
+    .reel-stage {
+      aspect-ratio: 16 / 10;
+      min-height: 0;
+    }
+    .reel-img {
+      object-fit: contain;
+      object-position: top center;
+    }
+    /*
+     * 10 surface labels: 2-column grid of large tap targets.
+     * Avoids a single overflowing row and keeps every label tappable.
+     */
+    .reel-nav {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .reel-dot {
+      width: 100%;
+      min-height: 44px;
+      border-radius: 10px;
+      padding: 10px 8px;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .stats { margin-top: 56px; grid-template-columns: 1fr 1fr; }
     .stat b { font-size: 21px; }
     .ad { margin-top: 64px; padding: 40px 20px; }
@@ -296,6 +366,12 @@
     pre.cmd { font-size: 11.5px; padding: 14px 12px; }
     .cmds { grid-template-columns: 1fr; }
     footer .row { flex-direction: column; align-items: flex-start; }
+  }
+
+  /* Very narrow phones — still 2 cols, slightly tighter type */
+  @media (max-width: 360px) {
+    .reel-dot { font-size: 11px; padding: 9px 6px; min-height: 42px; }
+    .wrap { padding: 0 12px; }
   }
 </style>
 </head>
@@ -379,17 +455,17 @@
           <img class="reel-img" src="shot-api-docs.png" alt="API Explorer: grouped endpoints with a live request/response panel" />
         </div>
       </div>
-      <div class="reel-nav">
-        <button class="reel-dot active" data-i="0">Grok Chat</button>
-        <button class="reel-dot" data-i="1">Dashboard</button>
-        <button class="reel-dot" data-i="2">Meetings</button>
-        <button class="reel-dot" data-i="3">Board</button>
-        <button class="reel-dot" data-i="4">Code</button>
-        <button class="reel-dot" data-i="5">Agents</button>
-        <button class="reel-dot" data-i="6">Automations</button>
-        <button class="reel-dot" data-i="7">Capabilities</button>
-        <button class="reel-dot" data-i="8">Settings</button>
-        <button class="reel-dot" data-i="9">API Explorer</button>
+      <div class="reel-nav" role="tablist" aria-label="Screenshot views">
+        <button type="button" class="reel-dot active" role="tab" aria-selected="true" data-i="0">Grok Chat</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="1">Dashboard</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="2">Meetings</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="3">Board</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="4">Code</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="5">Agents</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="6">Automations</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="7">Capabilities</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="8">Settings</button>
+        <button type="button" class="reel-dot" role="tab" aria-selected="false" data-i="9">API Explorer</button>
       </div>
     </div>
   </section>
@@ -566,24 +642,73 @@ npm run dev</pre>
     });
   });
 
-  // Demo reel — auto-advance, click to pin, pause on hover, honors reduced motion
+  // Demo reel — auto-advance, tap/click to pick a surface, pause on hover/touch, reduced motion
   (function () {
     const imgs = [...document.querySelectorAll('.reel-img')];
     const dots = [...document.querySelectorAll('.reel-dot')];
     const reel = document.getElementById('reel');
-    if (!imgs.length) return;
-    let i = 0, timer = null;
+    if (!imgs.length || !reel) return;
+    let i = 0, timer = null, resumeTimer = null;
     const show = (n) => {
-      i = n % imgs.length;
-      imgs.forEach((im, k) => im.classList.toggle('active', k === i));
-      dots.forEach((d, k) => d.classList.toggle('active', k === i));
+      i = ((n % imgs.length) + imgs.length) % imgs.length;
+      imgs.forEach((im, k) => {
+        const on = k === i;
+        im.classList.toggle('active', on);
+        im.setAttribute('aria-hidden', on ? 'false' : 'true');
+      });
+      dots.forEach((d, k) => {
+        const on = k === i;
+        d.classList.toggle('active', on);
+        d.setAttribute('aria-selected', on ? 'true' : 'false');
+        d.tabIndex = on ? 0 : -1;
+      });
     };
+    // Initialize inactive images as hidden for AT
+    imgs.forEach((im, k) => im.setAttribute('aria-hidden', k === 0 ? 'false' : 'true'));
+    dots.forEach((d, k) => { d.tabIndex = k === 0 ? 0 : -1; });
+
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const start = () => { if (!reduced && !timer) timer = setInterval(() => show(i + 1), 5000); };
-    const stop = () => { clearInterval(timer); timer = null; };
-    dots.forEach((d) => d.addEventListener('click', () => { stop(); show(Number(d.dataset.i)); start(); }));
+    const start = () => {
+      if (reduced || timer) return;
+      timer = setInterval(() => show(i + 1), 5000);
+    };
+    const stop = () => {
+      clearInterval(timer);
+      timer = null;
+      clearTimeout(resumeTimer);
+      resumeTimer = null;
+    };
+    // After a tap on mobile, pause briefly then resume (no reliable hover)
+    const pauseThenResume = (ms) => {
+      stop();
+      if (!reduced) resumeTimer = setTimeout(start, ms);
+    };
+
+    dots.forEach((d) => {
+      d.addEventListener('click', () => {
+        show(Number(d.dataset.i));
+        pauseThenResume(8000);
+      });
+    });
+
+    // Keyboard: left/right when focus is in the tablist
+    reel.querySelector('.reel-nav')?.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return;
+      e.preventDefault();
+      if (e.key === 'ArrowRight') show(i + 1);
+      else if (e.key === 'ArrowLeft') show(i - 1);
+      else if (e.key === 'Home') show(0);
+      else if (e.key === 'End') show(imgs.length - 1);
+      dots[i]?.focus();
+      pauseThenResume(8000);
+    });
+
+    // Desktop: pause while pointer is over the reel
     reel.addEventListener('mouseenter', stop);
     reel.addEventListener('mouseleave', start);
+    // Mobile: pause while finger is down on the frame
+    reel.addEventListener('touchstart', () => pauseThenResume(6000), { passive: true });
+
     start();
   })();
 
