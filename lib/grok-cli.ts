@@ -707,7 +707,12 @@ export function buildGrokCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): s
     args.push(`--worktree=${opts.worktree.trim()}`);
   }
   if (opts.worktreeRef?.trim() && opts.worktree) args.push('--worktree-ref', opts.worktreeRef.trim());
-  if (opts.check) args.push('--check');
+  // The CLI's --check verification pass runs as a subagent, and Grok Build
+  // rejects `--check` combined with `--no-subagents` (emitted for scoped /
+  // isolated / tools-off runs). Isolation is the security boundary for
+  // unattended work, so it wins and self-verification is skipped.
+  const subagentsDisabled = opts.toolsEnabled === false || opts.isolated || opts.scoped;
+  if (opts.check && !subagentsDisabled) args.push('--check');
   if (opts.bestOfN && opts.bestOfN >= 2) args.push('--best-of-n', String(Math.min(4, Math.floor(opts.bestOfN))));
   if (opts.jsonSchema?.trim()) args.push('--json-schema', opts.jsonSchema.trim());
   return args;

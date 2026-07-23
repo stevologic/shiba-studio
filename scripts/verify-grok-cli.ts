@@ -197,10 +197,15 @@ Commands:
   assert(valueAfter(baseArgs, '--json-schema') === schema, 'headless argv preserves JSON schema');
   const scopedArgs = buildGrokCliArgsBase({
     scoped: true,
+    check: true,
     allowedTools: ['read_file', 'grep', 'search_replace', 'run_terminal_cmd', 'not a tool'],
     disallowedTools: ['Agent', 'also/not-valid'],
     denyRules: ['MCPTool', 'WebFetch'],
   });
+  assert(
+    !scopedArgs.includes('--check'),
+    'scoped headless argv drops --check: the CLI rejects it beside --no-subagents, and isolation wins',
+  );
   assert(
     valueAfter(scopedArgs, '--tools') === 'read_file,grep,search_replace,run_terminal_cmd',
     'scoped headless argv clamps the built-in tool allowlist and drops invalid names',
