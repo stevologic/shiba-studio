@@ -18,6 +18,7 @@ const CHAIN = [
   'verify-transient-resource-integrity.ts',
   'verify-external-resource-integrity.ts',
   'verify-theme.ts',
+  'verify-brand-assets.ts',
   'verify-page-chrome.ts',
   'verify-ide-files.ts',
   'verify-ide-workspaces.ts',

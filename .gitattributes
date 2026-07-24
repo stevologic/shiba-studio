@@ -5,3 +5,15 @@ scripts/native-node/release-manifest.sig text eol=lf
 scripts/native-node/release-public.json text eol=lf
 scripts/native-node/shiba-node-helper.ps1 text eol=lf
 scripts/native-node/shiba-node-helper-core.ps1 text eol=lf
+
+# Generated brand assets. The rasters are binary; the text ones are compared
+# byte-for-byte against lib/brand.ts by verify-brand-assets.ts, so a CRLF
+# checkout (core.autocrlf=true on Windows) must not rewrite them.
+app/icon.svg text eol=lf
+app/opengraph-image.alt.txt text eol=lf
+app/twitter-image.alt.txt text eol=lf
+app/favicon.ico binary
+app/apple-icon.png binary
+app/opengraph-image.png binary
+app/twitter-image.png binary
+public/icons/*.png binary

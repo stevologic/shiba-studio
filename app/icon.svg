@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161616"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <radialGradient id="warmth" cx="0.5" cy="0.62" r="0.62">
+      <stop offset="0" stop-color="#e8a85c" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#e8a85c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="12" fill="url(#tile)"/>
+  <rect width="64" height="64" rx="12" fill="url(#warmth)"/>
+  <g transform="translate(0.000 0.000) scale(1)">
+    <path d="M14 22 L22 6 L30 20 Z" fill="#c68642"/>
+    <path d="M34 20 L42 6 L50 22 Z" fill="#c68642"/>
+    <path d="M16 20 L22 10 L28 19 Z" fill="#e8a85c"/>
+    <path d="M36 19 L42 10 L48 20 Z" fill="#e8a85c"/>
+    <ellipse cx="32" cy="36" rx="22" ry="20" fill="#e8a85c"/>
+    <ellipse cx="32" cy="40" rx="14" ry="11" fill="#f5d5a8"/>
+    <rect x="14" y="30" width="14" height="9" rx="2" fill="#111111"/>
+    <rect x="36" y="30" width="14" height="9" rx="2" fill="#111111"/>
+    <rect x="27" y="33" width="10" height="3" fill="#111111"/>
+    <rect x="15" y="31" width="5" height="3" rx="1" fill="rgba(255,255,255,0.15)"/>
+    <rect x="44" y="31" width="5" height="3" rx="1" fill="rgba(255,255,255,0.15)"/>
+    <ellipse cx="32" cy="44" rx="4" ry="3" fill="#2d2d2d"/>
+    <path d="M32 47 Q28 51 24 49" stroke="#2d2d2d" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+    <path d="M32 47 Q36 51 40 49" stroke="#2d2d2d" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>

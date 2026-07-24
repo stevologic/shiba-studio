@@ -202,6 +202,14 @@ export function proxy(req: NextRequest) {
   return continueWithoutLanBoundaryHeaders(req);
 }
 
+/**
+ * Static brand routes stay outside the boundary. A phone adding Studio to its
+ * iOS home screen and a chat client unfurling a shared link both fetch these as
+ * plain LAN clients — behind the companion redirect they would get HTML instead
+ * of an icon, so the home-screen tile and the link preview would come up blank.
+ * Public, non-sensitive artwork only; mirrored by PUBLIC_BRAND_ROUTES in lib/brand.ts.
+ */
 export const config = {
-  matcher: '/((?!_next/static|_next/image|favicon.ico|shiba-logo.svg|companion-sw.js).*)',
+  matcher:
+    '/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|opengraph-image.png|twitter-image.png|manifest.webmanifest|icons/|shiba-logo.svg|companion-sw.js).*)',
 };
