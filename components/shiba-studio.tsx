@@ -993,7 +993,10 @@ export default function ShibaStudio() {
     setModelsError(null);
     try {
       if (opts?.forceProviderProbe) invalidateClientJson('/api/models');
-      const data = await loadClientJson<any>('/api/models');
+      // The bootstrap effect can fire again (cloud auth, then CLI readiness)
+      // before the first catalog lands, which used to issue a second identical
+      // GET. Explicit refreshes invalidate above, so they still see fresh data.
+      const data = await loadClientJson<any>('/api/models', { maxAgeMs: 10_000 });
       if (data.ok && Array.isArray(data.models) && data.models.length > 0) {
         const mapped: ModelOption[] = data.models.map((m: ModelOption) => ({
           id: m.id,

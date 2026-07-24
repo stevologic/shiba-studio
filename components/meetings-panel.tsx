@@ -30,6 +30,7 @@ import {
 import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { subscribeLiveEvents } from '@/lib/live-events';
+import { loadClientJson } from '@/lib/client-json';
 import { splitSpeechChunks, takeNextUtterance } from '@/lib/xai-tts';
 import type { Agent } from '@/lib/types';
 import type {
@@ -43,6 +44,10 @@ import type {
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
 
 type RoomPhase = 'idle' | 'listening' | 'thinking' | 'speaking';
+
+/** Reuse window for shared read-only resources (projects, agents), matching
+ *  the chat panels — long enough to collapse mount-time duplicate GETs. */
+const READ_REUSE_MS = 10_000;
 
 interface ProjectOption { id: string; name: string }
 
@@ -817,9 +822,10 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
   // Resolve the agent's voice once — used for every spoken reply.
   useEffect(() => {
     let cancelled = false;
-    void fetch('/api/agents')
-      .then((response) => response.json())
-      .then((data: { agents?: Array<{ id: string; voiceId?: string }> }) => {
+    // Shared through the client-json coordinator so the shell's own agent load
+    // and this one never become two identical GETs.
+    void loadClientJson<{ agents?: Array<{ id: string; voiceId?: string }> }>('/api/agents', { maxAgeMs: READ_REUSE_MS })
+      .then((data) => {
         if (cancelled) return;
         const agent = (data.agents || []).find((candidate) => candidate.id === initial.agentId);
         if (agent?.voiceId) voiceIdRef.current = agent.voiceId;
@@ -1198,9 +1204,8 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
     void Promise.resolve().then(() => {
       if (cancelled) return;
       void refresh();
-      void fetch('/api/projects')
-        .then((response) => response.json())
-        .then((data: { projects?: ProjectOption[] }) => {
+      void loadClientJson<{ projects?: ProjectOption[] }>('/api/projects', { maxAgeMs: READ_REUSE_MS })
+        .then((data) => {
           if (!cancelled) setProjects((data.projects || []).map((p) => ({ id: p.id, name: p.name })));
         })
         .catch(() => {});
