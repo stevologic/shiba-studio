@@ -305,7 +305,10 @@ export async function reactToBoardAssignment(idOrKey: string): Promise<BoardTask
 
   const { loadAgents } = await import('./persistence');
   const agent = (await loadAgents()).find((candidate) => candidate.id === assignment.agentId);
-  if (!agent || agent.autoAcceptBoardAssignments !== true) {
+  // An explicitly queued card carries the operator's own consent, so it is
+  // accepted even when the agent never opted into automatic assignments.
+  const queued = assignment.queued === true;
+  if (!agent || (!queued && agent.autoAcceptBoardAssignments !== true)) {
     return disableBoardAutoAssignment(task.id, assignment.id);
   }
 
@@ -316,7 +319,7 @@ export async function reactToBoardAssignment(idOrKey: string): Promise<BoardTask
     taskId: durableTaskId,
     agentId: agent.id,
     agentName: agent.name,
-    mode: 'automatic',
+    mode: queued ? 'queued' : 'automatic',
     assignmentId: assignment.id,
   });
   if (!claim.claimed) return claim.task;

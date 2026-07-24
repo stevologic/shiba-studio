@@ -30,6 +30,7 @@ import {
 import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
 import { subscribeLiveEvents } from '@/lib/live-events';
+import { loadClientJson } from '@/lib/client-json';
 import { splitSpeechChunks, takeNextUtterance } from '@/lib/xai-tts';
 import type { Agent } from '@/lib/types';
 import type {
@@ -43,6 +44,10 @@ import type {
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
 
 type RoomPhase = 'idle' | 'listening' | 'thinking' | 'speaking';
+
+/** Reuse window for shared read-only resources (projects, agents), matching
+ *  the chat panels — long enough to collapse mount-time duplicate GETs. */
+const READ_REUSE_MS = 10_000;
 
 interface ProjectOption { id: string; name: string }
 
@@ -241,7 +246,13 @@ function AnnotationLayer({ strokes, active, onAddStroke }: {
 
 /* ── Stage: whatever the agent is currently presenting ── */
 
-interface MarkdownSection { title: string; body: string }
+interface MarkdownSection { title: string; body: string; wide?: boolean }
+
+/** Plotted cards need the full stage width — a 560-wide chart squeezed into a
+ *  250px column renders its labels at ~6px. */
+function sectionNeedsFullWidth(body: string): boolean {
+  return /"kind"\s*:\s*"(?:timechart|bars)"/.test(body);
+}
 
 /** Split a markdown body at #/##/### headings so the stage can lay sections
  *  out as cards instead of one tall prose column. */
@@ -262,7 +273,10 @@ function splitMarkdownSections(body: string): MarkdownSection[] {
   }
   sections.push(current);
   const cleaned = sections
-    .map((section) => ({ title: section.title, body: section.lines.join('\n').trim() }))
+    .map((section) => {
+      const body = section.lines.join('\n').trim();
+      return { title: section.title, body, ...(sectionNeedsFullWidth(body) ? { wide: true } : {}) };
+    })
     .filter((section) => section.title || section.body);
   return sawHeading && cleaned.length > 1 ? cleaned : [{ title: '', body: body.trim() }];
 }
@@ -281,7 +295,11 @@ function MarkdownStage({ body }: { body: string }) {
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))' }}>
       {sections.map((section, index) => (
-        <div key={index} className="rounded-lg border border-default p-4 min-w-0" style={{ background: 'var(--bg-elev)' }}>
+        <div
+          key={index}
+          className="rounded-lg border border-default p-4 min-w-0"
+          style={{ background: 'var(--bg-elev)', ...(section.wide ? { gridColumn: '1 / -1' } : {}) }}
+        >
           {section.title && <div className="text-sm font-medium text-primary mb-2">{section.title}</div>}
           <ChatMarkdown content={section.body} />
         </div>
@@ -804,9 +822,10 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
   // Resolve the agent's voice once — used for every spoken reply.
   useEffect(() => {
     let cancelled = false;
-    void fetch('/api/agents')
-      .then((response) => response.json())
-      .then((data: { agents?: Array<{ id: string; voiceId?: string }> }) => {
+    // Shared through the client-json coordinator so the shell's own agent load
+    // and this one never become two identical GETs.
+    void loadClientJson<{ agents?: Array<{ id: string; voiceId?: string }> }>('/api/agents', { maxAgeMs: READ_REUSE_MS })
+      .then((data) => {
         if (cancelled) return;
         const agent = (data.agents || []).find((candidate) => candidate.id === initial.agentId);
         if (agent?.voiceId) voiceIdRef.current = agent.voiceId;
@@ -1185,9 +1204,8 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
     void Promise.resolve().then(() => {
       if (cancelled) return;
       void refresh();
-      void fetch('/api/projects')
-        .then((response) => response.json())
-        .then((data: { projects?: ProjectOption[] }) => {
+      void loadClientJson<{ projects?: ProjectOption[] }>('/api/projects', { maxAgeMs: READ_REUSE_MS })
+        .then((data) => {
           if (!cancelled) setProjects((data.projects || []).map((p) => ({ id: p.id, name: p.name })));
         })
         .catch(() => {});

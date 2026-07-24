@@ -71,8 +71,8 @@ async function main() {
   assert.equal(bars.items.length, 1, 'negative magnitudes are dropped');
   assert.equal(bars.unit, 'runs');
 
-  // Timechart: ≥2 finite points required; null gaps kept; series cap 4; x ticks clipped.
-  const timechart = parseRichCard(JSON.stringify({
+  // Timechart: ≥2 finite points required; null gaps kept; x ticks clipped.
+  const timechartBasic = parseRichCard(JSON.stringify({
     kind: 'timechart',
     title: 'Score',
     xLabel: 'iter',
@@ -84,11 +84,30 @@ async function main() {
       { label: 'B', values: [2, 2, 5, 7] },
     ],
   }));
-  assert(timechart && timechart.kind === 'timechart');
-  assert.equal(timechart.series.length, 2, 'series without two finite samples are dropped');
-  assert.deepEqual(timechart.series[0].values, [1, null, 3, 4], 'null gaps are preserved');
-  assert.equal(timechart.xLabel, 'iter');
+  assert(timechartBasic && timechartBasic.kind === 'timechart');
+  assert.equal(timechartBasic.series.length, 2, 'series without two finite samples are dropped');
+  assert.deepEqual(timechartBasic.series[0].values, [1, null, 3, 4], 'null gaps are preserved');
+  assert.equal(timechartBasic.xLabel, 'iter');
   assert.equal(parseRichCard('{"kind":"timechart","series":[{"label":"A","values":[1]}]}'), null, 'timechart needs ≥2 points');
+
+  // The series cap counts PLOTTABLE series: a dropped one must not consume one
+  // of the four fixed categorical hue slots.
+  const timechart = parseRichCard(JSON.stringify({
+    kind: 'timechart',
+    title: 'Score by iteration',
+    series: [
+      { label: 'Attempt A', values: [3, null, 7, 9] },
+      { label: 'Attempt B', values: [2, 4, 'bad', 6] },
+      { label: 'Too short', values: [1] },
+      { label: 'C', values: [1, 2] },
+      { label: 'D', values: [1, 2] },
+      { label: 'E — beyond the fixed hue order', values: [1, 2] },
+    ],
+  }));
+  assert(timechart && timechart.kind === 'timechart');
+  assert.equal(timechart.series.length, 4, 'series cap at the four fixed categorical hues');
+  assert.deepEqual(timechart.series[1].values, [2, 4, null, 6], 'unparseable samples become gaps, not zeros');
+  assert.equal(timechart.series[2].label, 'C', 'a dropped series does not consume a hue slot');
 
   // Malformed payloads must return null (renderers fall back to plain code).
   for (const bad of ['not json', '[1,2]', '{"kind":"stats","stats":[]}', '{"kind":"unknown"}', '{"kind":"callout","title":""}']) {

@@ -6,6 +6,8 @@ import {
   getBoardTask,
   listBoardTasks,
   moveBoardTask,
+  queueBoardWork,
+  unqueueBoardWork,
   updateBoardTask,
 } from '@/lib/board';
 import { isBoardStatus } from '@/lib/board-types';
@@ -82,6 +84,18 @@ export async function POST(req: NextRequest) {
         const started = await startWorkOnTask(String(body.id || ''));
         const task = await getBoardTask(started.taskId);
         return Response.json({ ok: true, started, task });
+      }
+      // Queue instead of starting: the assigned agent claims the card when it
+      // frees, so a busy agent no longer means a rejected click.
+      case 'queueWork': {
+        const task = await queueBoardWork(String(body.id || ''));
+        audit('config', 'board card queued', `${task.key}: ${task.title.slice(0, 100)}`);
+        return Response.json({ ok: true, task });
+      }
+      case 'unqueueWork': {
+        const task = await unqueueBoardWork(String(body.id || ''));
+        audit('config', 'board card removed from queue', `${task.key}: ${task.title.slice(0, 100)}`);
+        return Response.json({ ok: true, task });
       }
       // Review stage: the user validates finished work into Done…
       case 'validate': {

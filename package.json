@@ -21,8 +21,10 @@
     "test:oauth-launch": "tsx scripts/verify-oauth-launch.ts",
     "test:reddit": "tsx scripts/verify-reddit.ts",
     "test:theme": "tsx scripts/verify-theme.ts",
+    "test:brand": "tsx scripts/verify-brand-assets.ts",
     "test:page-chrome": "tsx scripts/verify-page-chrome.ts",
-    "generate:avatars": "tsx scripts/generate-alien-avatars.ts"
+    "generate:avatars": "tsx scripts/generate-alien-avatars.ts",
+    "generate:brand": "tsx scripts/generate-brand-assets.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -1,10 +1,12 @@
 # Meetings (Beta)
 
+<img src="images/meetings.png" alt="Meetings beta: start a spoken agent-led project review with agent, project, and focus controls" width="880" />
+
 Meetings turns an agent into a colleague you sit down with. Instead of typing prompts, you hold a spoken project review: the agent leads — presenting what it has been building — while you steer with your voice. The agent puts real material on a visual stage as it talks, and the meeting ends in minutes with a todo list you can send to the Board in one click.
 
 Think of it as a director meeting a senior engineer about the project they're delivering.
 
-> **Beta.** The flow is functional end to end; expect rough edges around voice capture on non-Chromium browsers and long meetings.
+> **Beta.** The flow is functional end to end; expect rough edges around voice capture on non-Chromium browsers and long meetings. Agent turns stream live over SSE so long reviews stay responsive.
 
 ## Starting a meeting
 
@@ -47,7 +49,7 @@ Every agent turn may put one visual on the stage:
 
 Everything shown **stays in the conversation**: recent visuals keep their full content (the code text, diagram structure, notes) in the agent's context, and each of your turns tells the server which visual is on your stage — so *"now explain this"* right after a snippet appears just works, even if you flipped back to an earlier visual first. The visual history strip lists newest first.
 
-Markdown visuals also render **rich cards**: a fenced ` ```shiba-card ` block holding one JSON object becomes a live card — `stats` (KPI tiles with deltas), `progress` (bars), `checklist` (work states), `timeline` (milestones), or `callout` (highlighted note). The same fence works in Grok chat replies and any other agent markdown; a malformed payload just renders as code, never losing content.
+Markdown visuals also render **rich cards**: a fenced `shiba-card` code block holding one JSON object becomes a live card — `stats` (KPI tiles with deltas), `progress` (bars), `checklist` (work states), `timeline` (milestones), `callout` (highlighted note), `media` (image + text), `sparkline` / `bars` (comparisons), or `timechart` (multi-series Y over X with null gaps). The same fence works in Grok chat replies and any other agent markdown; a malformed payload just renders as code, never losing content.
 
 ### Steering
 

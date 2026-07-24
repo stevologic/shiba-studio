@@ -127,8 +127,9 @@ The primary Studio surface calls these **Automations**. Every recurring, one-tim
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET/POST | `/api/chat-sessions` | List / create / update / delete chat sessions. |
-| POST | `/api/grok/stream` | Stream a chat turn (SSE) — the main chat endpoint. |
+| POST | `/api/grok/stream` | Stream a chat turn (SSE) — the main chat endpoint. Long agentic turns set `maxDuration` high; transport/provider failures are normalized into short user-facing messages. |
 | POST | `/api/grok/multi-agent-stream` | "All agents" group chat with synthesis (SSE). |
+| POST | `/api/grok/voice-group-turn` | Multi-agent free-talk turn for Grok Voice group mode. |
 | POST | `/api/grok-cli/stream` | Stream a chat turn through a managed, one-shot official Grok Build process (SSE). Shiba launches `grok --no-auto-update -p … --output-format streaming-json` and projects the CLI's NDJSON events into the chat stream. See [CLI](cli.md). |
 | GET | `/api/grok-cli/status` | Official Grok Build detection: installed path/version plus authenticated model readiness from `grok models`. `?checkUpdate=1` also checks for a newer released binary. |
 | POST | `/api/chat-tools` | Run chat research, memory, and X actions (`search`, `fetch`, `remember`, `recall`, `forget`, `post_x`). Git, Board, and Obsidian commands use their dedicated endpoints. |
@@ -147,16 +148,29 @@ The primary Studio surface calls these **Automations**. Every recurring, one-tim
 
 The former Doctor page has been removed. These endpoints remain for diagnostics automation and backwards compatibility.
 
+### Live Meetings (Beta UI)
+
+The **Meetings** primary tab is a spoken agent-led project review surface. Turns stream over SSE; minutes and Board conversion require explicit confirmation. See [Meetings](meetings.md).
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET/POST | `/api/live-meetings` | List or create live meetings (`agentId`, optional `projectId`, `focus`). |
+| GET/DELETE | `/api/live-meetings/:id` | Read one meeting (transcript, visuals, minutes) or delete it (Board cards it created are kept). |
+| POST | `/api/live-meetings/:id/turn` | Non-streaming agent turn. |
+| POST | `/api/live-meetings/:id/turn/stream` | Streaming agent turn (SSE) — preferred for long reviews. |
+| POST | `/api/live-meetings/:id/end` | End the meeting and generate minutes + content-derived title. |
+| POST | `/api/live-meetings/:id/board` | After exact confirmation, convert selected minute todos into Board cards (idempotent). |
+
 ### Context and Companion voice storage
 
-There is no standalone Meetings page. The meeting-named endpoints remain as the storage and transcription layer for consent-confirmed Companion voice requests; durable plain-text transcript citations remain available after retained audio is deleted.
+Legacy **Companion voice / upload transcription** still uses the meeting-named endpoints below (separate from Live Meetings). Durable plain-text transcript citations remain available after retained audio is deleted.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET/PATCH | `/api/context/scopes/:scopeType/:scopeId` | Inspect meter/sources/compactions or pin/rebuild one session, project, or run context scope. |
 | GET | `/api/context/search` | Bounded grounded source search with exact citations. |
 | GET | `/api/context/sources/:sourceId` | Resolve an exact immutable source citation. |
-| GET/POST | `/api/meetings` | List meetings or stream a consent-confirmed local microphone/upload recording. |
+| GET/POST | `/api/meetings` | List Companion/upload meetings or stream a consent-confirmed local microphone/upload recording. |
 | GET/PATCH/DELETE | `/api/meetings/:id` | Read/update reviewed transcript metadata, delete retained audio, or delete the meeting. |
 | GET | `/api/meetings/:id/audio` | Range-capable local audio playback without exposing a filesystem path. |
 | GET | `/api/meetings/:id/citation` | Stable read-only plain-text transcript citation that remains available after audio retention cleanup. |

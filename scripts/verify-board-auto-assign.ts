@@ -549,6 +549,99 @@ async function main() {
     'one corrupt claim cannot block reconciliation of later cards',
   );
 
+  // ── Explicit queueing ───────────────────────────────────────────────────
+  // A dedicated agent: earlier fixtures rewrite the roster and leave the other
+  // agents busy or deleted. It stays opted OUT of automatic assignments, which
+  // is the whole point — the queue click alone must be enough.
+  await persistence.saveAgents([
+    ...(await persistence.loadAgents()).filter((agent) => agent.id !== 'agent-queue'),
+    makeAgent('agent-queue', 'Queue Agent', false),
+  ]);
+  // Queue consent is the operator's own click, so it must work for an agent
+  // that never opted into automatic Board assignments.
+  const queuedCard = await board.createBoardTask({
+    title: 'Queued for the queue agent',
+    description: 'Should start once the queue agent is free.',
+    status: 'todo',
+    assigneeAgentId: 'agent-queue',
+    createdBy: 'verifier',
+  });
+  // Occupy the queue agent so the queued card cannot start immediately.
+  const busyCard = await board.createBoardTask({
+    title: 'Occupies the queue agent',
+    description: 'Holds the single active claim.',
+    status: 'todo',
+    assigneeAgentId: 'agent-queue',
+    createdBy: 'verifier',
+  });
+  await runner.startWorkOnTask(busyCard.id);
+  const busyNow = await board.getBoardTask(busyCard.id);
+  assert(busyNow?.working === true, 'queue agent holds an active claim');
+
+  let startWorkRejected = '';
+  try {
+    await runner.startWorkOnTask(queuedCard.id);
+  } catch (error) {
+    startWorkRejected = error instanceof Error ? error.message : String(error);
+  }
+  assert(/already has accepted Board work/i.test(startWorkRejected), 'Start work still refuses while the agent is busy');
+
+  const queued = await board.queueBoardWork(queuedCard.id, 'verifier');
+  assert(
+    queued.autoAssignment?.status === 'pending' && queued.autoAssignment.queued === true && !queued.working,
+    'queueing a card for a busy agent records a durable pending queue entry',
+  );
+  assert(queued.activity.some((activity) => /Queued by verifier/.test(activity.text)), 'queueing is recorded on the card activity feed');
+
+  await runner.processBoardAssignmentsOnce({ dispatch: false });
+  const stillQueued = await board.getBoardTask(queuedCard.id);
+  assert(
+    stillQueued?.autoAssignment?.status === 'pending' && !stillQueued.working,
+    'a queued card stays queued (never disabled) while its agent is busy',
+  );
+
+  // Release the busy claim — the queued card must then be picked up, even
+  // though this agent has autoAcceptBoardAssignments disabled.
+  const busyTask = ledger.listTasks({ originType: 'board', originId: busyCard.id }).tasks[0];
+  ledger.transitionTask({ taskId: busyTask.id, status: 'succeeded', result: 'Freed the agent.' });
+  await runner.processBoardAssignmentsOnce({ dispatch: false });
+  const startedFromQueue = await board.getBoardTask(queuedCard.id);
+  assert(
+    startedFromQueue?.working === true && startedFromQueue.autoAssignment?.status === 'accepted',
+    'a queued card starts automatically once its agent frees, without auto-accept opt-in',
+  );
+  assert(startedFromQueue?.activeWork?.mode === 'queued', 'work claimed from the queue records the queued mode');
+  assert(
+    ledger.listTasks({ originType: 'board', originId: queuedCard.id }).total === 1,
+    'starting from the queue creates exactly one durable task',
+  );
+
+  // Leaving the queue is possible while still waiting.
+  const secondQueued = await board.createBoardTask({
+    title: 'Queued then withdrawn',
+    description: 'Removed from the queue before it starts.',
+    status: 'todo',
+    assigneeAgentId: 'agent-queue',
+    createdBy: 'verifier',
+  });
+  await board.queueBoardWork(secondQueued.id, 'verifier');
+  const withdrawn = await board.unqueueBoardWork(secondQueued.id, 'verifier');
+  assert(withdrawn.autoAssignment?.status === 'disabled', 'leaving the queue disables the pending entry');
+  await runner.processBoardAssignmentsOnce({ dispatch: false });
+  const stayedOut = await board.getBoardTask(secondQueued.id);
+  assert(!stayedOut?.working && !stayedOut?.activeWork, 'a withdrawn card is never picked up');
+
+  let queueWithoutAgentRejected = false;
+  const unassigned = await board.createBoardTask({
+    title: 'No assignee', description: 'Cannot be queued.', status: 'todo', createdBy: 'verifier',
+  });
+  try {
+    await board.queueBoardWork(unassigned.id, 'verifier');
+  } catch (error) {
+    queueWithoutAgentRejected = /no assigned agent/i.test(error instanceof Error ? error.message : String(error));
+  }
+  assert(queueWithoutAgentRejected, 'a card cannot be queued without an assigned agent');
+
   let unknownAgentRejected = false;
   try {
     await board.updateBoardTask(manualCard.id, { assigneeAgentId: 'deleted-agent' });

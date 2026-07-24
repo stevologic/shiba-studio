@@ -27,151 +27,6 @@ import type {
   RichTimelineState,
 } from '@/lib/rich-cards';
 
-const TIMECHART_COLORS = [
-  'var(--accent-3)',
-  'var(--accent-2)',
-  'var(--fun-orange)',
-  'var(--success)',
-] as const;
-
-/** Multi-series line chart with axes, optional X ticks, null = gap. */
-function Timechart({ card }: { card: RichTimechartCard }) {
-  const width = 360;
-  const height = 160;
-  const padL = 36;
-  const padR = 56;
-  const padT = 12;
-  const padB = 28;
-  const plotW = width - padL - padR;
-  const plotH = height - padT - padB;
-  const n = Math.max(...card.series.map((s) => s.values.length), 2);
-  const finite = card.series.flatMap((s) => s.values.filter((v): v is number => v != null && Number.isFinite(v)));
-  const minY = finite.length ? Math.min(...finite) : 0;
-  const maxY = finite.length ? Math.max(...finite) : 1;
-  const spanY = maxY - minY || 1;
-  const xAt = (index: number) => padL + (n <= 1 ? 0 : (index / (n - 1)) * plotW);
-  const yAt = (value: number) => padT + (1 - (value - minY) / spanY) * plotH;
-  const xTicks = card.x?.length
-    ? card.x.slice(0, n)
-    : Array.from({ length: Math.min(n, 6) }, (_, i) => {
-        const idx = n <= 1 ? 0 : Math.round((i / Math.max(Math.min(n, 6) - 1, 1)) * (n - 1));
-        return String(idx + 1);
-      });
-  const yTicks = [maxY, (minY + maxY) / 2, minY].map((v) =>
-    Number.isInteger(v) ? String(v) : v.toFixed(1),
-  );
-
-  return (
-    <div className="my-2 p-4" style={CARD_SHELL}>
-      <CardTitle title={card.title} />
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        width="100%"
-        style={{ maxWidth: width, height: 'auto' }}
-        role="img"
-        aria-label={card.title || 'Time chart'}
-      >
-        <title>{card.title || 'Time chart'}</title>
-        {/* axes */}
-        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke="var(--border)" strokeWidth={1} />
-        <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke="var(--border)" strokeWidth={1} />
-        {yTicks.map((label, i) => {
-          const y = padT + (i / 2) * plotH;
-          return (
-            <g key={`y-${i}`}>
-              <line x1={padL} y1={y} x2={padL + plotW} y2={y} stroke="var(--border)" strokeWidth={0.5} opacity={0.5} />
-              <text x={padL - 6} y={y + 3} textAnchor="end" fontSize={9} fill="var(--text-dim)">{label}</text>
-            </g>
-          );
-        })}
-        {xTicks.map((label, i) => {
-          const idx = card.x?.length
-            ? i
-            : n <= 1
-              ? 0
-              : Math.round((i / Math.max(xTicks.length - 1, 1)) * (n - 1));
-          const x = xAt(Math.min(idx, n - 1));
-          return (
-            <text key={`x-${i}`} x={x} y={height - 8} textAnchor="middle" fontSize={9} fill="var(--text-dim)">
-              {label}
-            </text>
-          );
-        })}
-        {card.yLabel && (
-          <text
-            x={12}
-            y={padT + plotH / 2}
-            textAnchor="middle"
-            fontSize={9}
-            fill="var(--text-dim)"
-            transform={`rotate(-90 12 ${padT + plotH / 2})`}
-          >
-            {card.yLabel}
-          </text>
-        )}
-        {card.xLabel && (
-          <text x={padL + plotW / 2} y={height - 2} textAnchor="middle" fontSize={9} fill="var(--text-dim)">
-            {card.xLabel}
-          </text>
-        )}
-        {card.series.map((series, sIdx) => {
-          const color = TIMECHART_COLORS[sIdx % TIMECHART_COLORS.length];
-          // Split into contiguous polylines so null gaps break the stroke.
-          const segments: Array<Array<[number, number]>> = [];
-          let current: Array<[number, number]> = [];
-          series.values.forEach((sample, index) => {
-            if (sample == null || !Number.isFinite(sample)) {
-              if (current.length) segments.push(current);
-              current = [];
-              return;
-            }
-            current.push([xAt(index), yAt(sample)]);
-          });
-          if (current.length) segments.push(current);
-          let lastIdx = -1;
-          let lastFinite: number | null = null;
-          for (let i = series.values.length - 1; i >= 0; i--) {
-            const v = series.values[i];
-            if (v != null && Number.isFinite(v)) {
-              lastIdx = i;
-              lastFinite = v;
-              break;
-            }
-          }
-          return (
-            <g key={sIdx}>
-              {segments.map((pts, segIdx) => (
-                <polyline
-                  key={segIdx}
-                  points={pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              ))}
-              {lastFinite != null && lastIdx >= 0 && (
-                <>
-                  <circle cx={xAt(lastIdx)} cy={yAt(lastFinite)} r={2.5} fill={color} />
-                  <text
-                    x={xAt(lastIdx) + 6}
-                    y={yAt(lastFinite) + 3}
-                    fontSize={9}
-                    fill={color}
-                  >
-                    {series.label}
-                  </text>
-                </>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
-
 /** Word-sized trend line: single hue, no axes — the headline value carries the
  *  reading and the line shows shape. Native tooltip exposes min/max/latest. */
 function Sparkline({ values, tone }: { values: number[]; tone?: 'up' | 'down' | 'flat' }) {
@@ -208,6 +63,139 @@ function Sparkline({ values, tone }: { values: number[]; tone?: 'up' | 'down' | 
       />
       <circle cx={endX} cy={endY} r={2.5} fill={endColor} />
     </svg>
+  );
+}
+
+/**
+ * Categorical series hues, assigned in fixed order and never cycled (the
+ * parser caps series at 4). Dark-mode steps validated against the card
+ * surface: lightness band, chroma floor, CVD separation, and contrast all pass.
+ */
+const SERIES_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500'] as const;
+
+/** Y-over-X line chart: recessive grid, direct end labels, gaps for nulls. */
+function Timechart({ card }: { card: RichTimechartCard }) {
+  const width = 560;
+  const height = 200;
+  const padLeft = 44;
+  const padRight = 76; // room for direct labels at the line ends
+  const padTop = 12;
+  const padBottom = 26;
+
+  const pointCount = Math.max(...card.series.map((series) => series.values.length));
+  const finite = card.series.flatMap((series) => series.values.filter((v): v is number => v != null));
+  const rawMin = Math.min(...finite);
+  const rawMax = Math.max(...finite);
+  // A flat series still deserves a readable band rather than a zero-height axis.
+  const min = rawMin === rawMax ? rawMin - 1 : rawMin;
+  const max = rawMin === rawMax ? rawMax + 1 : rawMax;
+  const span = max - min;
+
+  const xAt = (index: number) => padLeft + (pointCount <= 1 ? 0 : (index / (pointCount - 1)) * (width - padLeft - padRight));
+  const yAt = (value: number) => padTop + (1 - (value - min) / span) * (height - padTop - padBottom);
+  const tidy = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(1));
+
+  const gridValues = [max, min + span / 2, min];
+  const tickIndexes = pointCount <= 1
+    ? [0]
+    : [...new Set([0, Math.floor((pointCount - 1) / 2), pointCount - 1])];
+
+  return (
+    <div className="my-2 p-4" style={CARD_SHELL}>
+      <CardTitle title={card.title} />
+      {card.series.length > 1 && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
+          {card.series.map((series, index) => (
+            <span key={index} className="inline-flex items-center gap-1.5 text-[11px] text-muted">
+              <span className="w-2.5 h-2.5 rounded-sm" style={{ background: SERIES_COLORS[index] }} aria-hidden />
+              {series.label}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full"
+          style={{ minWidth: 340 }}
+          role="img"
+          aria-label={`${card.yLabel || 'Value'} over ${card.xLabel || 'time'}: ${card.series.map((s) => s.label).join(', ')}`}
+        >
+          {gridValues.map((value, index) => (
+            <g key={index}>
+              <line
+                x1={padLeft}
+                x2={width - padRight}
+                y1={yAt(value)}
+                y2={yAt(value)}
+                stroke="var(--border)"
+                strokeWidth={1}
+              />
+              <text x={padLeft - 6} y={yAt(value) + 3.5} textAnchor="end" fontSize={11} fill="var(--text-dim)">
+                {tidy(value)}
+              </text>
+            </g>
+          ))}
+
+          {tickIndexes.map((index) => (
+            <text key={index} x={xAt(index)} y={height - 8} textAnchor="middle" fontSize={11} fill="var(--text-dim)">
+              {card.x?.[index] || String(index + 1)}
+            </text>
+          ))}
+
+          {card.series.map((series, seriesIndex) => {
+            const color = SERIES_COLORS[seriesIndex];
+            // Nulls break the path into segments instead of drawing through a gap.
+            const segments: Array<Array<{ x: number; y: number; value: number; index: number }>> = [];
+            let current: Array<{ x: number; y: number; value: number; index: number }> = [];
+            series.values.forEach((value, index) => {
+              if (value == null) {
+                if (current.length) segments.push(current);
+                current = [];
+                return;
+              }
+              current.push({ x: xAt(index), y: yAt(value), value, index });
+            });
+            if (current.length) segments.push(current);
+            const last = segments[segments.length - 1]?.slice(-1)[0];
+            return (
+              <g key={seriesIndex}>
+                {segments.map((segment, segmentIndex) => (
+                  <React.Fragment key={segmentIndex}>
+                    <polyline
+                      points={segment.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ')}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    {segment.length === 1 && <circle cx={segment[0].x} cy={segment[0].y} r={2.5} fill={color} />}
+                  </React.Fragment>
+                ))}
+                {/* Generous invisible hit targets carry the hover tooltip. */}
+                {segments.flat().map((point) => (
+                  <circle key={point.index} cx={point.x} cy={point.y} r={8} fill="transparent">
+                    <title>{`${series.label} · ${card.x?.[point.index] || `#${point.index + 1}`}: ${tidy(point.value)}`}</title>
+                  </circle>
+                ))}
+                {last && (
+                  <text x={last.x + 6} y={last.y + 3.5} fontSize={11} fill="var(--text-muted)">
+                    {series.label.length > 12 ? `${series.label.slice(0, 11)}…` : series.label}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      {(card.xLabel || card.yLabel) && (
+        <div className="flex justify-between text-[10px] text-dim mt-1">
+          <span>{card.yLabel ? `↑ ${card.yLabel}` : ''}</span>
+          <span>{card.xLabel ? `${card.xLabel} →` : ''}</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -347,6 +335,10 @@ export default function RichCardView({ card }: { card: RichCard }) {
     );
   }
 
+  if (card.kind === 'timechart') {
+    return <Timechart card={card} />;
+  }
+
   if (card.kind === 'sparkline') {
     return (
       <div className="my-2 p-4" style={CARD_SHELL}>
@@ -401,8 +393,8 @@ export default function RichCardView({ card }: { card: RichCard }) {
       <img
         src={card.src}
         alt={card.alt || card.title || 'Card image'}
-        className="rounded border border-default max-w-full"
-        style={{ maxHeight: 240, objectFit: 'contain' }}
+        className="rounded border border-default"
+        style={{ width: '100%', maxHeight: 240, objectFit: 'contain' }}
         loading="lazy"
       />
     );
@@ -419,15 +411,13 @@ export default function RichCardView({ card }: { card: RichCard }) {
       <div className="my-2 p-4" style={CARD_SHELL}>
         <CardTitle title={card.title} />
         <div className={`flex items-start gap-4 ${card.layout === 'right' ? 'flex-row-reverse' : ''}`}>
-          <div className="flex-shrink-0" style={{ maxWidth: '42%' }}>{image}</div>
+          {/* An explicit basis is required: a bare flex child around an SVG
+              with no intrinsic size collapses to a couple of pixels. */}
+          <div className="flex-shrink-0" style={{ flexBasis: '38%', maxWidth: 220, minWidth: 96 }}>{image}</div>
           <div className="text-sm text-muted whitespace-pre-wrap min-w-0">{card.body}</div>
         </div>
       </div>
     );
-  }
-
-  if (card.kind === 'timechart') {
-    return <Timechart card={card} />;
   }
 
   // Discriminated callout — must not fall through from other kinds (timechart

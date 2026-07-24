@@ -57,8 +57,9 @@ On a fresh install the **dashboard shows a 3-step checklist** — connect a mode
    - **Local models** — enable, point at your server (e.g. `http://127.0.0.1:11434/v1` for Ollama), *Test Connection*, then choose which models are selectable.
 2. Watch the **top-bar readiness badges** — one per source: `XAI TOKEN`, `OAUTH 2.0`, `GROK CLI`, `LOCAL`.
 3. **Set a default model and workspace** in Settings.
-4. **Say hello** — press *New Chat* in the top bar. Type `/help` to see everything chat can do.
+4. **Say hello** — press *New Chat* in the top bar. Type `/help` to see everything chat can do. You can queue more messages while a reply streams, and agents can render **rich cards** (`shiba-card` fences) in replies.
 5. **Create an agent** — Agents → *Create Agent*: pick a model, workspace, integration scopes, and optionally a schedule. Run it from the **Automations** page and watch the live execution trace.
+6. **Optional — Meetings (Beta)** — open **Meetings**, pick an agent and project, start a spoken review; end the meeting to get minutes you can send to the **Board**.
 
 ## Where your data lives
 

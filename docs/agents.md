@@ -2,7 +2,7 @@
 
 Agents are autonomous Grok workers with their own model, workspace, and capabilities. The **Agents page** is where you view, create, and edit these execution owners. All recurring, one-time, monitored, and event-triggered work is configured and run from **[Automations](automations.md)**.
 
-<img src="images/agents.png" alt="Agents page: Grok execution owners with models, workspaces, integration scopes, and skills" width="880" />
+<img src="images/agents.png" alt="Agents page: local and cloud Grok execution owners with models, workspaces, integration scopes, and skills" width="880" />
 
 Every local agent runs on this machine with files and shell in its workspace, browser automation (Chrome), its own Alpine Linux sandbox container, Grok CLI delegation, MCP tools, cloud integrations (GitHub, Slack, …), web research, and memory. An Automation may assign an agent to execute its instructions, but the trigger and execution policy belong to the Automation.
 

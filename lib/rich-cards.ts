@@ -270,7 +270,9 @@ export function parseRichCard(raw: string): RichCard | null {
 
   if (value.kind === 'timechart') {
     const MAX_POINTS = 120;
-    const series = (Array.isArray(value.series) ? value.series : []).slice(0, 4).flatMap((entry) => {
+    // Validate first, then cap: an unplottable series must not consume one of
+    // the four fixed categorical hue slots.
+    const series = (Array.isArray(value.series) ? value.series : []).slice(0, 16).flatMap((entry) => {
       if (!entry || typeof entry !== 'object') return [];
       const row = entry as Record<string, unknown>;
       const label = text(row.label, 120);
@@ -282,7 +284,7 @@ export function parseRichCard(raw: string): RichCard | null {
         return Number.isFinite(numeric) ? numeric : null;
       });
       return values.filter((sample) => sample != null).length >= 2 ? [{ label, values }] : [];
-    });
+    }).slice(0, 4);
     if (!series.length) return null;
     const x = (Array.isArray(value.x) ? value.x : []).slice(0, MAX_POINTS).map((tick) => text(tick, 24));
     const xLabel = text(value.xLabel, 60) || undefined;
