@@ -672,7 +672,9 @@ export async function claimBoardWork(input: ClaimBoardWorkInput): Promise<ClaimB
         ? `${input.agentName} automatically accepted this assignment`
         : input.mode === 'refinement'
           ? `${input.agentName} accepted the review feedback`
-          : `${input.agentName} accepted this card`,
+          : input.mode === 'queued'
+            ? `${input.agentName} started this queued card`
+            : `${input.agentName} accepted this card`,
     ));
     if (from !== 'in_progress') {
       task.activity.push(systemEvent(`${input.agentName} moved ${from} → in_progress`));
@@ -699,6 +701,70 @@ export async function disableBoardAutoAssignment(
     task.autoAssignment.status = 'disabled';
     task.autoAssignment.updatedAt = now();
     task.updatedAt = task.autoAssignment.updatedAt;
+    await saveStore(store);
+    return task;
+  });
+}
+
+/**
+ * Queue a card for its assigned agent to pick up when it frees.
+ *
+ * Start work fails outright when the agent already has accepted work; queueing
+ * records the intent durably instead, and the Board assignment processor
+ * accepts it on a later pass. The explicit click is the operator's consent, so
+ * this works for agents that never opted into automatic assignments.
+ */
+export async function queueBoardWork(idOrKey: string, actor = 'user'): Promise<BoardTask> {
+  const needle = idOrKey.trim().toUpperCase();
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    const task = store.tasks.find((candidate) => (
+      candidate.id === idOrKey || candidate.key.toUpperCase() === needle
+    ));
+    if (!task) throw new Error(`Board task not found: ${idOrKey}`);
+    if (!task.assigneeAgentId) throw new Error(`${task.key} has no assigned agent — assign one first`);
+    if (task.activeWork || task.working) throw new Error(`${task.key} is already being worked`);
+    if (task.status === 'done' || task.status === 'cancelled') {
+      throw new Error(`${task.key} is ${task.status === 'done' ? 'done' : 'cancelled'} — reopen it before queueing work`);
+    }
+    if (task.autoAssignment?.status === 'pending' && task.autoAssignment.queued) return task;
+
+    const requestedAt = now();
+    task.autoAssignment = {
+      id: uuidv4(),
+      agentId: task.assigneeAgentId,
+      status: 'pending',
+      queued: true,
+      requestedAt,
+      updatedAt: requestedAt,
+    };
+    task.updatedAt = requestedAt;
+    task.activity.push(systemEvent(`Queued by ${actor}`));
+    await saveStore(store);
+    return task;
+  }).then(async (task) => {
+    // Start immediately when the agent is already free; otherwise the
+    // assignment stays pending and the Board processor claims it on a later
+    // pass, once whatever that agent is working on settles.
+    return (await reactToSavedAssignment(task.id)) || task;
+  });
+}
+
+/** Remove a card from the queue without touching work that already started. */
+export async function unqueueBoardWork(idOrKey: string, actor = 'user'): Promise<BoardTask> {
+  const needle = idOrKey.trim().toUpperCase();
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    const task = store.tasks.find((candidate) => (
+      candidate.id === idOrKey || candidate.key.toUpperCase() === needle
+    ));
+    if (!task) throw new Error(`Board task not found: ${idOrKey}`);
+    const assignment = task.autoAssignment;
+    if (!assignment || assignment.status !== 'pending' || !assignment.queued) return task;
+    assignment.status = 'disabled';
+    assignment.updatedAt = now();
+    task.updatedAt = assignment.updatedAt;
+    task.activity.push(systemEvent(`Removed from the queue by ${actor}`));
     await saveStore(store);
     return task;
   });

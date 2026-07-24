@@ -101,6 +101,12 @@ export interface BoardAutoAssignment {
   id: string;
   agentId: string;
   status: 'pending' | 'disabled' | 'accepted';
+  /**
+   * The operator explicitly queued this card. That click is the same consent
+   * as Start work, so the assigned agent picks it up when it frees even if it
+   * never opted into automatic Board assignments.
+   */
+  queued?: boolean;
   requestedAt: string;
   updatedAt: string;
 }
@@ -110,7 +116,7 @@ export interface BoardWorkClaim {
   id: string;
   taskId: string;
   agentId: string;
-  mode: 'manual' | 'automatic' | 'refinement';
+  mode: 'manual' | 'automatic' | 'refinement' | 'queued';
   assignmentId?: string;
   feedback?: string;
   requestedAt: string;

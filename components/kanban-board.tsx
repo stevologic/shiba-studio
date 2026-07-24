@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw, Check, RotateCcw,
-  FileText, Image as ImageIcon, File, Copy, PackageOpen, FolderKanban, AlertTriangle, BarChart3,
+  FileText, Image as ImageIcon, File, Copy, PackageOpen, FolderKanban, AlertTriangle, BarChart3, ListPlus,
 } from 'lucide-react';
 import BoardGanttModal from '@/components/board-gantt-modal';
 import dynamic from 'next/dynamic';
@@ -377,6 +377,30 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     }
   }
 
+  /** Waiting for its assigned agent rather than running right now. */
+  function isQueued(task: BoardTask): boolean {
+    return task.autoAssignment?.status === 'pending'
+      && task.autoAssignment.queued === true
+      && !task.working;
+  }
+
+  async function queueWork(task: BoardTask) {
+    const queuedTask = await post({ action: 'queueWork', id: task.id });
+    if (queuedTask) {
+      setTasks((prev) => prev.map((candidate) => candidate.id === task.id ? queuedTask : candidate));
+      toast.success(queuedTask.working
+        ? `${task.key} started — the agent was free`
+        : `${task.key} queued`);
+    }
+  }
+
+  async function unqueueWork(task: BoardTask) {
+    const updated = await post({ action: 'unqueueWork', id: task.id });
+    if (updated) {
+      setTasks((prev) => prev.map((candidate) => candidate.id === task.id ? updated : candidate));
+    }
+  }
+
   /** Review approved: push the card to Done. */
   async function validateCard(task: BoardTask) {
     setReviewBusy(true);
@@ -713,6 +737,11 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                             <Loader2 size={11} className="kb-spin" /> working
                           </span>
                         )}
+                        {isQueued(task) && (
+                          <span className="kb-queued" title={`Queued — ${agent?.name || 'the agent'} starts this when free`}>
+                            <ListPlus size={11} /> queued
+                          </span>
+                        )}
                       </div>
                       <div className="kb-card-title">{task.title}</div>
                       {task.projectId && (
@@ -931,7 +960,36 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                   ? <><Loader2 size={13} className="kb-spin" /> Agent working…</>
                   : <><Play size={13} /> Start work</>}
               </button>
-              {selected.assigneeAgentId && (
+              {!selected.working && selected.status !== 'done' && selected.status !== 'cancelled' && (
+                isQueued(selected) ? (
+                  <button
+                    type="button"
+                    className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
+                    title="Remove this card from the queue"
+                    onClick={() => void unqueueWork(selected)}
+                  >
+                    <X size={13} /> Leave queue
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="grok-btn grok-btn-secondary text-sm inline-flex items-center gap-1.5"
+                    disabled={!selected.assigneeAgentId}
+                    title={!selected.assigneeAgentId
+                      ? 'Assign an agent first'
+                      : 'Queue this card — the agent picks it up when it finishes its current work'}
+                    onClick={() => void queueWork(selected)}
+                  >
+                    <ListPlus size={13} /> Queue work
+                  </button>
+                )
+              )}
+              {isQueued(selected) && (
+                <span className="kb-workrow-hint">
+                  Queued — {agentById.get(selected.assigneeAgentId || '')?.name || 'the agent'} starts it when free.
+                </span>
+              )}
+              {selected.assigneeAgentId && !isQueued(selected) && (
                 <span className="kb-workrow-hint">
                   <AgentAvatar agent={agentById.get(selected.assigneeAgentId)} size={16} />
                   {agentById.get(selected.assigneeAgentId)?.autoAcceptBoardAssignments

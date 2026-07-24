@@ -6768,6 +6768,19 @@ select.kb-project-filter-select {
   padding: 0.05rem 0.45rem;
 }
 
+/* Queued: waiting for its assigned agent — recessive next to "working". */
+.kb-queued {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border-light);
+  background: var(--bg-hover);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+
 .kb-spin { animation: kb-spin 1s linear infinite; }
 
 @keyframes kb-spin { to { transform: rotate(360deg); } }

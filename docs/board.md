@@ -52,7 +52,9 @@ The snapshot contains portable card content and column state only. Agent and pro
 
 Two directions, both live:
 
-**You assign work.** Pick an agent in the card's Assignee selector. By default, click **▶ Start work** when the card is ready. You can instead enable **Auto-start future Board assignments** in that agent's setup; every card assigned after the toggle is enabled is accepted immediately, moves to In Progress, and waits safely for an execution slot. Existing assignments are never started retroactively.
+**You assign work.** Pick an agent in the card's Assignee selector. By default, click **▶ Start work** when the card is ready — or **Queue work** to line it up.
+
+**Queue work** exists because an agent accepts one card at a time: Start work is refused outright while that agent is busy, but queueing records the intent durably and the agent claims the card as soon as its current work settles (starting immediately if it is already free). Queued cards show a **queued** badge on the board and a **Leave queue** action in the detail panel while they wait. Queueing is your explicit consent, so it works for agents that never enabled *Auto-start future Board assignments* — and a queued card is never silently dropped: it stays queued until it starts, or until you withdraw it. You can instead enable **Auto-start future Board assignments** in that agent's setup; every card assigned after the toggle is enabled is accepted immediately, moves to In Progress, and waits safely for an execution slot. Existing assignments are never started retroactively.
 
 The accepted card is a durable task before execution begins, so reloads, temporary capacity limits, and server restarts do not duplicate or silently drop it. One agent accepts one Board card at a time; later assignments wait their turn. Reassignment is fenced while work is active, and cancelling the card prevents a late result from overwriting it.
 
