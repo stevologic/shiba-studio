@@ -241,7 +241,13 @@ function AnnotationLayer({ strokes, active, onAddStroke }: {
 
 /* ── Stage: whatever the agent is currently presenting ── */
 
-interface MarkdownSection { title: string; body: string }
+interface MarkdownSection { title: string; body: string; wide?: boolean }
+
+/** Plotted cards need the full stage width — a 560-wide chart squeezed into a
+ *  250px column renders its labels at ~6px. */
+function sectionNeedsFullWidth(body: string): boolean {
+  return /"kind"\s*:\s*"(?:timechart|bars)"/.test(body);
+}
 
 /** Split a markdown body at #/##/### headings so the stage can lay sections
  *  out as cards instead of one tall prose column. */
@@ -262,7 +268,10 @@ function splitMarkdownSections(body: string): MarkdownSection[] {
   }
   sections.push(current);
   const cleaned = sections
-    .map((section) => ({ title: section.title, body: section.lines.join('\n').trim() }))
+    .map((section) => {
+      const body = section.lines.join('\n').trim();
+      return { title: section.title, body, ...(sectionNeedsFullWidth(body) ? { wide: true } : {}) };
+    })
     .filter((section) => section.title || section.body);
   return sawHeading && cleaned.length > 1 ? cleaned : [{ title: '', body: body.trim() }];
 }
@@ -281,7 +290,11 @@ function MarkdownStage({ body }: { body: string }) {
   return (
     <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))' }}>
       {sections.map((section, index) => (
-        <div key={index} className="rounded-lg border border-default p-4 min-w-0" style={{ background: 'var(--bg-elev)' }}>
+        <div
+          key={index}
+          className="rounded-lg border border-default p-4 min-w-0"
+          style={{ background: 'var(--bg-elev)', ...(section.wide ? { gridColumn: '1 / -1' } : {}) }}
+        >
           {section.title && <div className="text-sm font-medium text-primary mb-2">{section.title}</div>}
           <ChatMarkdown content={section.body} />
         </div>
