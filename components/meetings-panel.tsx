@@ -3,7 +3,8 @@
 /**
  * Meetings (Beta) — spoken, agent-led project reviews.
  * Lobby (start/browse meetings) → live room (voice conversation + visual
- * stage) → minutes (summary, direction, decisions, todos → Board cards).
+ * stage + Board work initiated mid-meeting) → minutes (summary, direction,
+ * decisions, remaining todos → Board cards).
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -26,6 +27,7 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  Zap,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
@@ -1103,6 +1105,27 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
                     <Presentation size={11} aria-hidden /> {turn.visual.title}
                   </button>
                 )}
+                {/* Work this turn initiated on the Board, live. */}
+                {(turn.actions || []).map((action) => (
+                  <button
+                    key={action.taskId}
+                    type="button"
+                    className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-success border rounded-full px-2 py-0.5 hover:brightness-125 max-w-full"
+                    style={{ borderColor: 'color-mix(in srgb, var(--success) 45%, var(--border))' }}
+                    onClick={onOpenBoard}
+                    title={`${action.taskKey} · ${action.title}${action.assignee ? ` — ${action.queued ? 'queued to' : 'assigned to'} ${action.assignee}` : ''} — open the Board`}
+                  >
+                    <Zap size={10} strokeWidth={2.5} aria-hidden />
+                    <span className="truncate">
+                      {action.taskKey} · {action.title}
+                    </span>
+                    {action.assignee && (
+                      <span className="text-dim flex-shrink-0">
+                        → {action.assignee}{action.queued ? ' ⏵' : ''}
+                      </span>
+                    )}
+                  </button>
+                ))}
               </div>
             ))}
             {streamingSay && (

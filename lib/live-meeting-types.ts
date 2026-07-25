@@ -1,8 +1,9 @@
 /**
  * Live Meetings (Beta) — a spoken, agent-led project review.
  * The creator (director) and one agent (senior engineer) talk through the
- * project; the agent presents visuals and the meeting ends in minutes with
- * todos that convert to Board cards only after explicit confirmation.
+ * project; the agent presents visuals, initiates real Board work the moment
+ * the director asks for it, and the meeting ends in minutes whose remaining
+ * todos convert to Board cards only after explicit confirmation.
  */
 
 export type LiveMeetingStatus = 'active' | 'summarizing' | 'ended';
@@ -60,6 +61,18 @@ export type MeetingVisual =
   | MeetingMarkdownVisual
   | MeetingScreenshotVisual;
 
+/** Real work a turn initiated on the Board — created the moment it was asked for. */
+export interface MeetingWorkAction {
+  kind: 'board_card';
+  taskId: string;
+  taskKey: string;
+  title: string;
+  /** Card assignee when the named owner matched a real agent. */
+  assignee?: string;
+  /** Work was queued to start (immediately if the assignee is free). */
+  queued?: boolean;
+}
+
 export interface LiveMeetingTurn {
   id: string;
   role: 'creator' | 'agent';
@@ -68,6 +81,8 @@ export interface LiveMeetingTurn {
   at: string;
   /** Visual the agent put on the meeting stage with this turn. */
   visual?: MeetingVisual;
+  /** Board cards this turn created live, at the director's request. */
+  actions?: MeetingWorkAction[];
   /** AI steering — short directions the creator can take next. */
   suggestions?: string[];
 }

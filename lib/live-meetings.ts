@@ -20,7 +20,7 @@ import { grokChat } from './grok-client';
 import { grokChatStream } from './grok-chat-stream';
 import { loadAgents, loadConfig } from './persistence';
 import { buildProjectChatContext, getProject } from './projects';
-import { createBoardTask, listBoardTasks } from './board';
+import { createBoardTask, getBoardTask, listBoardTasks, queueBoardWork } from './board';
 import { buildAgentChatSystem } from './chat-skill';
 import { normalizeAgent, type Agent, type AppConfig } from './types';
 import { resolveProjectWorkspace } from './project-types';
@@ -37,6 +37,7 @@ import {
   type LiveMeetingTurn,
   type MeetingDiagramVisual,
   type MeetingVisual,
+  type MeetingWorkAction,
 } from './live-meeting-types';
 
 const execFileAsync = promisify(execFile);
@@ -298,6 +299,7 @@ async function buildMeetingBrief(input: {
 const MEETING_ROLE = [
   'You are in a live Meetings (Beta) session: a spoken project review between you — the senior engineer who has been building this project — and the creator, who directs it.',
   'You LEAD the meeting. Present what has been implemented, walk through the work like a delivery review, and propose direction — but always yield to what the director wants to discuss.',
+  'Meetings initiate work, not just talk about it: when the director asks for something to be done, create the Board card via "actions" in that same turn and confirm it out loud. Never make them wait for the meeting minutes.',
   'Speaking style: natural spoken language that will be read aloud, 2 to 5 short sentences per turn. No markdown, bullet lists, code, URLs, or emoji inside the spoken text. Be concrete: name real files, features, commits, and Board cards from the project material below.',
   'Everything you have put on the stage stays in this conversation, with its content included for recent visuals. When the director says "explain it", "walk me through this", or similar, they mean what is on the stage — use that included content directly instead of asking what they mean.',
   'Never invent files, code, commits, or decisions. If you are unsure something exists, say so and offer to check together.',
@@ -305,8 +307,9 @@ const MEETING_ROLE = [
 
 const VISUAL_CONTRACT = [
   'Respond with STRICT JSON only — one object, no code fences, no text outside it:',
-  '{"say":"...","visual":<visual or null>,"suggestions":["...","..."]}',
+  '{"say":"...","visual":<visual or null>,"actions":[...],"suggestions":["...","..."]}',
   '"say" — your spoken turn.',
+  '"actions" — REAL Board cards to create right now; [] on most turns. Include one ONLY when the director explicitly asks for work to happen ("make a card for that", "queue it up", "have <agent> fix it"): {"kind":"board_card","title":"...","detail":"context for whoever picks it up","priority":"low|medium|high","owner":"<name from the agent roster; your own name to take it yourself; omit when nobody was named>","start":true|false}. "start":true queues the card so the owner begins immediately (or as soon as they free up) — use it when the director wants the work started, not just tracked. Confirm in "say" what you created. Never invent work the director did not ask for.',
   '"visual" — at most one visual to put on the meeting stage, or null. Show something real every turn or two. One of:',
   '  {"kind":"code","title":"...","path":"relative/path/from/tree","startLine":N,"endLine":M} — the studio reads the REAL file and shows exactly those lines. Only reference paths from the workspace file tree. Keep ranges under 60 lines.',
   '  {"kind":"diagram","title":"...","nodes":[{"id":"a","label":"...","emphasis":true}],"edges":[{"from":"a","to":"b","label":"..."}]} — architecture or flow diagram, 3 to 10 nodes; set emphasis on the nodes you are discussing.',
@@ -315,7 +318,7 @@ const VISUAL_CONTRACT = [
   '"suggestions" — 2 to 4 short directions the director could take next, phrased as things they might say (for example "Show me the riskiest code path"). Steer toward review depth, strategy, and decisions.',
 ].join('\n');
 
-interface TurnPayload { say?: unknown; visual?: unknown; suggestions?: unknown }
+interface TurnPayload { say?: unknown; visual?: unknown; actions?: unknown; suggestions?: unknown }
 
 function parseModelJson<T>(content: string): T {
   const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -380,7 +383,9 @@ async function prepareLiveMeetingTurn(
   // must release pendingTurn so the room is never stuck mid-turn.
   const row = claimTurn(id, creatorText);
   try {
-    const agent = await requireAgent(row.agentId);
+    const roster = (await loadAgents()).map(normalizeAgent);
+    const agent = roster.find((candidate) => candidate.id === row.agentId);
+    if (!agent) throw new Error('Meeting agent no longer exists');
     const config = await loadConfig();
     const model = resolveMeetingModel(agent, config);
     const turns = parseJson<LiveMeetingTurn[]>(row.turns, []);
@@ -403,6 +408,9 @@ async function prepareLiveMeetingTurn(
       MEETING_ROLE,
       row.brief,
       VISUAL_CONTRACT,
+      // Real names make "owner" resolvable — a misspelled owner still creates
+      // the card, just unassigned.
+      `Agent roster for "actions" owners: ${roster.map((candidate) => candidate.name).filter(Boolean).join(', ') || '(none)'}.`,
       ...(stageTurn?.visual
         ? [`The director's stage currently shows: "${stageTurn.visual.title}" (${stageTurn.visual.kind}). When they say "this" or "it" about something displayed, they mean that visual unless they say otherwise.`]
         : []),
@@ -436,20 +444,110 @@ async function prepareLiveMeetingTurn(
   }
 }
 
+const MEETING_MAX_ACTIONS_PER_TURN = 3;
+const BOARD_PRIORITY: Record<string, number> = { high: 2, medium: 3, low: 4 };
+
+/** Owners named in the meeting become real card assignments (exact name first,
+ *  then containment) — shared by live actions and minutes conversion. */
+function matchAgentByName(agents: Agent[], owner: string | undefined): Agent | undefined {
+  const name = owner?.trim().toLowerCase();
+  if (!name) return undefined;
+  return agents.find((candidate) => candidate.name.toLowerCase() === name)
+    || agents.find((candidate) => candidate.name.toLowerCase().includes(name) || name.includes(candidate.name.toLowerCase()));
+}
+
+/**
+ * Create the Board cards a turn asked for, the moment the turn settles —
+ * meetings initiate work live rather than parking everything until minutes.
+ * Failures drop the action (never the spoken turn) with one logged line.
+ */
+async function resolveMeetingActions(row: LiveMeetingRow, raw: unknown): Promise<MeetingWorkAction[]> {
+  if (!Array.isArray(raw) || !raw.length) return [];
+  const agents = (await loadAgents()).map(normalizeAgent);
+  const turnCount = parseJson<LiveMeetingTurn[]>(row.turns, []).length;
+  const results: MeetingWorkAction[] = [];
+  for (const [index, entry] of raw.slice(0, MEETING_MAX_ACTIONS_PER_TURN).entries()) {
+    if (!entry || typeof entry !== 'object') continue;
+    const value = entry as Record<string, unknown>;
+    if (value.kind !== 'board_card') continue;
+    const cardTitle = cleanText(value.title, 300);
+    if (!cardTitle) continue;
+    const detail = cleanText(value.detail, 2_000);
+    const owner = cleanText(value.owner, 200);
+    const priority = value.priority === 'low' || value.priority === 'medium' || value.priority === 'high'
+      ? value.priority
+      : undefined;
+    const assignee = matchAgentByName(agents, owner);
+    try {
+      // Deterministic id keyed to this turn position: a settle retry after a
+      // crash re-finds the existing card instead of double-creating it.
+      const cardKey = createHash('sha256').update(`${row.id}\0turn${turnCount}\0${index}`).digest('hex').slice(0, 32);
+      const card = await createBoardTask({
+        id: `live-meeting-action-${cardKey}`,
+        title: cardTitle,
+        description: [
+          detail,
+          owner && !assignee ? `Owner named in the meeting: ${owner} (no matching agent — left unassigned)` : '',
+          `Requested live in meeting “${row.title}”.`,
+        ].filter(Boolean).join('\n\n'),
+        status: 'todo',
+        priority: priority ? BOARD_PRIORITY[priority] : 0,
+        projectId: row.projectId || undefined,
+        assigneeAgentId: assignee?.id,
+        labels: ['meeting'],
+        createdBy: `meeting ${row.title}`,
+      });
+      let queued = false;
+      if (value.start === true && assignee) {
+        try {
+          await queueBoardWork(card.id, `meeting ${row.title}`);
+          queued = true;
+        } catch {
+          // Assignment auto-accept may have started the card before the queue
+          // call — report the truth from the Board rather than the error.
+          const current = await getBoardTask(card.id);
+          queued = !!(current?.activeWork || current?.working || current?.autoAssignment?.status === 'pending');
+        }
+      }
+      results.push({
+        kind: 'board_card',
+        taskId: card.id,
+        taskKey: card.key,
+        title: cardTitle,
+        ...(assignee ? { assignee: assignee.name } : {}),
+        ...(queued ? { queued: true } : {}),
+      });
+    } catch (error) {
+      console.error(`[shiba-studio] live meeting board action dropped: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  if (results.length) {
+    audit('run', 'live meeting initiated work', row.title, {
+      meetingId: row.id,
+      cards: results.map((result) => result.taskKey),
+    });
+    emitAppEvent('board');
+  }
+  return results;
+}
+
 /** Parse a completed model reply, resolve the visual, and settle the claim. */
 async function settleAgentReply(row: LiveMeetingRow, content: string): Promise<LiveMeetingRecord> {
   let say: string;
   let visual: MeetingVisual | undefined;
+  let actions: MeetingWorkAction[];
   let suggestions: string[];
   try {
     const payload = parseModelJson<TurnPayload>(content);
     say = cleanText(payload.say, MAX_SAY_CHARS, true);
     visual = await resolveVisual(payload.visual, row.workspacePath);
+    actions = await resolveMeetingActions(row, payload.actions);
     suggestions = normalizeSuggestions(payload.suggestions);
   } catch {
     // Tolerate an off-contract reply — keep the words, drop the stage update.
     say = cleanText(content, MAX_SAY_CHARS, true);
     visual = undefined;
+    actions = [];
     suggestions = [];
   }
   settleTurn(row.id, (all) => {
@@ -459,6 +557,7 @@ async function settleAgentReply(row: LiveMeetingRow, content: string): Promise<L
       text: say,
       at: nowIso(),
       ...(visual ? { visual } : {}),
+      ...(actions.length ? { actions } : {}),
       ...(suggestions.length ? { suggestions } : {}),
     });
   }, null);
@@ -582,7 +681,13 @@ function turnSummaryLine(record: { agentName: string }, turn: LiveMeetingTurn): 
       ? ` [showed code: ${turn.visual.title} — ${turn.visual.path}:${turn.visual.startLine}-${turn.visual.endLine}]`
       : ` [showed ${turn.visual.kind}: ${turn.visual.title}]`
     : '';
-  return `${who}: ${turn.text}${visual}`;
+  // Work created live must be visible to later turns AND to the minutes model,
+  // so it is neither re-created nor re-listed as a todo.
+  const actions = (turn.actions || [])
+    .map((action) => ` [created Board card ${action.taskKey}: ${action.title}${
+      action.assignee ? ` — ${action.queued ? 'queued to' : 'assigned to'} ${action.assignee}` : ''}]`)
+    .join('');
+  return `${who}: ${turn.text}${visual}${actions}`;
 }
 
 function resolveMeetingModel(agent: Agent, config: AppConfig): string {
@@ -878,7 +983,7 @@ export async function endLiveMeeting(id: string): Promise<LiveMeetingRecord> {
         },
         {
           role: 'user',
-          content: `Write the minutes for this meeting. Return {"title":"4 to 8 words naming what this meeting actually covered — no project name, no dates","summary":"what was reviewed and discussed","direction":"the agreed direction for the project going forward","decisions":["explicit decisions made"],"todos":[{"text":"actionable item the director requested or both agreed on","detail":"context helpful to whoever picks it up","priority":"low|medium|high","owner":"who the transcript explicitly assigned this to — use the matching name from the agent roster, omit when nobody was named"}]}. Todos must come only from explicit requests or agreements in the transcript. Agent roster: ${roster.join(', ') || '(none)'}.\n\nMeeting: ${row.title}\n\n${transcript || '(no conversation happened)'}`,
+          content: `Write the minutes for this meeting. Return {"title":"4 to 8 words naming what this meeting actually covered — no project name, no dates","summary":"what was reviewed and discussed","direction":"the agreed direction for the project going forward","decisions":["explicit decisions made"],"todos":[{"text":"actionable item the director requested or both agreed on","detail":"context helpful to whoever picks it up","priority":"low|medium|high","owner":"who the transcript explicitly assigned this to — use the matching name from the agent roster, omit when nobody was named"}]}. Todos must come only from explicit requests or agreements in the transcript. Work already done during the meeting — transcript lines noting "created Board card" — is on the Board already and must NOT be repeated as a todo. Agent roster: ${roster.join(', ') || '(none)'}.\n\nMeeting: ${row.title}\n\n${transcript || '(no conversation happened)'}`,
         },
       ],
     });
@@ -923,19 +1028,12 @@ export async function convertLiveMeetingTodos(input: {
   const wanted = new Set(input.todoIds.map(String));
   const selected = minutes.todos.filter((todo) => wanted.has(todo.id));
   if (!selected.length) throw new Error('Select at least one todo');
-  const priorityMap: Record<string, number> = { high: 2, medium: 3, low: 4 };
   // Owners named in the meeting become real card assignments. Assignment uses
   // the Board's normal flow, so agent auto-accept opt-ins still govern starts.
   const agents = (await loadAgents()).map(normalizeAgent);
-  const resolveOwner = (owner: string | undefined): Agent | undefined => {
-    const name = owner?.trim().toLowerCase();
-    if (!name) return undefined;
-    return agents.find((candidate) => candidate.name.toLowerCase() === name)
-      || agents.find((candidate) => candidate.name.toLowerCase().includes(name) || name.includes(candidate.name.toLowerCase()));
-  };
   for (const todo of selected) {
     if (todo.boardTaskId) continue;
-    const assignee = resolveOwner(todo.owner);
+    const assignee = matchAgentByName(agents, todo.owner);
     const cardKey = createHash('sha256').update(`${row.id}\0${todo.id}`).digest('hex').slice(0, 32);
     const card = await createBoardTask({
       id: `live-meeting-board-${cardKey}`,
@@ -946,7 +1044,7 @@ export async function convertLiveMeetingTodos(input: {
         `Requested in meeting “${row.title}” (${new Date(row.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}).`,
       ].filter(Boolean).join('\n\n'),
       status: 'todo',
-      priority: todo.priority ? priorityMap[todo.priority] : 0,
+      priority: todo.priority ? BOARD_PRIORITY[todo.priority] : 0,
       projectId: row.projectId || undefined,
       assigneeAgentId: assignee?.id,
       labels: ['meeting'],
