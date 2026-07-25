@@ -109,6 +109,81 @@ async function main() {
   assert.deepEqual(timechart.series[1].values, [2, 4, null, 6], 'unparseable samples become gaps, not zeros');
   assert.equal(timechart.series[2].label, 'C', 'a dropped series does not consume a hue slot');
 
+  // Custom cards: agent-designed element trees normalize, nest, and stay bounded.
+  const custom = parseRichCard(JSON.stringify({
+    kind: 'custom',
+    title: 'Deploy readiness',
+    body: [
+      {
+        type: 'row',
+        align: 'between',
+        items: [
+          { type: 'text', text: 'API v2 rollout', size: 'lg', weight: 'semibold' },
+          { type: 'badge', text: 'ON TRACK', tone: 'success' },
+        ],
+      },
+      { type: 'divider' },
+      {
+        type: 'grid',
+        columns: 3,
+        items: [
+          { type: 'text', text: '98.2%', size: 'xl', weight: 'bold', tone: 'nonsense' },
+          { type: 'kv', label: 'Env', value: 'staging' },
+          { type: 'meter', percent: 240, label: 'Migration', tone: 'warning' },
+        ],
+      },
+      { type: 'text', text: '' },
+      { type: 'unknown-element', text: 'dropped' },
+    ],
+  }));
+  assert(custom && custom.kind === 'custom');
+  assert.equal(custom.body.length, 3, 'empty text and unknown element types are dropped');
+  const headerRow = custom.body[0];
+  assert(headerRow.type === 'row' && headerRow.align === 'between' && headerRow.items.length === 2, 'rows keep alignment and children');
+  const gridCell = custom.body[2];
+  assert(gridCell.type === 'grid' && gridCell.columns === 3, 'grid keeps its column count');
+  const bigNumber = gridCell.items[0];
+  assert(bigNumber.type === 'text' && bigNumber.tone === undefined, 'invalid text tones are dropped');
+  const meter = gridCell.items[2];
+  assert(meter.type === 'meter' && meter.percent === 100, 'meter percent clamps to 0–100');
+  assert.equal(parseRichCard('{"kind":"custom","body":[]}'), null, 'a custom card needs at least one element');
+  assert.equal(parseRichCard('{"kind":"custom","body":[{"type":"row","items":[]}]}'), null, 'containers without children are dropped');
+
+  // Depth cap: nesting beyond 4 container levels is pruned, not rendered.
+  const deep = parseRichCard(JSON.stringify({
+    kind: 'custom',
+    body: [{
+      type: 'row',
+      items: [{
+        type: 'row',
+        items: [{
+          type: 'row',
+          items: [{ type: 'row', items: [{ type: 'text', text: 'too deep' }] }],
+        }],
+      }],
+    }],
+  }));
+  assert.equal(deep, null, 'elements nested beyond the depth cap are pruned away');
+
+  // Element budget: a runaway payload cannot exceed the total element cap.
+  const flood = parseRichCard(JSON.stringify({
+    kind: 'custom',
+    body: Array.from({ length: 12 }, () => ({
+      type: 'row',
+      items: Array.from({ length: 12 }, () => ({
+        type: 'row',
+        items: Array.from({ length: 12 }, (_, index) => ({ type: 'text', text: `t${index}` })),
+      })),
+    })),
+  }));
+  assert(flood && flood.kind === 'custom');
+  const countElements = (elements: Array<{ type: string; items?: unknown[] }>): number =>
+    elements.reduce((total, element) => total + 1 + (Array.isArray(element.items) ? countElements(element.items as Array<{ type: string; items?: unknown[] }>) : 0), 0);
+  assert(countElements(flood.body) <= 80, 'custom cards respect the total element budget');
+
+  // The prompt must teach the designer escape hatch.
+  assert(RICH_CARD_PROMPT.includes('"kind":"custom"') && RICH_CARD_PROMPT.includes('DESIGN YOUR OWN'), 'prompt teaches custom card design');
+
   // Malformed payloads must return null (renderers fall back to plain code).
   for (const bad of ['not json', '[1,2]', '{"kind":"stats","stats":[]}', '{"kind":"unknown"}', '{"kind":"callout","title":""}']) {
     assert.equal(parseRichCard(bad), null, `rejects: ${bad}`);
@@ -129,6 +204,7 @@ async function main() {
   assert(richCardView.includes("card.kind === 'callout'"), 'RichCardView narrows callout by kind');
   assert(richCardView.includes("card.kind === 'timechart'"), 'RichCardView handles timechart by kind');
   assert(richCardView.includes('function Timechart'), 'Timechart renderer is present');
+  assert(richCardView.includes("card.kind === 'custom'") && richCardView.includes('function CustomElementView'), 'RichCardView renders agent-designed custom cards');
 
   console.log('verify-rich-cards: OK');
 }

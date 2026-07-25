@@ -23,6 +23,7 @@ import type {
   RichCalloutTone,
   RichCard,
   RichChecklistState,
+  RichCustomElement,
   RichTimechartCard,
   RichTimelineState,
 } from '@/lib/rich-cards';
@@ -242,6 +243,130 @@ const CALLOUT_TONE: Record<RichCalloutTone, { icon: React.ReactNode; color: stri
   error: { icon: <OctagonAlert size={15} aria-hidden />, color: 'var(--error)' },
 };
 
+/** Theme colors for agent-designed custom elements. Semantic tones only —
+ *  agents pick meaning (success/warning/…), the studio owns the palette. */
+const CUSTOM_TONE_COLOR: Record<string, string> = {
+  success: 'var(--success)',
+  warning: 'var(--warning)',
+  error: 'var(--error)',
+  accent: 'var(--accent-3)',
+};
+
+const CUSTOM_TEXT_SIZE: Record<string, string> = {
+  xs: 'text-[11px]',
+  sm: 'text-xs',
+  base: 'text-sm',
+  lg: 'text-lg',
+  xl: 'text-2xl',
+};
+
+const CUSTOM_TEXT_WEIGHT: Record<string, string> = {
+  medium: 'font-medium',
+  semibold: 'font-semibold',
+  bold: 'font-bold',
+};
+
+/** One node of an agent-designed custom card; rows and grids recurse. */
+function CustomElementView({ element }: { element: RichCustomElement }) {
+  if (element.type === 'text') {
+    const toneClass = element.tone === 'muted' ? 'text-muted' : element.tone === 'dim' ? 'text-dim' : 'text-primary';
+    const color = element.tone ? CUSTOM_TONE_COLOR[element.tone] : undefined;
+    return (
+      <div
+        className={[
+          CUSTOM_TEXT_SIZE[element.size || 'base'],
+          CUSTOM_TEXT_WEIGHT[element.weight || ''] || '',
+          color ? '' : toneClass,
+          element.mono ? 'font-mono' : '',
+          element.align === 'center' ? 'text-center' : element.align === 'right' ? 'text-right' : '',
+          'whitespace-pre-wrap min-w-0',
+        ].filter(Boolean).join(' ')}
+        style={color ? { color } : undefined}
+      >
+        {element.text}
+      </div>
+    );
+  }
+
+  if (element.type === 'badge') {
+    const color = (element.tone && CUSTOM_TONE_COLOR[element.tone]) || 'var(--text-dim)';
+    return (
+      <span
+        className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium self-start"
+        style={{
+          color,
+          border: `1px solid color-mix(in srgb, ${color} 45%, var(--border))`,
+          background: `color-mix(in srgb, ${color} 12%, transparent)`,
+        }}
+      >
+        {element.text}
+      </span>
+    );
+  }
+
+  if (element.type === 'kv') {
+    return (
+      <div className="flex items-baseline justify-between gap-3 min-w-0">
+        <span className="text-xs text-dim truncate" title={element.label}>{element.label}</span>
+        <span className="text-xs text-primary text-right min-w-0">{element.value}</span>
+      </div>
+    );
+  }
+
+  if (element.type === 'meter') {
+    const color = (element.tone && CUSTOM_TONE_COLOR[element.tone]) || 'var(--accent-2)';
+    return (
+      <div className="min-w-0 flex-1">
+        {element.label && (
+          <div className="flex items-baseline justify-between gap-3 mb-1">
+            <span className="text-xs text-primary truncate" title={element.label}>{element.label}</span>
+            <span className="text-[11px] font-mono text-dim flex-shrink-0">{element.percent}%</span>
+          </div>
+        )}
+        <div
+          className="h-1.5 rounded-full overflow-hidden"
+          style={{ background: 'var(--bg-hover)' }}
+          role="progressbar"
+          aria-valuenow={element.percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={element.label || `${element.percent}%`}
+        >
+          <div className="h-full rounded-full" style={{ width: `${element.percent}%`, background: color }} />
+        </div>
+      </div>
+    );
+  }
+
+  if (element.type === 'divider') {
+    return <hr className="border-0 border-t my-1" style={{ borderColor: 'var(--border)' }} />;
+  }
+
+  if (element.type === 'row') {
+    return (
+      <div
+        className={[
+          'flex flex-wrap gap-x-4 gap-y-2 min-w-0',
+          element.align === 'center' ? 'items-center' : element.align === 'baseline' ? 'items-baseline' : 'items-start',
+          element.align === 'between' ? 'items-center justify-between' : '',
+        ].filter(Boolean).join(' ')}
+      >
+        {element.items.map((child, index) => <CustomElementView key={index} element={child} />)}
+      </div>
+    );
+  }
+
+  if (element.type === 'grid') {
+    return (
+      <div className="grid gap-x-4 gap-y-2" style={{ gridTemplateColumns: `repeat(${element.columns || 2}, minmax(0, 1fr))` }}>
+        {element.items.map((child, index) => <CustomElementView key={index} element={child} />)}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 export default function RichCardView({ card }: { card: RichCard }) {
   if (card.kind === 'stats') {
     return (
@@ -415,6 +540,17 @@ export default function RichCardView({ card }: { card: RichCard }) {
               with no intrinsic size collapses to a couple of pixels. */}
           <div className="flex-shrink-0" style={{ flexBasis: '38%', maxWidth: 220, minWidth: 96 }}>{image}</div>
           <div className="text-sm text-muted whitespace-pre-wrap min-w-0">{card.body}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (card.kind === 'custom') {
+    return (
+      <div className="my-2 p-4" style={CARD_SHELL}>
+        <CardTitle title={card.title} />
+        <div className="space-y-2">
+          {card.body.map((element, index) => <CustomElementView key={index} element={element} />)}
         </div>
       </div>
     );
