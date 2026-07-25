@@ -7,7 +7,7 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Bell, Code2, Presentation
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Code2, Presentation
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -40,9 +40,10 @@ const MeetingsPanel = dynamic(() => import('@/components/meetings-panel'), { loa
 const MemoriesPanel = dynamic(() => import('@/components/memories-panel'), { loading: panelLoading });
 const PreviewRail = dynamic(() => import('@/components/preview-rail'), { loading: panelLoading });
 const ToolsCatalog = dynamic(() => import('@/components/tools-catalog'), { loading: panelLoading });
-const AttentionInbox = dynamic(
-  () => import('@/components/attention-inbox').then((module) => module.AttentionInbox),
-  { loading: panelLoading },
+const AttentionBell = dynamic(
+  () => import('@/components/attention-bell').then((module) => module.AttentionBell),
+  // No skeleton: the bell is a small always-mounted top-bar control.
+  { loading: () => null },
 );
 const TaskDetailPage = dynamic(
   () => import('@/components/task-detail-page').then((module) => module.TaskDetailPage),
@@ -141,7 +142,7 @@ type RunSummaryLite = {
 
 // One source of truth for tab display names (nav, top bar, document titles).
 const TAB_LABELS: Record<string, string> = {
-  dashboard: 'Dashboard', attention: 'Attention', chat: 'Grok Chat', meetings: 'Meetings', projects: 'Projects', board: 'Board', agents: 'Agents',
+  dashboard: 'Dashboard', chat: 'Grok Chat', meetings: 'Meetings', projects: 'Projects', board: 'Board', agents: 'Agents',
   memories: 'Memories', workspace: 'Workspace', code: 'Code', files: 'Files', automations: 'Automations', integrations: 'Capabilities',
   traffic: 'Traffic', usage: 'Usage', logs: 'Logs', settings: 'Settings',
 };
@@ -3062,7 +3063,6 @@ export default function ShibaStudio() {
   const paletteCommands = useMemo((): CommandPaletteItem[] => {
     const nav: CommandPaletteItem[] = ([
       { id: 'dashboard', label: 'Dashboard' },
-      { id: 'attention', label: 'Attention' },
       { id: 'chat', label: 'Grok Chat' },
       { id: 'meetings', label: 'Meetings' },
       { id: 'projects', label: 'Projects' },
@@ -3267,7 +3267,6 @@ export default function ShibaStudio() {
         <nav className="px-2 py-3 flex-shrink-0" aria-label="Primary">
           {([
             { id: 'dashboard', label: 'Dashboard', icon: Home, stat: navStats.tasksActive > 0 ? String(navStats.tasksActive) : null },
-            { id: 'attention', label: 'Attention', icon: Bell, stat: navStats.attentionOpen > 0 ? String(navStats.attentionOpen) : null },
             { id: 'chat', label: 'Grok Chat', icon: MessageSquare, stat: navStats.chatSessions > 0 ? String(navStats.chatSessions) : null },
             { id: 'meetings', label: 'Meetings', icon: Presentation, stat: 'beta' },
             { id: 'projects', label: 'Projects', icon: FolderKanban, stat: navStats.projects > 0 ? String(navStats.projects) : null },
@@ -3320,7 +3319,6 @@ export default function ShibaStudio() {
                 {!navCollapsed && item.stat != null && (
                   <span className={`nav-stat-badge nav-item-meta ${item.id === 'usage' ? 'nav-stat-badge-cost' : ''}`} title={
                     item.id === 'dashboard' ? `${item.stat} active task(s)`
-                    : item.id === 'attention' ? `${item.stat} pending approval(s)`
                     : item.id === 'chat' ? `${item.stat} open session(s)`
                     : item.id === 'projects' ? `${item.stat} project(s)`
                     : item.id === 'memories' ? `${item.stat} stored memory item(s)`
@@ -3487,8 +3485,9 @@ export default function ShibaStudio() {
           <div className="space-comet" />
           <div className="space-comet space-comet-2" />
         </div>
-        {/* Top bar */}
-        <div className="top-bar h-14 px-3 sm:px-5 flex items-center justify-between relative z-[1]">
+        {/* Top bar — above the content surfaces (z-[1]) and offline banner
+            (z-[2]) so its approvals popover is never painted under a page. */}
+        <div className="top-bar h-14 px-3 sm:px-5 flex items-center justify-between relative z-[3]">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
@@ -3504,6 +3503,8 @@ export default function ShibaStudio() {
             <div className="font-medium text-sm tracking-tight">{taskId ? 'Task detail' : (TAB_LABELS[tab] || tab)}</div>
           </div>
           <div className="flex items-center gap-2 text-sm">
+            {/* Approvals live here now — the Attention tab is retired. */}
+            <AttentionBell count={navStats.attentionOpen} />
             <button
               type="button"
               onClick={() => setShowCommandPalette(true)}
@@ -3555,8 +3556,6 @@ export default function ShibaStudio() {
           }
         >
           {taskId && <TaskDetailPage taskId={taskId} />}
-
-          {!taskId && tab === 'attention' && <AttentionInbox />}
 
           {/* Operational dashboard restored as the primary home surface. */}
           {!taskId && tab === 'dashboard' && (

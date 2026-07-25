@@ -30,7 +30,7 @@ Build, orchestrate, and automate AI agents with full computer use — chat, code
 
 Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok into a hands-on engineering copilot:
 
-- **Dashboard & Attention** — a focused operational home for readiness and recent runs, plus a quiet inbox containing only exact actions that are currently waiting for approval.
+- **Dashboard & approvals** — a focused operational home for readiness and recent runs, plus a quiet top-bar alert bell containing only exact actions that are currently waiting for approval.
 - **Artifact Studio** — checkpoint-backed HTML/PDF/Office previews with anchored review, visual verification, rollback, and revocable publishing.
 - **Remote and native companions** — a paired, scoped, encrypted-offline PWA for pending approvals and voice requests, and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
 
