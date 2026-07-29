@@ -25,7 +25,7 @@ const BASE_URL = (process.env.GROK_BASE_URL ?? "https://api.x.ai/v1").replace(/\
 const MODEL = process.env.GROK_MODEL || "grok-code-fast-1";
 const LOG_DIR = process.env.FAILURE_LOG_DIR ?? "";
 const SUMMARY_FILE = process.env.SELF_HEAL_SUMMARY_FILE ?? "/tmp/self-heal-summary.txt";
-const MAX_STEPS = Number(process.env.SELF_HEAL_MAX_STEPS ?? 40);
+const MAX_STEPS = Number(process.env.SELF_HEAL_MAX_STEPS ?? 60);
 const TOOL_OUTPUT_LIMIT = 16_000;
 const LOG_BUDGET = 80_000;
 
@@ -85,8 +85,11 @@ const CHECKS = {
   test: { cmd: ["npm", "test"], timeoutMin: 30 },
   audit: { cmd: ["npm", "audit", "--audit-level=high"], timeoutMin: 5 },
   audit_fix: { cmd: ["npm", "audit", "fix"], timeoutMin: 10 },
+  npm_install: { cmd: ["npm", "install", "--no-audit", "--no-fund"], timeoutMin: 15 },
   devvit_verify: { cmd: ["npm", "--prefix", "devvit/reddit-bridge", "run", "verify"], timeoutMin: 10 },
 };
+
+const PKG_NAME_RE = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/i;
 
 // -------------------------------------------------------------------- tools
 
@@ -153,15 +156,16 @@ const TOOL_SPECS = [
     function: {
       name: "run_check",
       description:
-        "Run one of the CI verification commands: typecheck (tsc --noEmit), lint, build, test (full verify suite), audit, audit_fix (npm audit fix — the only permitted lockfile mutation), devvit_verify, or verify_script (a single scripts/verify-*.ts via tsx; pass `script`).",
+        "Run one of the CI verification commands: typecheck (tsc --noEmit), lint, build, test (full verify suite), audit, audit_fix (npm audit fix), npm_install (sync package-lock.json and node_modules after editing package.json — required after changing dependencies or overrides), dep_tree (npm ls <package> --all; pass `package` to see every path a dependency reaches the tree by), devvit_verify, or verify_script (a single scripts/verify-*.ts via tsx; pass `script`).",
       parameters: {
         type: "object",
         properties: {
           check: {
             type: "string",
-            enum: [...Object.keys(CHECKS), "verify_script"],
+            enum: [...Object.keys(CHECKS), "dep_tree", "verify_script"],
           },
           script: { type: "string", description: "For verify_script: file name like 'verify-theme.ts'." },
+          package: { type: "string", description: "For dep_tree: the npm package name to trace." },
         },
         required: ["check"],
       },
@@ -201,6 +205,9 @@ function runTool(name, args) {
     }
     case "read_file": {
       const { abs, rel } = resolveSafe(String(args.path));
+      if (/(^|\/)package-lock\.json$/.test(rel) || /(^|\/)node_modules\//.test(rel)) {
+        return `ERROR: reading ${rel} wastes your budget — it is huge and truncated. Use run_check "dep_tree" with a package name to trace dependencies, or run_check "audit" for advisory details.`;
+      }
       if (!existsSync(abs)) return `ERROR: ${rel} does not exist.`;
       const lines = readFileSync(abs, "utf8").split("\n");
       const start = Math.max(1, Number(args.start_line ?? 1));
@@ -209,8 +216,9 @@ function runTool(name, args) {
       return `${rel} (${lines.length} lines total)\n${tail(slice.join("\n"), TOOL_OUTPUT_LIMIT)}`;
     }
     case "search": {
-      const cmdArgs = ["grep", "-n", "-I", "-e", String(args.pattern)];
-      if (args.path_glob) cmdArgs.push("--", String(args.path_glob));
+      const cmdArgs = ["grep", "-n", "-I", "-e", String(args.pattern), "--"];
+      cmdArgs.push(args.path_glob ? String(args.path_glob) : ".");
+      cmdArgs.push(":(exclude)package-lock.json", ":(exclude)*/package-lock.json");
       const res = sh("git", cmdArgs);
       if (res.status === 1) return "(no matches)";
       return tail(res.output, TOOL_OUTPUT_LIMIT);
@@ -227,7 +235,11 @@ function runTool(name, args) {
     }
     case "run_check": {
       let spec;
-      if (args.check === "verify_script") {
+      if (args.check === "dep_tree") {
+        const pkg = String(args.package ?? "");
+        if (!PKG_NAME_RE.test(pkg)) return `ERROR: '${pkg}' is not a valid npm package name.`;
+        spec = { cmd: ["npm", "ls", pkg, "--all"], timeoutMin: 3 };
+      } else if (args.check === "verify_script") {
         const script = String(args.script ?? "");
         if (!/^verify-[a-z0-9-]+\.ts$/.test(script) || !existsSync(path.join(REPO_ROOT, "scripts", script))) {
           return `ERROR: unknown verify script '${script}'.`;
@@ -308,7 +320,8 @@ const SYSTEM_PROMPT = `You are the automated CI-repair agent for Shiba Studio, a
 Hard rules:
 - Fix the root cause. Never delete or skip tests, never loosen a check, and never silence errors with eslint-disable, @ts-ignore, or @ts-expect-error.
 - Never weaken security enforcement: proxy.ts (rejects non-loopback-Origin /api/* requests) and lib/terminal-server.ts (rejects non-loopback WebSocket origins) must keep rejecting.
-- Writes to .github/, scripts/ci/, package-lock.json, and node_modules are blocked (run_check "audit_fix" is the only permitted lockfile mutation).
+- Writes to .github/, scripts/ci/, package-lock.json, and node_modules are blocked. The lockfile changes only through npm itself: run_check "audit_fix" or run_check "npm_install".
+- npm audit playbook: run_check "audit_fix" first; if high/critical advisories remain, read the audit output to find the ROOT advisories (packages with their own CVE, not "depends on vulnerable"), trace them with run_check "dep_tree", then add minimal pinned entries to the "overrides" block in package.json (the patched version is usually one patch above the vulnerable range), run_check "npm_install" to sync the lockfile, and run_check "audit" to confirm. Never grep or read package-lock.json — dep_tree answers dependency questions.
 - Some scripts/verify-*.ts checks assert literal source strings from the UI. If a deliberate source change broke such an assertion, update the assertion to match the new source; otherwise fix the source.
 - If you change behavior, update the matching page under docs/.
 
@@ -339,6 +352,13 @@ ${collectFailureLogs()}`;
 
   let nudges = 0;
   for (let step = 1; step <= MAX_STEPS && !doneState; step++) {
+    const remaining = MAX_STEPS - step;
+    if (remaining === 12) {
+      messages.push({
+        role: "user",
+        content: "Budget warning: only 12 tool calls remain. Stop exploring — apply your best fix now, verify it, and call `done`.",
+      });
+    }
     const msg = await chat(messages);
     messages.push({ role: "assistant", content: msg.content ?? "", tool_calls: msg.tool_calls });
     if (!msg.tool_calls?.length) {
