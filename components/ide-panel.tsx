@@ -11,6 +11,7 @@ import Editor, {
   DiffEditor,
   loader,
   type BeforeMount,
+  type DiffOnMount,
   type OnMount,
   type OnValidate,
 } from '@monaco-editor/react';
@@ -58,7 +59,10 @@ import { WorkspacePicker } from '@/components/ide/workspace-picker';
 import styles from './ide-panel.module.css';
 
 if (typeof window !== 'undefined') {
-  loader.config({ paths: { vs: '/api/monaco/vs' } });
+  // Must be absolute: Monaco boots its language workers from a blob: URL, and
+  // a root-relative base cannot be resolved inside that worker scope (the TS
+  // worker dies with "Failed to parse URL from /api/monaco/vs/...").
+  loader.config({ paths: { vs: `${window.location.origin}/api/monaco/vs` } });
 }
 
 const IDE_THEME = 'shiba-studio-ide';
@@ -1460,6 +1464,21 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
     editor.onDidDispose(() => disposable.dispose());
   }, []);
 
+  // Monaco requires diff TextModels to outlive the DiffEditorWidget, but
+  // @monaco-editor/react's unmount disposes the models first ("TextModel got
+  // disposed before DiffEditorWidget model got reset"). keepCurrent*Model on
+  // the <DiffEditor> suppresses that early dispose; this sweep releases the
+  // base/current models only after the widget itself is gone, so the next
+  // mount still builds fresh models.
+  const handleDiffMount: DiffOnMount = useCallback((editor, monaco) => {
+    editor.onDidDispose(() => {
+      for (const model of monaco.editor.getModels()) {
+        const query = model.uri.query;
+        if (query.endsWith('=base') || query.endsWith('=current')) model.dispose();
+      }
+    });
+  }, []);
+
   const handleValidate: OnValidate = useCallback((editorMarkers) => {
     const tab = tabs.find((candidate) => candidate.id === activeTabId);
     if (!tab || tab.kind !== 'file') return;
@@ -2591,8 +2610,11 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
               language={activeTab.language}
               originalModelPath={modelUri(workspace, activeTab.path, `?${activeTab.area}=base`)}
               modifiedModelPath={modelUri(workspace, activeTab.path, `?${activeTab.area}=current`)}
+              keepCurrentOriginalModel
+              keepCurrentModifiedModel
               theme={IDE_THEME}
               beforeMount={configureMonaco}
+              onMount={handleDiffMount}
               loading={<div className={styles.editorLoading}><Loader2 size={18} className={styles.spin} /> Building diff…</div>}
               options={{
                 automaticLayout: true,
