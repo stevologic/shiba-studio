@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Play, Plus, Trash2, X, Loader2, ExternalLink, CircleDashed, RefreshCw, Check, RotateCcw,
   FileText, Image as ImageIcon, File, Copy, PackageOpen, FolderKanban, AlertTriangle, BarChart3, ListPlus,
+  Search,
 } from 'lucide-react';
 import BoardGanttModal from '@/components/board-gantt-modal';
 import dynamic from 'next/dynamic';
@@ -27,6 +28,7 @@ import {
   boardTaskMatchesProjectFilter,
   type BoardProjectFilter,
 } from '@/lib/board-project-filter';
+import { boardTaskMatchesTextFilter } from '@/lib/board-text-filter';
 import type { Agent } from '@/lib/types';
 
 // Markdown pipeline is heavy — defer it until an agent answer is visible.
@@ -191,6 +193,8 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
   /** Projects a card can be linked to (loaded once; refreshed with the board). */
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [projectFilter, setProjectFilter] = useState<BoardProjectFilter>(BOARD_PROJECT_FILTER_ALL);
+  /** Free-text / SHIB-key filter applied on top of the project filter. */
+  const [textFilter, setTextFilter] = useState('');
   /** Draft title/description for the open card — an explicit Save persists them.
    *  Held locally so a live board refresh can't wipe an in-progress edit. */
   const [draftTitle, setDraftTitle] = useState('');
@@ -207,9 +211,12 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
+  const textFilterActive = textFilter.trim().length > 0;
   const filteredTasks = useMemo(
-    () => tasks.filter((task) => boardTaskMatchesProjectFilter(task, projectFilter)),
-    [projectFilter, tasks],
+    () => tasks
+      .filter((task) => boardTaskMatchesProjectFilter(task, projectFilter))
+      .filter((task) => boardTaskMatchesTextFilter(task, textFilter)),
+    [projectFilter, textFilter, tasks],
   );
   const activeProjectId = boardProjectIdFromFilter(projectFilter);
   const activeProjectFilterLabel = projectFilter === BOARD_PROJECT_FILTER_ALL
@@ -217,6 +224,10 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
     : projectFilter === BOARD_PROJECT_FILTER_UNASSIGNED
       ? 'No project'
       : projectById.get(activeProjectId || '')?.name || 'Selected project';
+  const boardFilterSummary = [
+    activeProjectFilterLabel ? `project ${activeProjectFilterLabel}` : null,
+    textFilterActive ? `search “${textFilter.trim()}”` : null,
+  ].filter(Boolean).join(' and ');
   const selected = useMemo(
     () => (selectedId ? tasks.find((t) => t.id === selectedId) || null : null),
     [selectedId, tasks],
@@ -590,8 +601,8 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
             Board
             <span
               className="kb-open-pill"
-              title={activeProjectFilterLabel
-                ? `Open cards in ${activeProjectFilterLabel} — Backlog, Todo, and In Progress combined`
+              title={boardFilterSummary
+                ? `Open cards filtered by ${boardFilterSummary} — Backlog, Todo, and In Progress combined`
                 : 'Open cards — Backlog, Todo, and In Progress combined'}
               aria-live="polite"
             >
@@ -603,6 +614,31 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
           </div>
         </div>
         <div className="kb-head-actions">
+          <div className={`kb-text-filter${textFilterActive ? ' kb-text-filter-active' : ''}`}>
+            <Search size={14} aria-hidden="true" />
+            <label className="sr-only" htmlFor="board-text-filter">Search board by SHIB ID or text</label>
+            <input
+              id="board-text-filter"
+              type="search"
+              className="grok-input kb-text-filter-input"
+              value={textFilter}
+              onChange={(event) => setTextFilter(event.target.value)}
+              placeholder="Search SHIB-# or text…"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {textFilterActive && (
+              <button
+                type="button"
+                className="kb-text-filter-clear"
+                onClick={() => setTextFilter('')}
+                title="Clear board search"
+                aria-label="Clear board search"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
           <div className={`kb-project-filter${projectFilter !== BOARD_PROJECT_FILTER_ALL ? ' kb-project-filter-active' : ''}`}>
             <FolderKanban size={14} aria-hidden="true" />
             <label className="sr-only" htmlFor="board-project-filter">Filter board by project</label>
@@ -647,8 +683,8 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
       <div
         className="kb-columns"
         role="list"
-        aria-label={activeProjectFilterLabel
-          ? `Kanban board columns filtered by ${activeProjectFilterLabel}`
+        aria-label={boardFilterSummary
+          ? `Kanban board columns filtered by ${boardFilterSummary}`
           : 'Kanban board columns'}
       >
         {COLUMNS.map((col) => {

@@ -55,6 +55,10 @@ Markdown visuals also render **rich cards**: a fenced `shiba-card` code block ho
 
 Each agent turn includes 2–4 **suggestion chips** — AI-assisted directions phrased as things you might say (*"Show me the riskiest code path"*). Click one to send it, or ignore them and drive the meeting yourself. If you stay quiet, the agent keeps leading.
 
+### Initiating work mid-meeting
+
+Meetings initiate work, not just talk about it. When you ask for something to happen — *"make a card for that"*, *"queue that up"*, *"have the Engineer fix it"* — the agent creates the Board card **in that same turn** and confirms it out loud; you never wait for the minutes. Each created card shows as a ⚡ chip on the turn in the transcript (key, title, and who it went to — click to open the Board). Cards land in **Todo**, labelled `meeting`, linked to the meeting and its project. Naming an owner from your agent roster assigns the card; asking for it to *start* queues the work so the owner begins immediately, or as soon as they finish what they're on. Work created live is excluded from the end-of-meeting todo list, so nothing gets double-created.
+
 ## Minutes and the Board
 
 **End meeting** asks the agent to write faithful minutes from the transcript. The meeting is also retitled from its content — `<Project>: <what the meeting covered>` — so the lobby reads like a history, not a list of dates. The minutes hold:
@@ -62,7 +66,7 @@ Each agent turn includes 2–4 **suggestion chips** — AI-assisted directions p
 - **Summary** — what was reviewed and discussed.
 - **Direction** — the agreed path forward.
 - **Decisions** — only explicit decisions from the conversation.
-- **Todos** — only what you requested or both of you agreed on, each with context for whoever picks it up.
+- **Todos** — only what you requested or both of you agreed on, each with context for whoever picks it up. Work already created live during the meeting is on the Board and is not repeated here.
 
 Select todos and **Add to project board** — after an explicit confirmation, each becomes a Board card in **Todo**, labelled `meeting`, linked to the meeting in its description, and attached to the meeting's project. Conversion is idempotent: a todo can only ever create one card, and converted todos show their card key in the minutes.
 
@@ -72,7 +76,7 @@ Past meetings (and their minutes) stay in the lobby until you delete them. Delet
 
 - **No audio is stored.** Speech is transcribed in the browser (Web Speech API) and only text reaches the server. This is different from the audio-upload transcription pipeline, which has its own consent and retention flow.
 - Meetings live in the local SQLite store (`live_meetings` table) like every other Studio record.
-- Board cards and any other durable outputs require an explicit confirmation click — ending a meeting alone never mutates the Board.
+- Durable outputs follow your explicit requests: mid-meeting Board cards are created only when you ask for work in the conversation, and converting minutes todos requires a confirmation click. Ending a meeting alone never mutates the Board.
 - Turns are model calls metered under Usage (source `live-meeting`).
 
 ## Voice integration scope

@@ -15,6 +15,61 @@ are carried over automatically.
   pull requests/issues/workflows, access to the persistent host terminal, and
   a picker for the default workspace, saved projects, and Git worktrees.
 - Workspace-contained file APIs and argument-safe Git operations for IDE use.
+- **Meetings (Beta)** — spoken, agent-led project reviews with a visual stage
+  (real workspace code, diagrams, markdown, live screenshots), streaming turns
+  over SSE, AI steering chips, and minutes that convert to Board cards after
+  confirmation. Mid-meeting, the director can create real Board work in the
+  same turn ("make a card", "queue it", "have <agent> fix it") with click-to-
+  Board transcript chips; minutes skip already-created items so cards are not
+  doubled.
+- **Rich cards** — fenced `shiba-card` JSON renders as stats, progress,
+  checklists, timelines, callouts, media, sparklines, bars, and multi-series
+  timecharts in chat, meetings, and run output. Agents choose presentation
+  (prose vs table vs card) and can compose a **custom** card from declarative
+  primitives (text, badge, kv, meter, divider, nestable row/grid) with hard
+  depth and element budgets — JSON only, never HTML.
+- **Board Timeline (Gantt)** — delivered-work view of Done cards under the
+  current project filter (created → done bars from activity).
+- **Board search** — header filter by SHIB key (`SHIB-12`, bare number) or free
+  text over title, description, and labels; stacks with the project filter.
+- **Queue work** — when an assignee is already busy, Start work records a
+  durable queued pending assignment instead of refusing; the processor starts
+  it when the agent frees up. Queued cards show a badge and support Leave queue.
+- **Approvals alert bell** — pending approvals live in a top-bar bell with a
+  count badge and in-place approve/deny (the Attention primary-nav tab is
+  retired; `/attention` 404s).
+- **Brand assets** — real favicon, iOS home-screen icon, and Open Graph /
+  link-unfurl card.
+- **Chat resilience** — queue additional messages while a reply streams; pin
+  stick-to-bottom through growing reasoning; longer timeouts for tool-heavy
+  turns; transport/proxy failures surface as short recovery copy instead of
+  HTML dumps.
+- **Reverse-proxy deployment** — documented `SHIBA_PUBLIC_ORIGIN` path for TLS
+  termination and auth at the proxy while Studio stays on loopback; chat
+  isolation hardened for shared-origin setups.
+- **serveLocalName** — runtime control for mDNS / port-80 local-name advertising.
+
+### Changed
+
+- Approvals moved out of the primary nav into the shell top bar so the slot is
+  not spent on a usually-empty queue.
+- Board assignment UX distinguishes **Start work** (run now) from **Queue work**
+  (run when free), including operator-consented queueing for agents that have
+  not enabled auto-accept.
+
+### Fixed
+
+- Interrupting a meeting agent no longer lets an in-flight greeting TTS chunk
+  play after stop; speech chunks carry an epoch so barge-in (including mic on)
+  drops stale audio.
+- Tracked global uploads are served at `/uploads/<name>` (capability-gated like
+  `/api/files`), so agent-cited images in chat render instead of 404ing.
+- Meetings and chat no longer double-fetch projects/agents/models on mount;
+  shared client JSON load uses a short reuse window.
+- Rich-card type narrowing and stream error UX for queued chat turns.
+- Grok CLI no longer passes `--check` when subagents are disabled.
+- CI path canonicalization and dependency audit cleanups across platforms.
+
 
 ## [0.2.0] — 2026-07-10
 

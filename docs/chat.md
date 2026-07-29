@@ -142,8 +142,11 @@ Any agent markdown (chat, meetings stage, run output) can embed a fenced code bl
 | `sparkline` | small multi-series trend lines |
 | `bars` | horizontal bar comparison |
 | `timechart` | multi-series Y over X (null = gap), optional axis labels |
+| `custom` | a card the agent designs itself from layout primitives |
 
-Agents learn the fence via the shared rich-card system prompt; prefer a card over a table when it genuinely reads better, and only with real data.
+`custom` is the escape hatch when no preset fits: the agent composes its own layout from `text`, `badge`, `kv` (label/value), `meter`, `divider`, and nestable `row` / `grid` containers (up to 4 levels, bounded element budget). Only semantic theme tones are available — agents choose meaning, the studio owns the palette — and the payload stays declarative JSON, never HTML.
+
+Agents learn the fence via the shared rich-card system prompt, which tells them to actively choose the best presentation for each piece of information: prose for narrative, tables for text grids, a preset card when structure or numbers deserve visual form, a self-designed `custom` card when none fits — and only ever with real data.
 
 ## Stream resilience
 

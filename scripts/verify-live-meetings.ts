@@ -192,6 +192,44 @@ async function main() {
       'the streaming request also carries recent visual content',
     );
 
+    // 4c) The director asks for work → real Board cards exist MID-MEETING,
+    //     recorded on the turn; a missing title is dropped, an unmatched owner
+    //     stays unassigned, and later model calls see what was created.
+    replies.push(() => ({
+      say: 'Done — the hardening card is on the Board and assigned to me, and the demo prep is tracked for Alex.',
+      visual: null,
+      actions: [
+        { kind: 'board_card', title: 'Harden greet() input validation', detail: 'Trim and bound the name argument', priority: 'high', owner: 'Review engineer' },
+        { kind: 'board_card', title: 'Prepare demo environment', owner: 'Alex', start: true },
+        { kind: 'board_card', title: '', detail: 'dropped — empty title' },
+      ],
+      suggestions: [],
+    }));
+    const afterActions = await liveMeetings.runLiveMeetingTurn(meeting.id, 'Queue up hardening the greeting input and demo prep');
+    assert.equal(afterActions.status, 'active', 'work is initiated while the meeting is still live');
+    assert(
+      (chatRequests[chatRequests.length - 1].messages || [])[0].content.includes('Agent roster for "actions" owners: Review engineer'),
+      'the turn prompt lists real agent names for owner attribution',
+    );
+    const actionTurn = afterActions.turns[afterActions.turns.length - 1];
+    assert.equal(actionTurn.role, 'agent');
+    assert(actionTurn.actions, 'the settled turn records the work it created');
+    assert.equal(actionTurn.actions.length, 2, 'an action without a title is dropped');
+    assert.equal(actionTurn.actions[0].title, 'Harden greet() input validation');
+    assert.equal(actionTurn.actions[0].assignee, 'Review engineer', 'a roster owner becomes the card assignee');
+    assert(actionTurn.actions[0].taskKey, 'the created card key is recorded on the turn');
+    assert.equal(actionTurn.actions[1].assignee, undefined, 'an unmatched owner leaves the action unassigned');
+    assert.equal(actionTurn.actions[1].queued, undefined, 'start cannot queue without a real assignee');
+    const liveCards = (await board.listBoardTasks()).filter((task) => task.id.startsWith('live-meeting-action-'));
+    assert.equal(liveCards.length, 2, 'the Board cards exist before the meeting ends');
+    const hardenCard = liveCards.find((task) => task.title === 'Harden greet() input validation')!;
+    assert.equal(hardenCard.assigneeAgentId, 'agent-reviewer');
+    assert.equal(hardenCard.status, 'todo');
+    assert(hardenCard.description.includes('Requested live in meeting'), 'the card cites the live meeting');
+    const demoCard = liveCards.find((task) => task.title === 'Prepare demo environment')!;
+    assert.equal(demoCard.assigneeAgentId, null);
+    assert(demoCard.description.includes('Owner named in the meeting: Alex'), 'unmatched owners are preserved in the description');
+
     // 5) End → minutes with a refined display title, direction, decisions, todos.
     replies.push(() => ({
       title: 'Greeting module launch review',
@@ -217,6 +255,9 @@ async function main() {
       JSON.stringify(chatRequests[chatRequests.length - 1]).includes('Agent roster: Review engineer'),
       'the minutes prompt lists the agent roster for owner attribution',
     );
+    const minutesPrompt = JSON.stringify(chatRequests[chatRequests.length - 1]);
+    assert(minutesPrompt.includes('created Board card'), 'the minutes transcript shows work created live');
+    assert(minutesPrompt.includes('must NOT be repeated as a todo'), 'the minutes model is told not to duplicate live work');
 
     // 6) Todos → Board requires explicit confirmation and is idempotent.
     await assert.rejects(
@@ -229,7 +270,7 @@ async function main() {
     assert(convertedTodo.boardTaskKey);
     const again = await liveMeetings.convertLiveMeetingTodos({ meetingId: meeting.id, todoIds: ['todo-1'], confirmed: true });
     assert.equal(again.minutes!.todos.find((todo) => todo.id === 'todo-1')!.boardTaskId, convertedTodo.boardTaskId, 'conversion is idempotent');
-    const cards = (await board.listBoardTasks()).filter((task) => task.labels.includes('meeting'));
+    const cards = (await board.listBoardTasks()).filter((task) => task.id.startsWith('live-meeting-board-'));
     assert.equal(cards.length, 1, 'exactly one Board card exists for the converted todo');
     assert.equal(cards[0].title, 'Add integration tests for the API');
     assert.equal(cards[0].status, 'todo');
@@ -259,9 +300,13 @@ async function main() {
     assert.equal(tombstone.minutes, null, 'delete scrubs minutes');
     assert.equal(tombstone.brief, '', 'delete scrubs the project brief');
     assert.equal(tombstone.pendingTurn, 0, 'delete clears any in-flight turn claim');
-    assert.equal((await board.listBoardTasks()).filter((task) => task.labels.includes('meeting')).length, 2, 'deleting a meeting keeps its Board cards');
+    assert.equal(
+      (await board.listBoardTasks()).filter((task) => task.labels.includes('meeting')).length,
+      4,
+      'deleting a meeting keeps its Board cards — both live-created and converted',
+    );
 
-    assert.equal(chatCalls, 6, 'exactly the scripted number of model calls happened');
+    assert.equal(chatCalls, 7, 'exactly the scripted number of model calls happened');
     assert.equal(replies.length, 0, 'every scripted reply was consumed');
     assert.equal(streamReplies.length, 0, 'every scripted streaming reply was consumed');
 

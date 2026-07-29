@@ -101,6 +101,33 @@ async function main() {
   assert(boardProjectIdFromFilter(BOARD_PROJECT_FILTER_ALL) === null, 'All projects creates an unlinked card');
   assert(kanbanUi.includes('Filter board by project'), 'Board exposes an accessible project filter');
   assert(kanbanUi.includes('All projects') && kanbanUi.includes('No project'), 'Board exposes all and unlinked project filters');
+
+  // Board free-text / SHIB-key search sits beside the project filter and
+  // narrows columns client-side without changing card data.
+  const {
+    boardTaskMatchesTextFilter,
+    normalizeBoardSearchQuery,
+  } = await import('../lib/board-text-filter');
+  const searchSample = {
+    key: 'SHIB-69',
+    title: 'Add ability to search Board',
+    description: 'Filter cards by SHIB ID or free text.',
+    labels: ['enhancement', 'shiba studio'],
+  };
+  assert(normalizeBoardSearchQuery('  SHIB-69  ') === 'shib-69', 'board search normalizes case and whitespace');
+  assert(boardTaskMatchesTextFilter(searchSample, ''), 'empty board search matches every card');
+  assert(boardTaskMatchesTextFilter(searchSample, '   '), 'whitespace-only board search matches every card');
+  assert(boardTaskMatchesTextFilter(searchSample, 'SHIB-69'), 'board search matches full SHIB key');
+  assert(boardTaskMatchesTextFilter(searchSample, 'shib-69'), 'board search is case-insensitive on SHIB key');
+  assert(boardTaskMatchesTextFilter(searchSample, '69'), 'board search matches bare SHIB number');
+  assert(boardTaskMatchesTextFilter(searchSample, 'search Board'), 'board search matches title text');
+  assert(boardTaskMatchesTextFilter(searchSample, 'free text'), 'board search matches description text');
+  assert(boardTaskMatchesTextFilter(searchSample, 'enhancement'), 'board search matches labels');
+  assert(!boardTaskMatchesTextFilter(searchSample, 'SHIB-12'), 'board search excludes non-matching SHIB keys');
+  assert(!boardTaskMatchesTextFilter(searchSample, 'unrelated query'), 'board search excludes non-matching text');
+  assert(kanbanUi.includes('Search board by SHIB ID or text'), 'Board exposes an accessible text search');
+  assert(kanbanUi.includes('board-text-filter') && kanbanUi.includes('boardTaskMatchesTextFilter'), 'Board wires text filter into the kanban UI');
+  assert((await read('app/globals.css')).includes('.kb-text-filter'), 'Board text search has header styles');
   assert((await read('lib/app-navigation.ts')).includes("'board'"), 'board nav tab');
 
   // Per-agent Board auto-start is an explicit, future-only opt-in. Legacy and

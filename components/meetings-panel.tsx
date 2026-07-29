@@ -3,7 +3,8 @@
 /**
  * Meetings (Beta) — spoken, agent-led project reviews.
  * Lobby (start/browse meetings) → live room (voice conversation + visual
- * stage) → minutes (summary, direction, decisions, todos → Board cards).
+ * stage + Board work initiated mid-meeting) → minutes (summary, direction,
+ * decisions, remaining todos → Board cards).
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -26,6 +27,7 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  Zap,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { confirmDialog } from '@/components/confirm-dialog';
@@ -560,10 +562,15 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
 
   const speakDoneRef = useRef<(() => void) | null>(null);
   /** Queued utterances; `audio` is the prefetched synthesis promise. */
-  const speakQueueRef = useRef<Array<{ text: string; audio?: Promise<Blob | null> }>>([]);
+  const speakQueueRef = useRef<Array<{ text: string; epoch: number; audio?: Promise<Blob | null> }>>([]);
+  /** Bumped by stopSpeaking so a chunk mid-synthesis can never play late —
+   *  without this, interrupting the opening greeting left its in-flight TTS
+   *  fetch alive, and it played BEFORE the reply to what the director said. */
+  const speechEpochRef = useRef(0);
   const ttsActiveRef = useRef(false);
   const stopSpeaking = useCallback(() => {
-    // Drop queued chunks first so the player loop exits after this utterance.
+    // Invalidate queued AND in-flight chunks so the player loop drops them.
+    speechEpochRef.current += 1;
     speakQueueRef.current.length = 0;
     if (audioRef.current) {
       audioRef.current.pause();
@@ -616,10 +623,13 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
         const item = speakQueueRef.current.shift()!;
         pumpSynthesis();
         const blob = await item.audio;
+        // A stop may have arrived while this chunk was synthesizing; newer
+        // chunks (the next reply) may already be queued behind it.
+        if (item.epoch !== speechEpochRef.current) continue;
         if (!blob) {
           // Silent fallback to text-only for the rest of this reply.
-          speakQueueRef.current.length = 0;
-          break;
+          speakQueueRef.current = speakQueueRef.current.filter((queued) => queued.epoch !== item.epoch);
+          continue;
         }
         const url = URL.createObjectURL(blob);
         await new Promise<void>((resolve) => {
@@ -649,14 +659,16 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
 
   const enqueueSpeech = useCallback((chunk: string) => {
     if (!chunk.trim()) return;
-    speakQueueRef.current.push({ text: chunk });
+    speakQueueRef.current.push({ text: chunk, epoch: speechEpochRef.current });
     pumpSynthesis();
     void playSpeechQueue();
   }, [playSpeechQueue, pumpSynthesis]);
 
   /** Speak a complete reply (used for the opening turn and replays). */
   const speakWhole = useCallback((text: string) => {
-    for (const chunk of splitSpeechChunks(text)) speakQueueRef.current.push({ text: chunk });
+    for (const chunk of splitSpeechChunks(text)) {
+      speakQueueRef.current.push({ text: chunk, epoch: speechEpochRef.current });
+    }
     pumpSynthesis();
     void playSpeechQueue();
   }, [playSpeechQueue, pumpSynthesis]);
@@ -815,6 +827,10 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
       toast.error('Voice input needs Chrome or Edge (Web Speech API)');
       return;
     }
+    // Turning the mic on IS the director interrupting: cut the agent's voice
+    // (recognition is gated while it speaks) so listening starts now, not
+    // after the rest of the greeting or reply has played out.
+    stopSpeaking();
     micOnRef.current = true;
     setMicOn(true);
   }
@@ -1089,6 +1105,27 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
                     <Presentation size={11} aria-hidden /> {turn.visual.title}
                   </button>
                 )}
+                {/* Work this turn initiated on the Board, live. */}
+                {(turn.actions || []).map((action) => (
+                  <button
+                    key={action.taskId}
+                    type="button"
+                    className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-success border rounded-full px-2 py-0.5 hover:brightness-125 max-w-full"
+                    style={{ borderColor: 'color-mix(in srgb, var(--success) 45%, var(--border))' }}
+                    onClick={onOpenBoard}
+                    title={`${action.taskKey} · ${action.title}${action.assignee ? ` — ${action.queued ? 'queued to' : 'assigned to'} ${action.assignee}` : ''} — open the Board`}
+                  >
+                    <Zap size={10} strokeWidth={2.5} aria-hidden />
+                    <span className="truncate">
+                      {action.taskKey} · {action.title}
+                    </span>
+                    {action.assignee && (
+                      <span className="text-dim flex-shrink-0">
+                        → {action.assignee}{action.queued ? ' ⏵' : ''}
+                      </span>
+                    )}
+                  </button>
+                ))}
               </div>
             ))}
             {streamingSay && (

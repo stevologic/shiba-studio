@@ -127,8 +127,13 @@ async function main() {
       && primaryNav.includes("label: 'Meetings'")
       && !primaryNav.includes("label: 'Dispatch'")
       && !primaryNav.includes("label: 'Routines'")
-      && !primaryNav.includes("label: 'Doctor'"),
+      && !primaryNav.includes("label: 'Doctor'")
+      && !primaryNav.includes("label: 'Attention'"),
     'primary navigation exposes Dashboard, Automations, and the Meetings beta without retired surfaces',
+  );
+  check(
+    studio.includes('<AttentionBell count={navStats.attentionOpen} />') && !studio.includes('AttentionInbox'),
+    'approvals surface as the top-bar alert bell, not the retired Attention tab',
   );
   const navigation = await source('lib/app-navigation.ts');
   const appTabs = navigation.match(/export const APP_TABS = \[[\s\S]*?\] as const;/)?.[0] || '';
@@ -138,8 +143,8 @@ async function main() {
     'Automations uses its canonical /automations path',
   );
   check(
-    appTabs.includes("'meetings'") && !appTabs.includes("'doctor'"),
-    'the Meetings beta route is in the app route contract while retired Doctor routes stay absent',
+    appTabs.includes("'meetings'") && !appTabs.includes("'doctor'") && !appTabs.includes("'attention'"),
+    'the Meetings beta route is in the app route contract while retired Doctor and Attention routes stay absent',
   );
   check(
     studio.includes('MeetingsPanel') && !studio.includes('MeetingCapturePanel') && !studio.includes('DoctorPage'),

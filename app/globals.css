@@ -6513,6 +6513,69 @@ select.kb-project-filter-select {
   background: color-mix(in srgb, var(--accent-2) 7%, var(--bg-elev));
 }
 
+/* Board free-text / SHIB-key search — sits beside the project filter. */
+.kb-text-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.kb-text-filter > svg {
+  position: absolute;
+  top: 50%;
+  left: 0.7rem;
+  z-index: 1;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+input.kb-text-filter-input {
+  min-width: 190px;
+  max-width: 260px;
+  padding-left: 2rem;
+  padding-right: 1.9rem;
+}
+
+/* Prefer the explicit clear control over the browser's native search cancel. */
+input.kb-text-filter-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+.kb-text-filter-active {
+  color: var(--text);
+}
+
+.kb-text-filter-active input.kb-text-filter-input {
+  border-color: color-mix(in srgb, var(--accent-2) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent-2) 7%, var(--bg-elev));
+}
+
+.kb-text-filter-clear {
+  position: absolute;
+  top: 50%;
+  right: 0.35rem;
+  z-index: 1;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.kb-text-filter-clear:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
 .kb-inline-key {
   color: var(--text);
   font-weight: 500;
@@ -7595,6 +7658,8 @@ select.kb-project-filter-select {
 @media (max-width: 640px) {
   .kb-head { flex-direction: column; }
   .kb-head-actions { width: 100%; flex-wrap: wrap; }
+  .kb-text-filter { flex: 1 0 100%; }
+  input.kb-text-filter-input { width: 100%; max-width: none; }
   .kb-project-filter { flex: 1 0 100%; }
   select.kb-project-filter-select { width: 100%; max-width: none; }
   .kb-head-actions .grok-btn { flex: 1; }

@@ -132,6 +132,74 @@ export interface RichTimechartCard {
   series: RichTimechartSeries[];
 }
 
+/* ── Custom cards — layouts the agent designs itself ── */
+
+export type RichCustomTone = 'primary' | 'muted' | 'dim' | 'success' | 'warning' | 'error' | 'accent';
+
+export interface RichCustomText {
+  type: 'text';
+  text: string;
+  size?: 'xs' | 'sm' | 'base' | 'lg' | 'xl';
+  tone?: RichCustomTone;
+  weight?: 'normal' | 'medium' | 'semibold' | 'bold';
+  mono?: boolean;
+  align?: 'left' | 'center' | 'right';
+}
+
+export interface RichCustomBadge {
+  type: 'badge';
+  text: string;
+  tone?: 'neutral' | 'success' | 'warning' | 'error' | 'accent';
+}
+
+/** One "label: value" line — the workhorse of definition-style layouts. */
+export interface RichCustomKv {
+  type: 'kv';
+  label: string;
+  value: string;
+}
+
+export interface RichCustomMeter {
+  type: 'meter';
+  /** 0–100. */
+  percent: number;
+  label?: string;
+  tone?: 'accent' | 'success' | 'warning' | 'error';
+}
+
+export interface RichCustomDivider {
+  type: 'divider';
+}
+
+export interface RichCustomRow {
+  type: 'row';
+  /** `between` pushes items to the edges (header rows); others map to align-items. */
+  align?: 'start' | 'center' | 'baseline' | 'between';
+  items: RichCustomElement[];
+}
+
+export interface RichCustomGrid {
+  type: 'grid';
+  /** 2–4 equal columns. */
+  columns?: number;
+  items: RichCustomElement[];
+}
+
+export type RichCustomElement =
+  | RichCustomText
+  | RichCustomBadge
+  | RichCustomKv
+  | RichCustomMeter
+  | RichCustomDivider
+  | RichCustomRow
+  | RichCustomGrid;
+
+export interface RichCustomCard {
+  kind: 'custom';
+  title?: string;
+  body: RichCustomElement[];
+}
+
 export type RichCard =
   | RichStatsCard
   | RichProgressCard
@@ -141,7 +209,8 @@ export type RichCard =
   | RichMediaCard
   | RichSparklineCard
   | RichBarsCard
-  | RichTimechartCard;
+  | RichTimechartCard
+  | RichCustomCard;
 
 /** The fence language that marks a card payload inside markdown. */
 export const RICH_CARD_FENCE = 'shiba-card';
@@ -159,6 +228,98 @@ function items<T>(raw: unknown, map: (entry: Record<string, unknown>) => T | nul
     const mapped = map(entry as Record<string, unknown>);
     return mapped == null ? [] : [mapped];
   });
+}
+
+/** Nesting and size caps for agent-designed custom cards: enough for a real
+ *  dashboard tile, small enough that a runaway payload can't bloat the DOM. */
+const CUSTOM_MAX_DEPTH = 4;
+const CUSTOM_MAX_ELEMENTS = 80;
+
+function parseCustomElements(raw: unknown, depth: number, budget: { left: number }): RichCustomElement[] {
+  if (!Array.isArray(raw) || depth > CUSTOM_MAX_DEPTH) return [];
+  const out: RichCustomElement[] = [];
+  for (const entry of raw.slice(0, MAX_ITEMS)) {
+    if (budget.left <= 0) break;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const element = entry as Record<string, unknown>;
+
+    if (element.type === 'text') {
+      const textValue = text(element.text, 2_000);
+      if (!textValue) continue;
+      budget.left -= 1;
+      const size = element.size === 'xs' || element.size === 'sm' || element.size === 'lg' || element.size === 'xl' ? element.size : undefined;
+      const tone = element.tone === 'primary' || element.tone === 'muted' || element.tone === 'dim'
+        || element.tone === 'success' || element.tone === 'warning' || element.tone === 'error' || element.tone === 'accent'
+        ? element.tone : undefined;
+      const weight = element.weight === 'medium' || element.weight === 'semibold' || element.weight === 'bold' ? element.weight : undefined;
+      const align = element.align === 'center' || element.align === 'right' ? element.align : undefined;
+      out.push({
+        type: 'text',
+        text: textValue,
+        ...(size ? { size } : {}),
+        ...(tone ? { tone } : {}),
+        ...(weight ? { weight } : {}),
+        ...(element.mono === true ? { mono: true } : {}),
+        ...(align ? { align } : {}),
+      });
+      continue;
+    }
+
+    if (element.type === 'badge') {
+      const textValue = text(element.text, 80);
+      if (!textValue) continue;
+      budget.left -= 1;
+      const tone = element.tone === 'success' || element.tone === 'warning' || element.tone === 'error' || element.tone === 'accent'
+        ? element.tone : undefined;
+      out.push({ type: 'badge', text: textValue, ...(tone ? { tone } : {}) });
+      continue;
+    }
+
+    if (element.type === 'kv') {
+      const label = text(element.label, 160);
+      const value = text(element.value, 400);
+      if (!label || !value) continue;
+      budget.left -= 1;
+      out.push({ type: 'kv', label, value });
+      continue;
+    }
+
+    if (element.type === 'meter') {
+      const percent = Number(element.percent);
+      if (!Number.isFinite(percent)) continue;
+      budget.left -= 1;
+      const label = text(element.label, 160) || undefined;
+      const tone = element.tone === 'success' || element.tone === 'warning' || element.tone === 'error' ? element.tone : undefined;
+      out.push({
+        type: 'meter',
+        percent: Math.max(0, Math.min(100, Math.round(percent))),
+        ...(label ? { label } : {}),
+        ...(tone ? { tone } : {}),
+      });
+      continue;
+    }
+
+    if (element.type === 'divider') {
+      budget.left -= 1;
+      out.push({ type: 'divider' });
+      continue;
+    }
+
+    if (element.type === 'row' || element.type === 'grid') {
+      budget.left -= 1;
+      const children = parseCustomElements(element.items, depth + 1, budget);
+      if (!children.length) continue;
+      if (element.type === 'row') {
+        const align = element.align === 'center' || element.align === 'baseline' || element.align === 'between' ? element.align : undefined;
+        out.push({ type: 'row', ...(align ? { align } : {}), items: children });
+      } else {
+        const columns = Math.max(2, Math.min(4, Math.round(Number(element.columns)) || 2));
+        out.push({ type: 'grid', columns, items: children });
+      }
+      continue;
+    }
+  }
+  return out;
 }
 
 /**
@@ -299,6 +460,12 @@ export function parseRichCard(raw: string): RichCard | null {
     };
   }
 
+  if (value.kind === 'custom') {
+    const budget = { left: CUSTOM_MAX_ELEMENTS };
+    const body = parseCustomElements(value.body, 1, budget);
+    return body.length ? { kind: 'custom', ...(title ? { title } : {}), body } : null;
+  }
+
   if (value.kind === 'callout') {
     const calloutTitle = text(value.title, 300);
     if (!calloutTitle) return null;
@@ -317,7 +484,7 @@ export function parseRichCard(raw: string): RichCard | null {
  * and meeting system prompts so every agent surface can use cards.
  */
 export const RICH_CARD_PROMPT = [
-  'Rich cards: inside any markdown you write, a fenced code block with language "shiba-card" containing ONE JSON object renders as a visual card. Prefer a card over prose or a table when it genuinely reads better. Kinds:',
+  'YOU decide how each piece of information is displayed — choose the form that reads best, not the first one that works. Plain prose for narrative, a markdown table for a grid of text, and a rich card whenever structure, status, or numbers deserve visual form. Inside any markdown you write, a fenced code block with language "shiba-card" containing ONE JSON object renders as a visual card. Kinds:',
   '{"kind":"stats","title":"...","stats":[{"label":"...","value":"...","delta":"+12%","tone":"up|down|flat"}]} — KPI tiles.',
   '{"kind":"progress","title":"...","items":[{"label":"...","percent":0-100,"note":"..."}]} — progress bars.',
   '{"kind":"checklist","title":"...","items":[{"text":"...","state":"done|active|pending|blocked","note":"..."}]} — work states.',
@@ -327,5 +494,6 @@ export const RICH_CARD_PROMPT = [
   '{"kind":"sparkline","title":"...","series":[{"label":"...","values":[3,5,4,8],"value":"8 runs","tone":"up|down|flat"}]} — small trend lines, oldest to newest.',
   '{"kind":"bars","title":"...","unit":"runs","items":[{"label":"...","value":12,"note":"..."}]} — horizontal bar comparison, non-negative values.',
   '{"kind":"timechart","title":"...","xLabel":"iteration","yLabel":"score","x":["1","2","3"],"series":[{"label":"...","values":[3,null,8]}]} — Y over time or iterations, up to 4 series, null = gap.',
+  '{"kind":"custom","title":"...","body":[elements]} — when no preset above fits, DESIGN YOUR OWN card from these elements: {"type":"text","text":"...","size":"xs|sm|base|lg|xl","tone":"primary|muted|dim|success|warning|error|accent","weight":"medium|semibold|bold","mono":true,"align":"center|right"} · {"type":"badge","text":"...","tone":"neutral|success|warning|error|accent"} · {"type":"kv","label":"...","value":"..."} · {"type":"meter","percent":0-100,"label":"...","tone":"success|warning|error"} · {"type":"divider"} · {"type":"row","align":"start|center|baseline|between","items":[...]} · {"type":"grid","columns":2-4,"items":[...]}. Rows and grids nest up to 4 levels — compose them like a tiny dashboard tile (e.g. a header row with a badge, a grid of big numbers, meters with labels).',
   'Only real data — never invent numbers or states for the sake of a card.',
 ].join('\n');

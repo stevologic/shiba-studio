@@ -3,7 +3,6 @@ import { test, expect } from '@playwright/test';
 /** Every primary surface loads with zero console errors. */
 const PAGES: Array<{ path: string; marker: string | RegExp }> = [
   { path: '/', marker: /Quick Stats|agent studio/i },
-  { path: '/attention', marker: /Attention/i },
   { path: '/chat', marker: /Grok Chat|New chat/i },
   { path: '/agents', marker: /Agents/ },
   { path: '/memories', marker: /Memories/ },
@@ -50,9 +49,12 @@ test('primary navigation keeps the simplified product surface', async ({ page })
   await expect(sidebar.getByRole('link', { name: 'Traffic', exact: true })).toHaveCount(0);
   await expect(page.locator('.footer-bar').getByRole('link', { name: 'Traffic', exact: true })).toHaveAttribute('href', '/traffic');
 
-  for (const retiredLabel of ['Dispatch', 'Routines', 'Doctor']) {
+  for (const retiredLabel of ['Dispatch', 'Routines', 'Doctor', 'Attention']) {
     await expect(sidebar.getByRole('link', { name: retiredLabel, exact: true })).toHaveCount(0);
   }
+
+  // Approvals moved from the Attention tab to a top-bar alert bell.
+  await expect(page.locator('.top-bar').getByRole('button', { name: /Approvals/ })).toBeVisible();
 });
 
 test('Meetings beta surface is directly reachable', async ({ page }) => {
@@ -61,7 +63,7 @@ test('Meetings beta surface is directly reachable', async ({ page }) => {
   await expect(page.locator('body')).toContainText(/Meeting|Meetings|review/i);
 });
 
-for (const retiredPath of ['/doctor']) {
+for (const retiredPath of ['/doctor', '/attention']) {
   test(`retired surface ${retiredPath} is not directly reachable`, async ({ page }) => {
     const response = await page.goto(retiredPath, { waitUntil: 'domcontentloaded' });
     expect(response?.status()).toBe(404);
