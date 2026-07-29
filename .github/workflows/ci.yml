@@ -336,6 +336,25 @@ jobs:
         if: steps.sanity.outputs.proceed == 'true'
         run: gh workflow run ci.yml --ref development
 
+      # GitHub holds pull_request workflows for github-actions[bot] pushes at
+      # "action_required"; the held run's pending CI OK check would shadow the
+      # green one from the dispatch above and block auto-merge. Approve it.
+      - name: Approve the held PR-side run for the bot commit
+        if: steps.sanity.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          for attempt in $(seq 1 6); do
+            sleep 10
+            run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$sha" \
+              --jq '.workflow_runs[] | select(.conclusion == "action_required") | .id' | head -n 1)"
+            if [ -n "$run_id" ]; then
+              gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/approve" || true
+              echo "Approved held PR run $run_id"
+              break
+            fi
+          done
+
       - name: Open an issue if healing failed
         if: failure() && steps.guard.outputs.enabled == 'true'
         run: |

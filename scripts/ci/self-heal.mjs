@@ -22,7 +22,7 @@ import path from "node:path";
 const REPO_ROOT = process.cwd();
 const API_KEY = process.env.GROK_API_KEY;
 const BASE_URL = (process.env.GROK_BASE_URL ?? "https://api.x.ai/v1").replace(/\/+$/, "");
-const MODEL = process.env.GROK_MODEL || "grok-code-fast-1";
+const MODEL = process.env.GROK_MODEL || "grok-4.5";
 const LOG_DIR = process.env.FAILURE_LOG_DIR ?? "";
 const SUMMARY_FILE = process.env.SELF_HEAL_SUMMARY_FILE ?? "/tmp/self-heal-summary.txt";
 const MAX_STEPS = Number(process.env.SELF_HEAL_MAX_STEPS ?? 60);
