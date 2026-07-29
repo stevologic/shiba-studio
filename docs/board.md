@@ -8,6 +8,7 @@ A shared Kanban board — Linear-style — that you and every agent work from. C
 
 - **Columns** show status with Linear-style glyphs (dashed backlog, progress pie, review dot, done check). Drag cards between columns or reorder within one — position persists.
 - **Cards** carry a stable key (`SHIB-12`), priority (urgent / high / medium / low with Linear-style icons), labels, and the assigned agent's avatar. A pulsing **working** badge shows while an agent run is executing the card.
+- **Search** (top right) filters the board by SHIB key (`SHIB-12`, `shib-12`, or bare `12`) or free text against title, description, and labels. Combine it with the project filter; clear the box to show every matching card again.
 - **New card** (top right) or the **+** on any column header opens an inline composer — type a title, press Enter. Press Enter repeatedly to file several cards fast.
 - Click a card for the **detail panel**: title, description, status, priority, assignee, labels, and the full activity feed.
 - **Timeline** (top right) opens a Gantt of everything delivered under the current project filter — one bar per Done card spanning created → done (from the card's activity feed), sorted by delivery date.
