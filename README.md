@@ -34,13 +34,13 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 - **Artifact Studio** — checkpoint-backed HTML/PDF/Office previews with anchored review, visual verification, rollback, and revocable publishing.
 - **Remote and native companions** — a paired, scoped, encrypted-offline PWA for pending approvals and voice requests, and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
 
-- **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, **rich cards** (`shiba-card` fences for stats, progress, checklists, timelines, callouts, media, sparklines, bars, timecharts), inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Queue more messages while a reply streams; stick-to-bottom tracks growing reasoning; transport failures surface as short friendly copy instead of HTML dumps. Bind any chat to a **workspace folder** and Grok reads, writes, and searches its files directly.
-- **Meetings (Beta)** — spoken, agent-led project reviews: the agent presents real code, diagrams, markdown, and live screenshots on a stage while you steer by voice or text; minutes convert to Board cards with one confirmation.
+- **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, **rich cards** (`shiba-card` fences for stats, progress, checklists, timelines, callouts, media, sparklines, bars, timecharts, or agent-designed custom layouts), inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Queue more messages while a reply streams; stick-to-bottom tracks growing reasoning; transport failures surface as short friendly copy instead of HTML dumps. Bind any chat to a **workspace folder** and Grok reads, writes, and searches its files directly.
+- **Meetings (Beta)** — spoken, agent-led project reviews: the agent presents real code, diagrams, markdown, and live screenshots on a stage while you steer by voice or text. Create Board cards mid-meeting in the same turn, or convert minutes to cards with one confirmation.
 - **Code IDE** — a first-class Monaco workspace with multi-file tabs, VS Code-grade syntax services, repository search, structured Git staging/branches/history, GitHub pull requests/issues/actions, diagnostics, and the real host terminal.
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, and peers. Automations select an agent as the execution owner; timing and triggers do not live in agent configuration. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Learning & Memories** — agents automatically recall relevant local knowledge before runs and can extract durable facts, decisions, procedures, preferences, and lessons afterward in **Review** or **Automatic** mode. The Memories page provides search, approval, editing, pinning, archiving, scope moves, provenance, and deletion.
 - **Automations** — one durable home for recurring schedules, one-time work, webhooks, integration events, filesystem watches, and health checks, with live traces, retry controls, and headless operation.
-- **Board** — a shared Kanban where people and agents work the same cards, with a **delivered-work Gantt** (Timeline), optional pull/push/two-way sync to Linear teams and Jira projects/Kanban boards, and private Grok Files snapshots.
+- **Board** — a shared Kanban where people and agents work the same cards, with **search** by SHIB key or free text, **Queue work** when an assignee is busy, a **delivered-work Gantt** (Timeline), optional pull/push/two-way sync to Linear teams and Jira projects/Kanban boards, and private Grok Files snapshots.
 - **Annotation sub-browser** — load the web app *you're* building, click any element DevTools-style, and send its selector + HTML + highlighted screenshot straight into chat for code refinement.
 - **Capabilities** — GitHub, Slack, Google Drive, Discord, X, Reddit through a Devvit companion, Obsidian, Vercel, and Netlify agent integrations; Linear/Jira Board sync; custom skills; MCP servers; and a live catalog of 40+ built-in agent tools (web search, workspace grep, persistent memory, image generation, social posting, PRs, deploys, …).
 - **Everything local** — Shiba-managed credentials AES-256-GCM encrypted at rest, runs + audit trail in an embedded SQLite database, one-file backup & restore, and zero telemetry. Reachable as **http://shiba.local** via mDNS (+ optional port-80 redirect). External CLIs can maintain their own permission-restricted caches (the X MCP bridge is documented below).
@@ -59,7 +59,7 @@ local model server (LM Studio, Ollama, llama.cpp).
 | Meetings (Beta) | Shared Board |
 | :---: | :---: |
 | <img src="docs/images/meetings.png" alt="Meetings beta: start a spoken agent-led project review with agent, project, and focus; past meetings with minutes" /> | <img src="docs/images/board.png" alt="Board page: Linear-style Kanban with Backlog/Todo/In Progress/In Review columns, Timeline Gantt, and Sync" /> |
-| Spoken agent-led reviews with a visual stage; minutes become Board cards after you confirm. | People and agents share one Kanban — Timeline Gantt for delivered work, Linear/Jira sync optional. |
+| Spoken agent-led reviews with a visual stage; create Board work mid-meeting or land minutes as cards after you confirm. | People and agents share one Kanban — search, queue work, Timeline Gantt for delivered work, Linear/Jira sync optional. |
 
 | Automations | Capabilities |
 | :---: | :---: |
@@ -248,9 +248,9 @@ tested `grok 0.2.103` binary.
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install on Windows/macOS/Linux, first run, connecting model sources |
 | [Grok Chat](docs/chat.md) | Sessions, models & reasoning, rich cards, message queue, attachments, slash commands, annotation sub-browser, quotas |
-| [Meetings (Beta)](docs/meetings.md) | Spoken agent-led project reviews with a visual stage, streaming turns, AI steering, and minutes → Board cards |
+| [Meetings (Beta)](docs/meetings.md) | Spoken agent-led project reviews with a visual stage, streaming turns, AI steering, mid-meeting Board actions, and minutes → Board cards |
 | [Code IDE](docs/code.md) | Monaco editing, workspace search, Git staging and branches, GitHub activity, keyboard shortcuts, and terminal access |
-| [Board](docs/board.md) | Shared Kanban, delivered-work Gantt, agent-run cards, Linear/Jira mirroring, and private Grok Files snapshots |
+| [Board](docs/board.md) | Shared Kanban, search, queue work, delivered-work Gantt, agent-run cards, Linear/Jira mirroring, and private Grok Files snapshots |
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
 | [Memories](docs/memories.md) | Automatic learning modes, relevance recall, review queue, scopes, safety, and management |
 | [Automations](docs/automations.md) | Recurring, one-time, monitored, and event triggers; traces, retries, and headless operation |
@@ -270,10 +270,11 @@ tested `grok 0.2.103` binary.
 ## Highlights
 
 - **Slash commands with grouped autocomplete** — type `/` in chat for session targeting (`/agent`, `/model`, `/project`, `/clear`), Board work (`/task`, `/board`), Git (`/git status|diff|log|checkout|commit|pull|push|pr`), research, memory lifecycle (`/remember`, `/recall`, `/forget`, `/memories`), publishing, and `/help`.
-- **Rich cards in any agent markdown** — fenced `shiba-card` JSON becomes live KPI tiles, progress bars, checklists, timelines, callouts, media layouts, sparklines, bar charts, or multi-series timecharts (chat, meetings, run output).
+- **Rich cards in any agent markdown** — fenced `shiba-card` JSON becomes live KPI tiles, progress bars, checklists, timelines, callouts, media layouts, sparklines, bar charts, multi-series timecharts, or custom declarative layouts (chat, meetings, run output).
 - **Message queue + resilient streams** — keep typing while a reply generates; long tool-using turns get longer timeouts; proxy HTML/timeouts collapse to short user-facing recovery text.
 - **Chat workspaces** — point a chat at any folder with `/workspace` (or the topbar folder button); file reads/writes/searches and `/git` commands run inside it, so "fix the failing test in this repo" just works.
-- **Meetings beta** — voice-first delivery reviews with real code excerpts, diagrams, and screenshots on a shared stage; confirm to land todos on the Board.
+- **Meetings beta** — voice-first delivery reviews with real code excerpts, diagrams, and screenshots on a shared stage; create Board cards live mid-meeting, or confirm minutes todos onto the Board.
+- **Board search & queue** — filter cards by SHIB ID or free text; queue work for a busy assignee instead of losing the Start click.
 - **Auto-titled chats** — a low-end model summarizes each new conversation into a title after the first exchange.
 - **Run provenance everywhere** — dashboard runs, agent history, Automation history, and the audit log all deep-link to full execution traces; removing an execution owner safely retires its Automations while preserving history.
 - **Cost & safety guardrails** — monthly *and* daily spend limits with an optional hard stop, a global concurrent-run cap, per-run token caps, and overlap-suppressed Automation invocations (Settings → Cost & safety).
