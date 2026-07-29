@@ -1,9 +1,17 @@
 name: CI
 
+# Self-healing pipeline (docs/self-healing-ci.md):
+#   push to development → full CI
+#     · red   → self-heal job asks Grok to repair, commits [self-heal],
+#               pushes to development, and re-dispatches this workflow
+#     · green → promote job opens/reuses a PR to main with auto-merge;
+#               branch protection on main requires the "CI OK" check,
+#               so the merge lands only when the PR's CI is green.
 on:
   push:
-    branches: [main]
+    branches: [main, development]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -177,3 +185,200 @@ jobs:
             throw new Error(`Expected env provenance, received ${version.source}.`);
           }
           NODE
+
+  # Single aggregate check — the only required status check on main, so the
+  # branch-protection contexts survive matrix/job renames above.
+  ci-ok:
+    name: CI OK
+    needs: [verify, audit, e2e, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          for result in $(echo "$RESULTS" | jq -r '.[].result'); do
+            if [ "$result" != "success" ]; then
+              echo "::error::A required job finished with result: $result"
+              exit 1
+            fi
+          done
+          echo "All required jobs succeeded."
+
+  # Red run on development → let Grok repair the tree, push the fix, and
+  # re-dispatch CI (workflow_dispatch is exempt from the GITHUB_TOKEN
+  # no-retrigger rule, so the healed commit gets a fresh full run).
+  self-heal:
+    name: Self-heal with Grok
+    needs: [verify, audit, e2e, docker]
+    if: >-
+      failure() &&
+      github.ref == 'refs/heads/development' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Check GROK_API_KEY is configured
+        id: guard
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+        run: |
+          if [ -z "$GROK_API_KEY" ]; then
+            echo "::warning::GROK_API_KEY secret is not set — self-heal skipped. Add it with: gh secret set GROK_API_KEY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.guard.outputs.enabled == 'true'
+        with:
+          ref: development
+          fetch-depth: 25
+
+      - name: Abort if superseded or looping
+        if: steps.guard.outputs.enabled == 'true'
+        id: sanity
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$GITHUB_SHA" ]; then
+            echo "::notice::development moved on ($head != $GITHUB_SHA); the newer run will handle it."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          streak=0
+          while read -r subject; do
+            case "$subject" in
+              *"[self-heal]"*) streak=$((streak+1)) ;;
+              *) break ;;
+            esac
+          done < <(git log -5 --format=%s)
+          if [ "$streak" -ge 3 ]; then
+            echo "::error::3 consecutive self-heal commits have not fixed CI — stopping to avoid a loop."
+            gh issue create \
+              --title "Self-heal loop stopped on development" \
+              --body "Three consecutive automated fixes did not turn CI green. Manual attention needed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              || true
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v6
+        if: steps.sanity.outputs.proceed == 'true'
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            devvit/reddit-bridge/package-lock.json
+
+      - name: Install (lockfile-exact)
+        if: steps.sanity.outputs.proceed == 'true'
+        run: |
+          npm ci
+          npm ci --prefix devvit/reddit-bridge
+
+      - name: Collect logs of the failed jobs
+        if: steps.sanity.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/self-heal-logs
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure") | [.id, .name] | @tsv' |
+          while IFS=$'\t' read -r id name; do
+            safe="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9._-' '-')"
+            gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" > "/tmp/self-heal-logs/$safe.log" || true
+          done
+          ls -l /tmp/self-heal-logs
+
+      - name: Ask Grok for a fix
+        if: steps.sanity.outputs.proceed == 'true'
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GROK_MODEL: ${{ vars.GROK_MODEL || 'grok-code-fast-1' }}
+          FAILURE_LOG_DIR: /tmp/self-heal-logs
+          SELF_HEAL_SUMMARY_FILE: /tmp/self-heal-summary.txt
+        run: node scripts/ci/self-heal.mjs
+
+      - name: Gate — typecheck must pass before pushing
+        if: steps.sanity.outputs.proceed == 'true'
+        run: npx tsc --noEmit
+
+      - name: Commit and push the fix
+        if: steps.sanity.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "::error::Healer reported success but produced no changes."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          summary="$(head -n 1 /tmp/self-heal-summary.txt || true)"
+          git commit \
+            -m "fix(ci): ${summary:-automated repair} [self-heal]" \
+            -m "Automated by the Grok self-heal job for failed run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          git push origin HEAD:development
+
+      - name: Re-dispatch CI for the healed commit
+        if: steps.sanity.outputs.proceed == 'true'
+        run: gh workflow run ci.yml --ref development
+
+      - name: Open an issue if healing failed
+        if: failure() && steps.guard.outputs.enabled == 'true'
+        run: |
+          gh issue create \
+            --title "Self-heal could not fix CI on development" \
+            --body "The Grok self-heal job failed to repair a red CI run. Logs: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            || true
+
+  # Green run on development → open (or reuse) the promotion PR to main and
+  # enable auto-merge. Branch protection on main requires "CI OK", and the
+  # check runs from this green run already sit on the PR's head SHA.
+  promote:
+    name: Promote development → main
+    needs: [ci-ok]
+    if: >-
+      github.ref == 'refs/heads/development' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Open or reuse the promotion PR and enable auto-merge
+        run: |
+          set -euo pipefail
+          ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
+          if [ "$ahead" = "0" ]; then
+            echo "development is not ahead of main — nothing to promote."
+            exit 0
+          fi
+          pr="$(gh pr list --repo "$REPO" --head development --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            gh pr create --repo "$REPO" \
+              --head development --base main \
+              --title "Promote development to main" \
+              --body "$(printf 'Automated promotion opened by CI after a green run on `development`.\n\nAuto-merge is enabled; this merges as soon as the required **CI OK** check passes on the head commit.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)')"
+            pr="$(gh pr list --repo "$REPO" --head development --base main --state open --json number --jq '.[0].number')"
+          fi
+          echo "Promotion PR: #$pr"
+          if ! gh pr merge "$pr" --repo "$REPO" --merge --auto; then
+            echo "Auto-merge could not be enabled (checks likely already green) — merging directly."
+            gh pr merge "$pr" --repo "$REPO" --merge
+          fi
