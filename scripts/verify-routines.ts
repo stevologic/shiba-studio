@@ -882,9 +882,19 @@ async function main() {
     routines.deleteRoutine(capacityRoutine.id, capacityRoutine.version);
 
     // Independent slow health probes run concurrently, so one endpoint cannot
-    // hold every other trigger behind its timeout.
+    // hold every other trigger behind its timeout. Assert overlap via in-flight
+    // request concurrency rather than wall-clock timing (Windows CI hosts can
+    // add hundreds of ms of connect/scheduling overhead that blows a 650ms budget
+    // even when the probes correctly overlap).
+    let healthInFlight = 0;
+    let healthMaxInFlight = 0;
+    let healthRequests = 0;
     const healthServer = createServer((_request, response) => {
+      healthRequests += 1;
+      healthInFlight += 1;
+      healthMaxInFlight = Math.max(healthMaxInFlight, healthInFlight);
       setTimeout(() => {
+        healthInFlight -= 1;
         response.statusCode = 503;
         response.end('unhealthy');
       }, 400);
@@ -900,10 +910,12 @@ async function main() {
           { id: 'health-b', type: 'health', enabled: true, url: `http://127.0.0.1:${address.port}/b`, intervalSeconds: 5, timeoutMs: 2_000 },
         ],
       });
-      const pollStarted = Date.now();
       assert.equal(await routines.pollRoutineTriggers(), 2);
-      const pollElapsed = Date.now() - pollStarted;
-      assert(pollElapsed < 650, `health checks should overlap (elapsed ${pollElapsed}ms)`);
+      assert.equal(healthRequests, 2, 'both health probes must hit the endpoint');
+      assert(
+        healthMaxInFlight >= 2,
+        `health checks should overlap (max in-flight ${healthMaxInFlight})`,
+      );
       routines.deleteRoutine(healthRoutine.id, healthRoutine.version);
     } finally {
       await new Promise<void>((resolve, reject) => healthServer.close((error) => error ? reject(error) : resolve()));
