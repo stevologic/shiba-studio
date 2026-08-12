@@ -10,6 +10,11 @@ are carried over automatically.
 
 ### Added
 
+- **Hands-off Grok 4.6+ maintenance** — daily high/critical vulnerability
+  remediation and a Monday weekly pass that assesses Claude / ChatGPT-Codex /
+  Grok / Cursor (plus self-improvement of the automation). Both write only to
+  `development`; existing **CI OK** + promote still auto-merges to `main`.
+  Missing `GROK_API_KEY` skips the agent with a warning.
 - **Grok 4.6 is the studio default.** New chats, agents, meetings, and offline
   fallback catalogs use `cloud:grok-4.6`. The picker prefers the current
   flagship instead of the leftover `grok-4` id. Usage metering uses the

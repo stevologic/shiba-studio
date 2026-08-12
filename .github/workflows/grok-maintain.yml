@@ -1,0 +1,178 @@
+name: Grok maintain
+
+# Hands-off Grok 4.6+ maintenance. Daily remediates high/critical vulns.
+# Weekly assesses Claude / ChatGPT-Codex / Grok / Cursor and may improve
+# this automation. Both write only to `development`. Green development
+# still promotes to main through ci.yml (CI OK + auto-merge).
+#
+# A GITHUB_TOKEN push does not retrigger ci.yml, so this workflow
+# re-dispatches CI after a successful commit (same pattern as self-heal).
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # daily
+    - cron: "17 7 * * 1"   # weekly (Monday)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: daily (vulns) or weekly (features + self-improve)
+        type: choice
+        options: [daily, weekly]
+        default: daily
+
+concurrency:
+  group: grok-maintain
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  maintain:
+    name: Grok ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'scheduled' }} maintain
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Resolve mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MODE: ${{ inputs.mode }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            mode="${INPUT_MODE:-daily}"
+          elif [ "$SCHEDULE" = "17 7 * * 1" ]; then
+            mode="weekly"
+          else
+            mode="daily"
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Resolved MAINTAIN_MODE=$mode (schedule=${SCHEDULE:-none})"
+
+      - name: Check GROK_API_KEY is configured
+        id: guard
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+        run: |
+          if [ -z "$GROK_API_KEY" ]; then
+            echo "::warning::GROK_API_KEY secret is not set — scheduled maintain skipped. Add it with: gh secret set GROK_API_KEY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.guard.outputs.enabled == 'true'
+        with:
+          ref: development
+          fetch-depth: 25
+
+      - name: Abort if looping
+        if: steps.guard.outputs.enabled == 'true'
+        id: sanity
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          set -euo pipefail
+          marker="[scheduled-${MODE}]"
+          streak=0
+          while read -r subject; do
+            case "$subject" in
+              *"$marker"*) streak=$((streak+1)) ;;
+              *) break ;;
+            esac
+          done < <(git log -5 --format=%s)
+          if [ "$streak" -ge 3 ]; then
+            echo "::error::3 consecutive $marker commits — stopping to avoid a loop."
+            gh issue create \
+              --title "Scheduled $MODE maintain loop stopped on development" \
+              --body "Three consecutive automated $MODE commits landed without a break. Manual attention: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              || true
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v6
+        if: steps.sanity.outputs.proceed == 'true'
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            devvit/reddit-bridge/package-lock.json
+
+      - name: Install (lockfile-exact)
+        if: steps.sanity.outputs.proceed == 'true'
+        run: |
+          npm ci
+          npm ci --prefix devvit/reddit-bridge
+
+      - name: Ask Grok 4.6+ to maintain
+        if: steps.sanity.outputs.proceed == 'true'
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GROK_MODEL: ${{ vars.GROK_MODEL }}
+          MAINTAIN_MODE: ${{ steps.mode.outputs.mode }}
+          GITHUB_SCHEDULE: ${{ github.event.schedule }}
+          MAINTAIN_SUMMARY_FILE: /tmp/maintain-summary.txt
+        run: node scripts/ci/scheduled-maintain.mjs --mode=${{ steps.mode.outputs.mode }}
+
+      - name: Gate — typecheck before pushing
+        if: steps.sanity.outputs.proceed == 'true'
+        run: npx tsc --noEmit
+
+      - name: Commit and push to development only
+        id: push
+        if: steps.sanity.outputs.proceed == 'true'
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          set -euo pipefail
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No tree changes — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          summary="$(head -n 1 /tmp/maintain-summary.txt || true)"
+          git commit \
+            -m "${MODE}: ${summary:-scheduled Grok 4.6 maintain} [scheduled-${MODE}]" \
+            -m "Automated by grok-maintain.yml (${MODE}) on $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Target branch is development only."
+          git push origin HEAD:development
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Re-dispatch CI so promote can see the new SHA
+        if: steps.push.outputs.pushed == 'true'
+        run: |
+          set -euo pipefail
+          echo "Dispatching ci.yml for $(git rev-parse HEAD) on development"
+          gh workflow run ci.yml --ref development
+
+      - name: Approve the held PR-side run for the bot commit
+        if: steps.push.outputs.pushed == 'true'
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          for attempt in $(seq 1 6); do
+            sleep 10
+            run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$sha" \
+              --jq '.workflow_runs[] | select(.conclusion == "action_required") | .id' | head -n 1)"
+            if [ -n "$run_id" ]; then
+              gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/approve" || true
+              echo "Approved held PR run $run_id"
+              break
+            fi
+          done
