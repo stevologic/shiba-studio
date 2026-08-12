@@ -22,6 +22,10 @@ export const AUTOMATION_LOGINS = Object.freeze([
 ]);
 export const ADMIN_ASSOCIATIONS = Object.freeze(["OWNER", "MEMBER", "COLLABORATOR"]);
 
+/**
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {{ skip: boolean, message: string }}
+ */
 export function skipWithoutApiKey(env = process.env) {
   const key = String(env.GROK_API_KEY || "").trim();
   if (key) return { skip: false, message: "" };
@@ -36,6 +40,11 @@ export function isSelectOnly(argv = process.argv.slice(2)) {
   return argv.includes("--select");
 }
 
+/**
+ * @param {string[]} [argv]
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {number | null}
+ */
 export function requestedIssueNumber(argv = process.argv.slice(2), env = process.env) {
   const flag = argv.find((arg) => arg.startsWith("--issue="));
   if (flag) {
