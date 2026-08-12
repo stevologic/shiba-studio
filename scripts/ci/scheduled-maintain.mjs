@@ -18,6 +18,7 @@ import {
   TARGET_BRANCH,
   buildMaintainPrompt,
   fetchHostAllowed,
+  finalizeMaintainRun,
   formatValidateMessage,
   isValidateOnly,
   resolveMaintainMode,
@@ -414,13 +415,17 @@ async function main() {
 
   if (!doneState) fail(`Step budget (${MAX_STEPS}) exhausted without a done call.`);
 
-  const dirty = sh("git", ["status", "--porcelain"]).output.trim();
+  const finalized = finalizeMaintainRun({ fixed: doneState.fixed, cwd: REPO_ROOT });
   if (!doneState.fixed) {
-    log(`scheduled-maintain: no change this run — ${doneState.summary}`);
+    log(
+      `scheduled-maintain: no change this run — ${doneState.summary}`
+      + (finalized.discarded ? " (discarded uncommitted edits)" : ""),
+    );
     writeFileSync(SUMMARY_FILE, `${doneState.summary || "no change"}\n`);
     process.exit(0);
   }
-  if (!dirty) fail("Grok reported a change but the working tree is unchanged.");
+  if (!finalized.dirty) fail("Grok reported a change but the working tree is unchanged.");
+  const dirty = finalized.dirty;
 
   const oneLine = doneState.summary.replace(/\s+/g, " ").trim().slice(0, 80) || `${MODE} maintenance`;
   writeFileSync(SUMMARY_FILE, `${oneLine}\n`);

@@ -79,7 +79,9 @@ Both jobs:
 
 `workflow_dispatch` accepts `mode=daily|weekly` for a manual dry fire.
 Three consecutive `[scheduled-daily]` or `[scheduled-weekly]` commits abort
-the loop and open an issue.
+the loop and open an issue. If Grok calls `done(fixed=false)` after editing
+files, `finalizeMaintainRun` runs `git reset --hard` and `git clean -fd` so
+the workflow cannot `git add -A` those discarded edits.
 
 Policy lives in `scripts/ci/scheduled-maintain-lib.mjs` so
 `scripts/verify-scheduled-maintain.ts` can exercise the real mode split,

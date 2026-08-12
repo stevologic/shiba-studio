@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const ROOT = path.resolve(__dirname, '..');
@@ -125,6 +126,45 @@ async function main() {
   assert.match(ci, /Promote development → main/);
   assert.match(ci, /gh pr merge .* --auto/);
   assert.match(ci, /github\.ref == 'refs\/heads\/development'/);
+
+  const runner = readFileSync(path.join(ROOT, 'scripts/ci/scheduled-maintain.mjs'), 'utf8');
+  assert.match(runner, /finalizeMaintainRun\(\{ fixed: doneState\.fixed, cwd: REPO_ROOT \}\)/);
+
+  const sandbox = mkdtempSync(path.join(os.tmpdir(), 'shiba-maintain-'));
+  const git = (args: string[]) => {
+    const res = spawnSync('git', args, { cwd: sandbox, encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+    return res;
+  };
+  try {
+    git(['init']);
+    git(['config', 'user.email', 'verify@shiba.local']);
+    git(['config', 'user.name', 'scheduled-maintain verifier']);
+    writeFileSync(path.join(sandbox, 'kept.txt'), 'original\n');
+    git(['add', 'kept.txt']);
+    git(['commit', '-m', 'seed']);
+    writeFileSync(path.join(sandbox, 'kept.txt'), 'mutated by grok then discarded\n');
+    writeFileSync(path.join(sandbox, 'scratch-edit.txt'), 'should not be committed\n');
+    assert.notEqual(lib.gitPorcelain(sandbox), '', 'fixture must start dirty');
+
+    const discarded = lib.finalizeMaintainRun({ fixed: false, cwd: sandbox });
+    assert.equal(discarded.discarded, true);
+    assert.equal(discarded.dirty, '', 'fixed=false must leave a clean tree');
+    assert.match(readFileSync(path.join(sandbox, 'kept.txt'), 'utf8'), /original/);
+    assert.doesNotMatch(readFileSync(path.join(sandbox, 'kept.txt'), 'utf8'), /mutated by grok/);
+    assert.equal(lib.gitPorcelain(sandbox), '');
+    assert.equal(existsSync(path.join(sandbox, 'scratch-edit.txt')), false, 'untracked Grok scratch must be cleaned');
+
+    writeFileSync(path.join(sandbox, 'kept.txt'), 'real fix\n');
+    writeFileSync(path.join(sandbox, 'new-feature.txt'), 'keep me\n');
+    const kept = lib.finalizeMaintainRun({ fixed: true, cwd: sandbox });
+    assert.equal(kept.discarded, false);
+    assert.notEqual(kept.dirty, '', 'fixed=true must not discard a real change');
+    assert.match(kept.dirty, /kept\.txt/);
+    assert.match(readFileSync(path.join(sandbox, 'kept.txt'), 'utf8'), /real fix/);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 
   console.log('verify-scheduled-maintain: OK');
 }
