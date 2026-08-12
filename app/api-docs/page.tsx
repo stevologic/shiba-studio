@@ -56,6 +56,9 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'Observability', method: 'GET', path: '/api/search', summary: 'Global search across chats, memories, runs, and the audit log.', query: [{ name: 'q', desc: 'Query (min 2 chars)', example: 'shiba' }] },
   { group: 'Observability', method: 'GET', path: '/api/logs', summary: 'Audit log, paginated.', query: [{ name: 'q', desc: 'Substring filter', example: '' }, { name: 'category', desc: 'run|chat|agent|config|integration|skill|sync|workspace|auth|system' }, { name: 'limit', desc: 'Page size (max 500)', example: '25' }, { name: 'offset', desc: 'Row offset', example: '0' }] },
   { group: 'Observability', method: 'GET', path: '/api/usage', summary: 'Usage & cost summary (studio metering + optional xAI billing backport).' },
+  { group: 'Observability', method: 'GET', path: '/api/attention', summary: 'Exact approvals waiting for a decision. Failures are not in this inbox.' },
+  { group: 'Observability', method: 'GET', path: '/api/alerts', summary: 'Durable failure and skipped-automation notices (separate from approvals).', query: [{ name: 'unread', desc: 'Set to 1 for unread only', example: '1' }, { name: 'limit', desc: 'Max rows (default 40)', example: '20' }] },
+  { group: 'Observability', method: 'GET', path: '/api/doctor', summary: 'Read-only Studio health report. Secrets are never included.' },
 
   // --- Content stores ---
   { group: 'Content', method: 'GET', path: '/api/chat-sessions', summary: 'All chat sessions (metadata + messages).' },
