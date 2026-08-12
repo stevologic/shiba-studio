@@ -86,6 +86,13 @@ async function main() {
   const picked = lib.selectIssueToAddress([laterAdmin, ignored, oldestAutomation]);
   assert.equal(picked?.number, 8, 'oldest eligible admin/automation issue wins');
   assert.equal(lib.selectIssueToAddress([laterAdmin, oldestAutomation], { requestedNumber: 20 })?.number, 20);
+  assert.equal(
+    lib.selectIssueToAddress([
+      issue({ ...oldestAutomation, labels: [{ name: 'grok-working' }] }),
+    ], { requestedNumber: 8 })?.number,
+    8,
+    'an explicit --issue=N still addresses the issue after grok-working is applied',
+  );
   assert.equal(lib.selectIssueToAddress([ignored]), null);
 
   assert.equal(lib.issueCommitMarker(8), '[grok-issue-#8]');
