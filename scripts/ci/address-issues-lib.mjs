@@ -126,7 +126,12 @@ export function selectIssueToAddress(rawIssues, opts = {}) {
   const issues = (Array.isArray(rawIssues) ? rawIssues : []).map(normalizeIssue);
   const requested = Number(opts.requestedNumber || 0);
   const eligible = issues
-    .filter((issue) => isIssueEligible(issue, opts))
+    .filter((issue) => isIssueEligible(issue, {
+      ...opts,
+      // The workflow claims the issue with grok-working before the agent
+      // starts. An explicit --issue=N must still see that claimed issue.
+      ignoreWorking: Boolean(opts.ignoreWorking || requested),
+    }))
     .filter((issue) => !requested || issue.number === requested)
     .sort((a, b) => {
       const left = a.createdAt || "";
