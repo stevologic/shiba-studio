@@ -10,6 +10,10 @@ are carried over automatically.
 
 ### Added
 
+- **Grok issue automation** — a GitHub Action addresses issues filed by
+  repo admins or by enabled project automations (Actions, Dependabot, other
+  bots). Missing `GROK_API_KEY` skips. Fixes land on `development` and ride
+  the existing CI OK → promote path.
 - **Grok phone assistant** — Settings pairs a Voice Agent Builder / SIP
   number to this Studio. Spoken commands hit a signed public MCP and JSON
   command path and run the real server-side Board, git, memory, search, and

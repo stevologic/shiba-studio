@@ -34,6 +34,7 @@ const CHAIN = [
   'verify-models.ts',
   'verify-studio-alerts.ts',
   'verify-scheduled-maintain.ts',
+  'verify-address-issues.ts',
   'verify-grok-cli.ts',
   'verify-cli-agent-outcome.ts',
   'verify-task-ledger.ts',

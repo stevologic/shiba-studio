@@ -1,0 +1,196 @@
+name: Grok issues
+
+# Address GitHub issues filed by repository admins or by enabled project
+# automations (github-actions, Dependabot, other bots). Uses GROK_API_KEY
+# when present; missing key skips with a warning. Writes only to development.
+# Green development still promotes to main through ci.yml.
+
+on:
+  issues:
+    types: [opened, reopened]
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to address (blank = oldest eligible open issue)
+        required: false
+        type: string
+
+concurrency:
+  group: grok-issues
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  address:
+    name: Address admin/automation issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Check GROK_API_KEY is configured
+        id: guard
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+        run: |
+          if [ -z "$GROK_API_KEY" ]; then
+            echo "::warning::GROK_API_KEY secret is not set — issue addressing skipped. Add it with: gh secret set GROK_API_KEY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.guard.outputs.enabled == 'true'
+        with:
+          ref: development
+          fetch-depth: 25
+
+      - uses: actions/setup-node@v6
+        if: steps.guard.outputs.enabled == 'true'
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            devvit/reddit-bridge/package-lock.json
+
+      - name: Install (lockfile-exact)
+        if: steps.guard.outputs.enabled == 'true'
+        run: |
+          npm ci
+          npm ci --prefix devvit/reddit-bridge
+
+      - name: Select eligible issue
+        if: steps.guard.outputs.enabled == 'true'
+        id: pick
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_ISSUE: ${{ github.event.issue.number }}
+          INPUT_ISSUE: ${{ inputs.issue }}
+          ISSUE_SELECT_FILE: /tmp/issue-select.json
+          ISSUE_ALLOW_ADDRESSED: ${{ github.event.action == 'reopened' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          issue=""
+          if [ "$EVENT_NAME" = "issues" ] && [ -n "${EVENT_ISSUE:-}" ]; then
+            issue="$EVENT_ISSUE"
+          elif [ -n "${INPUT_ISSUE:-}" ]; then
+            issue="$INPUT_ISSUE"
+          fi
+          extra=()
+          if [ -n "$issue" ]; then extra+=(--issue="$issue"); fi
+          node scripts/ci/address-issues.mjs --select "${extra[@]}"
+          skip="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("/tmp/issue-select.json","utf8")); process.stdout.write(p.skip ? "true" : "false")')"
+          number="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("/tmp/issue-select.json","utf8")); process.stdout.write(String(p.number||0))')"
+          title="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("/tmp/issue-select.json","utf8")); process.stdout.write(String(p.title||""))')"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = "true" ]; then
+            echo "No eligible admin or automation issue."
+          else
+            echo "Selected #$number $title"
+          fi
+
+      - name: Mark issue in progress
+        if: steps.guard.outputs.enabled == 'true' && steps.pick.outputs.skip == 'false'
+        env:
+          NUMBER: ${{ steps.pick.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh label create grok-working --color 0E8A16 --description "Grok is addressing this issue" --force || true
+          gh label create grok-addressed --color 1D76DB --description "Grok attempted a fix" --force || true
+          gh label create grok-failed --color B60205 --description "Grok could not address this issue" --force || true
+          gh label create grok-skip --color C5DEF5 --description "Do not auto-address" --force || true
+          gh issue edit "$NUMBER" --add-label grok-working --remove-label grok-failed || true
+          gh issue comment "$NUMBER" --body "Grok is addressing this on \`development\` using the configured API key. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Ask Grok 4.6+ to address the issue
+        if: steps.guard.outputs.enabled == 'true' && steps.pick.outputs.skip == 'false'
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GROK_MODEL: ${{ vars.GROK_MODEL }}
+          ISSUE_NUMBER: ${{ steps.pick.outputs.number }}
+          ISSUE_ALLOW_ADDRESSED: ${{ github.event.action == 'reopened' && '1' || '0' }}
+          ISSUE_SUMMARY_FILE: /tmp/issue-summary.txt
+          ISSUE_SELECT_FILE: /tmp/issue-result.json
+        run: node scripts/ci/address-issues.mjs --issue=${{ steps.pick.outputs.number }}
+
+      - name: Gate — typecheck before pushing
+        if: steps.guard.outputs.enabled == 'true' && steps.pick.outputs.skip == 'false'
+        run: npx tsc --noEmit
+
+      - name: Commit and push to development only
+        id: push
+        if: steps.guard.outputs.enabled == 'true' && steps.pick.outputs.skip == 'false'
+        env:
+          NUMBER: ${{ steps.pick.outputs.number }}
+        run: |
+          set -euo pipefail
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No tree changes — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          summary="$(node -e 'const fs=require("fs"); const raw=fs.readFileSync("/tmp/issue-summary.txt","utf8"); const line=raw.split(/\r?\n/).find((l)=>l&&!l.startsWith("{"))||"addressed issue"; process.stdout.write(line.slice(0,80))')"
+          git commit \
+            -m "fix: ${summary:-address issue #$NUMBER} [grok-issue-#$NUMBER]" \
+            -m "Automated by grok-issues.yml for #$NUMBER on $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Target branch is development only."
+          git push origin HEAD:development
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Re-dispatch CI so promote can see the new SHA
+        if: steps.push.outputs.pushed == 'true'
+        run: |
+          set -euo pipefail
+          echo "Dispatching ci.yml for $(git rev-parse HEAD) on development"
+          gh workflow run ci.yml --ref development
+
+      - name: Comment and label the issue
+        if: always() && steps.guard.outputs.enabled == 'true' && steps.pick.outputs.skip == 'false'
+        env:
+          NUMBER: ${{ steps.pick.outputs.number }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
+        run: |
+          set -euo pipefail
+          gh issue edit "$NUMBER" --remove-label grok-working || true
+          if [ ! -f /tmp/issue-summary.txt ]; then
+            gh issue edit "$NUMBER" --add-label grok-failed || true
+            gh issue comment "$NUMBER" --body "Grok did not finish addressing this issue. See $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            exit 0
+          fi
+          close="$(node -e 'const fs=require("fs"); const raw=fs.readFileSync("/tmp/issue-summary.txt","utf8"); try { const j=JSON.parse(raw.split(/\r?\n/)[0]); process.stdout.write(j.close ? "true" : "false"); } catch { process.stdout.write("false"); }')"
+          summary="$(node -e 'const fs=require("fs"); const raw=fs.readFileSync("/tmp/issue-summary.txt","utf8"); const line=raw.split(/\r?\n/).find((l)=>l&&!l.startsWith("{"))||raw.slice(0,400); process.stdout.write(line)')"
+          if [ "${PUSHED:-false}" = "true" ]; then
+            gh issue edit "$NUMBER" --add-label grok-addressed --remove-label grok-failed || true
+            gh issue comment "$NUMBER" --body "Grok pushed a fix to \`development\` for this issue. CI will promote to \`main\` when green.
+
+          ${summary}
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          else
+            gh issue edit "$NUMBER" --add-label grok-addressed --remove-label grok-failed || true
+            gh issue comment "$NUMBER" --body "Grok reviewed this issue and did not change the tree.
+
+          ${summary}
+
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
+          if [ "$close" = "true" ]; then
+            gh issue close "$NUMBER" --reason completed || true
+          fi

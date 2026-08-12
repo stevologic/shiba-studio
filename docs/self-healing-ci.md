@@ -86,3 +86,31 @@ the workflow cannot `git add -A` those discarded edits.
 Policy lives in `scripts/ci/scheduled-maintain-lib.mjs` so
 `scripts/verify-scheduled-maintain.ts` can exercise the real mode split,
 model default, write fences, and no-key skip without calling xAI.
+
+## Admin and automation issues
+
+`.github/workflows/grok-issues.yml` asks Grok to address open issues that
+were filed by a repository **admin** (OWNER / MEMBER / COLLABORATOR) or by
+an **enabled project automation** (`github-actions[bot]`, Dependabot,
+Renovate, or any `[bot]` account). Random public issues are ignored.
+
+| Trigger | When |
+| --- | --- |
+| `issues` opened / reopened | Immediately, if the author is eligible |
+| Hourly cron `23 * * * *` | Oldest eligible open issue |
+| `workflow_dispatch` | Optional issue number, else oldest eligible |
+
+The job:
+
+1. Skips with a warning (exit 0) when `GROK_API_KEY` is unset.
+2. Checks out `development`.
+3. Runs `node scripts/ci/address-issues.mjs --select` (the same selector the
+   tests drive with `--issues-file`).
+4. Labels the issue `grok-working`, asks Grok 4.6+ to implement a fix, then
+   `git reset --hard` + `git clean -fd` if Grok reports no change.
+5. Commits `[grok-issue-#N]` to `development` only when the tree changed,
+   re-dispatches `ci.yml`, and comments (optionally closing) the issue.
+
+Three consecutive commits for the same issue abort the loop. Label
+`grok-skip` or `wontfix` opts an issue out. Policy lives in
+`scripts/ci/address-issues-lib.mjs`.
