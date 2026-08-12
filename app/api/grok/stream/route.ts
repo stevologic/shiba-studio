@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import * as fs from 'fs';
 import { encodeSseEvent, grokChatStream } from '@/lib/grok-chat-stream';
-import { parseModelRef } from '@/lib/model-providers';
+import { parseModelRef, resolveDefaultCloudModel } from '@/lib/model-providers';
 import type { ChatMessagePayload } from '@/lib/chat-types';
 import { loadConfig } from '@/lib/persistence';
 import { buildGlobalUploadsChatContext } from '@/lib/workspace';
@@ -50,10 +50,11 @@ export async function POST(req: NextRequest) {
     if (!verifiedWorkspaceDir) verifiedWorkspaceDir = resolveProjectWorkspace(project, cfg.defaultWorkspace);
   }
   let integrationCreds = cfg.integrations || {};
-  const rawModel = requestChatSession?.chatModel
+  const rawModel = resolveDefaultCloudModel(
+    requestChatSession?.chatModel
     || (body.model && String(body.model).trim())
-    || cfg.defaultGrokModel
-    || 'cloud:grok-4';
+    || cfg.defaultGrokModel,
+  );
   const parsedModel = parseModelRef(rawModel);
   const model = parsedModel.encoded;
   // Honor the model's pinned credential source (OAuth-tagged vs Token-tagged).

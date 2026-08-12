@@ -17,6 +17,7 @@ import type {
 
 import type { Project, ProjectChatMessage } from './project-types';
 import type { AgentRun } from './types';
+import { replayBudgetForModel } from './model-providers';
 
 /**
  * A live-run persistence can win the race immediately before its model request
@@ -708,7 +709,8 @@ export function prepareSessionContext(input: {
   maxReplayTokens?: number;
   maxRecentMessages?: number;
 }): PreparedSessionContext {
-  const maxReplayTokens = boundedInt(input.maxReplayTokens, DEFAULT_REPLAY_TOKENS, 2_000, 50_000);
+  const defaultReplay = input.model ? replayBudgetForModel(input.model) : DEFAULT_REPLAY_TOKENS;
+  const maxReplayTokens = boundedInt(input.maxReplayTokens, defaultReplay, 2_000, 80_000);
   const maxRecentMessages = boundedInt(input.maxRecentMessages, DEFAULT_RECENT_MESSAGES, 8, 100);
   const sessionId = input.sessionId?.trim() || '';
   let compactions: ContextCompactionRecord[] = [];

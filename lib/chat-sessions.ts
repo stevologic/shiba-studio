@@ -6,6 +6,8 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ChatSession } from './chat-session-types';
 import { compactContextScope, deleteContextScope, indexSessionContext } from './context-engine';
 import { ownershipStoreFencePath, withStoreFileLock } from './store-file-lock';
+import { resolveDefaultCloudModel } from './model-providers';
+import { loadConfig } from './persistence';
 
 export type { ChatSession } from './chat-session-types';
 export { deriveSessionTitle } from './chat-session-types';
@@ -173,7 +175,7 @@ export async function createChatSession(
       id: uuidv4(),
       title: defaults.title?.trim() || 'New chat',
       chatTarget: defaults.chatTarget || 'grok',
-      chatModel: defaults.chatModel || 'cloud:grok-4',
+      chatModel: defaults.chatModel || resolveDefaultCloudModel((await loadConfig()).defaultGrokModel),
       projectId,
       useGrokCli: !!defaults.useGrokCli,
       toolsEnabled: defaults.toolsEnabled !== false,

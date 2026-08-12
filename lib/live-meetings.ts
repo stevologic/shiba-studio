@@ -24,7 +24,7 @@ import { createBoardTask, getBoardTask, listBoardTasks, queueBoardWork } from '.
 import { buildAgentChatSystem } from './chat-skill';
 import { normalizeAgent, type Agent, type AppConfig } from './types';
 import { resolveProjectWorkspace } from './project-types';
-import { parseModelRef } from './model-providers';
+import { parseModelRef, resolveDefaultCloudModel } from './model-providers';
 import { readIdeTextFile } from './ide-workspace';
 import {
   LIVE_MEETING_MAX_TODOS,
@@ -695,7 +695,7 @@ function resolveMeetingModel(agent: Agent, config: AppConfig): string {
   // needs the hosted chat API (CLI/local agents fall back to the app default).
   const agentRef = agent.model ? parseModelRef(agent.model) : null;
   if (agentRef?.provider === 'cloud') return agent.model;
-  return config.defaultGrokModel || 'cloud:grok-4';
+  return resolveDefaultCloudModel(config.defaultGrokModel);
 }
 
 async function requireAgent(agentId: string): Promise<Agent> {

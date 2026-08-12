@@ -29,12 +29,9 @@ function hasMultimodalInput(messages: ChatMessagePayload[]): boolean {
   );
 }
 
-function isReasoningModel(modelId: string): boolean {
-  return /grok-4/i.test(modelId);
-}
-
 function shouldUseResponsesApi(provider: string, modelId: string, messages: ChatMessagePayload[]): boolean {
-  return provider === 'cloud' && (hasMultimodalInput(messages) || isReasoningModel(modelId));
+  // Responses API streams reasoning for grok-4+ generations (including 4.6).
+  return provider === 'cloud' && (hasMultimodalInput(messages) || /grok-(?:[4-9]|\d{2,})/i.test(modelId));
 }
 
 function buildResponsesInput(messages: ChatMessagePayload[]) {
@@ -180,7 +177,7 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
   if (params.reasoningEffort && supportsReasoning(ref.id)) {
     if (useResponses) {
       if (params.reasoningEffort !== 'low') body.reasoning = { effort: params.reasoningEffort };
-    } else if (isReasoningModel(ref.id)) {
+    } else {
       body.reasoning_effort = params.reasoningEffort;
     }
   }

@@ -135,6 +135,10 @@ async function main() {
     studio.includes('<AttentionBell count={navStats.attentionOpen} />') && !studio.includes('AttentionInbox'),
     'approvals surface as the top-bar alert bell, not the retired Attention tab',
   );
+  check(
+    studio.includes('<StudioDoctorCard') && !studio.includes('DoctorPage'),
+    'Settings mounts Studio health without restoring the retired Doctor route',
+  );
   const navigation = await source('lib/app-navigation.ts');
   const appTabs = navigation.match(/export const APP_TABS = \[[\s\S]*?\] as const;/)?.[0] || '';
   check(

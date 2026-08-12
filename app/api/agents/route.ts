@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { audit } from '@/lib/audit-log';
 import { maskIntegrationCreds, restoreMaskedCreds } from '@/lib/secret-mask';
 import { redditOverridePairError } from '@/lib/integration-validation';
+import { resolveDefaultCloudModel } from '@/lib/model-providers';
 
 function clientSafeAgent(agent: Agent): Agent {
   const safe = {
@@ -138,7 +139,7 @@ export async function POST(req: NextRequest) {
     id: newId,
     name: body.name || 'New Agent',
     avatar: body.avatar && isValidAvatarId(body.avatar) ? body.avatar : defaultAvatarIdForAgent(newId),
-    model: typeof body.model === 'string' && body.model ? body.model : (cfg.defaultGrokModel || 'grok-4'),
+    model: typeof body.model === 'string' && body.model ? body.model : resolveDefaultCloudModel(cfg.defaultGrokModel),
     description: body.description || '',
     autoAcceptBoardAssignments: body.autoAcceptBoardAssignments === true,
     workspace: {

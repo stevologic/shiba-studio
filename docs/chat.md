@@ -27,7 +27,7 @@ The target select chooses *who* answers:
 
 ## Models, reasoning, attachments
 
-- The **composer model pill** switches between Cloud (xAI) and Local models per session; the terminal toggle routes through the **Grok CLI** instead of the API.
+- The **composer model pill** switches between Cloud (xAI) and Local models per session; the terminal toggle routes through the **Grok CLI** instead of the API. Unset sessions and fresh installs default to **Grok 4.6**.
 - For reasoning-capable models a **reasoning effort** pill appears (off/low/med/high). Non-reasoning models hide it and never send the parameter.
 - **Images & files:** drop, paste, or attach. Images render inline in the conversation — click for a full-screen lightbox.
 - The **QUOTA pill** in the top bar shows spend as a share of your monthly budget (Settings → Monthly Usage Quota).

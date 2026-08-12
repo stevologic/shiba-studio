@@ -32,7 +32,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 - [x] **GitHub Actions matrix** — lint/typecheck/build/`npm test` on windows/macos/ubuntu × Node 22.5/24, plus an audit job (`.github/workflows/ci.yml`).
 - [ ] **Zero out lint debt.** `lib/`, `app/api/`, `scripts/`, and `types/` are now **clean**. Remaining ~190 problems live entirely in `components/*.tsx` (≈124 in `shiba-studio.tsx`, 12 `grok-chat-panel`, 11 `chat-sessions-panel`, rest singles) — mostly `no-explicit-any` plus react-compiler `set-state-in-effect`/`no-img-element` warnings needing careful UI refactors. CI lint stays `continue-on-error` until zero; pairs with the component split below.
-- [x] **Browser E2E suite (Playwright)** — scaffolded: `playwright.config.ts` (isolated `SHIBA_DATA_DIR`, production server on its own port), `e2e/nav.spec.ts` (every surface renders with zero console errors + sidebar nav), `e2e/settings-and-search.spec.ts` (Cost & safety save round-trip, palette search, logs `?q=` deep link). Run: `npx playwright install chromium` once, `npm run build`, then `npm run test:e2e`. *(Not yet wired into CI — add once flake-checked on all three OSes.)*
+- [x] **Browser E2E suite (Playwright)** — `playwright.config.ts` plus nav, settings/search, chat isolation, IDE, and loading specs. Wired into CI as a required Ubuntu/Chromium job under **CI OK**.
 - [x] **Test isolation** — `npm test` runs every script against a fresh temp `SHIBA_DATA_DIR`; also fixed this session: `verify-theme` leaked its spawned server on Windows (tree-kill + dynamic free port now), which had been silently breaking later runs via port squatting.
 - [ ] **Split the god component.** `components/shiba-studio.tsx` (~5,700 lines post-merge). Concrete plan: the shell (nav/topbar/footer/palette/modals) stays; extract per-tab modules in this order — ① Settings tab (self-contained save handlers; pass `config` + a `reload` callback), ② Dashboard (needs `agents/runs/navStats/config` + run handlers), ③ Agents tab + agent-editor modal (the largest; editor state is already local), ④ Automations. Chat/Projects/Workspace/Logs/Usage/Capabilities panels are already separate components. Do each extraction in its own PR with `npm test` + E2E green between steps; most remaining lint debt falls out with it.
 
@@ -56,7 +56,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 - [x] **Accessibility pass (targeted)** — live-DOM scan across all surfaces: icon-only buttons were already labeled; fixed the last unlabeled controls (default-model select, file inputs) and raised `--text-dim` to clear WCAG AA 4.5:1. *(Full keyboard-trap audit of every modal remains open.)*
 - [x] **Search across chats/runs/logs** — SQLite FTS5 (external-content tables + triggers, schema v2) behind `/api/search`; surfaced in the Ctrl+K palette with grouped results that deep-link (`/chat/:id`, `/automations?run=`, `/logs?q=`).
-- [ ] **Notifications for scheduled-run failures** (in-app inbox and/or OS notification). Failures and skips are audit-logged today; a surfaced notification is still missing.
+- [x] **Notifications for scheduled-run failures** — unread failure/skip notices in the top-bar bell (separate from exact approvals) plus optional desktop notifications.
 - [x] **Retention settings** — optional day-based auto-prune for runs and audit log (Settings → Cost & safety); runs at boot + daily.
 - [ ] **i18n scaffolding** once copy stabilizes.
 
@@ -64,7 +64,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 ## State of the tree (2026-07-12)
 
-The combined release candidate includes integrations, dual licensing, memories and learning, guardrails, backup, search, onboarding, security hardening, and tool-dispatch fixes. Verified: `tsc` clean · `next build` clean · **full `npm test` suite green (15/15 scripts, exit 0)** · **Playwright 17/17 green** · app booted with the feature set live and zero console errors · agent tool-use proven end-to-end · all docs cross-checked against code. Playwright E2E is not yet wired into CI.
+The combined release candidate includes integrations, dual licensing, memories and learning, guardrails, backup, search, onboarding, security hardening, tool-dispatch fixes, Grok 4.6 defaults, and failure notices. `npm test` is the isolated 68-script functional suite. Playwright E2E is a required CI job.
 
 ### Bugs fixed in the final product-quality pass
 
@@ -73,4 +73,4 @@ The combined release candidate includes integrations, dual licensing, memories a
 - **`/capabilities` URL** now resolves to the Integrations/"Capabilities" tab instead of silently falling back to the dashboard.
 - Integrations audited end-to-end (Vercel/Netlify/Slack/Discord/Drive/X/Obsidian): tool defs, executor, scope types, per-agent override UI, connection tests, nav counts, and `/api/tools` catalog all present — no stubs.
 
-Still open, in priority order: components lint-zero + god-component split (paired), E2E in CI, failure notifications, OAuth public client, asset/ToS confirmations (human), i18n.
+Still open, in priority order: components lint-zero + god-component split (paired), OAuth public client, asset/ToS confirmations (human), i18n.

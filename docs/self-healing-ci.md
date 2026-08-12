@@ -10,13 +10,14 @@ The `self-heal` job runs when any CI job fails on `development`:
 
 1. Downloads the failed jobs' logs.
 2. Runs `scripts/ci/self-heal.mjs`, an agent loop against the xAI API
-   (`GROK_API_KEY` repo secret; model defaults to `grok-code-fast-1`,
+   (`GROK_API_KEY` repo secret; model defaults to `grok-4.6`,
    override with a `GROK_MODEL` repo variable). Grok can read/search the
-   tree, rewrite files, and run the allowlisted verification commands
+   tree, rewrite files, apply surgical `search_replace` edits, and run the
+   allowlisted verification commands
    (typecheck, lint, build, the verify suite, single verify scripts,
    npm audit / audit fix, npm install for lockfile sync after
    package.json edits, npm ls dependency tracing, devvit verify).
-3. Gates the result on `tsc --noEmit`, then commits with a `[self-heal]`
+3. Gates the result on `tsc --noEmit` **and** `npm test`, then commits with a `[self-heal]`
    marker and pushes to `development`.
 4. Re-dispatches CI via `workflow_dispatch` so the healed commit gets a
    fresh full run (a plain `GITHUB_TOKEN` push does not retrigger CI).

@@ -45,6 +45,10 @@ const AttentionBell = dynamic(
   // No skeleton: the bell is a small always-mounted top-bar control.
   { loading: () => null },
 );
+const StudioDoctorCard = dynamic(
+  () => import('@/components/studio-doctor-card').then((module) => module.StudioDoctorCard),
+  { loading: panelLoading },
+);
 const TaskDetailPage = dynamic(
   () => import('@/components/task-detail-page').then((module) => module.TaskDetailPage),
   { loading: panelLoading },
@@ -77,7 +81,16 @@ import { redditOverridePairError } from '@/lib/integration-validation';
 import { THEME_IDENTITY } from '@/lib/theme';
 import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
 import { AGENT_INTEGRATION_IDS, INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/integration-catalog';
-import { modelDisplayName, parseModelRef, providerLabel, providerTitle, type ModelProvider } from '@/lib/model-providers';
+import {
+  DEFAULT_CLOUD_MODEL_REF,
+  isLegacyPlaceholderModel,
+  modelDisplayName,
+  parseModelRef,
+  pickPreferredCloudModel,
+  providerLabel,
+  providerTitle,
+  type ModelProvider,
+} from '@/lib/model-providers';
 import { resolveProjectWorkspace } from '@/lib/project-types';
 import {
   AppTab,
@@ -667,7 +680,7 @@ export default function ShibaStudio() {
   const [serveLocalName, setServeLocalName] = useState(true);
 
   // Direct Grok Chat
-  const [chatModel, setChatModel] = useState<GrokModel>('grok-4');
+  const [chatModel, setChatModel] = useState<GrokModel>(DEFAULT_CLOUD_MODEL_REF);
   const chatModelRef = useRef(chatModel);
   useEffect(() => { chatModelRef.current = chatModel; }, [chatModel]);
 
@@ -682,7 +695,7 @@ export default function ShibaStudio() {
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [agentForm, setAgentForm] = useState<any>({
-    name: 'Builder Agent', avatar: 'alien-01', model: 'grok-4', workspace: { path: '', useWorktree: true },
+    name: 'Builder Agent', avatar: 'alien-01', model: DEFAULT_CLOUD_MODEL_REF, workspace: { path: '', useWorktree: true },
     autoAcceptBoardAssignments: false,
     integrations: { ...EMPTY_INTEGRATION_SCOPE },
     peers: [], skills: [], chatSkill: '', voiceId: '', driveFolders: [],
@@ -978,15 +991,8 @@ export default function ShibaStudio() {
   }
 
   function pickDefaultModel(current?: string, catalog: ModelOption[] = availableModels): string {
-    if (current && catalog.some(m => m.id === current)) return current;
     const configured = config?.defaultGrokModel || defaultModelInput;
-    if (configured && catalog.some(m => m.id === configured)) return configured;
-    const preferred = catalog.find(m => /grok-4(?!.*fast)/i.test(m.id))
-      || catalog.find(m => m.id.includes('grok-4'))
-      || catalog.find(m => m.id.includes('grok-3'))
-      || catalog.find(m => m.id.includes('grok'))
-      || catalog[0];
-    return preferred?.id || current || configured || 'cloud:grok-4';
+    return pickPreferredCloudModel(catalog, current || configured);
   }
 
   async function loadModels(opts?: { forceProviderProbe?: boolean }) {
@@ -1132,9 +1138,7 @@ export default function ShibaStudio() {
     if (cfg.defaultGrokModel) {
       setDefaultModelInput(cfg.defaultGrokModel);
       setChatModel((current) => (
-        current === 'grok-4' || current === 'cloud:grok-4' || current === 'grok-3' || current === 'cloud:grok-3'
-          ? cfg.defaultGrokModel
-          : current
+        isLegacyPlaceholderModel(current) ? cfg.defaultGrokModel : current
       ) as GrokModel);
     }
     {
@@ -5012,7 +5016,7 @@ export default function ShibaStudio() {
                     <Cpu size={16} className="opacity-70 shrink-0" />
                     <div>
                       <div className="font-medium text-sm">Default Model</div>
-                      <div className="text-[11px] text-dim">Used by Grok Chat and every new agent.</div>
+                      <div className="text-[11px] text-dim">Used by Grok Chat and every new agent. Fresh installs default to Grok 4.6.</div>
                     </div>
                     <button type="button" onClick={() => void loadModels({ forceProviderProbe: true })} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5 ml-auto">
                       <RefreshCw size={12} className={modelsLoading ? 'animate-spin' : ''} /> Refresh
@@ -5426,8 +5430,9 @@ export default function ShibaStudio() {
               </section>
               <section className="settings-section">
                 <h3 className="settings-section-title">Backup &amp; maintenance</h3>
-                <div className="settings-section-sub text-[11px] text-dim">Export or restore this machine&rsquo;s setup, and reset board data.</div>
+                <div className="settings-section-sub text-[11px] text-dim">Export or restore this machine&rsquo;s setup, diagnose health, and reset board data.</div>
               <div className="settings-grid">
+                <StudioDoctorCard />
                 <div className="grok-card p-5 settings-card">
                   <div className="settings-card-head">
                     <Archive size={16} className="opacity-70 shrink-0" />

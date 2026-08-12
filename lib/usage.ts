@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
-import { parseModelRef } from './model-providers';
+import { DEFAULT_CLOUD_MODEL_REF, parseModelRef } from './model-providers';
 
 const DATA_DIR = dataDir();
 const USAGE_FILE = path.join(DATA_DIR, 'usage.json');
@@ -40,10 +40,18 @@ export interface ModelPricing {
 }
 
 /** Public xAI rates — matched by model id prefix. Fallback for unknown models. */
-const PRICING_RULES: Array<{ match: RegExp; inputPer1M: number; outputPer1M: number }> = [
-  { match: /^grok-4\.3/i, inputPer1M: 1.25, outputPer1M: 2.5 },
-  { match: /^grok-4\.20/i, inputPer1M: 1.25, outputPer1M: 2.5 },
-  { match: /^grok-build/i, inputPer1M: 1.0, outputPer1M: 2.0 },
+const PRICING_RULES: Array<{
+  match: RegExp;
+  inputPer1M: number;
+  outputPer1M: number;
+  /** Prompt-token threshold at which the published long-context rate applies to the whole request. */
+  longContextFrom?: number;
+}> = [
+  { match: /^grok-4\.6/i, inputPer1M: 2.0, outputPer1M: 6.0, longContextFrom: 200_000 },
+  { match: /^grok-4\.5/i, inputPer1M: 2.0, outputPer1M: 6.0, longContextFrom: 200_000 },
+  { match: /^grok-4\.3/i, inputPer1M: 1.25, outputPer1M: 2.5, longContextFrom: 200_000 },
+  { match: /^grok-4\.20/i, inputPer1M: 1.25, outputPer1M: 2.5, longContextFrom: 200_000 },
+  { match: /^grok-build/i, inputPer1M: 1.0, outputPer1M: 2.0, longContextFrom: 200_000 },
   { match: /^grok-3-mini/i, inputPer1M: 0.3, outputPer1M: 0.5 },
   { match: /^grok-3/i, inputPer1M: 3.0, outputPer1M: 15.0 },
   { match: /^grok-2/i, inputPer1M: 2.0, outputPer1M: 10.0 },
@@ -56,14 +64,24 @@ const DEFAULT_PRICING: ModelPricing = {
   label: 'default estimate',
 };
 
-export function getModelPricing(model: string): ModelPricing {
+function matchingPricingRule(model: string) {
   const id = parseModelRef(model.trim()).id;
   for (const rule of PRICING_RULES) {
-    if (rule.match.test(id)) {
-      return { inputPer1M: rule.inputPer1M, outputPer1M: rule.outputPer1M, label: id };
-    }
+    if (rule.match.test(id)) return { id, rule };
   }
+  return { id, rule: undefined };
+}
+
+export function getModelPricing(model: string): ModelPricing {
+  const { id, rule } = matchingPricingRule(model);
+  if (rule) return { inputPer1M: rule.inputPer1M, outputPer1M: rule.outputPer1M, label: id };
   return { ...DEFAULT_PRICING, label: id || 'unknown' };
+}
+
+function longContextMultiplier(model: string, promptTokens: number): number {
+  const { rule } = matchingPricingRule(model);
+  if (!rule?.longContextFrom) return 1;
+  return promptTokens >= rule.longContextFrom ? 2 : 1;
 }
 
 export function estimateTokenCost(
@@ -73,8 +91,9 @@ export function estimateTokenCost(
   reasoningTokens = 0,
 ): number {
   const rates = getModelPricing(model);
-  const inputCost = (promptTokens / 1_000_000) * rates.inputPer1M;
-  const outputCost = ((completionTokens + reasoningTokens) / 1_000_000) * rates.outputPer1M;
+  const multiplier = longContextMultiplier(model, promptTokens);
+  const inputCost = (promptTokens / 1_000_000) * rates.inputPer1M * multiplier;
+  const outputCost = ((completionTokens + reasoningTokens) / 1_000_000) * rates.outputPer1M * multiplier;
   return inputCost + outputCost;
 }
 
@@ -288,7 +307,7 @@ export function computeLocalUsageSavings(
   };
 }
 
-export function aggregateUsage(records: UsageRecord[], defaultModel = 'cloud:grok-4'): UsageSummary {
+export function aggregateUsage(records: UsageRecord[], defaultModel = DEFAULT_CLOUD_MODEL_REF): UsageSummary {
   const byModelMap = new Map<string, ModelUsageRow>();
   const bySourceMap = new Map<UsageSource, { requests: number; totalTokens: number; estimatedCostUsd: number }>();
   const byDayMap = new Map<string, { requests: number; totalTokens: number; estimatedCostUsd: number }>();
@@ -389,6 +408,6 @@ export function aggregateUsage(records: UsageRecord[], defaultModel = 'cloud:gro
 
 export async function getUsageSummary(defaultModel?: string): Promise<UsageSummary> {
   const records = await loadUsageRecords();
-  const resolvedDefault = defaultModel?.trim() || 'cloud:grok-4';
+  const resolvedDefault = defaultModel?.trim() || DEFAULT_CLOUD_MODEL_REF;
   return aggregateUsage(records, resolvedDefault);
 }

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AgentRun } from './types';
 import { getDb } from './db';
 import { emitAppEvent } from './app-events';
+import { recordStudioAlert } from './studio-alerts';
 import type {
   AttentionItem,
   CompletionContract,
@@ -1181,9 +1182,26 @@ function transitionTaskInTransaction(input: TransitionTaskInput): TransitionTask
     }
   }
   if (shouldDeliverTerminal) enqueueTerminalDelivery(updated);
+  let recordedFailureAlert = false;
+  if (
+    shouldDeliverTerminal
+    && (updated.status === 'failed' || updated.status === 'lost')
+    && !terminalSignalsSuppressed(updated)
+  ) {
+    recordStudioAlert({
+      kind: updated.status === 'lost' ? 'task_lost' : 'task_failed',
+      severity: updated.status === 'lost' ? 'critical' : 'warning',
+      title: updated.status === 'lost' ? `${updated.title} was lost` : `${updated.title} failed`,
+      body: updated.error || `Task ended with status ${updated.status}.`,
+      href: `/tasks/${encodeURIComponent(updated.id)}`,
+      sourceId: updated.id,
+      dedupeKey: `task:${updated.id}:${updated.status}:${updated.retryCount}`,
+    }, { emit: false });
+    recordedFailureAlert = true;
+  }
   return {
     task: updated,
-    attentionChanged: approvalAttentionRemoved,
+    attentionChanged: approvalAttentionRemoved || recordedFailureAlert,
   };
 }
 

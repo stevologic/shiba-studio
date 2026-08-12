@@ -8,6 +8,7 @@ import { audit } from './audit-log';
 import { fetchCloudWithAuth } from './xai-oauth';
 import { grokChat } from './grok-client';
 import { loadConfig } from './persistence';
+import { resolveDefaultCloudModel } from './model-providers';
 import { createBoardTask } from './board';
 import { createOwnedRoutine, getRoutine } from './routines';
 import {
@@ -782,7 +783,7 @@ async function summarizeChunk(model: string, transcript: string): Promise<Summar
 
 async function summarizeMeeting(segments: MeetingSegment[]): Promise<SummaryPayload> {
   const cfg = await loadConfig();
-  const model = cfg.defaultGrokModel || 'cloud:grok-4';
+  const model = resolveDefaultCloudModel(cfg.defaultGrokModel);
   const chunks: string[] = [];
   let current = '';
   for (const segment of segments) {

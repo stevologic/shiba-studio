@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUsageSummary } from '@/lib/usage';
 import { loadConfig } from '@/lib/persistence';
+import { resolveDefaultCloudModel } from '@/lib/model-providers';
 import { clearXaiUsageCache, fetchXaiAccountUsage } from '@/lib/xai-billing-usage';
 
 export async function GET(req: NextRequest) {
@@ -10,7 +11,7 @@ export async function GET(req: NextRequest) {
     if (force) clearXaiUsageCache();
 
     const cfg = await loadConfig();
-    const defaultModel = cfg.defaultGrokModel?.trim() || 'cloud:grok-4';
+    const defaultModel = resolveDefaultCloudModel(cfg.defaultGrokModel);
     if (force) {
       // Keep the sidebar badge in step with a manual page refresh.
       const { clearNavUsageCostCache } = await import('@/lib/nav-stats');

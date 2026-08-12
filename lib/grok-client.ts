@@ -2,6 +2,7 @@
 // Cloud: https://api.x.ai/v1 · Local: LM Studio, Ollama, etc.
 
 import {
+  DEFAULT_CLOUD_MODEL_ID,
   DEFAULT_LOCAL_GROK_BASE,
   encodeCloudModel,
   encodeModelRef,
@@ -413,7 +414,7 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
 }
 
 // Convenience for direct chat (no tools)
-export async function grokComplete(prompt: string, model: string = 'grok-4', system?: string) {
+export async function grokComplete(prompt: string, model: string = DEFAULT_CLOUD_MODEL_ID, system?: string) {
   const messages: GrokMessage[] = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });

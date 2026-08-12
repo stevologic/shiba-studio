@@ -14,6 +14,7 @@ import {
 } from './task-ledger';
 import { TERMINAL_TASK_STATUSES, type TaskRecord, type TaskStatus } from './task-types';
 import { isAutomationMaintenanceActive } from './automation-maintenance';
+import { resolveDefaultCloudModel } from './model-providers';
 
 interface RetryDispatchGlobals {
   __shibaQueuedRetryDispatchPromise?: Promise<number>;
@@ -259,7 +260,7 @@ export async function dispatchExistingTask(taskId: string): Promise<BackgroundTa
     || task.workspaceRoots[0]?.path
     || config.defaultWorkspace
     || '';
-  const model = String(task.metadata.model || config.defaultGrokModel || 'cloud:grok-4');
+  const model = resolveDefaultCloudModel(String(task.metadata.model || config.defaultGrokModel || ''));
   // A durable task that was explicitly bound to a saved agent must never be
   // resumed under a made-up identity after that agent is deleted. Apart from
   // being surprising, doing so turns a broken reference into an irreversible

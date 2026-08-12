@@ -15,7 +15,8 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep development heals/promotes from being cancelled by a follow-up push.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/development' }}
 
 permissions:
   contents: read
@@ -31,6 +32,7 @@ jobs:
         # 22 = latest 22 LTS (node:sqlite is unflagged there; it needs
         # --experimental-sqlite on 22.5–22.11, which the app relies on).
         node: ['22', '24']
+    timeout-minutes: 50
     # Next's production build can exceed the default heap on smaller runners.
     env:
       NODE_OPTIONS: --max-old-space-size=4096
@@ -53,10 +55,13 @@ jobs:
           npm ci
           npm ci --prefix devvit/reddit-bridge
 
-      # Non-blocking until the remaining no-explicit-any debt is zeroed
-      # (TODO.md §4) — then drop continue-on-error so CI enforces it.
-      - name: Lint
-        run: npm run lint
+      # lib/, app/api/, scripts/, and types/ stay lint-clean. The remaining
+      # debt is in components/*.tsx — keep that tree visible but non-blocking.
+      - name: Lint (clean trees)
+        run: npx eslint lib app/api scripts types
+
+      - name: Lint (components, non-blocking)
+        run: npx eslint components
         continue-on-error: true
 
       - name: Typecheck
@@ -101,6 +106,12 @@ jobs:
 
       - name: Install (lockfile-exact)
         run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
@@ -306,7 +317,7 @@ jobs:
         if: steps.sanity.outputs.proceed == 'true'
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
-          GROK_MODEL: ${{ vars.GROK_MODEL || 'grok-code-fast-1' }}
+          GROK_MODEL: ${{ vars.GROK_MODEL || 'grok-4.6' }}
           FAILURE_LOG_DIR: /tmp/self-heal-logs
           SELF_HEAL_SUMMARY_FILE: /tmp/self-heal-summary.txt
         run: node scripts/ci/self-heal.mjs
@@ -314,6 +325,10 @@ jobs:
       - name: Gate — typecheck must pass before pushing
         if: steps.sanity.outputs.proceed == 'true'
         run: npx tsc --noEmit
+
+      - name: Gate — functional suite must pass before pushing
+        if: steps.sanity.outputs.proceed == 'true'
+        run: npm test
 
       - name: Commit and push the fix
         if: steps.sanity.outputs.proceed == 'true'
@@ -393,11 +408,10 @@ jobs:
             gh pr create --repo "$REPO" \
               --head development --base main \
               --title "Promote development to main" \
-              --body "$(printf 'Automated promotion opened by CI after a green run on `development`.\n\nAuto-merge is enabled; this merges as soon as the required **CI OK** check passes on the head commit.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)')"
+              --body "$(printf 'Automated promotion opened by CI after a green run on `development`.\n\nAuto-merge is enabled; this merges as soon as the required **CI OK** check passes on the head commit.\n\nHealed and promoted by Grok on Shiba Studio.')"
             pr="$(gh pr list --repo "$REPO" --head development --base main --state open --json number --jq '.[0].number')"
           fi
           echo "Promotion PR: #$pr"
           if ! gh pr merge "$pr" --repo "$REPO" --merge --auto; then
-            echo "Auto-merge could not be enabled (checks likely already green) — merging directly."
-            gh pr merge "$pr" --repo "$REPO" --merge
+            echo "Auto-merge could not be enabled; leaving the PR open until CI OK is green on this head."
           fi
