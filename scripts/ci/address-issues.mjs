@@ -97,11 +97,8 @@ function loadIssues() {
   const repo = env.GITHUB_REPOSITORY;
   if (!repo) throw new Error("Pass --issues-file=… or set GITHUB_REPOSITORY to list issues via gh.");
   const res = sh("gh", [
-    "issue", "list",
-    "--repo", repo,
-    "--state", "open",
-    "--limit", "50",
-    "--json", "number,title,body,state,author,authorAssociation,labels,createdAt",
+    "api",
+    `repos/${repo}/issues?state=open&per_page=50`,
   ]);
   if (res.status !== 0) throw new Error(`gh issue list failed: ${res.output.slice(0, 500)}`);
   return parseIssuesPayload(res.output);
