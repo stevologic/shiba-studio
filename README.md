@@ -47,7 +47,8 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 
 All intelligence routes exclusively through **Grok/xAI** — cloud API key,
 OAuth 2.0 with X, the local official Grok Build CLI, or any OpenAI-compatible
-local model server (LM Studio, Ollama, llama.cpp).
+local model server (LM Studio, Ollama, llama.cpp). Fresh installs default to
+**Grok 4.6**.
 
 ## A look around
 

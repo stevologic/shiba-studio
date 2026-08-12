@@ -119,7 +119,8 @@ export async function POST(req: NextRequest) {
         title = res.choices?.[0]?.message?.content?.trim() || '';
       } catch {
         // Cheap model unavailable — fall back to the configured default.
-        const res = await titleWithModel(cfg.defaultGrokModel || 'grok-4.3-latest');
+        const { resolveDefaultCloudModel } = await import('@/lib/model-providers');
+        const res = await titleWithModel(resolveDefaultCloudModel(cfg.defaultGrokModel));
         title = res.choices?.[0]?.message?.content?.trim() || '';
       }
       title = title.replace(/^["'`]+|["'`.]+$/g, '').slice(0, 60);

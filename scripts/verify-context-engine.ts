@@ -51,6 +51,21 @@ async function main() {
     assert.equal(prepared.meter.replayCount, prepared.replayMessages.length);
     assert.equal(prepared.meter.model, 'cloud:test-context');
     assert(prepared.meter.breakdown.messageTokens > 0);
+    const grok46 = context.prepareSessionContext({
+      sessionId: 'session-long',
+      projectId: 'project-a',
+      messages,
+      model: 'cloud:grok-4.6',
+    });
+    const grok4 = context.prepareSessionContext({
+      sessionId: 'session-long',
+      projectId: 'project-a',
+      messages,
+      model: 'cloud:grok-4',
+    });
+    assert.equal(grok46.meter.maxReplayTokens, 40_000);
+    assert.equal(grok4.meter.maxReplayTokens, 20_480);
+    assert(grok46.meter.maxReplayTokens > grok4.meter.maxReplayTokens);
 
     const firstInspection = context.inspectContextScope('session', 'session-long');
     assert.equal(firstInspection.sources.length, 112);

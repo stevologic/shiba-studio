@@ -47,7 +47,7 @@ npm run test:e2e  # Playwright browser E2E (needs `npx playwright install chromi
 
 `dev:lan` / `start:lan` bind the classified gateway on all interfaces but expose only scoped Companion/native-node routes. `dev:lan:studio` / `start:lan:studio` explicitly add the full Studio for private-network peers — see [SECURITY.md](../SECURITY.md) first.
 
-`npm test` chains the `verify-*` scripts: theme + brand-asset + page-chrome checks, a full runtime drive of the shipped code (real agent run with tools), tool-dispatch guards, voice-VAD unit tests, shell-state, 40+ OAuth/API unit+HTTP tests, and feature structural checks. Results go to `functional-npm-test.log` in the suite's scratch dir — stdout stays quiet; exit code 0 means pass. The Playwright E2E suite is separate (`npm run test:e2e`) and not yet wired into CI.
+`npm test` chains the `verify-*` scripts: theme + brand-asset + page-chrome checks, a full runtime drive of the shipped code (real agent run with tools), tool-dispatch guards, voice-VAD unit tests, shell-state, 40+ OAuth/API unit+HTTP tests, and feature structural checks. Results go to `functional-npm-test.log` in the suite's scratch dir — stdout stays quiet; exit code 0 means pass. The Playwright E2E suite (`npm run test:e2e`) is a required Ubuntu/Chromium job in CI.
 
 ## Brand assets (favicon, iOS icon, link previews)
 

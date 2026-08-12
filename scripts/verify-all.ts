@@ -31,6 +31,8 @@ const CHAIN = [
   'verify-agent-outcomes.ts',
   'verify-reddit.ts',
   'verify-tool-dispatch.ts',
+  'verify-models.ts',
+  'verify-studio-alerts.ts',
   'verify-grok-cli.ts',
   'verify-cli-agent-outcome.ts',
   'verify-task-ledger.ts',

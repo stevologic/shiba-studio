@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadOwnedXaiChatFile } from '@/lib/external-resource-integrity';
 import { loadConfig } from '@/lib/persistence';
 import { resolveCloudBearer } from '@/lib/xai-oauth';
-import { parseModelRef } from '@/lib/model-providers';
+import { parseModelRef, resolveDefaultCloudModel } from '@/lib/model-providers';
 
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
 const MAX_FILE_BYTES = 48 * 1024 * 1024;
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     }
     const form = await req.formData();
     const file = form.get('file');
-    const modelRef = String(form.get('model') || 'cloud:grok-4');
+    const modelRef = resolveDefaultCloudModel(String(form.get('model') || ''));
     const ref = parseModelRef(modelRef);
 
     if (!(file instanceof File)) {

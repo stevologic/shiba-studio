@@ -1,12 +1,49 @@
-let interAgentBus: Array<{ to: string; from: string; msg: string; ts: string }> = [];
+import { getDb } from './db';
+
+const MAX_INBOX = 80;
+
+function ensureAgentInboxSchema(): void {
+  getDb().exec(`
+    CREATE TABLE IF NOT EXISTS agent_inbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      toAgentId TEXT NOT NULL,
+      fromAgentId TEXT NOT NULL,
+      msg TEXT NOT NULL,
+      ts TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_inbox_to ON agent_inbox(toAgentId, id);
+  `);
+}
+
+function clip(value: unknown, max: number): string {
+  return String(value ?? '').replace(/\u0000/g, '').trim().slice(0, max);
+}
 
 export function postToAgentInbox(toAgentId: string, fromAgentId: string, message: string) {
-  interAgentBus.push({ to: toAgentId, from: fromAgentId, msg: message, ts: new Date().toISOString() });
-  if (interAgentBus.length > 80) interAgentBus.shift();
+  const to = clip(toAgentId, 120);
+  const from = clip(fromAgentId, 120);
+  const msg = clip(message, 8_000);
+  if (!to || !from || !msg) return;
+  ensureAgentInboxSchema();
+  const db = getDb();
+  db.prepare('INSERT INTO agent_inbox (toAgentId, fromAgentId, msg, ts) VALUES (?, ?, ?, ?)').run(
+    to, from, msg, new Date().toISOString(),
+  );
+  db.prepare(`
+    DELETE FROM agent_inbox WHERE id NOT IN (
+      SELECT id FROM agent_inbox ORDER BY id DESC LIMIT ?
+    )
+  `).run(MAX_INBOX);
 }
 
 export function drainInbox(agentId: string): string[] {
-  const mine = interAgentBus.filter((m) => m.to === agentId);
-  interAgentBus = interAgentBus.filter((m) => m.to !== agentId);
-  return mine.map((m) => `[peer ${m.from} @ ${m.ts}] ${m.msg}`);
+  const to = clip(agentId, 120);
+  if (!to) return [];
+  ensureAgentInboxSchema();
+  const db = getDb();
+  const mine = db.prepare(
+    'SELECT fromAgentId, msg, ts FROM agent_inbox WHERE toAgentId = ? ORDER BY id ASC',
+  ).all(to) as Array<{ fromAgentId: string; msg: string; ts: string }>;
+  db.prepare('DELETE FROM agent_inbox WHERE toAgentId = ?').run(to);
+  return mine.map((row) => `[peer ${row.fromAgentId} @ ${row.ts}] ${row.msg}`);
 }

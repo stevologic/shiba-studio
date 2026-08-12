@@ -46,6 +46,100 @@ export function supportsReasoning(modelIdOrRef: string): boolean {
   return false;
 }
 
+/** Canonical xAI flagship id and encoded cloud ref. */
+export const DEFAULT_CLOUD_MODEL_ID = 'grok-4.6';
+export const DEFAULT_CLOUD_MODEL_REF = `cloud:${DEFAULT_CLOUD_MODEL_ID}`;
+/** Cheap/fast cloud model for titles and other background summaries. */
+export const CHEAP_CLOUD_MODEL_ID = 'grok-code-fast-1';
+export const CHEAP_CLOUD_MODEL_REF = `cloud:${CHEAP_CLOUD_MODEL_ID}`;
+
+/** Bare or encoded ids that were leftover first-paint placeholders, not a user choice. */
+const LEGACY_PLACEHOLDER_IDS = new Set(['grok-4', 'grok-3', 'grok-2', 'grok-4.5']);
+
+export function resolveDefaultCloudModel(saved?: string | null): string {
+  const value = (saved || '').trim();
+  return value || DEFAULT_CLOUD_MODEL_REF;
+}
+
+export function isLegacyPlaceholderModel(value?: string | null): boolean {
+  const raw = (value || '').trim();
+  if (!raw) return true;
+  return LEGACY_PLACEHOLDER_IDS.has(parseModelRef(raw).id.toLowerCase());
+}
+
+/**
+ * Rank a catalog entry so the picker prefers the current flagship over a
+ * locale-sorted leftover like `cloud:grok-4`. Higher is better.
+ */
+export function modelPreferenceScore(modelIdOrRef: string): number {
+  const id = parseModelRef(modelIdOrRef).id.toLowerCase();
+  if (!id) return -1;
+  if (id.includes('image') || id.includes('imagine') || id.includes('vision') || id.includes('voice')) {
+    return -1;
+  }
+  let score = 0;
+  const generation = id.match(/grok-(\d+)(?:\.(\d+))?/);
+  if (generation) {
+    score = Number(generation[1]) * 10_000 + Number(generation[2] || 0) * 100;
+  } else if (id === 'grok-latest') {
+    // Alias to "whatever is current" — slightly below an explicit 4.6 pin.
+    score = 40_550;
+  } else if (id.includes('grok-code')) {
+    score = 3_500;
+  } else if (id.includes('grok')) {
+    score = 100;
+  } else {
+    return 0;
+  }
+  if (id.includes('non-reasoning')) score -= 50;
+  if (id.includes('fast')) score -= 500;
+  if (id.endsWith('-latest') || id === 'grok-latest') score += 10;
+  return score;
+}
+
+/**
+ * Choose the catalog entry a new chat/agent should use. Keeps an explicit
+ * non-legacy current selection; otherwise picks the highest-ranked Grok.
+ */
+export function pickPreferredCloudModel(
+  catalog: Array<{ id: string }>,
+  current?: string | null,
+): string {
+  const currentValue = (current || '').trim();
+  if (
+    currentValue
+    && !isLegacyPlaceholderModel(currentValue)
+    && catalog.some((entry) => entry.id === currentValue)
+  ) {
+    return currentValue;
+  }
+  const ranked = catalog
+    .map((entry) => ({ id: entry.id, score: modelPreferenceScore(entry.id) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  return ranked[0]?.id || currentValue || DEFAULT_CLOUD_MODEL_REF;
+}
+
+/** Published xAI context windows. Conservative fallback for unknown ids. */
+export function contextWindowTokensForModel(modelIdOrRef: string): number {
+  const id = parseModelRef(modelIdOrRef).id.toLowerCase();
+  if (/grok-4\.(?:3|20)/.test(id)) return 1_000_000;
+  if (/grok-4\.(?:6|5)/.test(id) || id === 'grok-latest') return 500_000;
+  if (/grok-4/.test(id) || id.includes('grok-code')) return 256_000;
+  if (/grok-3/.test(id)) return 131_072;
+  return 128_000;
+}
+
+/**
+ * How many recent-turn tokens to replay for a model. Leaves most of the
+ * window for the live turn (system, tools, images, output).
+ */
+export function replayBudgetForModel(modelIdOrRef?: string | null): number {
+  if (!modelIdOrRef?.trim()) return 14_000;
+  const windowTokens = contextWindowTokensForModel(modelIdOrRef);
+  return Math.max(8_000, Math.min(80_000, Math.floor(windowTokens * 0.08)));
+}
+
 export function encodeModelRef(provider: ModelProvider, id: string): string {
   const clean = id.trim();
   return `${provider}:${clean}`;
@@ -138,10 +232,12 @@ export function modelOptionLabel(m: SelectableModel): string {
  * usable — chat requests still validate against the real API.
  */
 export const FALLBACK_CLOUD_GROK_MODELS: SelectableModel[] = [
-  { id: 'cloud:grok-4.3-latest', label: 'grok-4.3-latest', provider: 'cloud', reasoning: true },
+  { id: DEFAULT_CLOUD_MODEL_REF, label: DEFAULT_CLOUD_MODEL_ID, provider: 'cloud', reasoning: true },
+  { id: 'cloud:grok-4.6-latest', label: 'grok-4.6-latest', provider: 'cloud', reasoning: true },
   { id: 'cloud:grok-latest', label: 'grok-latest', provider: 'cloud', reasoning: true },
+  { id: 'cloud:grok-4.3-latest', label: 'grok-4.3-latest', provider: 'cloud', reasoning: true },
   { id: 'cloud:grok-4.20-reasoning-latest', label: 'grok-4.20-reasoning-latest', provider: 'cloud', reasoning: true },
-  { id: 'cloud:grok-code-fast-1', label: 'grok-code-fast-1', provider: 'cloud', reasoning: true },
+  { id: CHEAP_CLOUD_MODEL_REF, label: CHEAP_CLOUD_MODEL_ID, provider: 'cloud', reasoning: true },
   { id: 'cloud:grok-4', label: 'grok-4 (legacy)', provider: 'cloud', reasoning: true },
 ];
 

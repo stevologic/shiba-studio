@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { grokChat } from '@/lib/grok-client';
-import { parseModelRef } from '@/lib/model-providers';
+import { parseModelRef, resolveDefaultCloudModel } from '@/lib/model-providers';
 import { resolveCloudBearer } from '@/lib/xai-oauth';
 import {
   buildVoiceGroupAgentSystem,
@@ -33,11 +33,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'No conversation yet' }, { status: 400 });
     }
 
-    const rawModel =
+    const rawModel = resolveDefaultCloudModel(
       agent.model
       || scope.chatModel
-      || cfg.defaultGrokModel
-      || 'cloud:grok-4';
+      || cfg.defaultGrokModel,
+    );
     const modelRef = parseModelRef(rawModel);
     const model = modelRef.encoded;
     const auth = await resolveCloudBearer(cfg, modelRef.authSource);

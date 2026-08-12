@@ -22,7 +22,7 @@ import path from "node:path";
 const REPO_ROOT = process.cwd();
 const API_KEY = process.env.GROK_API_KEY;
 const BASE_URL = (process.env.GROK_BASE_URL ?? "https://api.x.ai/v1").replace(/\/+$/, "");
-const MODEL = process.env.GROK_MODEL || "grok-4.5";
+const MODEL = process.env.GROK_MODEL || "grok-4.6";
 const LOG_DIR = process.env.FAILURE_LOG_DIR ?? "";
 const SUMMARY_FILE = process.env.SELF_HEAL_SUMMARY_FILE ?? "/tmp/self-heal-summary.txt";
 const MAX_STEPS = Number(process.env.SELF_HEAL_MAX_STEPS ?? 60);
@@ -154,6 +154,24 @@ const TOOL_SPECS = [
   {
     type: "function",
     function: {
+      name: "search_replace",
+      description:
+        "Replace an exact substring in an existing file. Prefer this over write_file for surgical edits. Fails if old_string is not found or matches more than once (unless replace_all is true).",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          old_string: { type: "string" },
+          new_string: { type: "string" },
+          replace_all: { type: "boolean" },
+        },
+        required: ["path", "old_string", "new_string"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "run_check",
       description:
         "Run one of the CI verification commands: typecheck (tsc --noEmit), lint, build, test (full verify suite), audit, audit_fix (npm audit fix), npm_install (sync package-lock.json and node_modules after editing package.json — required after changing dependencies or overrides), dep_tree (npm ls <package> --all; pass `package` to see every path a dependency reaches the tree by), devvit_verify, or verify_script (a single scripts/verify-*.ts via tsx; pass `script`).",
@@ -232,6 +250,29 @@ function runTool(name, args) {
       writeFileSync(abs, String(args.content));
       editedFiles.add(rel);
       return `Wrote ${rel} (${String(args.content).length} chars).`;
+    }
+    case "search_replace": {
+      const { abs, rel } = resolveSafe(String(args.path));
+      if (WRITE_DENYLIST.some((re) => re.test(rel))) {
+        return `ERROR: writing to ${rel} is not permitted for the self-heal agent.`;
+      }
+      if (!existsSync(abs)) return `ERROR: ${rel} does not exist.`;
+      const current = readFileSync(abs, "utf8");
+      const oldString = String(args.old_string);
+      const newString = String(args.new_string);
+      if (!oldString) return "ERROR: old_string must not be empty.";
+      if (oldString === newString) return "ERROR: old_string and new_string are identical.";
+      const occurrences = current.split(oldString).length - 1;
+      if (occurrences === 0) return `ERROR: old_string was not found in ${rel}.`;
+      if (occurrences > 1 && !args.replace_all) {
+        return `ERROR: old_string matched ${occurrences} times in ${rel}. Pass replace_all=true or include more surrounding context.`;
+      }
+      const next = args.replace_all
+        ? current.split(oldString).join(newString)
+        : current.replace(oldString, newString);
+      writeFileSync(abs, next);
+      editedFiles.add(rel);
+      return `Updated ${rel} (${occurrences} replacement${occurrences === 1 ? "" : "s"}).`;
     }
     case "run_check": {
       let spec;

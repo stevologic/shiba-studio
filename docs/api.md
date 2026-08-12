@@ -100,6 +100,8 @@ Agents are execution owners. Trigger and schedule management is available only t
 | POST | `/api/tasks/:id/team/dispatch` | Claim and start all dependency-ready worker tasks. |
 | GET | `/api/attention` | List live exact approvals awaiting a decision. Optional query parameters: `taskId`, `limit` (1–500; default 100), and `offset` (non-negative; default 0). Results have a stable newest-first order. |
 | PATCH | `/api/attention/:id` | Compatibility guard that returns `409`; approvals must use an exact `approve` or `deny` task command. |
+| GET | `/api/alerts` | List durable failure/skip notices (not approvals). Optional `unread=1` and `limit`. |
+| POST | `/api/alerts` | Mark one notice read (`{ action: "read", id }`) or all (`{ action: "read-all" }`). |
 
 ### Automations (Routine API)
 

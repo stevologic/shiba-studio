@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { encodeSseEvent, multiAgentChatStream } from '@/lib/multi-agent-chat';
-import { parseModelRef } from '@/lib/model-providers';
+import { parseModelRef, resolveDefaultCloudModel } from '@/lib/model-providers';
 import type { ChatMessagePayload } from '@/lib/chat-types';
 import { loadAgents, loadConfig } from '@/lib/persistence';
 import { buildGlobalUploadsChatContext } from '@/lib/workspace';
@@ -26,10 +26,11 @@ export async function POST(req: NextRequest) {
     requestChatSession?.messages || null,
     body.messages,
   );
-  const rawModel = requestChatSession?.chatModel
+  const rawModel = resolveDefaultCloudModel(
+    requestChatSession?.chatModel
     || (body.model && String(body.model).trim())
-    || cfg.defaultGrokModel
-    || 'cloud:grok-4';
+    || cfg.defaultGrokModel,
+  );
   const model = parseModelRef(rawModel).encoded;
   const projectId = requestChatSession?.projectId || null;
   let verifiedProjectContext = '';

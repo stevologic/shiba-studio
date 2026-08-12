@@ -10,6 +10,18 @@ are carried over automatically.
 
 ### Added
 
+- **Grok 4.6 is the studio default.** New chats, agents, meetings, and offline
+  fallback catalogs use `cloud:grok-4.6`. The picker prefers the current
+  flagship instead of the leftover `grok-4` id. Usage metering uses the
+  published 4.6/4.5 rates ($2 / $6 per million) and the 200k long-context
+  multiplier. Long sessions replay a model-aware context budget (40k tokens
+  on 4.6 vs 14k previously).
+- **Failure & skip notices** — scheduled skips and failed/lost tasks appear
+  in the top-bar bell as dismissable alerts, with optional desktop
+  notifications. Approvals stay an exact-action queue.
+- **Studio health in Settings** — run Doctor and apply previewed repairs
+  without a `/doctor` route.
+- Durable peer-agent inbox (survives a server restart).
 - **Code IDE** — a dedicated Monaco editor with multi-file tabs, repository
   search, diagnostics, structured Git staging/branches/history, live GitHub
   pull requests/issues/workflows, access to the persistent host terminal, and
@@ -51,6 +63,15 @@ are carried over automatically.
 
 ### Changed
 
+- Self-heal now defaults to Grok 4.6, can apply surgical file edits, and
+  must pass `npm test` (not only `tsc`) before pushing. Development CI no
+  longer cancels an in-flight heal/promote. Promotion PRs no longer
+  force-merge when auto-merge cannot be enabled.
+- Lint on `lib/`, `app/api/`, `scripts/`, and `types/` is a required CI
+  check. Component lint remains non-blocking.
+- Pin patched `brace-expansion`, `minimatch`, `fast-uri`, `ip-address`,
+  `js-yaml`, and `nanoid` via npm overrides so `npm audit --audit-level=high`
+  stays clean.
 - Approvals moved out of the primary nav into the shell top bar so the slot is
   not spent on a usually-empty queue.
 - Board assignment UX distinguishes **Start work** (run now) from **Queue work**

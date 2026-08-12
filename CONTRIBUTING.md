@@ -32,7 +32,11 @@ this Next.js version.
    `~/.shiba-studio` data.
 4. **Build:** `npm run build` must succeed.
 
-CI runs all four on Windows/macOS/Linux × Node 22.5/24.
+CI runs those four on Windows/macOS/Linux × Node 22/24, plus `npm audit`
+(high+), Playwright Chromium E2E, and a Docker image smoke test. The
+aggregate **CI OK** check is what branch protection requires. `npx eslint
+lib app/api scripts types` must stay clean; component lint is still
+non-blocking.
 
 ## Guidelines
 

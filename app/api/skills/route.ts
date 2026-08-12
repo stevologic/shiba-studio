@@ -61,9 +61,9 @@ export async function POST(req: NextRequest) {
       const { loadConfig } = await import('@/lib/persistence');
       const { resolveCloudBearer } = await import('@/lib/xai-oauth');
       const { grokChat } = await import('@/lib/grok-client');
-      const { parseModelRef } = await import('@/lib/model-providers');
+      const { parseModelRef, resolveDefaultCloudModel } = await import('@/lib/model-providers');
       const cfg = await loadConfig();
-      const modelRef = parseModelRef(cfg.defaultGrokModel || 'cloud:grok-4');
+      const modelRef = parseModelRef(resolveDefaultCloudModel(cfg.defaultGrokModel));
       const auth = modelRef.provider === 'cloud'
         ? await resolveCloudBearer(cfg, modelRef.authSource)
         : { token: null };

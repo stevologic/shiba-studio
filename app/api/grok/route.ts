@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { grokChat, validateApiKey } from '@/lib/grok-client';
-import { parseModelRef } from '@/lib/model-providers';
+import { parseModelRef, resolveDefaultCloudModel } from '@/lib/model-providers';
 import { loadConfig, saveConfig } from '@/lib/persistence';
 import { resolveCloudBearer } from '@/lib/xai-oauth';
 
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'chat') {
     const cfg = await loadConfig();
-    const rawModel = (body.model && String(body.model).trim()) || cfg.defaultGrokModel || 'cloud:grok-4';
+    const rawModel = resolveDefaultCloudModel((body.model && String(body.model).trim()) || cfg.defaultGrokModel);
     const parsed = parseModelRef(rawModel);
     const model = parsed.encoded;
     const auth = await resolveCloudBearer(cfg, parsed.authSource);
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'tool-chat') {
     const cfg = await loadConfig();
-    const parsed = parseModelRef(body.model || cfg.defaultGrokModel || 'cloud:grok-4');
+    const parsed = parseModelRef(resolveDefaultCloudModel(body.model || cfg.defaultGrokModel));
     const auth = await resolveCloudBearer(cfg, parsed.authSource);
     try {
       const resp = await grokChat({

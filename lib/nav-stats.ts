@@ -113,11 +113,12 @@ export async function getNavStats(cfg: AppConfig): Promise<NavStats> {
 
   const mcpConfigured = mcpServers.filter((s) => s.enabled).length;
   const { listAttention, listTasks } = await import('./task-ledger');
+  const { unreadStudioAlertCount } = await import('./studio-alerts');
   const tasksActive = listTasks({
     statuses: ['queued', 'running', 'paused', 'waiting_for_input', 'waiting_for_approval', 'blocked'],
     limit: 1,
   }).total;
-  const attentionOpen = listAttention({ limit: 1 }).total;
+  const attentionOpen = listAttention({ limit: 1 }).total + unreadStudioAlertCount();
 
   return {
     tasksActive,

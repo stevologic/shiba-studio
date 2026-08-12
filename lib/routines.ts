@@ -14,6 +14,7 @@ import {
 } from './task-ledger';
 import { automationCronError, automationTick, isSupportedAutomationCron } from './automation-cron';
 import { automationMaintenanceReason, isAutomationMaintenanceActive } from './automation-maintenance';
+import { recordStudioAlert } from './studio-alerts';
 import { loadAgents, mutateAgents, withAgentOwnershipSnapshot } from './persistence';
 import type {
   CreateRoutineInput,
@@ -1202,6 +1203,17 @@ export function enqueueRoutineInvocation(input: {
       routineId: routine.id, invocationId: id, triggerType: input.triggerType, triggerId,
     });
     emitAppEvent('routines');
+    if (status === 'skipped' && reason && reason !== 'Routine is disabled') {
+      recordStudioAlert({
+        kind: 'automation_skipped',
+        severity: /circuit/i.test(reason) ? 'critical' : 'warning',
+        title: `${routine.name} skipped`,
+        body: reason,
+        href: '/automations',
+        sourceId: routine.id,
+        dedupeKey: `routine-skip:${routine.id}:${reason}`,
+      });
+    }
   }
   return { invocation: rowToInvocation(row), inserted: Number(result.changes) === 1 };
 }
