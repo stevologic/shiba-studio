@@ -39,6 +39,10 @@ async function main() {
   assert.equal(lib.isAdminAuthor('helper', 'MEMBER'), true);
   assert.equal(lib.isAdminAuthor('helper', 'COLLABORATOR'), true);
   assert.equal(lib.isAdminAuthor('stevologic', 'NONE', ['stevologic']), true);
+  assert.equal(lib.isIssueEligible(issue({
+    author_association: '',
+    user: { login: 'stevologic', type: 'User' },
+  }), { adminLogins: ['stevologic'] }), true, 'repo owner login is eligible without association');
   assert.equal(lib.isAdminAuthor('stranger', 'CONTRIBUTOR'), false);
   assert.equal(lib.isAdminAuthor('github-actions[bot]', 'CONTRIBUTOR'), false);
 
@@ -161,6 +165,7 @@ async function main() {
   assert.match(workflow, /node scripts\/ci\/address-issues\.mjs --issue=/);
 
   const runner = readFileSync(script, 'utf8');
+  assert.match(runner, /repos\/\$\{repo\}\/issues\?state=open/);
   assert.match(runner, /selectIssueToAddress\(/);
   assert.match(runner, /finalizeMaintainRun\(\{ fixed: doneState\.fixed, cwd: REPO_ROOT \}\)/);
   assert.match(runner, /writeAllowedForIssue/);

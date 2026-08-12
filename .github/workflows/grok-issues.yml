@@ -80,6 +80,7 @@ jobs:
           EVENT_ISSUE: ${{ github.event.issue.number }}
           INPUT_ISSUE: ${{ inputs.issue }}
           ISSUE_SELECT_FILE: /tmp/issue-select.json
+          ISSUE_ADMIN_LOGINS: ${{ github.repository_owner }}
           ISSUE_ALLOW_ADDRESSED: ${{ github.event.action == 'reopened' && '1' || '0' }}
         run: |
           set -euo pipefail
@@ -123,6 +124,7 @@ jobs:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
           GROK_MODEL: ${{ vars.GROK_MODEL }}
           ISSUE_NUMBER: ${{ steps.pick.outputs.number }}
+          ISSUE_ADMIN_LOGINS: ${{ github.repository_owner }}
           ISSUE_ALLOW_ADDRESSED: ${{ github.event.action == 'reopened' && '1' || '0' }}
           ISSUE_SUMMARY_FILE: /tmp/issue-summary.txt
           ISSUE_SELECT_FILE: /tmp/issue-result.json
