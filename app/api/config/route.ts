@@ -15,6 +15,7 @@ export async function GET() {
     (drive?.clientId?.trim() && drive?.clientSecret?.trim())
     || bundledGoogleClient()
   );
+  const phone = cfg.phoneAssistant;
   const safe = {
     ...cfg,
     // Full secrets never reach the browser: keys go out as partial
@@ -22,6 +23,16 @@ export async function GET() {
     xaiApiKey: maskSecret(cfg.xaiApiKey || ''),
     xaiManagementKey: maskSecret(cfg.xaiManagementKey || ''),
     integrations: maskIntegrationCreds(cfg.integrations || {}),
+    phoneAssistant: {
+      enabled: phone?.enabled === true,
+      hasToken: !!phone?.tokenHash,
+      tokenPrefix: phone?.tokenPrefix || '',
+      createdAt: phone?.createdAt || '',
+      lastUsedAt: phone?.lastUsedAt || '',
+      phoneNumber: phone?.phoneNumber || '',
+      hasWebhookSecret: !!phone?.webhookSecret?.trim(),
+      allowedCallers: Array.isArray(phone?.allowedCallers) ? phone.allowedCallers : [],
+    },
     hasKey: !!cfg.xaiApiKey,
     hasManagementKey: !!cfg.xaiManagementKey?.trim(),
     hasOAuth: oauth.connected,

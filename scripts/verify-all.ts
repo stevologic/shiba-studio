@@ -44,6 +44,7 @@ const CHAIN = [
   'verify-task-checkpoints.ts',
   'verify-artifacts.ts',
   'verify-companion.ts',
+  'verify-phone-assistant.ts',
   'verify-lan-boundary.mjs',
   'verify-public-origin.ts',
   'verify-native-nodes.ts',

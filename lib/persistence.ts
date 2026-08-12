@@ -37,6 +37,7 @@ const SENSITIVE_CONFIG_PATHS = [
   'integrations.netlify.token',
   'integrations.linear.apiKey',
   'integrations.jira.apiToken',
+  'phoneAssistant.webhookSecret',
 ] as const;
 
 function getAtPath(obj: Record<string, unknown>, dotPath: string): unknown {
@@ -314,6 +315,9 @@ const DEFAULT_CONFIG: AppConfig = {
     pairingTtlMinutes: 5,
     deviceTtlDays: 30,
   },
+  phoneAssistant: {
+    enabled: false,
+  },
 };
 
 async function syncCloudAuthCache(cfg: AppConfig): Promise<void> {
@@ -352,6 +356,11 @@ async function loadConfigUnlocked(): Promise<AppConfig> {
         ...(parsed.remoteAccess || {}),
         // Missing/legacy config must remain explicitly off.
         enabled: parsed.remoteAccess?.enabled === true,
+      },
+      phoneAssistant: {
+        ...DEFAULT_CONFIG.phoneAssistant,
+        ...(parsed.phoneAssistant || {}),
+        enabled: parsed.phoneAssistant?.enabled === true,
       },
     } as AppConfig;
     const { opened, hadPlaintext } = openConfigSecrets(stored);
@@ -398,6 +407,11 @@ export async function saveConfig(partial: Partial<AppConfig>) {
         ...(cur.remoteAccess || DEFAULT_CONFIG.remoteAccess),
         ...(partial.remoteAccess || {}),
         enabled: partial.remoteAccess?.enabled ?? cur.remoteAccess?.enabled ?? false,
+      },
+      phoneAssistant: {
+        ...(cur.phoneAssistant || DEFAULT_CONFIG.phoneAssistant),
+        ...(partial.phoneAssistant || {}),
+        enabled: partial.phoneAssistant?.enabled ?? cur.phoneAssistant?.enabled ?? false,
       },
     };
     return writeConfigUnlocked(next);

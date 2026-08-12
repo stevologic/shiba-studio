@@ -35,6 +35,7 @@ async function main() {
     assert(report.checks.some((item) => item.id === 'browser-runtime' && typeof item.data?.launchHealthy === 'boolean'));
     assert(report.checks.some((item) => item.id === 'worktree-health'));
     assert(report.checks.some((item) => item.id === 'origin-firewall-boundary' && item.data?.originGuard === true));
+    assert(report.checks.some((item) => item.id === 'phone-assistant'));
     assert(report.checks.some((item) => item.id === 'host-firewall'));
     assert(report.checks.some((item) => item.id === 'extension-compatibility'));
     assert.equal(report.safeMode, true);

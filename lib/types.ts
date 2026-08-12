@@ -337,6 +337,23 @@ export interface AppConfig {
     /** Paired device-key lifetime (default 30 days, max 90). */
     deviceTtlDays?: number;
   };
+  /**
+   * Grok phone-number assistant ingress. Disabled until the local user
+   * generates a token. The raw bearer is shown once and stored only as a hash.
+   */
+  phoneAssistant?: {
+    enabled: boolean;
+    tokenHash?: string;
+    tokenPrefix?: string;
+    createdAt?: string;
+    lastUsedAt?: string;
+    /** Optional E.164 display of the Voice Agent / SIP number. */
+    phoneNumber?: string;
+    /** Optional xAI incoming-call webhook signing secret (`whsec_…`). */
+    webhookSecret?: string;
+    /** Optional E.164 allowlist; empty means any caller. */
+    allowedCallers?: string[];
+  };
 }
 
 export interface InterAgentMessage {

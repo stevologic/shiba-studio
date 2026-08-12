@@ -346,6 +346,29 @@ export async function runDoctor(): Promise<DoctorReport> {
     networkDetail,
     { data: { lanExposed, studioLan } },
   ));
+  const phone = cfg.phoneAssistant;
+  const phoneEnabled = phone?.enabled === true;
+  const phoneHasToken = !!phone?.tokenHash;
+  const publicOrigin = process.env.SHIBA_PUBLIC_ORIGIN?.trim() || '';
+  const phoneReachable = /^https:\/\//i.test(publicOrigin);
+  const phoneStatus = !phoneEnabled
+    ? 'ok'
+    : (!phoneHasToken || !phoneReachable ? 'warning' : 'ok');
+  const phoneDetail = !phoneEnabled
+    ? 'Phone assistant is off. Enable it in Settings to let the Grok phone number dictate Studio commands.'
+    : !phoneHasToken
+      ? 'Phone assistant is on but no bearer token has been generated.'
+      : !phoneReachable
+        ? 'Phone assistant is on. Set SHIBA_PUBLIC_ORIGIN to an https origin so the Grok Voice Agent can reach /api/phone/mcp.'
+        : `Phone assistant is paired and reachable at ${publicOrigin}/api/phone/mcp.`;
+  checks.push(check(
+    'phone-assistant',
+    'network',
+    'Grok phone assistant',
+    phoneStatus,
+    phoneDetail,
+    { data: { enabled: phoneEnabled, hasToken: phoneHasToken, publicHttps: phoneReachable } },
+  ));
   const summary: Record<DoctorStatus, number> = { ok: 0, warning: 0, error: 0 };
   for (const item of checks) summary[item.status]++;
   return { generatedAt: new Date().toISOString(), safeMode: !!cfg.safeMode, summary, checks };

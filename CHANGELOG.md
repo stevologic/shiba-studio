@@ -10,6 +10,11 @@ are carried over automatically.
 
 ### Added
 
+- **Grok phone assistant** — Settings pairs a Voice Agent Builder / SIP
+  number to this Studio. Spoken commands hit a signed public MCP and JSON
+  command path and run the real server-side Board, git, memory, search, and
+  durable-work actions (logged in a Phone assistant chat). Incoming SIP
+  webhooks can join the Speech-to-Speech session with the same tools.
 - **Hands-off Grok 4.6+ maintenance** — daily high/critical vulnerability
   remediation and a Monday weekly pass that assesses Claude / ChatGPT-Codex /
   Grok / Cursor (plus self-improvement of the automation). Both write only to

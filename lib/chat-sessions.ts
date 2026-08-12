@@ -160,7 +160,7 @@ export async function getChatSession(id: string): Promise<ChatSession | null> {
 }
 
 export async function createChatSession(
-  defaults: Partial<Pick<ChatSession, 'title' | 'chatTarget' | 'chatModel' | 'projectId' | 'useGrokCli' | 'toolsEnabled' | 'reasoningEffort' | 'ephemeral'>> = {},
+  defaults: Partial<Pick<ChatSession, 'id' | 'title' | 'chatTarget' | 'chatModel' | 'projectId' | 'useGrokCli' | 'toolsEnabled' | 'reasoningEffort' | 'ephemeral'>> = {},
 ): Promise<ChatSession> {
   return withStoreLock(async () => {
     let projectId: string | null = null;
@@ -170,9 +170,16 @@ export async function createChatSession(
     }
     const projectWorkspace = await projectWorkspaceForChat(projectId);
     if (projectWorkspace) await assertExistingChatWorkspace(projectWorkspace);
+    const requestedId = typeof defaults.id === 'string' ? defaults.id.trim() : '';
+    if (requestedId) {
+      const store = await loadStore();
+      if (store.sessions.some((session) => session.id === requestedId)) {
+        throw new Error('Chat session already exists');
+      }
+    }
     const now = new Date().toISOString();
     const session: ChatSession = {
-      id: uuidv4(),
+      id: requestedId || uuidv4(),
       title: defaults.title?.trim() || 'New chat',
       chatTarget: defaults.chatTarget || 'grok',
       chatModel: defaults.chatModel || resolveDefaultCloudModel((await loadConfig()).defaultGrokModel),
