@@ -54,3 +54,33 @@ of every matrix leg name; keep it in sync with the job list in `ci.yml`.
 Manual escape hatches: repo admins can still push to `main` directly
 (`enforce_admins` is off), and deleting the `GROK_API_KEY` secret turns the
 whole healing half off without touching the workflow.
+
+## Hands-off scheduled maintenance (Grok 4.6+)
+
+`.github/workflows/grok-maintain.yml` keeps the tree current without a human
+in the loop. It never writes `main`.
+
+| Cadence | Cron (UTC) | Job |
+| --- | --- | --- |
+| Daily | `17 6 * * *` | Remediate high/critical `npm audit` findings |
+| Weekly (Monday) | `17 7 * * 1` | Assess Claude / ChatGPT-Codex / Grok / Cursor, ship at most one bounded increment, and optionally improve this automation |
+
+Both jobs:
+
+1. Check out `development`.
+2. Skip with a warning (exit 0) when `GROK_API_KEY` is unset.
+3. Run `node scripts/ci/scheduled-maintain.mjs` at **Grok 4.6 or later**
+   (`scripts/ci/scheduled-maintain-lib.mjs` refuses `grok-4.5` /
+   `grok-code-fast-1` as the unattended default even if `GROK_MODEL` is set
+   to those ids).
+4. Commit and `git push origin HEAD:development` only when the tree changed.
+5. Re-dispatch `ci.yml` on `development` so **CI OK** + the existing
+   **Promote development → main** job can auto-merge.
+
+`workflow_dispatch` accepts `mode=daily|weekly` for a manual dry fire.
+Three consecutive `[scheduled-daily]` or `[scheduled-weekly]` commits abort
+the loop and open an issue.
+
+Policy lives in `scripts/ci/scheduled-maintain-lib.mjs` so
+`scripts/verify-scheduled-maintain.ts` can exercise the real mode split,
+model default, write fences, and no-key skip without calling xAI.
