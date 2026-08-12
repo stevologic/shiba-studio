@@ -4,6 +4,8 @@
  * must call these functions, not a reimplementation.
  */
 
+import { spawnSync } from "node:child_process";
+
 export const DEFAULT_SCHEDULED_GROK_MODEL = "grok-4.6";
 export const TARGET_BRANCH = "development";
 export const CRON_DAILY = "17 6 * * *";
@@ -178,4 +180,36 @@ export function buildMaintainPrompt(mode, extras = {}) {
 export function formatValidateMessage({ mode, model, skip }) {
   if (skip) return SKIP_NO_KEY_MESSAGE;
   return `scheduled-maintain: validate mode=${mode} model=${model} target=${TARGET_BRANCH}`;
+}
+
+/**
+ * @param {string} cwd
+ * @returns {string}
+ */
+export function gitPorcelain(cwd) {
+  const res = spawnSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" });
+  return String(res.stdout || "").trim();
+}
+
+/**
+ * Drop every uncommitted edit/untracked file so a discarded Grok run cannot
+ * be scooped up by the workflow's `git add -A`.
+ * @param {string} cwd
+ */
+export function discardUncommittedWork(cwd) {
+  spawnSync("git", ["reset", "--hard"], { cwd, encoding: "utf8" });
+  spawnSync("git", ["clean", "-fd"], { cwd, encoding: "utf8" });
+}
+
+/**
+ * Last step of a scheduled run. When Grok calls done(fixed=false), any dirty
+ * tree is discarded so grok-maintain.yml will not commit exploratory edits.
+ * @param {{ fixed: boolean, cwd?: string }} input
+ * @returns {{ discarded: boolean, dirty: string }}
+ */
+export function finalizeMaintainRun({ fixed, cwd = process.cwd() }) {
+  const before = gitPorcelain(cwd);
+  if (fixed) return { discarded: false, dirty: before };
+  if (before) discardUncommittedWork(cwd);
+  return { discarded: Boolean(before), dirty: gitPorcelain(cwd) };
 }
