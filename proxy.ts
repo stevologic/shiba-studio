@@ -117,6 +117,13 @@ function isTokenizedArtifactPublication(req: NextRequest, pathname: string): boo
     && /^\/api\/artifact-public\/sha_[A-Za-z0-9_-]{43}$/.test(pathname);
 }
 
+/** xAI Voice Agent / SIP servers call these with a bearer or webhook signature. */
+function isPublicPhoneIngress(pathname: string): boolean {
+  return pathname === '/api/phone/mcp'
+    || pathname === '/api/phone/command'
+    || pathname === '/api/phone/incoming';
+}
+
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const requestOrigin = visibleRequestOrigin(req);
@@ -146,6 +153,7 @@ export function proxy(req: NextRequest) {
     && !pathname.startsWith('/api/companion/')
     && !pathname.startsWith('/api/native-nodes/')
     && !isTokenizedArtifactPublication(req, pathname)
+    && !isPublicPhoneIngress(pathname)
   ) {
     return NextResponse.json(
       { ok: false, error: 'LAN clients may access only the scoped Companion API.' },
@@ -154,6 +162,9 @@ export function proxy(req: NextRequest) {
   }
   if (lanCompanionBoundary && pathname.startsWith('/api/companion/admin')) {
     return NextResponse.json({ ok: false, error: 'Companion administration is localhost-only.' }, { status: 403 });
+  }
+  if (lanCompanionBoundary && pathname.startsWith('/api/phone/admin')) {
+    return NextResponse.json({ ok: false, error: 'Phone assistant administration is localhost-only.' }, { status: 403 });
   }
   if (lanCompanionBoundary && (pathname.startsWith('/api/native-nodes/admin') || pathname.startsWith('/api/native-nodes/captures'))) {
     return NextResponse.json({ ok: false, error: 'Native-node administration and captures are localhost-only.' }, { status: 403 });
@@ -166,6 +177,12 @@ export function proxy(req: NextRequest) {
     && !/^Bearer\s+shiba_cmp_[A-Za-z0-9_-]{30,}$/i.test(req.headers.get('authorization') || '')
   ) {
     return NextResponse.json({ ok: false, error: 'A paired companion device key is required.' }, { status: 401 });
+  }
+  if (
+    (pathname === '/api/phone/mcp' || pathname === '/api/phone/command')
+    && !/^Bearer\s+shiba_phone_[A-Za-z0-9_-]{32,}$/i.test(req.headers.get('authorization') || '')
+  ) {
+    return NextResponse.json({ ok: false, error: 'A phone assistant bearer token is required.' }, { status: 401 });
   }
   if (
     (pathname.startsWith('/api/native-nodes/poll') || pathname.startsWith('/api/native-nodes/complete') || pathname.startsWith('/api/native-nodes/events'))

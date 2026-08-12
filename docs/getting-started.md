@@ -60,6 +60,7 @@ On a fresh install the **dashboard shows a 3-step checklist** — connect a mode
 4. **Say hello** — press *New Chat* in the top bar. Type `/help` to see everything chat can do. You can queue more messages while a reply streams, and agents can render **rich cards** (`shiba-card` fences) in replies.
 5. **Create an agent** — Agents → *Create Agent*: pick a model, workspace, integration scopes, and optionally a schedule. Run it from the **Automations** page and watch the live execution trace.
 6. **Optional — Meetings (Beta)** — open **Meetings**, pick an agent and project, start a spoken review; end the meeting to get minutes you can send to the **Board**.
+7. **Optional — Phone assistant** — Settings → Phone assistant: generate a token, expose Studio at an `https` `SHIBA_PUBLIC_ORIGIN`, paste the MCP URL and bearer into [Voice Agent Builder](https://console.x.ai), then call the Grok number and dictate commands (`create a task…`, `git status`, `start work on…`).
 
 ## Where your data lives
 

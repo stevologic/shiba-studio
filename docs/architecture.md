@@ -17,6 +17,7 @@ flowchart TB
         AutomationsUI["Automations page<br/>definitions, triggers, run history, live trace"]
         Dashboard["Dashboard<br/>readiness badges, recent runs"]
         LogsUI["Logs page<br/>audit trail, deep links"]
+        Phone["Phone assistant<br/>Grok number · MCP · spoken commands"]
     end
 
     subgraph Engine["Engine — what does the work"]
@@ -41,6 +42,8 @@ flowchart TB
         Sync["Cloud sync<br/>snapshots in your xAI file storage"]
     end
 
+    Phone -->|"dictate_command / MCP / SIP"| ToolExec
+    Phone -->|"Phone assistant session"| Chat
     Chat -->|"messages + tool loop"| Gateway
     Chat -->|"/git /x /search /note …"| ToolExec
     Chat -->|"/annotate"| SubBrowser

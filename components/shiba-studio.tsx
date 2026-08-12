@@ -49,6 +49,10 @@ const StudioDoctorCard = dynamic(
   () => import('@/components/studio-doctor-card').then((module) => module.StudioDoctorCard),
   { loading: panelLoading },
 );
+const PhoneAssistantCard = dynamic(
+  () => import('@/components/phone-assistant-card').then((module) => module.PhoneAssistantCard),
+  { loading: panelLoading },
+);
 const TaskDetailPage = dynamic(
   () => import('@/components/task-detail-page').then((module) => module.TaskDetailPage),
   { loading: panelLoading },
@@ -5311,6 +5315,13 @@ export default function ShibaStudio() {
                 </div>
 
               </div>
+              </section>
+              <section className="settings-section">
+                <h3 className="settings-section-title">Phone assistant</h3>
+                <div className="settings-section-sub text-[11px] text-dim">Call the Grok Voice number and dictate the same Studio commands you type in chat.</div>
+                <div className="settings-grid">
+                  <PhoneAssistantCard />
+                </div>
               </section>
               <section className="settings-section">
                 <h3 className="settings-section-title">Cost &amp; safety</h3>

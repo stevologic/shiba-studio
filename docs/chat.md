@@ -45,6 +45,12 @@ The expanded voice HUD and the minimized sidebar dock both expose two direct pla
 
 Both controls have visible labels or tooltips, keyboard focus, accessible names, and native disabled states. Minimizing Grok Voice does not change their behavior; it only moves the controls into the sidebar dock.
 
+## Phone assistant — dictate from the Grok number
+
+Call the number from [Voice Agent Builder](https://console.x.ai) (each xAI account includes a free number) and speak Studio commands. Grok does not reach localhost; Settings → **Phone assistant** generates a `shiba_phone_` bearer and the public MCP URL. Paste both into the Voice Agent as a remote MCP server (or a `dictate_command` function tool). The handler runs the same actions as chat slash commands — create a Board card, list the board, git, memory, search, or start durable work — and writes the exchange into a **Phone assistant** chat session.
+
+xAI can only call Studio when `SHIBA_PUBLIC_ORIGIN` is an `https://` origin (Tailscale Funnel, Cloudflare Tunnel, or an authenticated reverse proxy). Optional SIP numbers can POST signed `realtime.call.incoming` events to `/api/phone/incoming`.
+
 ## Slash commands
 
 Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dismiss). Commands run instantly and post their result into the chat:

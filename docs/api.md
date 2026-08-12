@@ -249,6 +249,10 @@ See [Native companion nodes](native-nodes.md) for the signed protocol, escalatio
 | GET | `/api/companion/data` | Authenticated redacted tasks/evidence/pending-approval/Routine projection plus sanitized voice-request status for devices with `action:voice`. |
 | POST | `/api/companion/actions` | Scoped, revision-bound, idempotent exact approval/deny, steering, cancel, or Routine action. |
 | POST | `/api/companion/voice` | Stream one consent-confirmed, SHA-256-bound microphone request from a device with `action:voice`. Supported audio is capped at 50 MB, retained locally for one day, transcribed through server-side xAI auth, and dispatched as a durable task. |
+| GET/POST | `/api/phone/admin` | Localhost-only Grok phone-assistant pairing: enable, rotate/revoke the `shiba_phone_` bearer, save the displayed number or SIP webhook secret, and copy the public MCP URL. |
+| GET/POST/DELETE | `/api/phone/mcp` | Streamable HTTP MCP server the Voice Agent Builder (or any Speech-to-Speech `mcp` tool) calls with the phone bearer. `tools/call` runs the same Studio command executor as chat slash commands. |
+| POST | `/api/phone/command` | Same executor as MCP, as a JSON webhook (`utterance` or `{ tool, arguments }`). Used by custom function tools and tests. |
+| POST | `/api/phone/incoming` | Optional SIP `realtime.call.incoming` webhook. Verifies Standard Webhooks signatures, then joins `wss://api.x.ai/v1/realtime?call_id=` and answers function calls in-process. |
 | GET/POST | `/api/harness-grants` | List or issue one-workspace, action-level, TTL-bound attachment grants for an external coding worker. |
 | POST | `/api/harness-grants/:id/start` | Activate one grant, create or attach its child task/session contract, and return the attachment metadata. This endpoint does not discover or spawn an ambient host CLI. |
 | POST | `/api/harness-grants/:id/callback` | Authenticated external worker status and typed evidence callback. |

@@ -79,9 +79,12 @@ const ENDPOINTS: Endpoint[] = [
   // --- CLI & backup ---
   { group: 'CLI & Backup', method: 'GET', path: '/api/grok-cli/status', summary: 'Official Grok Build path/version, authenticated readiness, models, detected headless/ACP capabilities, and audited open-source provenance.', query: [{ name: 'checkUpdate', desc: '1 = also check for a newer released binary' }] },
   { group: 'CLI & Backup', method: 'GET', path: '/api/backup', summary: 'Download a full studio backup. Sensitive: the encryption key is included unless omitted.', sensitive: true, query: [{ name: 'key', desc: 'Use "omit" unless you explicitly need a portable secret-bearing backup', example: 'omit' }] },
+
+  { group: 'Phone', method: 'GET', path: '/api/phone/admin', summary: 'Localhost-only phone-assistant status, public MCP URL, and Voice Agent setup.', sensitive: true },
+  { group: 'Phone', method: 'POST', path: '/api/phone/command', summary: 'Execute a spoken or slash command with the phone bearer. Creates real Board cards and work.', mutating: true, body: JSON.stringify({ utterance: 'create a task to review the landing page' }, null, 2) },
 ];
 
-const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Automations', 'Observability', 'Content', 'Code IDE', 'CLI & Backup'];
+const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Automations', 'Observability', 'Content', 'Code IDE', 'CLI & Backup', 'Phone'];
 
 export default function ApiDocsPage() {
   const [selected, setSelected] = useState<Endpoint>(ENDPOINTS[0]);

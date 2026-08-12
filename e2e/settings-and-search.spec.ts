@@ -5,6 +5,7 @@ test('Cost & safety settings save round-trip', async ({ page, request }) => {
   expect(seeded.ok()).toBeTruthy();
 
   await page.goto('/settings', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.settings-card', { hasText: 'Phone assistant' })).toBeVisible();
   const card = page.locator('.settings-card', { hasText: 'Cost & safety' });
   await expect(card).toBeVisible();
 

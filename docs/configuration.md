@@ -20,6 +20,7 @@ Settings is a card grid; each card maps to a concern:
 | **Cost & safety** | Monthly + daily spend limits with an optional hard stop (blocks new cloud runs/chats at the limit), max concurrent runs, per-run token cap, and retention windows for runs and the audit log |
 | **Backup & restore** | One-file export of settings, agents, chats, projects, runs, and the audit log (includes the encryption key — treat like a password); restore on any machine |
 | **Studio health** | Read-only Doctor scan (models, auth, storage, automations, origin/firewall) with preview-then-confirm repairs. Does not restore the retired `/doctor` route |
+| **Phone assistant** | Pair the Grok Voice phone number: enable, generate/rotate the `shiba_phone_` bearer (shown once), copy the public MCP URL, optionally store the number and SIP webhook secret |
 
 ## Environment variables
 
