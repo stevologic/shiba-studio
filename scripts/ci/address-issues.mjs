@@ -447,12 +447,14 @@ async function main() {
 
   const finalized = finalizeMaintainRun({ fixed: doneState.fixed, cwd: REPO_ROOT });
   const oneLine = doneState.summary.replace(/\s+/g, " ").trim().slice(0, 200) || `issue #${issue.number}`;
+  const applied = Boolean(doneState.fixed && finalized.dirty);
   const report = {
     number: issue.number,
     title: issue.title,
-    fixed: Boolean(doneState.fixed && finalized.dirty),
-    close: Boolean(doneState.close),
+    fixed: applied,
+    close: Boolean(doneState.close) && !finalized.revertedWorkflows,
     discarded: finalized.discarded,
+    revertedWorkflows: Boolean(finalized.revertedWorkflows),
     summary: oneLine,
   };
   writeFileSync(SUMMARY_FILE, `${JSON.stringify(report)}\n${oneLine}\n`);
@@ -462,7 +464,13 @@ async function main() {
     log(`address-issues: no code change — ${oneLine}${finalized.discarded ? " (discarded uncommitted edits)" : ""}`);
     process.exit(0);
   }
-  if (!finalized.dirty) fail("Grok reported a change but the working tree is unchanged.");
+  if (!finalized.dirty) {
+    if (finalized.revertedWorkflows) {
+      log("address-issues: dropped workflow-only edits (GITHUB_TOKEN cannot push .github/workflows)");
+      process.exit(0);
+    }
+    fail("Grok reported a change but the working tree is unchanged.");
+  }
   log(`address-issues: applied — ${oneLine}\n${finalized.dirty}`);
   if (env.GITHUB_STEP_SUMMARY) {
     appendFileSync(

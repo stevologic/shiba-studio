@@ -168,28 +168,43 @@ jobs:
         env:
           NUMBER: ${{ steps.pick.outputs.number }}
           PUSHED: ${{ steps.push.outputs.pushed }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
         run: |
           set -euo pipefail
           gh issue edit "$NUMBER" --remove-label grok-working || true
+          if [ "${PUSH_OUTCOME:-}" != "success" ]; then
+            gh issue edit "$NUMBER" --add-label grok-failed --remove-label grok-addressed || true
+            gh issue comment "$NUMBER" --body "Grok did not land a fix on \`development\` (push ${PUSH_OUTCOME:-unknown}). Editing \`.github/workflows/*\` fails because GITHUB_TOKEN cannot update workflow files. See $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            exit 0
+          fi
           if [ ! -f /tmp/issue-summary.txt ]; then
             gh issue edit "$NUMBER" --add-label grok-failed || true
             gh issue comment "$NUMBER" --body "Grok did not finish addressing this issue. See $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
-          close="$(node -e 'const fs=require("fs"); const raw=fs.readFileSync("/tmp/issue-summary.txt","utf8"); try { const j=JSON.parse(raw.split(/\r?\n/)[0]); process.stdout.write(j.close ? "true" : "false"); } catch { process.stdout.write("false"); }')"
+          close="$(node -e 'const fs=require("fs"); const raw=fs.readFileSync("/tmp/issue-summary.txt","utf8"); try { const j=JSON.parse(raw.split(/\r?\n/)[0]); process.stdout.write(j.close && !j.revertedWorkflows ? "true" : "false"); } catch { process.stdout.write("false"); }')"
+          reverted="$(node -e 'const fs=require("fs"); const raw=fs.readFileSync("/tmp/issue-summary.txt","utf8"); try { const j=JSON.parse(raw.split(/\r?\n/)[0]); process.stdout.write(j.revertedWorkflows ? "true" : "false"); } catch { process.stdout.write("false"); }')"
           summary="$(node -e 'const fs=require("fs"); const raw=fs.readFileSync("/tmp/issue-summary.txt","utf8"); const line=raw.split(/\r?\n/).find((l)=>l&&!l.startsWith("{"))||raw.slice(0,400); process.stdout.write(line)')"
           if [ "${PUSHED:-false}" = "true" ]; then
             gh issue edit "$NUMBER" --add-label grok-addressed --remove-label grok-failed || true
+            extra=""
+            if [ "$reverted" = "true" ]; then
+              extra=" Workflow-file edits were dropped because GITHUB_TOKEN cannot push \`.github/workflows/*\`."
+            fi
             gh issue comment "$NUMBER" --body "Grok pushed a fix to \`development\` for this issue. CI will promote to \`main\` when green.
 
-          ${summary}
+          ${summary}${extra}
 
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           else
             gh issue edit "$NUMBER" --add-label grok-addressed --remove-label grok-failed || true
+            extra=""
+            if [ "$reverted" = "true" ]; then
+              extra=" Workflow-file edits were dropped because GITHUB_TOKEN cannot push \`.github/workflows/*\`."
+            fi
             gh issue comment "$NUMBER" --body "Grok reviewed this issue and did not change the tree.
 
-          ${summary}
+          ${summary}${extra}
 
           Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
