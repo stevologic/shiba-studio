@@ -128,11 +128,19 @@ export function toolBudgetForMode(mode) {
   };
 }
 
+export function isGithubWorkflowPath(relPath) {
+  const rel = String(relPath || "").replaceAll("\\", "/").replace(/^\.\//, "");
+  return rel === ".github/workflows" || rel.startsWith(".github/workflows/");
+}
+
 export function writeAllowedForMode(mode, relPath) {
   const rel = String(relPath || "").replaceAll("\\", "/").replace(/^\.\//, "");
   if (!rel || rel === ".git" || rel.startsWith(".git/")) return false;
   if (rel === "node_modules" || rel.startsWith("node_modules/")) return false;
   if (/(^|\/)package-lock\.json$/.test(rel)) return false;
+  // GITHUB_TOKEN cannot create or update workflow files. Editing them makes
+  // the later `git push` fail the whole job.
+  if (isGithubWorkflowPath(rel)) return false;
   if (mode === "weekly") return true;
   if (rel.startsWith(".github/")) return false;
   if (rel.startsWith("scripts/ci/")) return false;
@@ -160,7 +168,7 @@ export function buildMaintainPrompt(mode, extras = {}) {
       "1) Assess the latest relevant capabilities in Claude, ChatGPT/Codex, Grok, and Cursor.",
       "   Fetch current docs with fetch_url (allowlisted hosts only). Compare against IDEAS.md, TODO.md, and the shipped lib/ surfaces.",
       "   Implement at most one bounded increment that belongs in Shiba Studio (Grok/xAI + local-first; do not add a multi-provider catalog).",
-      "2) Look for ways to improve this scheduled automation (scripts/ci/scheduled-maintain*.mjs and .github/workflows/grok-maintain.yml) and apply a small, safe improvement if one is clearly justified.",
+      "2) Look for ways to improve this scheduled automation (scripts/ci/scheduled-maintain*.mjs) and apply a small, safe improvement if one is clearly justified. Do not edit .github/workflows/ — GITHUB_TOKEN cannot push workflow files.",
       "If nothing belongs this week, call done with fixed=false and a one-line reason. Do not invent work.",
       "Never weaken proxy.ts or lib/terminal-server.ts origin checks, never delete tests, never disable CI OK.",
       `Budget: at most ${budget.maxSteps} tool calls.`,
@@ -191,6 +199,30 @@ export function gitPorcelain(cwd) {
   return String(res.stdout || "").trim();
 }
 
+function porcelainPaths(cwd) {
+  const raw = gitPorcelain(cwd);
+  if (!raw) return [];
+  return raw.split("\n").map((line) => {
+    const rest = line.slice(3);
+    if (rest.includes(" -> ")) return rest.split(" -> ").pop();
+    return rest.replace(/^"+|"+$/g, "");
+  }).filter(Boolean);
+}
+
+/**
+ * Drop uncommitted workflow-file edits. GITHUB_TOKEN cannot push them, and
+ * leaving them dirty fails the later `git push` for the whole job.
+ * @param {string} [cwd]
+ * @returns {{ reverted: boolean, paths: string[] }}
+ */
+export function revertGithubWorkflowChanges(cwd = process.cwd()) {
+  const paths = porcelainPaths(cwd).filter(isGithubWorkflowPath);
+  if (!paths.length) return { reverted: false, paths: [] };
+  spawnSync("git", ["checkout", "--", ".github/workflows"], { cwd, encoding: "utf8" });
+  spawnSync("git", ["clean", "-fd", "--", ".github/workflows"], { cwd, encoding: "utf8" });
+  return { reverted: true, paths };
+}
+
 /**
  * Drop every uncommitted edit/untracked file so a discarded Grok run cannot
  * be scooped up by the workflow's `git add -A`.
@@ -208,8 +240,19 @@ export function discardUncommittedWork(cwd) {
  * @returns {{ discarded: boolean, dirty: string }}
  */
 export function finalizeMaintainRun({ fixed, cwd = process.cwd() }) {
+  const workflowRevert = revertGithubWorkflowChanges(cwd);
   const before = gitPorcelain(cwd);
-  if (fixed) return { discarded: false, dirty: before };
+  if (fixed) {
+    return {
+      discarded: false,
+      dirty: before,
+      revertedWorkflows: workflowRevert.reverted,
+    };
+  }
   if (before) discardUncommittedWork(cwd);
-  return { discarded: Boolean(before), dirty: gitPorcelain(cwd) };
+  return {
+    discarded: Boolean(before),
+    dirty: gitPorcelain(cwd),
+    revertedWorkflows: workflowRevert.reverted,
+  };
 }

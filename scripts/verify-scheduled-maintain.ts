@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -48,6 +48,8 @@ async function main() {
   assert.match(weeklyPrompt, /ChatGPT\/Codex/);
   assert.match(weeklyPrompt, /Cursor/);
   assert.match(weeklyPrompt, /self-improve|this scheduled automation/i);
+  assert.match(weeklyPrompt, /\.github\/workflows/);
+  assert.doesNotMatch(weeklyPrompt, /grok-maintain\.yml/);
   assert.notEqual(dailyPrompt, weeklyPrompt);
 
   const dailyBudget = lib.toolBudgetForMode('daily');
@@ -63,10 +65,12 @@ async function main() {
   assert.equal(lib.writeAllowedForMode('daily', '.github/workflows/grok-maintain.yml'), false);
   assert.equal(lib.writeAllowedForMode('daily', 'scripts/ci/scheduled-maintain.mjs'), false);
   assert.equal(lib.writeAllowedForMode('daily', 'package.json'), true);
-  assert.equal(lib.writeAllowedForMode('weekly', '.github/workflows/grok-maintain.yml'), true);
+  assert.equal(lib.writeAllowedForMode('weekly', '.github/workflows/grok-maintain.yml'), false);
   assert.equal(lib.writeAllowedForMode('weekly', 'scripts/ci/scheduled-maintain.mjs'), true);
   assert.equal(lib.writeAllowedForMode('weekly', 'node_modules/left-pad/index.js'), false);
   assert.equal(lib.writeAllowedForMode('daily', 'package-lock.json'), false);
+  assert.equal(lib.isGithubWorkflowPath('.github/workflows/ci.yml'), true);
+  assert.equal(lib.isGithubWorkflowPath('.github/ISSUE_TEMPLATE/bug_report.md'), false);
 
   assert.equal(lib.fetchHostAllowed('https://docs.x.ai/developers/models'), true);
   assert.equal(lib.fetchHostAllowed('https://code.claude.com/docs/en/overview'), true);
@@ -126,9 +130,20 @@ async function main() {
   assert.match(ci, /Promote development → main/);
   assert.match(ci, /gh pr merge .* --auto/);
   assert.match(ci, /github\.ref == 'refs\/heads\/development'/);
+  assert.match(
+    ci,
+    /Gate — production build before the functional suite[\s\S]*npm run build[\s\S]*Gate — functional suite must pass before pushing[\s\S]*npm test/,
+  );
+
+  const theme = readFileSync(path.join(ROOT, 'scripts/verify-theme.ts'), 'utf8');
+  assert.match(theme, /assertProductionBuild/);
+  assert.match(theme, /\.next is missing/);
+  assert.match(theme, /start', '-H', '127\.0\.0\.1'/);
+  assert.match(theme, /http:\/\/127\.0\.0\.1:\$\{PORT\}/);
 
   const runner = readFileSync(path.join(ROOT, 'scripts/ci/scheduled-maintain.mjs'), 'utf8');
   assert.match(runner, /finalizeMaintainRun\(\{ fixed: doneState\.fixed, cwd: REPO_ROOT \}\)/);
+  assert.match(runner, /dropped workflow-only edits/);
 
   const sandbox = mkdtempSync(path.join(os.tmpdir(), 'shiba-maintain-'));
   const git = (args: string[]) => {
@@ -162,6 +177,19 @@ async function main() {
     assert.notEqual(kept.dirty, '', 'fixed=true must not discard a real change');
     assert.match(kept.dirty, /kept\.txt/);
     assert.match(readFileSync(path.join(sandbox, 'kept.txt'), 'utf8'), /real fix/);
+
+    mkdirSync(path.join(sandbox, '.github', 'workflows'), { recursive: true });
+    writeFileSync(path.join(sandbox, '.github', 'workflows', 'ci.yml'), 'name: original\n');
+    git(['add', '.github/workflows/ci.yml']);
+    git(['commit', '-m', 'seed workflow']);
+    writeFileSync(path.join(sandbox, '.github', 'workflows', 'ci.yml'), 'name: grok cannot push this\n');
+    writeFileSync(path.join(sandbox, 'kept.txt'), 'keep alongside workflow edit\n');
+    const dropped = lib.finalizeMaintainRun({ fixed: true, cwd: sandbox });
+    assert.equal(dropped.revertedWorkflows, true);
+    assert.match(dropped.dirty, /kept\.txt/);
+    assert.doesNotMatch(dropped.dirty, /ci\.yml/);
+    assert.match(readFileSync(path.join(sandbox, '.github', 'workflows', 'ci.yml'), 'utf8'), /original/);
+    assert.match(readFileSync(path.join(sandbox, 'kept.txt'), 'utf8'), /keep alongside workflow edit/);
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }

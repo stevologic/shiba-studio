@@ -8,6 +8,17 @@ are carried over automatically.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Grok issue automation can push again.** Agents are fenced off
+  `.github/workflows/*` because `GITHUB_TOKEN` cannot update workflow files
+  (run 31644453870 failed the push, then closed the issue as if nothing
+  changed). Workflow-only edits are dropped; a failed push is labeled
+  `grok-failed` and no longer closes the issue.
+- **Self-heal builds before `npm test`.** The healer gate now runs
+  `npm run build` so `verify-theme` has a production `.next` and binds
+  `127.0.0.1` instead of hanging when the build is missing.
+
 ### Added
 
 - **Grok issue automation** — a GitHub Action addresses issues filed by

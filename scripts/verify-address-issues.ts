@@ -111,11 +111,17 @@ async function main() {
   assert.equal(lib.writeAllowedForIssue('package-lock.json'), false);
   assert.equal(lib.writeAllowedForIssue('node_modules/left-pad/index.js'), false);
   assert.equal(lib.writeAllowedForIssue('.git/config'), false);
+  assert.equal(lib.writeAllowedForIssue('.github/workflows/ci.yml'), false);
+  assert.equal(lib.writeAllowedForIssue('.github/workflows/grok-issues.yml'), false);
+  assert.equal(lib.writeAllowedForIssue('.github/ISSUE_TEMPLATE/bug_report.md'), true);
+  assert.equal(lib.isGithubWorkflowPath('.github/workflows/ci.yml'), true);
+  assert.equal(lib.isGithubWorkflowPath('scripts/ci/address-issues.mjs'), false);
 
   const prompt = lib.buildIssuePrompt(lib.normalizeIssue(oldestAutomation), { model: 'grok-4.6' });
   assert.match(prompt, /#8/);
   assert.match(prompt, /development/);
   assert.match(prompt, /admin or by an enabled project automation/i);
+  assert.match(prompt, /\.github\/workflows/);
   assert.doesNotMatch(prompt, /\bmain\b.*push/i);
 
   const skip = lib.skipWithoutApiKey({ GROK_API_KEY: '' });
@@ -170,12 +176,17 @@ async function main() {
   assert.match(workflow, /GROK_API_KEY secret is not set — issue addressing skipped/);
   assert.match(workflow, /node scripts\/ci\/address-issues\.mjs --select/);
   assert.match(workflow, /node scripts\/ci\/address-issues\.mjs --issue=/);
+  assert.match(workflow, /steps\.push\.outcome/);
+  assert.match(workflow, /GITHUB_TOKEN cannot update workflow files/);
+  assert.match(workflow, /j\.close && !j\.revertedWorkflows/);
 
   const runner = readFileSync(script, 'utf8');
   assert.match(runner, /repos\/\$\{repo\}\/issues\?state=open/);
   assert.match(runner, /selectIssueToAddress\(/);
   assert.match(runner, /finalizeMaintainRun\(\{ fixed: doneState\.fixed, cwd: REPO_ROOT \}\)/);
   assert.match(runner, /writeAllowedForIssue/);
+  assert.match(runner, /revertedWorkflows/);
+  assert.match(runner, /dropped workflow-only edits/);
 
   const sandbox = mkdtempSync(path.join(os.tmpdir(), 'shiba-issue-finalize-'));
   const git = (args: string[]) => {

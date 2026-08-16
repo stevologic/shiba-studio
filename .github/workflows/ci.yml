@@ -326,6 +326,10 @@ jobs:
         if: steps.sanity.outputs.proceed == 'true'
         run: npx tsc --noEmit
 
+      - name: Gate — production build before the functional suite
+        if: steps.sanity.outputs.proceed == 'true'
+        run: npm run build
+
       - name: Gate — functional suite must pass before pushing
         if: steps.sanity.outputs.proceed == 'true'
         run: npm test

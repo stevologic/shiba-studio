@@ -3,9 +3,14 @@
  * GitHub issues. The workflow and address-issues.mjs both import this file.
  */
 
-import { finalizeMaintainRun, resolveScheduledModel, TARGET_BRANCH } from "./scheduled-maintain-lib.mjs";
+import {
+  finalizeMaintainRun,
+  isGithubWorkflowPath,
+  resolveScheduledModel,
+  TARGET_BRANCH,
+} from "./scheduled-maintain-lib.mjs";
 
-export { TARGET_BRANCH, resolveScheduledModel, finalizeMaintainRun };
+export { TARGET_BRANCH, resolveScheduledModel, finalizeMaintainRun, isGithubWorkflowPath };
 
 export const SKIP_NO_KEY_MESSAGE = "address-issues: skipped (GROK_API_KEY is not set)";
 export const ISSUE_LABEL_WORKING = "grok-working";
@@ -161,6 +166,10 @@ export function writeAllowedForIssue(relPath) {
   if (!rel || rel === ".git" || rel.startsWith(".git/")) return false;
   if (rel === "node_modules" || rel.startsWith("node_modules/")) return false;
   if (/(^|\/)package-lock\.json$/.test(rel)) return false;
+  // GITHUB_TOKEN cannot create or update workflow files. Run
+  // 31644453870 failed the push with "without `workflows` permission"
+  // after Grok edited `.github/workflows/ci.yml`.
+  if (isGithubWorkflowPath(rel)) return false;
   return true;
 }
 
@@ -176,6 +185,7 @@ export function buildIssuePrompt(issue, extras = {}) {
     "If the issue is already resolved on development (for example CI is green after a later heal), call done with fixed=false and close=true.",
     "If the request is out of scope, unsafe, or needs a human, call done with fixed=false and close=false.",
     "Never weaken proxy.ts or lib/terminal-server.ts origin checks, never delete tests, never disable CI OK.",
+    "Do not edit .github/workflows/ — GITHUB_TOKEN cannot push workflow files.",
     "Do not invent extra features beyond the issue.",
     `Budget: at most ${extras.maxSteps || 50} tool calls.`,
   ].join("\n");

@@ -17,8 +17,9 @@ The `self-heal` job runs when any CI job fails on `development`:
    (typecheck, lint, build, the verify suite, single verify scripts,
    npm audit / audit fix, npm install for lockfile sync after
    package.json edits, npm ls dependency tracing, devvit verify).
-3. Gates the result on `tsc --noEmit` **and** `npm test`, then commits with a `[self-heal]`
-   marker and pushes to `development`.
+3. Gates the result on `tsc --noEmit`, `npm run build`, **and** `npm test`, then commits with a `[self-heal]`
+   marker and pushes to `development`. The production build is required because
+   `verify-theme` launches `next start` and fails fast when `.next` is missing.
 4. Re-dispatches CI via `workflow_dispatch` so the healed commit gets a
    fresh full run (a plain `GITHUB_TOKEN` push does not retrigger CI).
 
@@ -74,6 +75,7 @@ Both jobs:
    `grok-code-fast-1` as the unattended default even if `GROK_MODEL` is set
    to those ids).
 4. Commit and `git push origin HEAD:development` only when the tree changed.
+   `.github/workflows/*` edits are dropped; `GITHUB_TOKEN` cannot push them.
 5. Re-dispatch `ci.yml` on `development` so **CI OK** + the existing
    **Promote development → main** job can auto-merge.
 
@@ -110,6 +112,9 @@ The job:
    `git reset --hard` + `git clean -fd` if Grok reports no change.
 5. Commits `[grok-issue-#N]` to `development` only when the tree changed,
    re-dispatches `ci.yml`, and comments (optionally closing) the issue.
+   A failed or skipped push is labeled `grok-failed` and does **not** close
+   the issue. `GITHUB_TOKEN` cannot update `.github/workflows/*`; those
+   edits are dropped before commit.
 
 Three consecutive commits for the same issue abort the loop. Label
 `grok-skip` or `wontfix` opts an issue out. Policy lives in
