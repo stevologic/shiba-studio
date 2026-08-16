@@ -190,6 +190,11 @@ async function main() {
     assert.doesNotMatch(dropped.dirty, /ci\.yml/);
     assert.match(readFileSync(path.join(sandbox, '.github', 'workflows', 'ci.yml'), 'utf8'), /original/);
     assert.match(readFileSync(path.join(sandbox, 'kept.txt'), 'utf8'), /keep alongside workflow edit/);
+
+    writeFileSync(path.join(sandbox, '.github', 'workflows', 'ci.yml'), 'name: only workflow dirty\n');
+    const onlyWorkflow = lib.revertGithubWorkflowChanges(sandbox);
+    assert.equal(onlyWorkflow.reverted, true, 'leading-space porcelain must still see the workflow path');
+    assert.match(readFileSync(path.join(sandbox, '.github', 'workflows', 'ci.yml'), 'utf8'), /original/);
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }

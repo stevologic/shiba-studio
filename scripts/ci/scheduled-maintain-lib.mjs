@@ -200,9 +200,11 @@ export function gitPorcelain(cwd) {
 }
 
 function porcelainPaths(cwd) {
-  const raw = gitPorcelain(cwd);
-  if (!raw) return [];
-  return raw.split("\n").map((line) => {
+  const res = spawnSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" });
+  // Do not trim the whole buffer — a leading space is the unstaged column
+  // of the first path (` M file`).
+  return String(res.stdout || "").split("\n").map((line) => {
+    if (line.length < 4) return "";
     const rest = line.slice(3);
     if (rest.includes(" -> ")) return rest.split(" -> ").pop();
     return rest.replace(/^"+|"+$/g, "");
@@ -237,7 +239,7 @@ export function discardUncommittedWork(cwd) {
  * Last step of a scheduled run. When Grok calls done(fixed=false), any dirty
  * tree is discarded so grok-maintain.yml will not commit exploratory edits.
  * @param {{ fixed: boolean, cwd?: string }} input
- * @returns {{ discarded: boolean, dirty: string }}
+ * @returns {{ discarded: boolean, dirty: string, revertedWorkflows: boolean }}
  */
 export function finalizeMaintainRun({ fixed, cwd = process.cwd() }) {
   const workflowRevert = revertGithubWorkflowChanges(cwd);
