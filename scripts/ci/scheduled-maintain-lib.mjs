@@ -28,6 +28,7 @@ export const FETCH_HOST_ALLOWLIST = [
   "platform.openai.com",
   "help.openai.com",
   "developers.openai.com",
+  "learn.chatgpt.com",
   "cursor.com",
   "docs.cursor.com",
   "github.com",
@@ -147,6 +148,94 @@ export function fetchHostAllowed(url) {
     return false;
   }
   return FETCH_HOST_ALLOWLIST.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+}
+
+const FETCH_DOC_LIMIT = 12_000;
+
+function decodeBasicEntities(text) {
+  return String(text || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'");
+}
+
+function collapseWhitespace(text) {
+  return decodeBasicEntities(text).replace(/\s+/g, " ").trim();
+}
+
+function looksLikeRenderedShell(text) {
+  const sample = String(text || "").slice(0, 4_000);
+  return /self\.__next_f\.push|window\.__CF\$cv\$params|__NEXT_DATA__/.test(sample);
+}
+
+/**
+ * Pull human-readable prose out of Next.js RSC / JS app shells so weekly
+ * research is not just minified flight data.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function extractQuotedProse(raw) {
+  const matches = String(raw || "").match(/"(?:\\.|[^"\\]){40,500}"/g) || [];
+  const seen = new Set();
+  const lines = [];
+  for (const match of matches) {
+    const value = collapseWhitespace(
+      match
+        .slice(1, -1)
+        .replace(/\\n/g, "\n")
+        .replace(/\\t/g, " ")
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\")
+        .replace(/<[^>]+>/g, " "),
+    );
+    if (value.length < 40) continue;
+    if (!/[A-Za-z]{4,}\s+[A-Za-z]/.test(value)) continue;
+    if (/^(https?:|\/_next\/|static\/chunks)/.test(value)) continue;
+    if (/function\s*\(|=>\s*\{|self\.__next_f|window\.__CF/.test(value)) continue;
+    const key = value.slice(0, 160);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    lines.push(value);
+    if (lines.length >= 48) break;
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Reduce a fetched documentation body to inspectable text.
+ * @param {string} body
+ * @param {{ maxChars?: number }} [opts]
+ * @returns {string}
+ */
+export function extractFetchedDocText(body, { maxChars = FETCH_DOC_LIMIT } = {}) {
+  const raw = String(body || "");
+  const withoutChrome = raw
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  const stripped = collapseWhitespace(withoutChrome);
+  const usable = looksLikeRenderedShell(raw) || stripped.length < 200
+    ? extractQuotedProse(raw) || stripped
+    : stripped;
+  if (usable.length <= maxChars) return usable;
+  return `…[${usable.length - maxChars} earlier chars truncated]…\n${usable.slice(-maxChars)}`;
+}
+
+/**
+ * Format a weekly fetch_url result. Rejects redirects that leave the allowlist.
+ * @param {{ url: string, status: number, finalUrl?: string, body: string }} input
+ * @returns {string}
+ */
+export function formatFetchedDocument({ url, status, finalUrl, body }) {
+  const requested = String(url || "");
+  const landed = String(finalUrl || requested);
+  if (!fetchHostAllowed(requested) || !fetchHostAllowed(landed)) {
+    return `ERROR: redirect left the weekly research allowlist: ${landed || requested}`;
+  }
+  return `HTTP ${status} ${requested}\n${extractFetchedDocText(body)}`;
 }
 
 export function buildMaintainPrompt(mode, extras = {}) {
