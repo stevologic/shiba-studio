@@ -64,3 +64,8 @@ daily_summary.txt
 
 # local-only Claude Code settings
 .claude/settings.local.json
+
+# Worker lock files
+worker.lock
+worker.lock-journal
+
