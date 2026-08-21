@@ -99,7 +99,7 @@ Renovate, or any `[bot]` account). Random public issues are ignored.
 | Trigger | When |
 | --- | --- |
 | `issues` opened / reopened | Immediately, if the author is eligible |
-| Hourly cron `23 * * * *` | Oldest eligible open issue |
+| Daily cron `23 6 * * *` | Oldest eligible open issue |
 | `workflow_dispatch` | Optional issue number, else oldest eligible |
 
 The job:

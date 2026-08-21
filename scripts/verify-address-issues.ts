@@ -166,7 +166,7 @@ async function main() {
   assert.match(adminOnly.stdout, /selected #20/);
 
   const workflow = readFileSync(path.join(ROOT, '.github/workflows/grok-issues.yml'), 'utf8');
-  assert.match(workflow, /cron:\s*"23 \* \* \* \*"/);
+  assert.match(workflow, /cron:\s*"23 6 \* \* \*"/);
   assert.match(workflow, /issues:\s*\n\s*types:\s*\[opened,\s*reopened\]/);
   assert.match(workflow, /secrets\.GROK_API_KEY/);
   assert.match(workflow, /ref: development/);
