@@ -74,7 +74,40 @@ async function main() {
 
   assert.equal(lib.fetchHostAllowed('https://docs.x.ai/developers/models'), true);
   assert.equal(lib.fetchHostAllowed('https://code.claude.com/docs/en/overview'), true);
+  assert.equal(lib.fetchHostAllowed('https://learn.chatgpt.com/docs/long-running-work'), true);
   assert.equal(lib.fetchHostAllowed('https://evil.example/steal'), false);
+  assert.equal(
+    lib.fetchHostAllowed('https://steal.learn.chatgpt.com.evil.example/docs'),
+    false,
+    'suffix spoofing of an allowlisted host must stay blocked',
+  );
+
+  const markdownDoc = lib.formatFetchedDocument({
+    url: 'https://learn.chatgpt.com/docs/long-running-work.md',
+    status: 200,
+    finalUrl: 'https://learn.chatgpt.com/docs/long-running-work.md',
+    body: '# Long-running work\n\nKeep multi-step work focused with clear outcomes and completion criteria.',
+  });
+  assert.match(markdownDoc, /HTTP 200/);
+  assert.match(markdownDoc, /Keep multi-step work focused/);
+
+  const jsShell = lib.formatFetchedDocument({
+    url: 'https://docs.x.ai/docs/overview',
+    status: 200,
+    finalUrl: 'https://docs.x.ai/docs/overview',
+    body: 'self.__next_f.push([1,"Grok 4.6 is the current flagship model for code, text, voice, image, and video."])',
+  });
+  assert.match(jsShell, /Grok 4.6 is the current flagship model/);
+  assert.doesNotMatch(jsShell, /self\.__next_f\.push/);
+
+  const bounced = lib.formatFetchedDocument({
+    url: 'https://docs.x.ai/docs/overview',
+    status: 302,
+    finalUrl: 'https://evil.example/steal',
+    body: 'secret',
+  });
+  assert.match(bounced, /redirect left the weekly research allowlist/);
+  assert.doesNotMatch(bounced, /secret/);
 
   const skip = lib.skipWithoutApiKey({ GROK_API_KEY: '' });
   assert.equal(skip.skip, true);

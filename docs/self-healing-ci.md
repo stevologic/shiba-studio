@@ -88,6 +88,9 @@ the workflow cannot `git add -A` those discarded edits.
 Policy lives in `scripts/ci/scheduled-maintain-lib.mjs` so
 `scripts/verify-scheduled-maintain.ts` can exercise the real mode split,
 model default, write fences, and no-key skip without calling xAI.
+Weekly `fetch_url` also allows `learn.chatgpt.com` (ChatGPT Work / Codex
+product docs), prefers Markdown/`text/plain` responses, extracts prose from
+JS app shells, and rejects redirects that leave the host allowlist.
 
 ## Admin and automation issues
 

@@ -16,15 +16,26 @@ are carried over automatically.
 
 ### Changed
 
+- **Weekly maintain can read ChatGPT/Codex docs.** `fetch_url` now allows
+  `learn.chatgpt.com`, prefers Markdown/`text/plain`, extracts prose from
+  JS app shells, and rejects redirects off the host allowlist. Workflow
+  write fences on `GITHUB_TOKEN` are unchanged.
+- **Reddit Devvit bridge lockfile pins.** `js-yaml` 4.x is now 4.3.1,
+  `nanoid` is 3.3.18, and `hono` is 4.13.3 so the subpackage no longer
+  ships the previously reported high `js-yaml`/`nanoid` advisories.
+  `postcss` and `brace-expansion` 1.x/2.x are pinned to patched releases.
+- **Root advisory pins.** `hono` is overridden to 4.13.3 and Next's bundled
+  `postcss` to 8.5.26 so root `npm audit` is clean at every severity.
 - **Public site matches shipped product.** gh-pages now documents the phone
   assistant, Memories, Artifact Studio, Companion/native nodes, and keyboard
   shortcuts, and the footer license links point at `LICENSE` / `COMMERCIAL.md`.
 
 ### Fixed
 
-- **Windows Board lock wait.** Store-file lock acquisition waits up to 90s on
-  Windows so concurrent Board/agent writers on Node 24 CI no longer time out
-  waiting for `.ownership-stores`.
+- **Windows store-lock waits under contention.** Multi-process Board/agent
+  writes share `.ownership-stores`; the lock wait (and the concurrency
+  verifier child) now allows 60s/120s on Windows so Node 24 CI does not
+  flake at the old 30s ceiling.
 
 - **Grok issue automation can push again.** Agents are fenced off
   `.github/workflows/*` because `GITHUB_TOKEN` cannot update workflow files

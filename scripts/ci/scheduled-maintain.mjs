@@ -19,6 +19,7 @@ import {
   buildMaintainPrompt,
   fetchHostAllowed,
   finalizeMaintainRun,
+  formatFetchedDocument,
   formatValidateMessage,
   isValidateOnly,
   resolveMaintainMode,
@@ -318,10 +319,21 @@ function runTool(name, args) {
       if (!fetchHostAllowed(url)) {
         return `ERROR: host is not on the weekly research allowlist: ${url}`;
       }
-      return fetch(url, { headers: { "user-agent": "shiba-studio-scheduled-maintain/1.0" }, redirect: "follow" })
+      return fetch(url, {
+        headers: {
+          "user-agent": "shiba-studio-scheduled-maintain/1.0",
+          accept: "text/markdown, text/plain;q=0.9, text/html;q=0.8, */*;q=0.5",
+        },
+        redirect: "follow",
+      })
         .then(async (res) => {
           const text = await res.text();
-          return `HTTP ${res.status} ${url}\n${tail(text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "), 12_000)}`;
+          return formatFetchedDocument({
+            url,
+            status: res.status,
+            finalUrl: res.url,
+            body: text,
+          });
         })
         .catch((err) => `ERROR: fetch failed: ${err.message}`);
     }
