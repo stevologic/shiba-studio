@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Shiba Studio Packages — Windows and macOS apps</title>
-<meta name="description" content="Download the official Shiba Studio Windows and macOS desktop hosts. Compiled on every push to main and development." />
+<meta name="description" content="Download official Shiba Studio apps for Windows and macOS. Double-click to run the same Studio UI. Apps update when main or development moves." />
 <link rel="icon" href="favicon.ico" sizes="32x32" />
 <link rel="icon" type="image/svg+xml" href="logo.svg" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
@@ -12,11 +12,11 @@
 <meta property="og:url" content="https://shiba-studio.io/packages.html" />
 <meta property="og:site_name" content="Shiba Studio" />
 <meta property="og:title" content="Shiba Studio Packages" />
-<meta property="og:description" content="Official Windows and macOS desktop apps, compiled on every push to main and development." />
+<meta property="og:description" content="Official Windows and macOS apps. Double-click to run Studio; each channel updates itself when that branch moves." />
 <meta property="og:image" content="https://shiba-studio.io/og-card.png" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Shiba Studio Packages" />
-<meta name="twitter:description" content="Official Windows and macOS desktop apps, compiled on every push to main and development." />
+<meta name="twitter:description" content="Official Windows and macOS apps. Double-click to run Studio; each channel updates itself when that branch moves." />
 <meta name="twitter:image" content="https://shiba-studio.io/og-card.png" />
 <style>
   :root {
@@ -85,15 +85,17 @@
   <header id="packages">
     <h1>Packages</h1>
     <p class="lead">
-      Official Windows and macOS desktop apps. CI compiles both on every push to
-      <code>main</code> and <code>development</code>, then publishes the artifacts here.
+      Official Windows and macOS apps. Double-click and they run the same Studio
+      as the browser — no clone, no Node install, no terminal. CI packages both
+      on every push to <code>main</code> and <code>development</code>. Each app
+      updates itself when its channel moves.
     </p>
   </header>
 
   <div class="grid">
     <article class="card" id="windows">
       <h2>Shiba Studio for Windows</h2>
-      <p>Native WebView2 host. Start a local checkout with <code>npm run start</code>, or attach to a Studio that is already running on this machine.</p>
+      <p>Native Windows host (dark title bar, standard menus, WebView2). Extract the folder and double-click <code>ShibaStudio.exe</code>. Studio starts itself on loopback and looks like the web app.</p>
       <p class="meta">Artifact: <code>ShibaStudio-windows-x64.zip</code></p>
       <div class="offers">
         <a class="btn btn-primary" id="windows-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-windows-x64.zip">Download stable (main)</a>
@@ -105,7 +107,7 @@
 
     <article class="card" id="macos">
       <h2>Shiba Studio for macOS</h2>
-      <p>Native WKWebView host for Mac. Start a local checkout with <code>npm run start</code>, or attach to a Studio that is already running on this machine.</p>
+      <p>Native Mac host (menu bar, Settings, WKWebView). Open <code>ShibaStudio.app</code> — drag to Applications if you like. Studio starts itself on loopback and looks like the web app.</p>
       <p class="meta">Artifact: <code>ShibaStudio-macos.zip</code></p>
       <div class="offers">
         <a class="btn btn-primary" id="macos-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-macos.zip">Download stable (main)</a>
@@ -117,9 +119,10 @@
   </div>
 
   <div class="note">
-    The macOS zip is an unsigned universal <code>.app</code> (Apple Silicon and Intel) from
-    <code>xcodebuild</code>. First launch of a downloaded build may need right-click → Open.
+    The macOS zip is an unsigned <code>.app</code> (universal Swift host; bundled Studio
+    runtime is Apple Silicon). First launch of a downloaded build may need right-click → Open.
     Windows needs the Evergreen WebView2 runtime (already present on current Windows 11).
+    Stable builds follow <code>main</code>; development builds follow <code>development</code>.
   </div>
 
   <footer>

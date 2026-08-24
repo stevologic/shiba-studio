@@ -25,8 +25,9 @@
     "test:page-chrome": "tsx scripts/verify-page-chrome.ts",
     "generate:avatars": "tsx scripts/generate-alien-avatars.ts",
     "generate:brand": "tsx scripts/generate-brand-assets.ts",
-    "build:windows": "dotnet publish apps/windows/ShibaStudio.csproj -c Release -r win-x64 --self-contained true -o dist/native/windows",
-    "build:macos": "bash apps/macos/build.sh"
+    "build:windows": "dotnet publish apps/windows/ShibaStudio.csproj -c Release -r win-x64 --self-contained true -o dist/native/windows/ShibaStudio",
+    "build:macos": "bash apps/macos/build.sh",
+    "pack:desktop": "node scripts/pack-desktop-runtime.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

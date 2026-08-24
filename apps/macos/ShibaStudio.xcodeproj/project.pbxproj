@@ -11,6 +11,9 @@
 		A10000000000000000000013 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* ContentView.swift */; };
 		A10000000000000000000015 /* StudioWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* StudioWebView.swift */; };
 		A10000000000000000000021 /* StudioHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000022 /* StudioHost.swift */; };
+		A10000000000000000000025 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000024 /* AppIdentity.swift */; };
+		A10000000000000000000027 /* AppUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* AppUpdater.swift */; };
+		A10000000000000000000029 /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* PreferencesView.swift */; };
 		A10000000000000000000018 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017 /* Assets.xcassets */; };
 		A10000000000000000000020 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A10000000000000000000019 /* WebKit.framework */; };
 /* End PBXBuildFile section */
@@ -23,6 +26,9 @@
 		A10000000000000000000017 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000000000000000000019 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		A10000000000000000000022 /* StudioHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioHost.swift; sourceTree = "<group>"; };
+		A10000000000000000000024 /* AppIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIdentity.swift; sourceTree = "<group>"; };
+		A10000000000000000000026 /* AppUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdater.swift; sourceTree = "<group>"; };
+		A10000000000000000000028 /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
 		A10000000000000000000040 /* ShibaStudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ShibaStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -53,6 +59,9 @@
 				A10000000000000000000012 /* ContentView.swift */,
 				A10000000000000000000014 /* StudioWebView.swift */,
 				A10000000000000000000022 /* StudioHost.swift */,
+				A10000000000000000000024 /* AppIdentity.swift */,
+				A10000000000000000000026 /* AppUpdater.swift */,
+				A10000000000000000000028 /* PreferencesView.swift */,
 				A10000000000000000000016 /* Info.plist */,
 				A10000000000000000000017 /* Assets.xcassets */,
 			);
@@ -149,6 +158,9 @@
 				A10000000000000000000013 /* ContentView.swift in Sources */,
 				A10000000000000000000015 /* StudioWebView.swift in Sources */,
 				A10000000000000000000021 /* StudioHost.swift in Sources */,
+				A10000000000000000000025 /* AppIdentity.swift in Sources */,
+				A10000000000000000000027 /* AppUpdater.swift in Sources */,
+				A10000000000000000000029 /* PreferencesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

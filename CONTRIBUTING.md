@@ -33,7 +33,7 @@ this Next.js version.
 4. **Build:** `npm run build` must succeed.
 
 CI runs those four on Windows/macOS/Linux × Node 22/24, plus `npm audit`
-(high+), Playwright Chromium E2E, a Docker image smoke test, and compile
+(high+), Playwright Chromium E2E, a Docker image smoke test, and package
 jobs for the Windows and macOS apps. The aggregate **CI OK** check is what
 branch protection requires. Pushes to `main` and `development` also publish
 those binaries to the [packages page](https://shiba-studio.io/packages.html). `npx eslint

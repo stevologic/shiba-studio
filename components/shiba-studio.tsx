@@ -5602,7 +5602,7 @@ export default function ShibaStudio() {
               target="_blank"
               rel="noreferrer"
               className="hover:text-primary"
-              title="Download the compiled Windows and macOS apps"
+              title="Download the Windows and macOS apps"
             >
               Packages
             </a>

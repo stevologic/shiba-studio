@@ -29,15 +29,41 @@ function main() {
   for (const app of catalog.apps) {
     assert.equal(existsSync(path.join(ROOT, app.project)), true, `${app.project} must exist`);
     assert.match(app.name, /Shiba Studio for (Windows|macOS)/);
+    assert.match(app.summary, /Double-click/);
   }
+
+  const packer = read('scripts/pack-desktop-runtime.mjs');
+  assert.match(packer, /pack-desktop-runtime/);
+  assert.match(packer, /preferredPort: 18765/);
+  assert.match(packer, /https:\/\/shiba-studio\.io\/packages\/manifest\.json/);
+  assert.match(packer, /'next', 'dist', 'bin', 'next'/);
+  assert.match(packer, /app\.json/);
+  assert.equal(existsSync(path.join(ROOT, 'scripts/ci/pack-windows-app.ps1')), true);
+  assert.equal(existsSync(path.join(ROOT, 'scripts/ci/pack-macos-app.sh')), true);
+  assert.match(read('scripts/ci/pack-windows-app.ps1'), /pack-desktop-runtime\.mjs/);
+  assert.match(read('scripts/ci/pack-windows-app.ps1'), /apps\\windows\\ShibaStudio\.csproj/);
+  assert.match(read('scripts/ci/pack-macos-app.sh'), /pack-desktop-runtime\.mjs/);
+  assert.match(read('scripts/ci/pack-macos-app.sh'), /build\.sh/);
 
   const windowsCsproj = read('apps/windows/ShibaStudio.csproj');
   assert.match(windowsCsproj, /Microsoft\.Web\.WebView2/);
   assert.match(windowsCsproj, /net8\.0-windows/);
   assert.match(read('apps/windows/Program.cs'), /MainForm/);
-  assert.match(read('apps/windows/StudioHost.cs'), /npm run start/);
+  assert.match(read('apps/windows/Program.cs'), /Local\\ShibaStudio\.Desktop/);
+  const windowsHost = read('apps/windows/StudioHost.cs');
+  assert.match(windowsHost, /next start/);
+  assert.match(read('apps/windows/AppIdentity.cs'), /18765/);
+  assert.match(windowsHost, /PreferredPort/);
+  assert.doesNotMatch(windowsHost, /npm run start/);
+  assert.match(read('apps/windows/AppIdentity.cs'), /https:\/\/shiba-studio\.io\/packages\/manifest\.json/);
+  assert.match(read('apps/windows/AppUpdater.cs'), /ShibaStudio-Desktop/);
   const mainForm = read('apps/windows/MainForm.cs');
   assert.match(mainForm, /WebView2/);
+  assert.match(mainForm, /MenuStrip/);
+  assert.match(mainForm, /Check for &Updates/);
+  assert.match(mainForm, /NativeWindowChrome/);
+  assert.doesNotMatch(mainForm, /Start local Studio/);
+  assert.doesNotMatch(mainForm, /class TextBox|new TextBox/);
   assert.doesNotMatch(mainForm, /static readonly Color Text/, 'Form.Text must not be shadowed by a color field');
   assert.equal(existsSync(path.join(ROOT, 'apps/windows/shiba.ico')), true, 'Windows app icon');
 
@@ -45,13 +71,27 @@ function main() {
   assert.match(pbx, /PRODUCT_BUNDLE_IDENTIFIER = "io\.shiba-studio\.macos"/);
   assert.match(pbx, /SDKROOT = macosx/);
   assert.match(pbx, /CODE_SIGNING_ALLOWED = NO/);
+  assert.match(pbx, /AppIdentity\.swift/);
+  assert.match(pbx, /AppUpdater\.swift/);
+  assert.match(pbx, /PreferencesView\.swift/);
   assert.match(read('apps/macos/ShibaStudio/App.swift'), /ShibaStudioApp/);
-  assert.match(read('apps/macos/ShibaStudio/ContentView.swift'), /Start local Studio/);
+  assert.match(read('apps/macos/ShibaStudio/App.swift'), /Check for Updates/);
+  assert.match(read('apps/macos/ShibaStudio/App.swift'), /Starting Shiba Studio/);
+  assert.match(read('apps/macos/ShibaStudio/ContentView.swift'), /StudioWebView/);
+  assert.doesNotMatch(read('apps/macos/ShibaStudio/ContentView.swift'), /Start local Studio/);
+  assert.doesNotMatch(read('apps/macos/ShibaStudio/ContentView.swift'), /TextField/);
   assert.match(read('apps/macos/ShibaStudio/StudioWebView.swift'), /WKWebView/);
   assert.match(read('apps/macos/ShibaStudio/StudioWebView.swift'), /NSViewRepresentable/);
-  assert.match(read('apps/macos/ShibaStudio/StudioHost.swift'), /npm run start/);
+  const macHost = read('apps/macos/ShibaStudio/StudioHost.swift');
+  assert.match(macHost, /--port/);
+  assert.match(read('apps/macos/ShibaStudio/AppIdentity.swift'), /18765/);
+  assert.match(macHost, /preferredPort/);
+  assert.doesNotMatch(macHost, /npm run start/);
+  assert.match(read('apps/macos/ShibaStudio/AppIdentity.swift'), /https:\/\/shiba-studio\.io\/packages\/manifest\.json/);
+  assert.match(read('apps/macos/ShibaStudio/AppUpdater.swift'), /ShibaStudio-Desktop/);
   assert.match(read('apps/macos/build.sh'), /xcodebuild/);
   assert.match(read('apps/macos/build.sh'), /generic\/platform=macOS/);
+  assert.match(read('apps/macos/build.sh'), /--no-zip/);
   assert.doesNotMatch(read('apps/macos/build.sh'), /iphonesimulator/);
   assert.equal(
     existsSync(path.join(ROOT, 'apps/macos/ShibaStudio/Assets.xcassets/Contents.json')),
@@ -67,6 +107,9 @@ function main() {
   }
   assert.doesNotMatch(page, /Shiba Studio for iOS/);
   assert.doesNotMatch(page, /iphonesimulator/);
+  assert.doesNotMatch(page, /npm run start/);
+  assert.match(page, /Double-click/);
+  assert.match(page, /updates itself/);
   assert.match(page, /packages-main/);
   assert.match(page, /packages-development/);
   assert.match(page, /channel-main/);
@@ -82,8 +125,12 @@ function main() {
   assert.match(ci, /native-macos:/);
   assert.doesNotMatch(ci, /native-ios:/);
   assert.match(ci, /publish-packages:/);
-  assert.match(ci, /dotnet publish apps\/windows\/ShibaStudio\.csproj/);
-  assert.match(ci, /bash apps\/macos\/build\.sh/);
+  assert.match(ci, /scripts\/ci\/pack-windows-app\.ps1/);
+  assert.match(ci, /scripts\/ci\/pack-macos-app\.sh/);
+  assert.match(ci, /native-windows:[\s\S]*?actions\/setup-node/);
+  assert.match(ci, /native-macos:[\s\S]*?actions\/setup-node/);
+  assert.match(ci, /native-windows:[\s\S]*?npm run build/);
+  assert.match(ci, /native-macos:[\s\S]*?npm run build/);
   assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows, native-macos\]/);
   assert.match(ci, /Publish packages page/);
   assert.match(
@@ -109,6 +156,8 @@ function main() {
   const release = read('.github/workflows/release.yml');
   assert.match(release, /native-windows:/);
   assert.match(release, /native-macos:/);
+  assert.match(release, /scripts\/ci\/pack-windows-app\.ps1/);
+  assert.match(release, /scripts\/ci\/pack-macos-app\.sh/);
   assert.match(release, /ShibaStudio-windows-x64\.zip/);
   assert.match(release, /ShibaStudio-macos\.zip/);
   assert.doesNotMatch(release, /ShibaStudio-ios-simulator\.zip/);
@@ -116,6 +165,7 @@ function main() {
   const weekly = read('scripts/ci/scheduled-maintain-lib.mjs');
   assert.match(weekly, /Windows and macOS/);
   assert.match(weekly, /packages page/);
+  assert.match(weekly, /auto-updating/);
   assert.match(weekly, /apps\//);
 
   const verifyAll = read('scripts/verify-all.ts');

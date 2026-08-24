@@ -18,10 +18,10 @@ flowchart TB
         Dashboard["Dashboard<br/>readiness badges, recent runs"]
         LogsUI["Logs page<br/>audit trail, deep links"]
         Phone["Phone assistant<br/>Grok number · MCP · spoken commands"]
-        NativeApps["Windows + macOS apps<br/>packages page · compile on push"]
+        NativeApps["Windows + macOS apps<br/>bundled runtime · auto-update"]
     end
 
-    NativeApps -->|"host or pair"| Chat
+    NativeApps -->|"same Studio UI"| Chat
 
     subgraph Engine["Engine — what does the work"]
         Gateway["Model gateway (grok-client)<br/>xAI key / OAuth / Grok CLI / local server"]

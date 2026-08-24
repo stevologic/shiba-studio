@@ -1,7 +1,8 @@
 # Native apps
 
-Shiba Studio ships two compiled desktop hosts in addition to the source / Docker
-install:
+Shiba Studio ships two compiled desktop apps in addition to the source / Docker
+install. They wrap the **same** production Studio UI — they are not a second
+product.
 
 | App | Kind | Source | Artifact |
 | --- | --- | --- | --- |
@@ -13,35 +14,43 @@ They are listed on the public [packages page](https://shiba-studio.io/packages.h
 
 ## What each app does
 
-Both apps are native hosts, not a rewrite of Studio. Each can:
+Double-click the downloaded app. It silently starts a bundled Studio on
+loopback (`127.0.0.1:18765` when free) and fills a native window with that
+same UI. There is no address bar, no “start the server” strip, and no need
+to clone the repo or install Node.
 
-- open a running Studio at `http://127.0.0.1:3000` (or another origin you type);
-- start `npm run start` from a checkout found via `SHIBA_STUDIO_ROOT`,
-  a configured host file, or a nearby `package.json` named `shiba-studio`;
-- open `/companion` in the same window.
+The OS wrapper stays thin and native:
 
-Windows looks under `%LOCALAPPDATA%\ShibaStudio\checkout` and needs the
-Evergreen WebView2 runtime (current Windows 11 already has it).
+- **Windows** — dark DWM title bar, standard menu (Studio / View / Help),
+  Evergreen WebView2 for the page.
+- **macOS** — standard menu bar and Settings, thin title bar, WKWebView
+  for the page. The zip is unsigned; first launch of a downloaded build
+  may need right-click → Open. The bundled runtime is Apple Silicon.
 
-macOS looks under `~/Library/Application Support/ShibaStudio/checkout`.
-CI produces an unsigned universal `.app` (arm64 + x86_64). First launch of a
-downloaded zip may need right-click → Open until a Developer ID certificate
-is added. Both hosts need Node.js ≥ 22.5 if you want them to start the
-server themselves.
+Studio data lives in `%LOCALAPPDATA%\ShibaStudio\data` on Windows and
+`~/Library/Application Support/ShibaStudio/data` on macOS, not inside the
+app bundle. Each app checks
+`https://shiba-studio.io/packages/manifest.json` and updates itself when
+the channel you downloaded (`main` or `development`) publishes a new SHA.
+Switch channels from Preferences / Settings.
+
+`scripts/pack-desktop-runtime.mjs` embeds official Node 22, the production
+`.next` tree, and `node_modules` (including `node-pty` built on that OS).
+CI must pack on Windows and macOS — native addons are not portable.
 
 ## Compile on every push
 
 `.github/workflows/ci.yml` already runs on `main` and `development`. Two
 required jobs sit on that same pipeline:
 
-- `native-windows` — `dotnet publish` on `windows-latest`
-- `native-macos` — `apps/macos/build.sh` (`xcodebuild`) on `macos-latest`
+- `native-windows` — `npm run build` + `scripts/ci/pack-windows-app.ps1`
+- `native-macos` — `npm run build` + `scripts/ci/pack-macos-app.sh`
 
 Both are part of **CI OK**, so a broken app project fails promotion the same
 way a red `npm test` does. The Grok self-heal job on `development` also
-watches those compiles.
+watches those jobs.
 
-After a green compile on a **push** or **workflow_dispatch** to `main` or
+After a green package on a **push** or **workflow_dispatch** to `main` or
 `development` (not on pull requests), `publish-packages` updates:
 
 1. the rolling GitHub Release `packages-main` or `packages-development`;
@@ -53,6 +62,8 @@ is not skipped. Tagged `v*` releases attach the same zips via
 
 ## Local compile
 
+Shell only (no bundled Studio — useful while editing the host):
+
 ```powershell
 npm run build:windows
 ```
@@ -61,13 +72,23 @@ npm run build:windows
 npm run build:macos
 ```
 
+Full package, same as CI (needs a production `npm run build` first):
+
+```powershell
+pwsh -File scripts/ci/pack-windows-app.ps1
+```
+
+```bash
+bash scripts/ci/pack-macos-app.sh
+```
+
 `scripts/verify-native-apps.ts` (part of `npm test`) checks the catalog, app
-sources, packages page, and the CI/release/maintain wiring without needing
-Windows or Xcode on the machine running the suite.
+sources, packer, packages page, and the CI/release/maintain wiring without
+needing Windows or Xcode on the machine running the suite.
 
 ## Maintenance
 
-Weekly Grok maintain is instructed to keep `apps/` compiling and the packages
+Weekly Grok maintain is instructed to keep `apps/` packaging and the packages
 page listed. It cannot edit `.github/workflows/` (`GITHUB_TOKEN` cannot push
 workflow files); fix app sources or `site/packages.html` when the offering
 drifts.

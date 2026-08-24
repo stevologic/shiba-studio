@@ -61,22 +61,35 @@ jobs:
           if-no-files-found: error
 
   native-windows:
-    name: Windows app · compile
+    name: Windows app · package
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: '1'
+      NEXT_TELEMETRY_DISABLED: '1'
+      NODE_OPTIONS: --max-old-space-size=4096
+      CHANNEL: main
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Publish Windows desktop host
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Build Studio and package the Windows app
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          dotnet publish apps/windows/ShibaStudio.csproj -c Release -r win-x64 --self-contained true -o dist/native/windows
-          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit $LASTEXITCODE" }
-          New-Item -ItemType Directory -Force -Path dist/native/packages | Out-Null
-          Compress-Archive -Path (Join-Path 'dist/native/windows' '*') -DestinationPath dist/native/packages/ShibaStudio-windows-x64.zip -Force
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit $LASTEXITCODE" }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw "npm run build failed with exit $LASTEXITCODE" }
+          npm prune --omit=dev
+          if ($LASTEXITCODE -ne 0) { throw "npm prune failed with exit $LASTEXITCODE" }
+          pwsh -File scripts/ci/pack-windows-app.ps1
       - uses: actions/upload-artifact@v6
         with:
           name: shiba-studio-windows
@@ -84,17 +97,31 @@ jobs:
           if-no-files-found: error
 
   native-macos:
-    name: macOS app · compile
+    name: macOS app · package
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: '1'
+      NEXT_TELEMETRY_DISABLED: '1'
+      NODE_OPTIONS: --max-old-space-size=4096
+      CHANNEL: main
     steps:
       - uses: actions/checkout@v6
-      - name: Compile macOS desktop host
-        run: bash apps/macos/build.sh
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Build Studio and package the macOS app
+        run: |
+          npm ci
+          npm run build
+          npm prune --omit=dev
+          bash scripts/ci/pack-macos-app.sh
       - uses: actions/upload-artifact@v6
         with:
           name: shiba-studio-macos
-          path: dist/native/macos/ShibaStudio-macos.zip
+          path: dist/native/packages/ShibaStudio-macos.zip
           if-no-files-found: error
 
   release:
