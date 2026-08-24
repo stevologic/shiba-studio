@@ -77,7 +77,7 @@ Past meetings (and their minutes) stay in the lobby until you delete them. Delet
 - **No audio is stored.** Speech is transcribed in the browser (Web Speech API) and only text reaches the server. This is different from the audio-upload transcription pipeline, which has its own consent and retention flow.
 - Meetings live in the local SQLite store (`live_meetings` table) like every other Studio record.
 - Durable outputs follow your explicit requests: mid-meeting Board cards are created only when you ask for work in the conversation, and converting minutes todos requires a confirmation click. Ending a meeting alone never mutates the Board.
-- Turns are model calls metered under Usage (source `live-meeting`).
+- Turns are model calls metered under Usage (source `other`, tagged with the meeting id).
 
 ## Voice integration scope
 

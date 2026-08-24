@@ -775,7 +775,8 @@ export async function runLiveMeetingTurn(
       model: prepared.model,
       temperature: 0.4,
       max_tokens: 4_096,
-      usageContext: { source: 'other', sourceId: 'live-meeting' },
+      usageContext: { source: 'other', sourceId: prepared.row.id },
+      conversationId: prepared.row.id,
       messages: prepared.messages,
     });
     const content = response.choices[0]?.message?.content || '';
@@ -816,7 +817,8 @@ export async function* streamLiveMeetingTurn(
       temperature: 0.4,
       max_tokens: 4_096,
       signal: options?.signal,
-      usageContext: { source: 'other', sourceId: 'live-meeting' },
+      usageContext: { source: 'other', sourceId: prepared.row.id },
+      conversationId: prepared.row.id,
       messages: prepared.messages,
     })) {
       if (options?.signal?.aborted) {
@@ -975,7 +977,8 @@ export async function endLiveMeeting(id: string): Promise<LiveMeetingRecord> {
       model,
       temperature: 0.1,
       max_tokens: 4_096,
-      usageContext: { source: 'other', sourceId: 'live-meeting' },
+      usageContext: { source: 'other', sourceId: row.id },
+      conversationId: row.id,
       messages: [
         {
           role: 'system',

@@ -5597,6 +5597,15 @@ export default function ShibaStudio() {
             >
               Docs
             </a>
+            <a
+              href="https://shiba-studio.io/packages.html"
+              target="_blank"
+              rel="noreferrer"
+              className="hover:text-primary"
+              title="Download the compiled Windows and iOS apps"
+            >
+              Packages
+            </a>
             <Link
               href="/api-docs"
               className="hover:text-primary"

@@ -49,6 +49,7 @@ const CHAIN = [
   'verify-lan-boundary.mjs',
   'verify-public-origin.ts',
   'verify-native-nodes.ts',
+  'verify-native-apps.ts',
   'verify-routines.ts',
   'verify-automation-guards.ts',
   'verify-background-work.ts',

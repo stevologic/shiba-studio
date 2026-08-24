@@ -36,6 +36,8 @@ export interface UsageRecord {
 export interface ModelPricing {
   inputPer1M: number;
   outputPer1M: number;
+  /** Published cached-prompt rate when xAI lists one; otherwise inputPer1M. */
+  cachedInputPer1M: number;
   label: string;
 }
 
@@ -44,14 +46,15 @@ const PRICING_RULES: Array<{
   match: RegExp;
   inputPer1M: number;
   outputPer1M: number;
+  cachedInputPer1M?: number;
   /** Prompt-token threshold at which the published long-context rate applies to the whole request. */
   longContextFrom?: number;
 }> = [
-  { match: /^grok-4\.6/i, inputPer1M: 2.0, outputPer1M: 6.0, longContextFrom: 200_000 },
-  { match: /^grok-4\.5/i, inputPer1M: 2.0, outputPer1M: 6.0, longContextFrom: 200_000 },
-  { match: /^grok-4\.3/i, inputPer1M: 1.25, outputPer1M: 2.5, longContextFrom: 200_000 },
-  { match: /^grok-4\.20/i, inputPer1M: 1.25, outputPer1M: 2.5, longContextFrom: 200_000 },
-  { match: /^grok-build/i, inputPer1M: 1.0, outputPer1M: 2.0, longContextFrom: 200_000 },
+  { match: /^grok-4\.6/i, inputPer1M: 2.0, outputPer1M: 6.0, cachedInputPer1M: 0.5, longContextFrom: 200_000 },
+  { match: /^grok-4\.5/i, inputPer1M: 2.0, outputPer1M: 6.0, cachedInputPer1M: 0.3, longContextFrom: 200_000 },
+  { match: /^grok-4\.3/i, inputPer1M: 1.25, outputPer1M: 2.5, cachedInputPer1M: 0.2, longContextFrom: 200_000 },
+  { match: /^grok-4\.20/i, inputPer1M: 1.25, outputPer1M: 2.5, cachedInputPer1M: 0.2, longContextFrom: 200_000 },
+  { match: /^grok-build/i, inputPer1M: 1.0, outputPer1M: 2.0, cachedInputPer1M: 0.2, longContextFrom: 200_000 },
   { match: /^grok-3-mini/i, inputPer1M: 0.3, outputPer1M: 0.5 },
   { match: /^grok-3/i, inputPer1M: 3.0, outputPer1M: 15.0 },
   { match: /^grok-2/i, inputPer1M: 2.0, outputPer1M: 10.0 },
@@ -61,8 +64,12 @@ const PRICING_RULES: Array<{
 const DEFAULT_PRICING: ModelPricing = {
   inputPer1M: 1.25,
   outputPer1M: 2.5,
+  cachedInputPer1M: 1.25,
   label: 'default estimate',
 };
+
+/** xAI bills `cost_in_usd_ticks` at 10^10 ticks per USD. */
+export const XAI_USD_TICKS_PER_DOLLAR = 10_000_000_000;
 
 function matchingPricingRule(model: string) {
   const id = parseModelRef(model.trim()).id;
@@ -74,7 +81,14 @@ function matchingPricingRule(model: string) {
 
 export function getModelPricing(model: string): ModelPricing {
   const { id, rule } = matchingPricingRule(model);
-  if (rule) return { inputPer1M: rule.inputPer1M, outputPer1M: rule.outputPer1M, label: id };
+  if (rule) {
+    return {
+      inputPer1M: rule.inputPer1M,
+      outputPer1M: rule.outputPer1M,
+      cachedInputPer1M: rule.cachedInputPer1M ?? rule.inputPer1M,
+      label: id,
+    };
+  }
   return { ...DEFAULT_PRICING, label: id || 'unknown' };
 }
 
@@ -84,17 +98,54 @@ function longContextMultiplier(model: string, promptTokens: number): number {
   return promptTokens >= rule.longContextFrom ? 2 : 1;
 }
 
+/**
+ * Estimate USD from published xAI rates. Cached prompt tokens use the
+ * published cached-input price; long-context multipliers apply to both.
+ */
 export function estimateTokenCost(
   model: string,
   promptTokens: number,
   completionTokens: number,
   reasoningTokens = 0,
+  cachedTokens = 0,
 ): number {
   const rates = getModelPricing(model);
   const multiplier = longContextMultiplier(model, promptTokens);
-  const inputCost = (promptTokens / 1_000_000) * rates.inputPer1M * multiplier;
+  const cached = Math.max(0, Math.min(promptTokens, cachedTokens || 0));
+  const uncached = Math.max(0, promptTokens - cached);
+  const inputCost = (
+    (uncached / 1_000_000) * rates.inputPer1M
+    + (cached / 1_000_000) * rates.cachedInputPer1M
+  ) * multiplier;
   const outputCost = ((completionTokens + reasoningTokens) / 1_000_000) * rates.outputPer1M * multiplier;
   return inputCost + outputCost;
+}
+
+/** Convert xAI `cost_in_usd_ticks` to USD, or null when the field is absent. */
+export function parseBilledCostUsd(usage: unknown): number | null {
+  if (!usage || typeof usage !== 'object') return null;
+  const ticks = Number((usage as Record<string, unknown>).cost_in_usd_ticks);
+  if (!Number.isFinite(ticks) || ticks < 0) return null;
+  return ticks / XAI_USD_TICKS_PER_DOLLAR;
+}
+
+/** Prefer the billed tick total; otherwise estimate from public rates. */
+export function resolveUsageCostUsd(
+  model: string,
+  usage: unknown,
+  parsed = parseGrokUsage(usage),
+): number {
+  if (parseModelRef(model).provider === 'local') return 0;
+  const billed = parseBilledCostUsd(usage);
+  if (billed != null) return billed;
+  if (!parsed) return 0;
+  return estimateTokenCost(
+    model,
+    parsed.promptTokens,
+    parsed.completionTokens,
+    parsed.reasoningTokens,
+    parsed.cachedTokens,
+  );
 }
 
 export function parseGrokUsage(usage: unknown): {
@@ -115,6 +166,7 @@ export function parseGrokUsage(usage: unknown): {
   ) || 0;
   const cachedTokens = Number(
     (u.prompt_tokens_details as { cached_tokens?: number } | undefined)?.cached_tokens
+    ?? (u.input_tokens_details as { cached_tokens?: number } | undefined)?.cached_tokens
     ?? u.cached_prompt_tokens
     ?? 0,
   ) || 0;
@@ -148,15 +200,7 @@ export async function recordUsage(input: {
   const parsed = parseGrokUsage(input.usage);
   if (!parsed) return null;
 
-  const isLocal = parseModelRef(input.model).provider === 'local';
-  const estimatedCostUsd = isLocal
-    ? 0
-    : estimateTokenCost(
-        input.model,
-        parsed.promptTokens,
-        parsed.completionTokens,
-        parsed.reasoningTokens,
-      );
+  const estimatedCostUsd = resolveUsageCostUsd(input.model, input.usage, parsed);
 
   const record: UsageRecord = {
     id: uuidv4(),
@@ -258,6 +302,7 @@ export function computeLocalUsageSavings(
       r.promptTokens,
       r.completionTokens,
       r.reasoningTokens,
+      r.cachedTokens,
     );
     hypotheticalCostUsd += hypo;
     totalPromptTokens += r.promptTokens;
@@ -402,7 +447,7 @@ export function aggregateUsage(records: UsageRecord[], defaultModel = DEFAULT_CL
         estimatedCostUsd: parseModelRef(r.model).provider === 'local' ? 0 : r.estimatedCostUsd,
       })),
     localSavings: computeLocalUsageSavings(records, defaultModel),
-    pricingNote: 'Costs are estimated from public xAI per-million-token rates. Local model runs are $0. Actual billing may differ.',
+    pricingNote: 'Studio metering uses billed xAI cost ticks when a response includes them; otherwise public rates with the published cached-prompt discount. Local model runs are $0.',
   };
 }
 

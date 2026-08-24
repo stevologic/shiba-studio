@@ -605,6 +605,8 @@ export async function POST(req: NextRequest) {
                   tool_choice: allowTools ? 'auto' : undefined,
                   temperature: body.temperature,
                   max_tokens: body.max_tokens ?? 4096,
+                  usageContext: { source: 'chat', sourceId: requestChatSession?.id },
+                  conversationId: requestChatSession?.id,
                 });
               } catch (toolErr: unknown) {
                 // Local servers that reject tools: fall back to plain completion once.
@@ -624,6 +626,8 @@ export async function POST(req: NextRequest) {
                   messages: msgs,
                   temperature: body.temperature,
                   max_tokens: body.max_tokens ?? 4096,
+                  usageContext: { source: 'chat', sourceId: requestChatSession?.id },
+                  conversationId: requestChatSession?.id,
                 });
               }
 
@@ -878,6 +882,8 @@ export async function POST(req: NextRequest) {
                   messages: msgs,
                   temperature: body.temperature,
                   max_tokens: body.max_tokens ?? 4096,
+                  usageContext: { source: 'chat', sourceId: requestChatSession?.id },
+                  conversationId: requestChatSession?.id,
                 });
                 const finalText = finalResp.choices?.[0]?.message?.content?.trim();
                 if (finalText) {
@@ -935,7 +941,8 @@ export async function POST(req: NextRequest) {
           temperature: body.temperature,
           max_tokens: body.max_tokens,
           reasoningEffort: body.reasoningEffort,
-          usageContext: { source: 'chat' },
+          usageContext: { source: 'chat', sourceId: requestChatSession?.id },
+          conversationId: requestChatSession?.id,
         })) {
           if (event.type === 'content' && event.delta) emittedContent = true;
           controller.enqueue(encoder.encode(encodeSseEvent(event)));

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>shiba.ico</ApplicationIcon>
+    <AssemblyName>ShibaStudio</AssemblyName>
+    <RootNamespace>ShibaStudio</RootNamespace>
+    <Product>Shiba Studio</Product>
+    <Company>Shiba Studio</Company>
+    <Version>0.2.0</Version>
+    <InformationalVersion>0.2.0</InformationalVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <Content Include="shiba.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

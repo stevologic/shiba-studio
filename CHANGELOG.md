@@ -10,9 +10,19 @@ are carried over automatically.
 
 ### Added
 
+- **Windows and iOS apps on the packages page.** Official clients live in
+  `apps/` and are offered at [packages.html](https://shiba-studio.io/packages.html).
+  CI compiles both on every push to `main` and `development` (and on the
+  `workflow_dispatch` re-runs that self-heal and weekly maintain use),
+  attaches the zips to rolling `packages-main` / `packages-development`
+  releases, and weekly maintain is instructed to keep that pipeline listed.
+  Tagged `v*` releases attach the same artifacts.
 - **Keyboard shortcuts overlay.** Press `?` when not typing, or `Ctrl`/`⌘`+`/`,
   or pick **Keyboard shortcuts** from the command palette. Studio-wide keys
   stay out of the Code IDE so Monaco keeps its own chords.
+- **Grok prompt-cache routing.** Durable chat, agent, meeting, and voice
+  turns send `x-grok-conv-id` / `prompt_cache_key` so consecutive turns can
+  reuse xAI's published cached-prompt discount.
 
 ### Changed
 
@@ -20,6 +30,10 @@ are carried over automatically.
   `learn.chatgpt.com`, prefers Markdown/`text/plain`, extracts prose from
   JS app shells, and rejects redirects off the host allowlist. Workflow
   write fences on `GITHUB_TOKEN` are unchanged.
+- **Studio metering uses billed ticks and cached-prompt rates.** Usage records
+  prefer `cost_in_usd_ticks` from xAI responses and otherwise apply the
+  published cached-input price instead of charging every prompt token at the
+  full input rate.
 - **Reddit Devvit bridge lockfile pins.** `js-yaml` 4.x is now 4.3.1,
   `nanoid` is 3.3.18, and `hono` is 4.13.3 so the subpackage no longer
   ships the previously reported high `js-yaml`/`nanoid` advisories.

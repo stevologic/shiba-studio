@@ -1,4 +1,4 @@
-import { XAI_BASE } from './grok-client';
+import { grokConversationId, XAI_BASE, XAI_CONV_ID_HEADER } from './grok-client';
 import type { ChatMessagePayload, ChatStreamEvent, ReasoningEffort } from './chat-types';
 import { parseModelRef, supportsReasoning } from './model-providers';
 
@@ -16,6 +16,8 @@ export interface GrokChatStreamParams {
   max_tokens?: number;
   reasoningEffort?: ReasoningEffort;
   usageContext?: { source: 'chat' | 'agent' | 'other'; sourceId?: string };
+  /** Sticky conversation id for xAI prompt-cache routing. */
+  conversationId?: string;
 }
 
 function normalizeLocalBase(url?: string): string {
@@ -144,6 +146,10 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
 
   let base = XAI_BASE;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const conversationId = grokConversationId(params.conversationId || params.usageContext?.sourceId);
+  if (ref.provider === 'cloud' && conversationId) {
+    headers[XAI_CONV_ID_HEADER] = conversationId;
+  }
 
   if (ref.provider === 'local') {
     const { loadConfig } = await import('./persistence');
@@ -162,11 +168,13 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
         input: buildResponsesInput(params.messages),
         stream: true,
         store: false,
+        ...(conversationId ? { prompt_cache_key: conversationId } : {}),
       }
     : {
         model: ref.id,
         messages: buildCompletionsMessages(params.messages),
         stream: true,
+        ...(ref.provider === 'cloud' ? { stream_options: { include_usage: true } } : {}),
         temperature: params.temperature ?? 0.7,
         max_tokens: params.max_tokens ?? 4096,
       };

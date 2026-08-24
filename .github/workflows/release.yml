@@ -3,6 +3,7 @@ name: Release
 # Tag a commit `v*` (matching package.json's version) to cut a GitHub Release:
 #   git tag v0.2.0 && git push origin v0.2.0
 # The in-app footer notice compares against the latest release of this repo.
+# Windows and iOS packages compiled by this workflow are attached to the tag.
 
 on:
   push:
@@ -12,7 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -53,8 +54,69 @@ jobs:
           ' CHANGELOG.md > RELEASE_NOTES.md
           [ -s RELEASE_NOTES.md ] || echo "See CHANGELOG.md" > RELEASE_NOTES.md
 
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
+          if-no-files-found: error
+
+  native-windows:
+    name: Windows app · compile
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish Windows desktop host
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish apps/windows/ShibaStudio.csproj -c Release -r win-x64 --self-contained true -o dist/native/windows
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force -Path dist/native/packages | Out-Null
+          Compress-Archive -Path (Join-Path 'dist/native/windows' '*') -DestinationPath dist/native/packages/ShibaStudio-windows-x64.zip -Force
+      - uses: actions/upload-artifact@v6
+        with:
+          name: shiba-studio-windows
+          path: dist/native/packages/ShibaStudio-windows-x64.zip
+          if-no-files-found: error
+
+  native-ios:
+    name: iOS app · compile
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compile iOS companion
+        run: bash apps/ios/build.sh
+      - uses: actions/upload-artifact@v6
+        with:
+          name: shiba-studio-ios
+          path: dist/native/ios/ShibaStudio-ios-simulator.zip
+          if-no-files-found: error
+
+  release:
+    needs: [verify, native-windows, native-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+      - name: Stage release files
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          cp artifacts/release-notes/RELEASE_NOTES.md dist/release/RELEASE_NOTES.md
+          cp artifacts/shiba-studio-windows/ShibaStudio-windows-x64.zip dist/release/
+          cp artifacts/shiba-studio-ios/ShibaStudio-ios-simulator.zip dist/release/
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          body_path: RELEASE_NOTES.md
+          body_path: dist/release/RELEASE_NOTES.md
           generate_release_notes: false
+          files: |
+            dist/release/ShibaStudio-windows-x64.zip
+            dist/release/ShibaStudio-ios-simulator.zip

@@ -1162,6 +1162,7 @@ export type AgentRunOpts = {
     tool_choice?: 'auto';
     max_tokens?: number;
     usageContext?: GrokUsageContext;
+    conversationId?: string;
   }) => Promise<{ choices: Array<{ message?: { role?: string; content?: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }; finish_reason?: string }>; usage?: unknown }>;
   /** Injectable structured CLI stream for deterministic runtime verification. */
   grokCliStreamFn?: (
@@ -1851,6 +1852,7 @@ async function* agentRunGenerator(
         tools,
         tool_choice: 'auto',
         usageContext: { source: 'agent', sourceId: runId },
+        conversationId: runId,
       });
       await pollDurableRunControls();
       await waitWhileRunPaused(runId, runSignal, pollDurableRunControls);
@@ -2161,6 +2163,7 @@ async function* agentRunGenerator(
             },
           ],
           usageContext: { source: 'agent', sourceId: runId },
+          conversationId: runId,
         });
         finalOutput = (resp.choices?.[0]?.message?.content || '').trim();
         if (finalOutput) {

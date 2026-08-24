@@ -49,6 +49,8 @@ async function main() {
   assert.match(weeklyPrompt, /Cursor/);
   assert.match(weeklyPrompt, /self-improve|this scheduled automation/i);
   assert.match(weeklyPrompt, /\.github\/workflows/);
+  assert.match(weeklyPrompt, /Windows and iOS/);
+  assert.match(weeklyPrompt, /packages page/);
   assert.doesNotMatch(weeklyPrompt, /grok-maintain\.yml/);
   assert.notEqual(dailyPrompt, weeklyPrompt);
 
@@ -74,6 +76,7 @@ async function main() {
 
   assert.equal(lib.fetchHostAllowed('https://docs.x.ai/developers/models'), true);
   assert.equal(lib.fetchHostAllowed('https://code.claude.com/docs/en/overview'), true);
+  assert.equal(lib.fetchHostAllowed('https://platform.claude.com/docs/en/agents-and-tools/overview'), true);
   assert.equal(lib.fetchHostAllowed('https://learn.chatgpt.com/docs/long-running-work'), true);
   assert.equal(lib.fetchHostAllowed('https://evil.example/steal'), false);
   assert.equal(
@@ -163,6 +166,9 @@ async function main() {
   assert.match(ci, /Promote development → main/);
   assert.match(ci, /gh pr merge .* --auto/);
   assert.match(ci, /github\.ref == 'refs\/heads\/development'/);
+  assert.match(ci, /native-windows:/);
+  assert.match(ci, /native-ios:/);
+  assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows, native-ios\]/);
   assert.match(
     ci,
     /Gate — production build before the functional suite[\s\S]*npm run build[\s\S]*Gate — functional suite must pass before pushing[\s\S]*npm test/,

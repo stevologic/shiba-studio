@@ -24,7 +24,9 @@
     "test:brand": "tsx scripts/verify-brand-assets.ts",
     "test:page-chrome": "tsx scripts/verify-page-chrome.ts",
     "generate:avatars": "tsx scripts/generate-alien-avatars.ts",
-    "generate:brand": "tsx scripts/generate-brand-assets.ts"
+    "generate:brand": "tsx scripts/generate-brand-assets.ts",
+    "build:windows": "dotnet publish apps/windows/ShibaStudio.csproj -c Release -r win-x64 --self-contained true -o dist/native/windows",
+    "build:ios": "bash apps/ios/build.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

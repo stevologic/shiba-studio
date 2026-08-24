@@ -55,6 +55,23 @@ export interface GrokChatParams {
   temperature?: number;
   max_tokens?: number;
   usageContext?: GrokUsageContext;
+  /**
+   * Sticky conversation id for xAI prompt-cache routing (`x-grok-conv-id`).
+   * Prefer a durable session/run/meeting id so follow-up turns hit the same cache.
+   */
+  conversationId?: string;
+}
+
+/** Header xAI uses to pin Chat Completions to one cache-bearing server. */
+export const XAI_CONV_ID_HEADER = 'x-grok-conv-id';
+
+const CONV_ID_MAX = 128;
+
+/** Normalize a durable session/run/meeting id for xAI cache routing. */
+export function grokConversationId(value?: string | null): string | undefined {
+  const id = String(value || '').trim();
+  if (!id) return undefined;
+  return id.slice(0, CONV_ID_MAX);
 }
 
 export interface GrokChoice {
@@ -339,6 +356,10 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
 
   let base = XAI_BASE;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const conversationId = grokConversationId(params.conversationId || params.usageContext?.sourceId);
+  if (ref.provider === 'cloud' && conversationId) {
+    headers[XAI_CONV_ID_HEADER] = conversationId;
+  }
   // Tool-loop chat turns often need multi-minute completions (search + read +
   // synthesize). 5 minutes was cutting long agentic turns mid-flight and
   // surfacing raw AbortSignal noise as the assistant bubble.
