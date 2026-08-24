@@ -13,7 +13,8 @@ are carried over automatically.
 - **Windows and iOS apps on the packages page.** Official clients live in
   `apps/` and are offered at [packages.html](https://shiba-studio.io/packages.html).
   CI compiles both on every push to `main` and `development` (and on the
-  `workflow_dispatch` re-runs that self-heal and weekly maintain use),
+  `workflow_dispatch` re-runs that self-heal, weekly maintain, and promote
+  use so a `GITHUB_TOKEN` merge still publishes `packages-main`),
   attaches the zips to rolling `packages-main` / `packages-development`
   releases, and weekly maintain is instructed to keep that pipeline listed.
   Tagged `v*` releases attach the same artifacts.

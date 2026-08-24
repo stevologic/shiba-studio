@@ -477,6 +477,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
@@ -501,3 +502,17 @@ jobs:
           if ! gh pr merge "$pr" --repo "$REPO" --merge --auto; then
             echo "Auto-merge could not be enabled; leaving the PR open until CI OK is green on this head."
           fi
+          # github-actions auto-merge uses GITHUB_TOKEN, so the merge push to
+          # main does not start workflows. Wait until main has the promotion,
+          # then dispatch CI so Windows/iOS packages still compile and publish.
+          for attempt in $(seq 1 40); do
+            ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
+            if [ "$ahead" = "0" ]; then
+              echo "Promotion is on main — dispatching CI so packages-main publishes."
+              gh workflow run ci.yml --ref main
+              exit 0
+            fi
+            echo "Waiting for promotion merge (ahead_by=$ahead) attempt=$attempt"
+            sleep 15
+          done
+          echo "::warning::Promotion still open after waiting; main CI was not dispatched."

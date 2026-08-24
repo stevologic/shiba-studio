@@ -93,6 +93,11 @@ function main() {
     /publish-packages:[\s\S]*?github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'/,
     'packages must republish after self-heal and weekly maintain re-dispatch CI',
   );
+  assert.match(
+    ci,
+    /Promote development[\s\S]*?gh workflow run ci\.yml --ref main/,
+    'promote must dispatch main CI after a github-actions merge so packages-main still compiles',
+  );
 
   const release = read('.github/workflows/release.yml');
   assert.match(release, /native-windows:/);

@@ -48,7 +48,9 @@ After a green compile on a **push** or **workflow_dispatch** to `main` or
 1. the rolling GitHub Release `packages-main` or `packages-development`;
 2. `packages/manifest.json` and `packages.html` on the `gh-pages` site.
 
-Tagged `v*` releases attach the same zips via `.github/workflows/release.yml`.
+Promote re-dispatches CI on `main` after a bot merge so the stable channel
+is not skipped. Tagged `v*` releases attach the same zips via
+`.github/workflows/release.yml`.
 
 ## Local compile
 
