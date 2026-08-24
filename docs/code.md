@@ -49,7 +49,7 @@ Connect a GitHub personal access token under **Capabilities → GitHub**. The to
 
 The terminal button opens Shiba Studio’s existing persistent host terminal. It is a real `xterm.js` and `node-pty` session that survives page navigation and can also be opened with **Ctrl/Cmd+`**.
 
-Use **Ctrl/Cmd+Shift+P** for Code commands such as saving, refreshing the tree and repository state, changing activities, and opening the terminal. The app-wide **Ctrl/Cmd+K** palette stays out of Monaco’s keyboard-chord handling while the editor has focus.
+Use **Ctrl/Cmd+Shift+P** for Code commands such as saving, refreshing the tree and repository state, changing activities, and opening the terminal. The app-wide **Ctrl/Cmd+K** palette stays out of Monaco’s keyboard-chord handling while the editor has focus. Press **?** (or **Ctrl/Cmd+/** outside Monaco) for the studio shortcut overlay.
 
 ## Capability boundary
 

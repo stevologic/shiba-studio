@@ -8,6 +8,12 @@ are carried over automatically.
 
 ## [Unreleased]
 
+### Added
+
+- **Keyboard shortcuts overlay.** Press `?` when not typing, or `Ctrl`/`⌘`+`/`,
+  or pick **Keyboard shortcuts** from the command palette. Studio-wide keys
+  stay out of the Code IDE so Monaco keeps its own chords.
+
 ### Changed
 
 - **Weekly maintain can read ChatGPT/Codex docs.** `fetch_url` now allows
@@ -20,13 +26,17 @@ are carried over automatically.
   `postcss` and `brace-expansion` 1.x/2.x are pinned to patched releases.
 - **Root advisory pins.** `hono` is overridden to 4.13.3 and Next's bundled
   `postcss` to 8.5.26 so root `npm audit` is clean at every severity.
+- **Public site matches shipped product.** gh-pages now documents the phone
+  assistant, Memories, Artifact Studio, Companion/native nodes, and keyboard
+  shortcuts, and the footer license links point at `LICENSE` / `COMMERCIAL.md`.
 
 ### Fixed
 
 - **Windows store-lock waits under contention.** Multi-process Board/agent
   writes share `.ownership-stores`; the lock wait (and the concurrency
-  verifier child) now allows 60s/120s on Windows so Node 24 CI does not
+  verifier child) now allows 90s/180s on Windows so Node 24 CI does not
   flake at the old 30s ceiling.
+
 - **Grok issue automation can push again.** Agents are fenced off
   `.github/workflows/*` because `GITHUB_TOKEN` cannot update workflow files
   (run 31644453870 failed the push, then closed the issue as if nothing
