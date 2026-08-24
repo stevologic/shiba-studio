@@ -89,7 +89,7 @@ async function main() {
   assert(publicDocs.includes('packages.html'), 'public docs link the packages page');
   const packages = await read('site/packages.html');
   assert(packages.includes('Shiba Studio for Windows'), 'packages page offers the Windows app');
-  assert(packages.includes('Shiba Studio for iOS'), 'packages page offers the iOS app');
+  assert(packages.includes('Shiba Studio for macOS'), 'packages page offers the macOS app');
 
   await log('PASS: all competitor feature structural checks');
   process.exit(0);

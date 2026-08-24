@@ -32,7 +32,7 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 
 - **Dashboard & approvals** — a focused operational home for readiness and recent runs, plus a quiet top-bar alert bell containing only exact actions that are currently waiting for approval.
 - **Artifact Studio** — checkpoint-backed HTML/PDF/Office previews with anchored review, visual verification, rollback, and revocable publishing.
-- **Remote and native companions** — a paired, scoped, encrypted-offline PWA for pending approvals and voice requests, official compiled **Windows** and **iOS** apps on the [packages page](https://shiba-studio.io/packages.html), and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
+- **Remote and native companions** — a paired, scoped, encrypted-offline PWA for pending approvals and voice requests, official compiled **Windows** and **macOS** desktop apps on the [packages page](https://shiba-studio.io/packages.html), and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
 - **Grok phone assistant** — call the Voice Agent Builder number and dictate Studio commands. Settings issues a one-time `shiba_phone_` bearer; Grok invokes the public MCP/command URL and Shiba creates Board cards, runs git, remembers facts, or starts durable work.
 
 - **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, **rich cards** (`shiba-card` fences for stats, progress, checklists, timelines, callouts, media, sparklines, bars, timecharts, or agent-designed custom layouts), inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Queue more messages while a reply streams; stick-to-bottom tracks growing reasoning; transport failures surface as short friendly copy instead of HTML dumps. Bind any chat to a **workspace folder** and Grok reads, writes, and searches its files directly.
@@ -261,7 +261,7 @@ tested `grok 0.2.103` binary.
 | [Capability Packs](docs/capability-packs.md) | Governed learn → review → activate workflow packs, permissions, versions, rollback, and uninstall |
 | [Artifact Studio](docs/artifact-studio.md) | Immutable previews, visual evidence, annotations, live refresh, rollback, and publishing |
 | [Native Nodes](docs/native-nodes.md) | Signed Windows-helper protocol and compatibility API for existing paired nodes |
-| [Native apps](docs/native-apps.md) | Windows host and iOS companion, packages page, and compile-on-push CI |
+| [Native apps](docs/native-apps.md) | Windows and macOS desktop hosts, packages page, and compile-on-push CI |
 | [Grok Build CLI](docs/cli.md) | Official installation and provenance, authenticated readiness, one-shot chat/agent delegation, output and safety contracts |
 | [Grok Build Harnesses](docs/grok-build-harnesses.md) | Managed headless requests, persistent `grok agent stdio` ACP, and external attachment/callback boundaries |
 | [API Reference](docs/api.md) | Every `/api/*` endpoint, curl examples, and the in-app interactive explorer at `/api-docs` |
@@ -318,7 +318,7 @@ Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Pri
 | `npm test` | Full functional verification suite — isolated, never touches your live data |
 | `npm run test:e2e` | Playwright browser E2E (run `npx playwright install chromium` + `npm run build` first) |
 | `npm run build:windows` | Compile the Windows desktop host (requires .NET 8 on Windows) |
-| `npm run build:ios` | Compile the iOS companion (requires Xcode on macOS) |
+| `npm run build:macos` | Compile the macOS desktop host (requires Xcode on a Mac) |
 
 ## Contributing & support
 

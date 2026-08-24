@@ -224,20 +224,20 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  native-ios:
-    name: iOS app · compile
+  native-macos:
+    name: macOS app · compile
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
-      - name: Compile iOS companion
-        run: bash apps/ios/build.sh
+      - name: Compile macOS desktop host
+        run: bash apps/macos/build.sh
 
       - uses: actions/upload-artifact@v6
         with:
-          name: shiba-studio-ios
-          path: dist/native/ios/ShibaStudio-ios-simulator.zip
+          name: shiba-studio-macos
+          path: dist/native/macos/ShibaStudio-macos.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -245,11 +245,11 @@ jobs:
   # Not part of CI OK — a Pages publish flake must not block promote.
   publish-packages:
     name: Publish packages page
-    needs: [native-windows, native-ios]
+    needs: [native-windows, native-macos]
     if: >-
       always() &&
       needs.native-windows.result == 'success' &&
-      needs.native-ios.result == 'success' &&
+      needs.native-macos.result == 'success' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development')
     runs-on: ubuntu-latest
@@ -283,7 +283,7 @@ jobs:
   # branch-protection contexts survive matrix/job renames above.
   ci-ok:
     name: CI OK
-    needs: [verify, audit, e2e, docker, native-windows, native-ios]
+    needs: [verify, audit, e2e, docker, native-windows, native-macos]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -305,7 +305,7 @@ jobs:
   # no-retrigger rule, so the healed commit gets a fresh full run).
   self-heal:
     name: Self-heal with Grok
-    needs: [verify, audit, e2e, docker, native-windows, native-ios]
+    needs: [verify, audit, e2e, docker, native-windows, native-macos]
     if: >-
       failure() &&
       github.ref == 'refs/heads/development' &&
@@ -504,7 +504,7 @@ jobs:
           fi
           # github-actions auto-merge uses GITHUB_TOKEN, so the merge push to
           # main does not start workflows. Wait until main has the promotion,
-          # then dispatch CI so Windows/iOS packages still compile and publish.
+          # then dispatch CI so Windows/macOS packages still compile and publish.
           for attempt in $(seq 1 40); do
             ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
             if [ "$ahead" = "0" ]; then

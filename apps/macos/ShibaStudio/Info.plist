@@ -20,7 +20,11 @@
   <string>0.2.0</string>
   <key>CFBundleVersion</key>
   <string>1</string>
-  <key>LSRequiresIPhoneOS</key>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSAppTransportSecurity</key>
   <dict>
@@ -29,25 +33,11 @@
     <key>NSAllowsArbitraryLoadsInWebContent</key>
     <true/>
   </dict>
-  <key>NSLocalNetworkUsageDescription</key>
-  <string>Shiba Studio connects to your paired host on the local network.</string>
-  <key>NSBonjourServices</key>
-  <array>
-    <string>_http._tcp</string>
-  </array>
-  <key>UILaunchScreen</key>
-  <dict/>
-  <key>UISupportedInterfaceOrientations</key>
-  <array>
-    <string>UIInterfaceOrientationPortrait</string>
-    <string>UIInterfaceOrientationLandscapeLeft</string>
-    <string>UIInterfaceOrientationLandscapeRight</string>
-  </array>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>io.shiba-studio.app</string>
+      <string>io.shiba-studio.macos</string>
       <key>CFBundleURLSchemes</key>
       <array>
         <string>shiba-studio</string>

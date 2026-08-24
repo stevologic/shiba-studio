@@ -49,7 +49,7 @@ async function main() {
   assert.match(weeklyPrompt, /Cursor/);
   assert.match(weeklyPrompt, /self-improve|this scheduled automation/i);
   assert.match(weeklyPrompt, /\.github\/workflows/);
-  assert.match(weeklyPrompt, /Windows and iOS/);
+  assert.match(weeklyPrompt, /Windows and macOS/);
   assert.match(weeklyPrompt, /packages page/);
   assert.doesNotMatch(weeklyPrompt, /grok-maintain\.yml/);
   assert.notEqual(dailyPrompt, weeklyPrompt);
@@ -167,8 +167,8 @@ async function main() {
   assert.match(ci, /gh pr merge .* --auto/);
   assert.match(ci, /github\.ref == 'refs\/heads\/development'/);
   assert.match(ci, /native-windows:/);
-  assert.match(ci, /native-ios:/);
-  assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows, native-ios\]/);
+  assert.match(ci, /native-macos:/);
+  assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows, native-macos\]/);
   assert.match(
     ci,
     /Gate — production build before the functional suite[\s\S]*npm run build[\s\S]*Gate — functional suite must pass before pushing[\s\S]*npm test/,

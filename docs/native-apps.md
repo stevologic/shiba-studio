@@ -1,34 +1,33 @@
 # Native apps
 
-Shiba Studio ships two compiled clients in addition to the source / Docker
+Shiba Studio ships two compiled desktop hosts in addition to the source / Docker
 install:
 
 | App | Kind | Source | Artifact |
 | --- | --- | --- | --- |
 | **Shiba Studio for Windows** | Desktop host (WebView2) | `apps/windows` | `ShibaStudio-windows-x64.zip` |
-| **Shiba Studio for iOS** | Companion (WKWebView) | `apps/ios` | `ShibaStudio-ios-simulator.zip` |
+| **Shiba Studio for macOS** | Desktop host (WKWebView) | `apps/macos` | `ShibaStudio-macos.zip` |
 
 They are listed on the public [packages page](https://shiba-studio.io/packages.html).
 `apps/catalog.json` is the source of truth for names, channels, and filenames.
 
 ## What each app does
 
-The **Windows** app is a native host, not a rewrite of Studio. It can:
+Both apps are native hosts, not a rewrite of Studio. Each can:
 
 - open a running Studio at `http://127.0.0.1:3000` (or another origin you type);
 - start `npm run start` from a checkout found via `SHIBA_STUDIO_ROOT`,
-  `%LOCALAPPDATA%\ShibaStudio\checkout`, or a nearby `package.json` named
-  `shiba-studio`;
+  a configured host file, or a nearby `package.json` named `shiba-studio`;
 - open `/companion` in the same window.
 
-It needs the Evergreen WebView2 runtime (current Windows 11 already has it)
-and Node.js ≥ 22.5 if you want it to start the server itself.
+Windows looks under `%LOCALAPPDATA%\ShibaStudio\checkout` and needs the
+Evergreen WebView2 runtime (current Windows 11 already has it).
 
-The **iOS** app is the official companion. The Next.js / `node:sqlite` /
-`node-pty` host cannot run on iOS. Pair it with a Studio that has remote
-Companion access enabled (`dev:lan` / `start:lan` or a public origin). CI
-produces a **simulator** build; device or App Store signing is a human step
-that uses the same Xcode project and an Apple certificate.
+macOS looks under `~/Library/Application Support/ShibaStudio/checkout`.
+CI produces an unsigned universal `.app` (arm64 + x86_64). First launch of a
+downloaded zip may need right-click → Open until a Developer ID certificate
+is added. Both hosts need Node.js ≥ 22.5 if you want them to start the
+server themselves.
 
 ## Compile on every push
 
@@ -36,7 +35,7 @@ that uses the same Xcode project and an Apple certificate.
 required jobs sit on that same pipeline:
 
 - `native-windows` — `dotnet publish` on `windows-latest`
-- `native-ios` — `apps/ios/build.sh` (`xcodebuild`) on `macos-latest`
+- `native-macos` — `apps/macos/build.sh` (`xcodebuild`) on `macos-latest`
 
 Both are part of **CI OK**, so a broken app project fails promotion the same
 way a red `npm test` does. The Grok self-heal job on `development` also
@@ -59,7 +58,7 @@ npm run build:windows
 ```
 
 ```bash
-npm run build:ios
+npm run build:macos
 ```
 
 `scripts/verify-native-apps.ts` (part of `npm test`) checks the catalog, app

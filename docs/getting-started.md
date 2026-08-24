@@ -10,12 +10,11 @@ Shiba Studio runs entirely on your machine. The only outbound traffic goes to xA
 
 ## Install
 
-Compiled **Windows** and **iOS** apps are offered on the public
+Compiled **Windows** and **macOS** desktop apps are offered on the public
 [packages page](https://shiba-studio.io/packages.html). CI compiles both on
 every push to `main` and `development` and publishes rolling
-`packages-main` / `packages-development` GitHub Releases. The Windows app is a
-native host for a local Studio server; the iOS app is the official companion
-(the full Node host cannot run on iOS). Source install remains the complete
+`packages-main` / `packages-development` GitHub Releases. Each app is a
+native host for a local Studio server. Source install remains the complete
 Studio. See [Native apps](native-apps.md).
 
 ### Windows

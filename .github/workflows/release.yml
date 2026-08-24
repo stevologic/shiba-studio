@@ -3,7 +3,7 @@ name: Release
 # Tag a commit `v*` (matching package.json's version) to cut a GitHub Release:
 #   git tag v0.2.0 && git push origin v0.2.0
 # The in-app footer notice compares against the latest release of this repo.
-# Windows and iOS packages compiled by this workflow are attached to the tag.
+# Windows and macOS packages compiled by this workflow are attached to the tag.
 
 on:
   push:
@@ -83,22 +83,22 @@ jobs:
           path: dist/native/packages/ShibaStudio-windows-x64.zip
           if-no-files-found: error
 
-  native-ios:
-    name: iOS app · compile
+  native-macos:
+    name: macOS app · compile
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-      - name: Compile iOS companion
-        run: bash apps/ios/build.sh
+      - name: Compile macOS desktop host
+        run: bash apps/macos/build.sh
       - uses: actions/upload-artifact@v6
         with:
-          name: shiba-studio-ios
-          path: dist/native/ios/ShibaStudio-ios-simulator.zip
+          name: shiba-studio-macos
+          path: dist/native/macos/ShibaStudio-macos.zip
           if-no-files-found: error
 
   release:
-    needs: [verify, native-windows, native-ios]
+    needs: [verify, native-windows, native-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -111,7 +111,7 @@ jobs:
           mkdir -p dist/release
           cp artifacts/release-notes/RELEASE_NOTES.md dist/release/RELEASE_NOTES.md
           cp artifacts/shiba-studio-windows/ShibaStudio-windows-x64.zip dist/release/
-          cp artifacts/shiba-studio-ios/ShibaStudio-ios-simulator.zip dist/release/
+          cp artifacts/shiba-studio-macos/ShibaStudio-macos.zip dist/release/
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -119,4 +119,4 @@ jobs:
           generate_release_notes: false
           files: |
             dist/release/ShibaStudio-windows-x64.zip
-            dist/release/ShibaStudio-ios-simulator.zip
+            dist/release/ShibaStudio-macos.zip
