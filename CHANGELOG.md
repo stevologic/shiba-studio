@@ -8,7 +8,23 @@ are carried over automatically.
 
 ## [Unreleased]
 
+### Added
+
+- **Keyboard shortcuts overlay.** Press `?` when not typing, or `Ctrl`/`⌘`+`/`,
+  or pick **Keyboard shortcuts** from the command palette. Studio-wide keys
+  stay out of the Code IDE so Monaco keeps its own chords.
+
+### Changed
+
+- **Public site matches shipped product.** gh-pages now documents the phone
+  assistant, Memories, Artifact Studio, Companion/native nodes, and keyboard
+  shortcuts, and the footer license links point at `LICENSE` / `COMMERCIAL.md`.
+
 ### Fixed
+
+- **Windows Board lock wait.** Store-file lock acquisition waits up to 90s on
+  Windows so concurrent Board/agent writers on Node 24 CI no longer time out
+  waiting for `.ownership-stores`.
 
 - **Grok issue automation can push again.** Agents are fenced off
   `.github/workflows/*` because `GITHUB_TOKEN` cannot update workflow files

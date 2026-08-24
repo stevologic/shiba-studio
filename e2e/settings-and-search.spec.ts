@@ -49,6 +49,17 @@ test('command palette searches runs/chats/logs', async ({ page }) => {
   await expect(page.locator('.command-palette-item').first()).toBeVisible();
 });
 
+test('keyboard shortcuts overlay opens from the top bar', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  const trigger = page.getByRole('button', { name: 'Keyboard shortcuts' });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
+  await expect(page.getByText('Command palette and global search')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toHaveCount(0);
+});
+
 test('logs page seeds search from ?q=', async ({ page }) => {
   await page.goto('/logs?q=system', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('input[placeholder*="Search"]').first()).toHaveValue('system');

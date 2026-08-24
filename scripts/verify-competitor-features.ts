@@ -32,8 +32,21 @@ async function main() {
   assert(desk.includes('CommandPalette'), 'shiba-studio imports command palette');
   assert(desk.includes('showCommandPalette'), 'shiba-studio palette state');
   assert(desk.includes("e.key.toLowerCase() === 'k'"), 'shiba-studio Ctrl+K handler');
+  assert(desk.includes('KeyboardShortcutsOverlay'), 'shiba-studio imports shortcuts overlay');
+  assert(desk.includes('showShortcuts'), 'shiba-studio shortcuts state');
+  assert(desk.includes("e.key === '/'"), 'shiba-studio Ctrl+/ handler');
   assert(desk.includes('/api/execute/stream'), 'shiba-studio uses streaming execute');
   assert(desk.includes('WorkspaceDiffPanel'), 'shiba-studio diff panel');
+
+  const storeLock = await read('lib/store-file-lock.ts');
+  assert(storeLock.includes("process.platform === 'win32' ? 90_000"), 'Windows store lock waits longer than POSIX');
+
+  const shortcuts = await read('lib/keyboard-shortcuts.ts');
+  assert(shortcuts.includes('STUDIO_SHORTCUTS'), 'shortcut catalog export');
+  assert(shortcuts.includes('Command palette and global search'), 'catalog covers Ctrl+K');
+  assert(shortcuts.includes('Toggle the host terminal'), 'catalog covers terminal');
+  const overlay = await read('components/keyboard-shortcuts-overlay.tsx');
+  assert(overlay.includes('aria-labelledby="shortcuts-heading"'), 'shortcuts overlay a11y');
 
   // Streaming API
   const streamRoute = await read('app/api/execute/stream/route.ts');
@@ -63,6 +76,15 @@ async function main() {
   const chatDocs = await read('docs/chat.md');
   assert(chatDocs.includes('/annotate'), 'docs cover annotation');
   assert(chatDocs.includes('/workspace'), 'docs cover chat workspaces');
+  assert(chatDocs.includes('keyboard-shortcut overlay'), 'docs cover shortcut overlay');
+
+  const site = await read('site/index.html');
+  assert(site.includes('Grok phone assistant'), 'marketing site covers phone assistant');
+  assert(site.includes('Artifact Studio'), 'marketing site covers Artifact Studio');
+  assert(site.includes('COMMERCIAL.md'), 'marketing site license link is current');
+  const publicDocs = await read('site/docs.html');
+  assert(publicDocs.includes('40+ tools total'), 'public docs use current tool count');
+  assert(publicDocs.includes('id="phone"'), 'public docs include phone assistant');
 
   await log('PASS: all competitor feature structural checks');
   process.exit(0);

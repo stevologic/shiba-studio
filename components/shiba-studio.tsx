@@ -7,7 +7,8 @@ import {
   Home, MessageSquare, Users, FolderOpen, FolderKanban, KanbanSquare, Clock, Plug, Settings, Play, Plus, Trash2, Edit2,
   Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
-  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Code2, Presentation
+  KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Code2, Presentation,
+  Keyboard
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -64,9 +65,11 @@ const RoutinesPanel = dynamic(
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
 const SyncModal = dynamic(() => import('@/components/sync-modal'));
 const CommandPalette = dynamic(() => import('@/components/command-palette'));
+const KeyboardShortcutsOverlay = dynamic(() => import('@/components/keyboard-shortcuts-overlay'));
 const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
 const ToolApprovalModal = dynamic(() => import('@/components/tool-approval-modal'));
 import { createClientId } from '@/lib/client-id';
+import { isEditableShortcutTarget } from '@/lib/keyboard-shortcuts';
 import { toast } from '@/lib/toast';
 import { getTerminalOpen, setTerminalOpen, toggleTerminalOpen, subscribeTerminalOpen } from '@/lib/terminal-ui-store';
 import {
@@ -633,6 +636,7 @@ export default function ShibaStudio() {
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [liveTrace, setLiveTrace] = useState<any[]>([]);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   // Terminal open state is global (root layout) so it survives tab navigation.
   const [showTerminal, setShowTerminalLocal] = useState(false);
   useEffect(() => {
@@ -3151,6 +3155,14 @@ export default function ShibaStudio() {
         keywords: ['terminal', 'shell', 'bash', 'pty', 'console'],
         run: () => setTerminalOpen(true),
       },
+      {
+        id: 'shortcuts',
+        label: 'Keyboard shortcuts',
+        hint: '?',
+        group: 'Actions',
+        keywords: ['help', 'hotkeys', 'keymap', 'cheatsheet'],
+        run: () => setShowShortcuts(true),
+      },
       ...agentCmds,
     ];
   }, [agents, navigateToTab]);
@@ -3160,7 +3172,21 @@ export default function ShibaStudio() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         if (e.target instanceof Element && e.target.closest('.monaco-editor')) return;
         e.preventDefault();
+        setShowShortcuts(false);
         setShowCommandPalette((v) => !v);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+        if (e.target instanceof Element && e.target.closest('.monaco-editor')) return;
+        e.preventDefault();
+        setShowCommandPalette(false);
+        setShowShortcuts((v) => !v);
+        return;
+      }
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key === '?' && !isEditableShortcutTarget(e.target)) {
+        e.preventDefault();
+        setShowCommandPalette(false);
+        setShowShortcuts(true);
       }
       // Ctrl+` is also handled in StudioTerminal; keep palette-only here to avoid double-toggle.
     };
@@ -3172,7 +3198,9 @@ export default function ShibaStudio() {
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (showTraceModal) {
+      if (showShortcuts) {
+        setShowShortcuts(false);
+      } else if (showTraceModal) {
         closeTraceModal();
       } else if (showAgentModal) {
         setShowAgentModal(false);
@@ -3199,7 +3227,7 @@ export default function ShibaStudio() {
     };
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
-  }, [showTraceModal, showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen, answerRun, historyAgent, runDetail, runDetailLoading, searchParams]);
+  }, [showShortcuts, showTraceModal, showAgentModal, showRunModal, showSyncModal, folderBrowseFor, mobileNavOpen, answerRun, historyAgent, runDetail, runDetailLoading, searchParams]);
 
   // Dynamic document titles (C7) — tabs are distinguishable in the browser.
   useEffect(() => {
@@ -3520,6 +3548,15 @@ export default function ShibaStudio() {
               title="Command palette (Ctrl+K)"
             >
               <Command size={14} /> <span className="text-dim text-xs">Ctrl+K</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowShortcuts(true)}
+              className="grok-btn grok-btn-ghost hidden sm:inline-flex items-center gap-1.5"
+              title="Keyboard shortcuts (?)"
+              aria-label="Keyboard shortcuts"
+            >
+              <Keyboard size={14} />
             </button>
             <button
               type="button"
@@ -6578,6 +6615,13 @@ export default function ShibaStudio() {
           onClose={() => setShowCommandPalette(false)}
           commands={paletteCommands}
           onOpenHref={(href) => router.push(href)}
+        />
+      )}
+
+      {showShortcuts && (
+        <KeyboardShortcutsOverlay
+          open={showShortcuts}
+          onClose={() => setShowShortcuts(false)}
         />
       )}
 

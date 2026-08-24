@@ -4,7 +4,7 @@
 
 ## Stack
 
-Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 with built-in `node:sqlite` · puppeteer for browser control · node-cron inside the durable Automation engine. No native modules anywhere — the repo builds identically on Windows, macOS, and Linux.
+Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 with built-in `node:sqlite` · puppeteer for browser control · node-cron inside the durable Automation engine · `node-pty` only for the host terminal. The rest of the repo builds identically on Windows, macOS, and Linux.
 
 ## Repo layout
 
@@ -33,6 +33,7 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 wi
 | `lib/app-events.ts`, `lib/live-events.ts` | Live change feed: stores emit on write → `/api/events` (SSE) → shell/board refresh without polling or page reloads |
 | `lib/brand.ts` | Brand source of truth: the shiba mark SVG and the 1200×630 share card that every committed icon is rendered from |
 | `scripts/verify-*.ts` | The functional verification suite (`verify-all.ts` chains them) |
+| `site/` | Marketing `index.html` / `docs.html` published to the `gh-pages` branch |
 | `playwright.config.ts`, `e2e/*.spec.ts` | Browser E2E (nav, settings, search) — `npm run test:e2e` |
 
 ## Scripts

@@ -281,6 +281,7 @@ tested `grok 0.2.103` binary.
 - **Run provenance everywhere** — dashboard runs, agent history, Automation history, and the audit log all deep-link to full execution traces; removing an execution owner safely retires its Automations while preserving history.
 - **Cost & safety guardrails** — monthly *and* daily spend limits with an optional hard stop, a global concurrent-run cap, per-run token caps, and overlap-suppressed Automation invocations (Settings → Cost & safety).
 - **Global search** — Ctrl+K searches chats, memories, agent runs, and the audit log alongside commands, deep-linking straight to the result.
+- **Keyboard shortcuts overlay** — press `?` (or Ctrl/⌘+/) for the same cheatsheet Cursor and VS Code users expect: palette, terminal, chat, and Code IDE keys.
 - **Backup & restore** — export your entire studio (settings, agents, chats, projects, runs, audit log) to one file and restore it on another machine.
 - **Bounded Board sync** — mirror task fields and optional workflow status with Linear or Jira, or explicitly send/pull a safe Board snapshot through private Grok Files. Assignments, active work, activity, runs, provider links, and deletions stay local.
 - **Cross-session agent learning** — scoped SQLite memories are relevance-ranked and injected automatically; successful runs can propose or activate safe learned memories with provenance and manual-review controls.

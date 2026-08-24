@@ -6,7 +6,10 @@ const builtinFs = process.getBuiltinModule?.('fs') as typeof import('fs') | unde
 if (!builtinFs) throw new Error('Shiba Studio requires Node.js 22.5+');
 const fs = builtinFs.promises;
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+// Windows directory-rename locks serialize much more slowly than POSIX.
+// Eight concurrent Board/agent writers can wait longer than 30s at the back
+// of the queue on GitHub-hosted Windows runners (Node 24), so give them room.
+const DEFAULT_TIMEOUT_MS = process.platform === 'win32' ? 90_000 : 30_000;
 const MALFORMED_LOCK_GRACE_MS = 5_000;
 const TRANSIENT_WINDOWS_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
