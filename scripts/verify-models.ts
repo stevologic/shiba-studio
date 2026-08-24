@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseXaiModelList, expandModelSelectableIds } from '../lib/grok-client';
+import { parseXaiModelList, expandModelSelectableIds, grokConversationId } from '../lib/grok-client';
 import {
   CHEAP_CLOUD_MODEL_REF,
   DEFAULT_CLOUD_MODEL_ID,
@@ -12,7 +12,14 @@ import {
   replayBudgetForModel,
   resolveDefaultCloudModel,
 } from '../lib/model-providers';
-import { estimateTokenCost, getModelPricing } from '../lib/usage';
+import {
+  estimateTokenCost,
+  getModelPricing,
+  parseBilledCostUsd,
+  parseGrokUsage,
+  resolveUsageCostUsd,
+  XAI_USD_TICKS_PER_DOLLAR,
+} from '../lib/usage';
 
 function main() {
   const sample = {
@@ -76,9 +83,11 @@ function main() {
   const pricing46 = getModelPricing('cloud:grok-4.6');
   assert.equal(pricing46.inputPer1M, 2);
   assert.equal(pricing46.outputPer1M, 6);
+  assert.equal(pricing46.cachedInputPer1M, 0.5);
   const pricing43 = getModelPricing('grok-4.3-latest');
   assert.equal(pricing43.inputPer1M, 1.25);
   assert.equal(pricing43.outputPer1M, 2.5);
+  assert.equal(pricing43.cachedInputPer1M, 0.2);
 
   const short = estimateTokenCost('grok-4.6', 1_000_000, 0);
   const long = estimateTokenCost('grok-4.6', 200_000, 0);
@@ -87,6 +96,25 @@ function main() {
   assert.equal(long, 0.8);
   assert.equal(short, 4);
   assert.equal(estimateTokenCost('grok-4.3', 200_000, 0), 0.5);
+  assert.equal(estimateTokenCost('grok-4.6', 1_000_000, 0, 0, 800_000), 1.6);
+  assert.equal(estimateTokenCost('grok-4.6', 200_000, 0, 0, 150_000), 0.35);
+
+  const responsesUsage = parseGrokUsage({
+    input_tokens: 200,
+    output_tokens: 20,
+    total_tokens: 220,
+    input_tokens_details: { cached_tokens: 120 },
+    cost_in_usd_ticks: 37_756_000,
+  });
+  assert.equal(responsesUsage?.cachedTokens, 120);
+  assert.equal(parseBilledCostUsd({ cost_in_usd_ticks: 37_756_000 }), 37_756_000 / XAI_USD_TICKS_PER_DOLLAR);
+  assert.equal(
+    resolveUsageCostUsd('cloud:grok-4.6', { cost_in_usd_ticks: 37_756_000, input_tokens: 200, output_tokens: 20 }),
+    37_756_000 / XAI_USD_TICKS_PER_DOLLAR,
+  );
+  assert.equal(resolveUsageCostUsd('local:llama', { prompt_tokens: 100, completion_tokens: 10 }), 0);
+  assert.equal(grokConversationId(' session-42 '), 'session-42');
+  assert.equal(grokConversationId(''), undefined);
 
   console.log('verify-models: OK', expanded.map((m) => m.id).join(', '));
 }

@@ -93,6 +93,7 @@ export async function POST(req: NextRequest) {
           agents,
           messages,
           reasoningEffort: requestChatSession?.reasoningEffort || body.reasoningEffort,
+          sessionId: requestChatSession?.id,
         })) {
           controller.enqueue(encoder.encode(encodeSseEvent(event)));
         }

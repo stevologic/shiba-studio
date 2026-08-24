@@ -417,9 +417,9 @@ function UsageBadgeExplainer({
       <div className="text-xs text-dim mt-1">{prefLine}</div>
       {showGap && (
         <div className="text-xs text-muted mt-2 usage-badge-gap">
-          Studio metering below estimates <strong>{fmtUsd(studioEstimateUsd)}</strong> from full public
-          per-token rates. The billed figure is lower because xAI discounts cached-prompt tokens and
-          applies your account’s actual pricing — the sidebar shows the billed number.
+          Studio metering below estimates <strong>{fmtUsd(studioEstimateUsd)}</strong> from this app’s
+          request ledger (billed ticks when present, otherwise public rates with the cached-prompt
+          discount). The sidebar shows the account-wide billed number from xAI.
         </div>
       )}
       {!isXai && (

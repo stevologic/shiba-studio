@@ -47,11 +47,14 @@ async function main() {
     /** SSE bodies served for `/v1/responses` streaming calls (grok-4 streams there). */
     const streamReplies: string[] = [];
     const chatRequests: Array<{ messages?: Array<{ role: string; content: string }> }> = [];
+    const convIds: Array<string | null> = [];
     let chatCalls = 0;
     let pendingGate: Promise<void> | null = null;
     oauth.setTokenFetcher(async (input, init) => {
       const url = String(input);
-      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer xai-verifier-key', 'cloud auth stays server-side');
+      const requestHeaders = new Headers(init?.headers);
+      assert.equal(requestHeaders.get('authorization'), 'Bearer xai-verifier-key', 'cloud auth stays server-side');
+      convIds.push(requestHeaders.get('x-grok-conv-id'));
       chatRequests.push(JSON.parse(String(init?.body || '{}')));
       chatCalls++;
       if (pendingGate) {
@@ -87,6 +90,7 @@ async function main() {
     }));
     const meeting = await liveMeetings.createLiveMeeting({ agentId: 'agent-reviewer', title: 'Sprint review', focus: 'launch readiness' });
     assert.equal(meeting.status, 'active');
+    assert.equal(convIds[0], meeting.id, 'opening turn pins xAI prompt-cache routing to the meeting');
     assert.equal(meeting.turns.length, 1);
     const opening = meeting.turns[0];
     assert.equal(opening.role, 'agent');
@@ -187,6 +191,7 @@ async function main() {
     assert.equal(streamedTurn.text, sayFull);
     assert.deepEqual(streamedTurn.suggestions, ['Keep going']);
     assert.equal(streamEvents[streamEvents.length - 1]?.type, 'done');
+    assert.equal(convIds[convIds.length - 1], meeting.id, 'streamed turns reuse the same cache conversation id');
     assert(
       JSON.stringify(chatRequests[chatRequests.length - 1]).includes('export function greet'),
       'the streaming request also carries recent visual content',

@@ -24,6 +24,7 @@ export const FETCH_HOST_ALLOWLIST = [
   "docs.x.ai",
   "x.ai",
   "docs.anthropic.com",
+  "platform.claude.com",
   "code.claude.com",
   "platform.openai.com",
   "help.openai.com",

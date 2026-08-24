@@ -144,7 +144,7 @@ The primary Studio surface calls these **Automations**. Every recurring, one-tim
 | --- | --- | --- |
 | GET | `/api/search` | Global FTS5 search across chats, runs, and the audit log (`?q=`). |
 | GET | `/api/logs` | Audit log, paginated (`?q`, `?category`, `?limit`, `?offset`). |
-| GET | `/api/usage` | Usage & cost summary (studio metering + optional xAI billing backport). |
+| GET | `/api/usage` | Usage & cost summary (studio metering from billed ticks / cached-prompt rates + optional xAI billing backport). |
 | GET | `/api/doctor` | Machine-readable, secret-free, read-only model/auth, static MCP launch readiness, isolated browser launch health, task/storage, worktree/Git-origin, firewall/LAN-origin boundary, and pack/native-helper compatibility diagnostics. Arbitrary MCP processes start only through their separate explicit Test action. |
 | GET/POST | `/api/doctor/repairs` | Compatibility endpoint to preview or apply one exact-confirmed, audited repair. |
 

@@ -11,6 +11,7 @@ export interface MultiAgentChatParams {
   agents: Agent[];
   messages: ChatMessagePayload[];
   reasoningEffort?: ReasoningEffort;
+  sessionId?: string | null;
 }
 
 function latestUserMessage(messages: ChatMessagePayload[]): string {
@@ -28,7 +29,7 @@ function conversationContext(messages: ChatMessagePayload[], maxTurns = 6): Chat
 }
 
 export async function* multiAgentChatStream(params: MultiAgentChatParams): AsyncGenerator<ChatStreamEvent> {
-  const { agents, model, messages, reasoningEffort, cloudKey, signal } = params;
+  const { agents, model, messages, reasoningEffort, cloudKey, signal, sessionId } = params;
   if (!agents.length) {
     yield { type: 'error', message: 'No agents configured. Create agents first.' };
     return;
@@ -102,7 +103,8 @@ export async function* multiAgentChatStream(params: MultiAgentChatParams): Async
           ],
           max_tokens: 1200,
           temperature: 0.7,
-          usageContext: { source: 'chat', sourceId: `agent:${agent.id}` },
+          usageContext: { source: 'chat', sourceId: sessionId || `agent:${agent.id}` },
+          conversationId: sessionId ? `${sessionId}:${agent.id}` : `agent:${agent.id}`,
         });
         const content = resp.choices?.[0]?.message?.content?.trim() || '(no response)';
         const perspective = { agentId: agent.id, name: agent.name, content };
@@ -157,7 +159,8 @@ export async function* multiAgentChatStream(params: MultiAgentChatParams): Async
     signal,
     messages: synthesisMessages,
     reasoningEffort,
-    usageContext: { source: 'chat', sourceId: 'multi-agent' },
+    usageContext: { source: 'chat', sourceId: sessionId || 'multi-agent' },
+    conversationId: sessionId || 'multi-agent',
   })) {
     yield event;
   }

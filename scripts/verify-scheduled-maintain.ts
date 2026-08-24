@@ -74,6 +74,7 @@ async function main() {
 
   assert.equal(lib.fetchHostAllowed('https://docs.x.ai/developers/models'), true);
   assert.equal(lib.fetchHostAllowed('https://code.claude.com/docs/en/overview'), true);
+  assert.equal(lib.fetchHostAllowed('https://platform.claude.com/docs/en/agents-and-tools/overview'), true);
   assert.equal(lib.fetchHostAllowed('https://learn.chatgpt.com/docs/long-running-work'), true);
   assert.equal(lib.fetchHostAllowed('https://evil.example/steal'), false);
   assert.equal(
