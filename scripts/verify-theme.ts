@@ -11,6 +11,7 @@ import {
   usesRetiredAccent,
 } from '../lib/theme';
 import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import * as path from 'path';
 import puppeteer from 'puppeteer';
 import { spawn, ChildProcess } from 'child_process';
@@ -90,9 +91,16 @@ async function waitForServer(url: string, timeoutMs = 30000): Promise<void> {
   throw new Error(`Server not ready at ${url} within ${timeoutMs}ms`);
 }
 
+function assertProductionBuild(): void {
+  const nextDir = path.join(process.cwd(), '.next');
+  if (!existsSync(nextDir)) {
+    throw new Error('No production build found (.next is missing). Run `npm run build` before theme launch verification.');
+  }
+}
+
 function startProdServer(): ChildProcess {
   const nextCli = path.join(process.cwd(), 'node_modules', 'next', 'dist', 'bin', 'next');
-  return spawn(process.execPath, [nextCli, 'start', '--port', String(PORT)], {
+  return spawn(process.execPath, [nextCli, 'start', '-H', '127.0.0.1', '--port', String(PORT)], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
@@ -118,7 +126,7 @@ async function runHeadlessLaunch(runIndex: 1 | 2): Promise<{
   });
   page.on('pageerror', (err) => consoleErrors.push(String(err)));
 
-  await page.goto(`http://localhost:${PORT}/?themeVerify=${runIndex}-${Date.now()}`, {
+  await page.goto(`http://127.0.0.1:${PORT}/?themeVerify=${runIndex}-${Date.now()}`, {
     // networkidle2, not 0: the shell keeps one SSE connection (/api/events)
     // open for live updates, so zero-in-flight never happens.
     waitUntil: 'networkidle2',
@@ -162,7 +170,7 @@ async function runLaunchVerificationOnce(): Promise<void> {
   PORT = await getFreePort();
   const server = startProdServer();
   try {
-    await waitForServer(`http://localhost:${PORT}`);
+    await waitForServer(`http://127.0.0.1:${PORT}`);
     console.log('  Server ready on port', PORT);
 
     const run1 = await runHeadlessLaunch(1);
@@ -194,6 +202,7 @@ async function runLaunchVerificationOnce(): Promise<void> {
 
 async function runLaunchVerification(): Promise<void> {
   console.log('=== THEME LAUNCH VERIFICATION (built app) ===');
+  assertProductionBuild();
   await fs.mkdir(SCRATCH, { recursive: true });
 
   let lastErr: unknown;

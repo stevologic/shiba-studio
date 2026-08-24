@@ -436,7 +436,14 @@ async function main() {
     writeFileSync(SUMMARY_FILE, `${doneState.summary || "no change"}\n`);
     process.exit(0);
   }
-  if (!finalized.dirty) fail("Grok reported a change but the working tree is unchanged.");
+  if (!finalized.dirty) {
+    if (finalized.revertedWorkflows) {
+      log("scheduled-maintain: dropped workflow-only edits (GITHUB_TOKEN cannot push .github/workflows)");
+      writeFileSync(SUMMARY_FILE, `${doneState.summary || "workflow-only edits dropped"}\n`);
+      process.exit(0);
+    }
+    fail("Grok reported a change but the working tree is unchanged.");
+  }
   const dirty = finalized.dirty;
 
   const oneLine = doneState.summary.replace(/\s+/g, " ").trim().slice(0, 80) || `${MODE} maintenance`;
