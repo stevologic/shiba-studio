@@ -38,6 +38,11 @@ function main() {
   assert.match(packer, /https:\/\/shiba-studio\.io\/packages\/manifest\.json/);
   assert.match(packer, /'next', 'dist', 'bin', 'next'/);
   assert.match(packer, /app\.json/);
+  assert.match(packer, /copyTree/);
+  assert.match(packer, /lstatSync/);
+  assert.match(packer, /parts\.includes\('\.bin'\)/);
+  assert.match(packer, /function fsPath/);
+  assert.match(packer, /win32/);
   assert.equal(existsSync(path.join(ROOT, 'scripts/ci/pack-windows-app.ps1')), true);
   assert.equal(existsSync(path.join(ROOT, 'scripts/ci/pack-macos-app.sh')), true);
   assert.match(read('scripts/ci/pack-windows-app.ps1'), /pack-desktop-runtime\.mjs/);

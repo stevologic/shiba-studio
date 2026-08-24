@@ -13,7 +13,7 @@
  *     --channel development \
  *     --sha "$(git rev-parse HEAD)"
  */
-import { cpSync, copyFileSync, chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -87,8 +87,8 @@ function parseArgs(argv) {
 
 function readPackageName(root) {
   const file = path.join(root, 'package.json');
-  if (!existsSync(file)) fail(`Missing ${file}`);
-  const pkg = JSON.parse(readFileSync(file, 'utf8'));
+  if (!existsSync(fsPath(file))) fail(`Missing ${file}`);
+  const pkg = JSON.parse(readFileSync(fsPath(file), 'utf8'));
   if (pkg.name !== 'shiba-studio') fail(`${file} is not shiba-studio`);
   return pkg;
 }
@@ -96,8 +96,8 @@ function readPackageName(root) {
 function assertBuild(root) {
   const nextDir = path.join(root, '.next');
   const nextCli = path.join(root, 'node_modules', 'next', 'dist', 'bin', 'next');
-  if (!existsSync(nextDir)) fail(`No production build at ${nextDir}. Run npm run build first.`);
-  if (!existsSync(nextCli)) fail(`Next CLI missing at ${nextCli}. Run npm ci first.`);
+  if (!existsSync(fsPath(nextDir))) fail(`No production build at ${nextDir}. Run npm run build first.`);
+  if (!existsSync(fsPath(nextCli))) fail(`Next CLI missing at ${nextCli}. Run npm ci first.`);
 }
 
 function shouldSkip(src, root) {
@@ -107,23 +107,75 @@ function shouldSkip(src, root) {
   if (parts.some((part) => SKIP_DIR_NAMES.has(part))) return true;
   if (parts[0] === '.next' && parts[1] === 'cache') return true;
   if (parts[0] === 'node_modules' && parts.includes('.cache')) return true;
+  // Windows npm uses cmd shims / junctions here; the hosts invoke Next by path.
+  if (parts[0] === 'node_modules' && parts.includes('.bin')) return true;
   return false;
 }
 
+// Node can still hit MAX_PATH when copying node_modules into dist/native/...
+function fsPath(p) {
+  if (process.platform !== 'win32') return p;
+  const resolved = path.resolve(p);
+  if (resolved.startsWith('\\\\?\\')) return resolved;
+  if (resolved.startsWith('\\\\')) return `\\\\?\\UNC\\${resolved.slice(2)}`;
+  return `\\\\?\\${resolved}`;
+}
+
 function copyFiltered(from, to, root) {
-  if (!existsSync(from)) return;
-  mkdirSync(path.dirname(to), { recursive: true });
-  cpSync(from, to, {
-    recursive: true,
-    dereference: true,
-    filter: (src) => !shouldSkip(src, root),
-  });
+  if (!existsSync(fsPath(from))) return;
+  mkdirSync(fsPath(path.dirname(to)), { recursive: true });
+  copyTree(from, to, root, new Set());
+}
+
+// Walk and copy real files. `fs.cpSync({ dereference: true })` throws on Windows
+// npm junctions (EPERM / EINVAL / ELOOP) and can loop on circular links.
+function copyTree(from, to, root, stack) {
+  if (shouldSkip(from, root)) return;
+
+  let stat;
+  try {
+    stat = lstatSync(fsPath(from));
+  } catch {
+    return;
+  }
+
+  if (stat.isSymbolicLink()) {
+    let target;
+    try {
+      target = realpathSync(fsPath(from));
+    } catch {
+      return;
+    }
+    copyTree(target, to, root, stack);
+    return;
+  }
+
+  if (stat.isDirectory()) {
+    let real = from;
+    try {
+      real = realpathSync(fsPath(from));
+    } catch {
+      return;
+    }
+    if (stack.has(real)) return;
+    stack.add(real);
+    mkdirSync(fsPath(to), { recursive: true });
+    for (const name of readdirSync(fsPath(from))) {
+      copyTree(path.join(from, name), path.join(to, name), root, stack);
+    }
+    stack.delete(real);
+    return;
+  }
+
+  if (!stat.isFile()) return;
+  mkdirSync(fsPath(path.dirname(to)), { recursive: true });
+  copyFileSync(fsPath(from), fsPath(to));
 }
 
 function copyFileIfExists(from, to) {
-  if (!existsSync(from)) return;
-  mkdirSync(path.dirname(to), { recursive: true });
-  copyFileSync(from, to);
+  if (!existsSync(fsPath(from))) return;
+  mkdirSync(fsPath(path.dirname(to)), { recursive: true });
+  copyFileSync(fsPath(from), fsPath(to));
 }
 
 function copyNode(out, platform) {
@@ -131,9 +183,9 @@ function copyNode(out, platform) {
   const dest = platform === 'windows'
     ? path.join(out, 'node.exe')
     : path.join(out, 'bin', 'node');
-  mkdirSync(path.dirname(dest), { recursive: true });
-  copyFileSync(source, dest);
-  if (platform !== 'windows') chmodSync(dest, 0o755);
+  mkdirSync(fsPath(path.dirname(dest)), { recursive: true });
+  copyFileSync(source, fsPath(dest));
+  if (platform !== 'windows') chmodSync(fsPath(dest), 0o755);
   return dest;
 }
 
@@ -151,7 +203,7 @@ function writeIdentity(out, { platform, channel, sha, nodePath }) {
     manifestUrl: 'https://shiba-studio.io/packages/manifest.json',
     packagesPage: 'https://shiba-studio.io/packages.html',
   };
-  writeFileSync(path.join(out, 'app.json'), `${JSON.stringify(identity, null, 2)}\n`);
+  writeFileSync(fsPath(path.join(out, 'app.json')), `${JSON.stringify(identity, null, 2)}\n`);
   return identity;
 }
 
@@ -160,8 +212,8 @@ export function packDesktopRuntime(options) {
   readPackageName(root);
   assertBuild(root);
 
-  rmSync(out, { recursive: true, force: true });
-  mkdirSync(out, { recursive: true });
+  rmSync(fsPath(out), { recursive: true, force: true });
+  mkdirSync(fsPath(out), { recursive: true });
 
   for (const file of [
     'package.json',
