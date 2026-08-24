@@ -48,6 +48,10 @@ The `promote` job runs after the aggregate `CI OK` job succeeds on
    `CI OK` as a required status check, so the merge only lands once that
    check is green on the PR's head commit — which the just-finished green
    run already provides.
+3. Waits for that merge, then `gh workflow run ci.yml --ref main`. A
+   `github-actions` auto-merge uses `GITHUB_TOKEN` and does not start the
+   main push pipeline; the dispatch is what compiles and publishes the
+   stable Windows/iOS packages.
 
 `CI OK` exists so branch protection tracks a single stable context instead
 of every matrix leg name; keep it in sync with the job list in `ci.yml`.
