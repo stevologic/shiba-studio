@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Shiba Studio Packages — Windows and iOS apps</title>
-<meta name="description" content="Download the official Shiba Studio Windows host and iOS companion. Compiled on every push to main and development." />
+<title>Shiba Studio Packages — Windows and macOS apps</title>
+<meta name="description" content="Download the official Shiba Studio Windows and macOS desktop hosts. Compiled on every push to main and development." />
 <link rel="icon" href="favicon.ico" sizes="32x32" />
 <link rel="icon" type="image/svg+xml" href="logo.svg" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
@@ -12,11 +12,11 @@
 <meta property="og:url" content="https://shiba-studio.io/packages.html" />
 <meta property="og:site_name" content="Shiba Studio" />
 <meta property="og:title" content="Shiba Studio Packages" />
-<meta property="og:description" content="Official Windows and iOS apps, compiled on every push to main and development." />
+<meta property="og:description" content="Official Windows and macOS desktop apps, compiled on every push to main and development." />
 <meta property="og:image" content="https://shiba-studio.io/og-card.png" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Shiba Studio Packages" />
-<meta name="twitter:description" content="Official Windows and iOS apps, compiled on every push to main and development." />
+<meta name="twitter:description" content="Official Windows and macOS desktop apps, compiled on every push to main and development." />
 <meta name="twitter:image" content="https://shiba-studio.io/og-card.png" />
 <style>
   :root {
@@ -85,7 +85,7 @@
   <header id="packages">
     <h1>Packages</h1>
     <p class="lead">
-      Official Windows and iOS apps. CI compiles both on every push to
+      Official Windows and macOS desktop apps. CI compiles both on every push to
       <code>main</code> and <code>development</code>, then publishes the artifacts here.
     </p>
   </header>
@@ -103,23 +103,23 @@
       <p class="meta channel-development" data-app="windows">Development channel updates on every push to development.</p>
     </article>
 
-    <article class="card" id="ios">
-      <h2>Shiba Studio for iOS</h2>
-      <p>Official companion. Pair it with a Studio host that has remote Companion access enabled — the full Node server cannot run on iPhone or iPad.</p>
-      <p class="meta">Artifact: <code>ShibaStudio-ios-simulator.zip</code></p>
+    <article class="card" id="macos">
+      <h2>Shiba Studio for macOS</h2>
+      <p>Native WKWebView host for Mac. Start a local checkout with <code>npm run start</code>, or attach to a Studio that is already running on this machine.</p>
+      <p class="meta">Artifact: <code>ShibaStudio-macos.zip</code></p>
       <div class="offers">
-        <a class="btn btn-primary" id="ios-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-ios-simulator.zip">Download stable (main)</a>
-        <a class="btn btn-ghost" id="ios-development" href="https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-ios-simulator.zip">Download development</a>
+        <a class="btn btn-primary" id="macos-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-macos.zip">Download stable (main)</a>
+        <a class="btn btn-ghost" id="macos-development" href="https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-macos.zip">Download development</a>
       </div>
-      <p class="meta channel-main" data-app="ios">Stable channel updates on every push to main.</p>
-      <p class="meta channel-development" data-app="ios">Development channel updates on every push to development.</p>
+      <p class="meta channel-main" data-app="macos">Stable channel updates on every push to main.</p>
+      <p class="meta channel-development" data-app="macos">Development channel updates on every push to development.</p>
     </article>
   </div>
 
   <div class="note">
-    The iOS zip is a simulator build produced by <code>xcodebuild</code> on every push.
-    Device and App Store signing stay a human Apple-certificate step; the Xcode project lives in
-    <code>apps/ios</code>. Windows needs the Evergreen WebView2 runtime (already present on current Windows 11).
+    The macOS zip is an unsigned universal <code>.app</code> (Apple Silicon and Intel) from
+    <code>xcodebuild</code>. First launch of a downloaded build may need right-click → Open.
+    Windows needs the Evergreen WebView2 runtime (already present on current Windows 11).
   </div>
 
   <footer>
