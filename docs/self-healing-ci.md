@@ -52,12 +52,12 @@ The `promote` job runs after the aggregate `CI OK` job succeeds on
    Actions API (this job has no checkout, so `gh workflow run` cannot be
    used). A `github-actions` auto-merge uses `GITHUB_TOKEN` and does not
    start the main push pipeline; the dispatch is what compiles and
-   publishes the stable Windows/iOS packages.
+   publishes the stable Windows/macOS packages.
 
 `CI OK` exists so branch protection tracks a single stable context instead
 of every matrix leg name; keep it in sync with the job list in `ci.yml`.
-That list includes the Windows and iOS app compile jobs (`native-windows`,
-`native-ios`) so a broken desktop/companion project fails the same gate as
+That list includes the Windows and macOS app compile jobs (`native-windows`,
+`native-macos`) so a broken desktop host project fails the same gate as
 `npm test`. Successful compiles on `main` and `development` (a direct push
 or the `workflow_dispatch` re-run that self-heal and weekly maintain use)
 then publish those artifacts to rolling GitHub Releases and

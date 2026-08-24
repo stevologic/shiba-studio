@@ -15,14 +15,14 @@
       "summary": "Native WebView2 host that starts or attaches to a local Shiba Studio server."
     },
     {
-      "id": "ios",
-      "name": "Shiba Studio for iOS",
-      "platform": "ios",
-      "kind": "companion",
+      "id": "macos",
+      "name": "Shiba Studio for macOS",
+      "platform": "macos",
+      "kind": "desktop-host",
       "enabled": true,
-      "project": "apps/ios/ShibaStudio.xcodeproj",
-      "artifact": "ShibaStudio-ios-simulator.zip",
-      "summary": "Official iOS companion that pairs with a running Studio over LAN or Tailscale."
+      "project": "apps/macos/ShibaStudio.xcodeproj",
+      "artifact": "ShibaStudio-macos.zip",
+      "summary": "Native WKWebView host for Mac that starts or attaches to a local Shiba Studio server."
     }
   ]
 }

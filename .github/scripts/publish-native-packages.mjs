@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Publish compiled Windows/iOS packages for the current branch channel.
+ * Publish compiled Windows/macOS packages for the current branch channel.
  *
  * Expects:
  *   source/                 repo checkout
@@ -80,9 +80,9 @@ function sh(cmd, args, opts = {}) {
 }
 
 const notes = [
-  `Rolling ${channel} Windows and iOS packages compiled from ${sha || 'HEAD'}.`,
+  `Rolling ${channel} Windows and macOS packages compiled from ${sha || 'HEAD'}.`,
   runUrl ? `CI run: ${runUrl}` : '',
-  'The iOS zip is a simulator build. Device / App Store signing stays a human Apple-certificate step.',
+  'The macOS zip is an unsigned universal .app. First launch may need right-click → Open until a Developer ID certificate is added.',
 ].filter(Boolean).join('\n');
 
 const view = spawnSync('gh', ['release', 'view', tag, '--repo', repo], { encoding: 'utf8' });
@@ -99,6 +99,17 @@ if (view.status !== 0) {
 } else {
   sh('gh', ['release', 'edit', tag, '--repo', repo, '--notes', notes, '--target', sha || channel]);
   sh('gh', ['release', 'upload', tag, '--repo', repo, '--clobber', ...uploadFiles]);
+}
+
+const keep = new Set(catalog.apps.map((app) => app.artifact));
+const listed = spawnSync('gh', ['release', 'view', tag, '--repo', repo, '--json', 'assets'], { encoding: 'utf8' });
+if (listed.status === 0) {
+  const assets = JSON.parse(listed.stdout).assets || [];
+  for (const asset of assets) {
+    if (!keep.has(asset.name)) {
+      sh('gh', ['release', 'delete-asset', tag, asset.name, '--repo', repo, '--yes']);
+    }
+  }
 }
 
 if (!existsSync(siteRoot)) {
@@ -138,7 +149,7 @@ const dirty = spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: siteRoot 
 if (dirty.status === 0) {
   console.log('Packages page is already current.');
 } else {
-  git(['commit', '-m', `chore(pages): publish ${channel} Windows and iOS packages`]);
+  git(['commit', '-m', `chore(pages): publish ${channel} Windows and macOS packages`]);
   git(['push', 'origin', 'HEAD:gh-pages']);
 }
 

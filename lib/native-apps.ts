@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const NATIVE_APP_PLATFORMS = ['windows', 'ios'] as const;
+export const NATIVE_APP_PLATFORMS = ['windows', 'macos'] as const;
 export type NativeAppPlatform = (typeof NATIVE_APP_PLATFORMS)[number];
 
 export const NATIVE_APP_KINDS = ['desktop-host', 'companion'] as const;
@@ -102,7 +102,7 @@ export function parseNativeAppCatalog(raw: unknown): NativeAppCatalog {
     if (!isChannel(channel)) throw new Error(`Unknown native app channel: ${String(channel)}`);
   }
   if (!Array.isArray(input.apps) || input.apps.length !== NATIVE_APP_PLATFORMS.length) {
-    throw new Error('Catalog must list exactly the Windows and iOS apps');
+    throw new Error('Catalog must list exactly the Windows and macOS apps');
   }
 
   const apps = input.apps.map((entry, index) => {
@@ -126,10 +126,8 @@ export function parseNativeAppCatalog(raw: unknown): NativeAppCatalog {
     const kind = app.kind;
     switch (platform) {
       case 'windows':
-        if (kind !== 'desktop-host') throw new Error('Windows app must be a desktop host');
-        break;
-      case 'ios':
-        if (kind !== 'companion') throw new Error('iOS app must be a companion');
+      case 'macos':
+        if (kind !== 'desktop-host') throw new Error(`${platform} app must be a desktop host`);
         break;
       default:
         assertNever(platform, 'native app platform');

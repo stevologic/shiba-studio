@@ -13,10 +13,10 @@
           "file": "ShibaStudio-windows-x64.zip",
           "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-windows-x64.zip"
         },
-        "ios": {
-          "name": "Shiba Studio for iOS",
-          "file": "ShibaStudio-ios-simulator.zip",
-          "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-ios-simulator.zip"
+        "macos": {
+          "name": "Shiba Studio for macOS",
+          "file": "ShibaStudio-macos.zip",
+          "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-macos.zip"
         }
       }
     },
@@ -30,10 +30,10 @@
           "file": "ShibaStudio-windows-x64.zip",
           "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-windows-x64.zip"
         },
-        "ios": {
-          "name": "Shiba Studio for iOS",
-          "file": "ShibaStudio-ios-simulator.zip",
-          "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-ios-simulator.zip"
+        "macos": {
+          "name": "Shiba Studio for macOS",
+          "file": "ShibaStudio-macos.zip",
+          "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-macos.zip"
         }
       }
     }
