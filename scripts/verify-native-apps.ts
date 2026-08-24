@@ -95,7 +95,7 @@ function main() {
   );
   assert.match(
     ci,
-    /Promote development[\s\S]*?gh workflow run ci\.yml --ref main/,
+    /Promote development[\s\S]*?actions\/workflows\/ci\.yml\/dispatches/,
     'promote must dispatch main CI after a github-actions merge so packages-main still compiles',
   );
 
