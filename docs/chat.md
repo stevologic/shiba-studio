@@ -9,6 +9,7 @@ Grok Chat is a working surface, not just a conversation: it streams reasoning, r
 - Chats live in the **collapsible session rail** on the left — searchable, archivable, and scalable to hundreds of sessions. Each session keeps its own model, chat target, reasoning effort, and full history.
 - **Auto-titling:** after the first exchange, a low-end model (grok-code-fast-1) summarizes the conversation into a 3–6 word title.
 - **New Chat** lives in the global top bar on every page.
+- Press **?** (or **Ctrl/Cmd+/**) for the studio keyboard-shortcut overlay — command palette, terminal, slash commands, and Code IDE keys.
 - Full history is sent with every prompt, so context always carries across turns.
 
 ## Message queue & stick-to-bottom
