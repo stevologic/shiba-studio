@@ -8,6 +8,19 @@ are carried over automatically.
 
 ## [Unreleased]
 
+### Changed
+
+- **Weekly maintain can read ChatGPT/Codex docs.** `fetch_url` now allows
+  `learn.chatgpt.com`, prefers Markdown/`text/plain`, extracts prose from
+  JS app shells, and rejects redirects off the host allowlist. Workflow
+  write fences on `GITHUB_TOKEN` are unchanged.
+- **Reddit Devvit bridge lockfile pins.** `js-yaml` 4.x is now 4.3.1,
+  `nanoid` is 3.3.18, and `hono` is 4.13.3 so the subpackage no longer
+  ships the previously reported high `js-yaml`/`nanoid` advisories.
+  `postcss` and `brace-expansion` 1.x/2.x are pinned to patched releases.
+- **Root advisory pins.** `hono` is overridden to 4.13.3 and Next's bundled
+  `postcss` to 8.5.26 so root `npm audit` is clean at every severity.
+
 ### Fixed
 
 - **Grok issue automation can push again.** Agents are fenced off
