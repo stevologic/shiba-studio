@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-24T21:56:46.694Z",
+  "updatedAt": "2026-08-24T22:07:05.693Z",
   "page": "https://shiba-studio.io/packages.html",
   "channels": {
     "development": {
@@ -21,8 +21,8 @@
       }
     },
     "main": {
-      "sha": "8d030516fa985d0d169646bdc5b0e02f35ee2558",
-      "runUrl": "https://github.com/stevologic/shiba-studio/actions/runs/32779946999",
+      "sha": "d91ac223d8bb0578affda3fee76ab3aa8db14aa9",
+      "runUrl": "https://github.com/stevologic/shiba-studio/actions/runs/32782932480",
       "releaseUrl": "https://github.com/stevologic/shiba-studio/releases/tag/packages-main",
       "apps": {
         "windows": {
@@ -30,10 +30,10 @@
           "file": "ShibaStudio-windows-x64.zip",
           "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-windows-x64.zip"
         },
-        "ios": {
-          "name": "Shiba Studio for iOS",
-          "file": "ShibaStudio-ios-simulator.zip",
-          "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-ios-simulator.zip"
+        "macos": {
+          "name": "Shiba Studio for macOS",
+          "file": "ShibaStudio-macos.zip",
+          "url": "https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-macos.zip"
         }
       }
     }
