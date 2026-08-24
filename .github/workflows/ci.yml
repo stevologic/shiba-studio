@@ -250,7 +250,7 @@ jobs:
       always() &&
       needs.native-windows.result == 'success' &&
       needs.native-ios.result == 'success' &&
-      github.event_name == 'push' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development')
     runs-on: ubuntu-latest
     permissions:

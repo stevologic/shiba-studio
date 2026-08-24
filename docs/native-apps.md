@@ -42,8 +42,8 @@ Both are part of **CI OK**, so a broken app project fails promotion the same
 way a red `npm test` does. The Grok self-heal job on `development` also
 watches those compiles.
 
-After a green compile on a **push** to `main` or `development` (not on pull
-requests), `publish-packages` updates:
+After a green compile on a **push** or **workflow_dispatch** to `main` or
+`development` (not on pull requests), `publish-packages` updates:
 
 1. the rolling GitHub Release `packages-main` or `packages-development`;
 2. `packages/manifest.json` and `packages.html` on the `gh-pages` site.

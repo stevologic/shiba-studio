@@ -88,6 +88,11 @@ function main() {
     ci,
     /github\.ref == 'refs\/heads\/main' \|\| github\.ref == 'refs\/heads\/development'/,
   );
+  assert.match(
+    ci,
+    /publish-packages:[\s\S]*?github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'/,
+    'packages must republish after self-heal and weekly maintain re-dispatch CI',
+  );
 
   const release = read('.github/workflows/release.yml');
   assert.match(release, /native-windows:/);
