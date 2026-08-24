@@ -21,6 +21,10 @@
 
 # production
 /build
+/dist/native/
+apps/windows/bin/
+apps/windows/obj/
+apps/ios/build/
 
 # misc
 .DS_Store

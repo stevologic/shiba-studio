@@ -82,9 +82,14 @@ async function main() {
   assert(site.includes('Grok phone assistant'), 'marketing site covers phone assistant');
   assert(site.includes('Artifact Studio'), 'marketing site covers Artifact Studio');
   assert(site.includes('COMMERCIAL.md'), 'marketing site license link is current');
+  assert(site.includes('packages.html'), 'marketing site links the packages page');
   const publicDocs = await read('site/docs.html');
   assert(publicDocs.includes('40+ tools total'), 'public docs use current tool count');
   assert(publicDocs.includes('id="phone"'), 'public docs include phone assistant');
+  assert(publicDocs.includes('packages.html'), 'public docs link the packages page');
+  const packages = await read('site/packages.html');
+  assert(packages.includes('Shiba Studio for Windows'), 'packages page offers the Windows app');
+  assert(packages.includes('Shiba Studio for iOS'), 'packages page offers the iOS app');
 
   await log('PASS: all competitor feature structural checks');
   process.exit(0);

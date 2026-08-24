@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Shiba Studio Packages — Windows and iOS apps</title>
+<meta name="description" content="Download the official Shiba Studio Windows host and iOS companion. Compiled on every push to main and development." />
+<link rel="icon" href="favicon.ico" sizes="32x32" />
+<link rel="icon" type="image/svg+xml" href="logo.svg" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://shiba-studio.io/packages.html" />
+<meta property="og:site_name" content="Shiba Studio" />
+<meta property="og:title" content="Shiba Studio Packages" />
+<meta property="og:description" content="Official Windows and iOS apps, compiled on every push to main and development." />
+<meta property="og:image" content="https://shiba-studio.io/og-card.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Shiba Studio Packages" />
+<meta name="twitter:description" content="Official Windows and iOS apps, compiled on every push to main and development." />
+<meta name="twitter:image" content="https://shiba-studio.io/og-card.png" />
+<style>
+  :root {
+    --bg: #000; --bg-elev: #0a0a0a; --card: #111; --border: #262626; --border-light: #404040;
+    --text: #f5f5f5; --muted: #a3a3a3; --dim: #737373; --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+  }
+  a { color: #e5e5e5; text-decoration: none; }
+  a:hover { color: #fff; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px; }
+  nav { display: flex; align-items: center; gap: 12px; padding: 22px 0; flex-wrap: wrap; }
+  nav img { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border-light); }
+  nav .brand { font-weight: 700; letter-spacing: -.03em; font-size: 19px; }
+  nav .links { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13.5px; }
+  nav a { color: var(--muted); }
+  nav a:hover { color: var(--text); }
+  header { padding: 56px 0 28px; }
+  h1 { font-size: clamp(34px, 6vw, 56px); letter-spacing: -.04em; line-height: 1.08; }
+  .lead { margin-top: 16px; max-width: 640px; color: var(--muted); font-size: 17px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; padding: 12px 0 40px; }
+  .card {
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 26px;
+    background: linear-gradient(180deg, rgba(17,17,17,.95), rgba(10,10,10,.95));
+  }
+  .card h2 { font-size: 22px; letter-spacing: -.02em; margin-bottom: 8px; }
+  .card p { color: var(--muted); font-size: 14px; }
+  .card code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: rgba(255,255,255,.06); padding: 1px 6px; border-radius: 5px; }
+  .offers { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 11px 16px; border-radius: 999px; font-size: 14px; font-weight: 600;
+  }
+  .btn-primary { background: linear-gradient(180deg, #fff, #d4d4d4); color: #000; }
+  .btn-ghost { border: 1px solid var(--border-light); color: var(--text); }
+  .meta { margin-top: 14px; font-size: 12px; color: var(--dim); }
+  .note {
+    border: 1px solid var(--border-light); border-radius: 12px; padding: 16px 18px;
+    color: var(--muted); font-size: 14px; background: rgba(255,255,255,.03);
+  }
+  footer { margin-top: 48px; border-top: 1px solid var(--border); padding: 28px 0 40px; font-size: 13px; color: var(--dim); }
+  footer a { color: var(--muted); }
+  @media (max-width: 640px) {
+    .wrap { padding: 0 16px; }
+    nav .links { margin-left: 0; flex-basis: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <img src="logo.svg" alt="Shiba Studio logo" />
+    <span class="brand">Shiba Studio</span>
+    <div class="links">
+      <a href="index.html">Home</a>
+      <a href="index.html#download">Install from source</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/stevologic/shiba-studio">GitHub</a>
+    </div>
+  </nav>
+
+  <header id="packages">
+    <h1>Packages</h1>
+    <p class="lead">
+      Official Windows and iOS apps. CI compiles both on every push to
+      <code>main</code> and <code>development</code>, then publishes the artifacts here.
+    </p>
+  </header>
+
+  <div class="grid">
+    <article class="card" id="windows">
+      <h2>Shiba Studio for Windows</h2>
+      <p>Native WebView2 host. Start a local checkout with <code>npm run start</code>, or attach to a Studio that is already running on this machine.</p>
+      <p class="meta">Artifact: <code>ShibaStudio-windows-x64.zip</code></p>
+      <div class="offers">
+        <a class="btn btn-primary" id="windows-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-windows-x64.zip">Download stable (main)</a>
+        <a class="btn btn-ghost" id="windows-development" href="https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-windows-x64.zip">Download development</a>
+      </div>
+      <p class="meta channel-main" data-app="windows">Stable channel updates on every push to main.</p>
+      <p class="meta channel-development" data-app="windows">Development channel updates on every push to development.</p>
+    </article>
+
+    <article class="card" id="ios">
+      <h2>Shiba Studio for iOS</h2>
+      <p>Official companion. Pair it with a Studio host that has remote Companion access enabled — the full Node server cannot run on iPhone or iPad.</p>
+      <p class="meta">Artifact: <code>ShibaStudio-ios-simulator.zip</code></p>
+      <div class="offers">
+        <a class="btn btn-primary" id="ios-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-ios-simulator.zip">Download stable (main)</a>
+        <a class="btn btn-ghost" id="ios-development" href="https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-ios-simulator.zip">Download development</a>
+      </div>
+      <p class="meta channel-main" data-app="ios">Stable channel updates on every push to main.</p>
+      <p class="meta channel-development" data-app="ios">Development channel updates on every push to development.</p>
+    </article>
+  </div>
+
+  <div class="note">
+    The iOS zip is a simulator build produced by <code>xcodebuild</code> on every push.
+    Device and App Store signing stay a human Apple-certificate step; the Xcode project lives in
+    <code>apps/ios</code>. Windows needs the Evergreen WebView2 runtime (already present on current Windows 11).
+  </div>
+
+  <footer>
+    <a href="index.html">Home</a> ·
+    <a href="docs.html">Docs</a> ·
+    <a href="traffic/">Traffic</a> ·
+    <a href="https://github.com/stevologic/shiba-studio/releases">Releases</a>
+  </footer>
+</div>
+<script>
+  fetch('packages/manifest.json', { cache: 'no-store' })
+    .then((response) => response.ok ? response.json() : null)
+    .then((manifest) => {
+      if (!manifest || !manifest.channels) return;
+      for (const channel of ['main', 'development']) {
+        const snapshot = manifest.channels[channel];
+        if (!snapshot || !snapshot.apps) continue;
+        for (const [id, offer] of Object.entries(snapshot.apps)) {
+          const link = document.getElementById(`${id}-${channel}`);
+          if (link && offer.url) link.href = offer.url;
+        }
+        document.querySelectorAll(`.channel-${channel}`).forEach((node) => {
+          const app = snapshot.apps[node.dataset.app];
+          if (!app) return;
+          const sha = snapshot.sha ? ` · ${snapshot.sha.slice(0, 7)}` : '';
+          node.innerHTML = `${channel === 'main' ? 'Stable' : 'Development'} build ready${sha}. <a href="${snapshot.releaseUrl}">Release notes</a>`;
+        });
+      }
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>

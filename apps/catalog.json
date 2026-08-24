@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "page": "site/packages.html",
+  "channels": ["main", "development"],
+  "releaseTagPrefix": "packages",
+  "apps": [
+    {
+      "id": "windows",
+      "name": "Shiba Studio for Windows",
+      "platform": "windows",
+      "kind": "desktop-host",
+      "enabled": true,
+      "project": "apps/windows/ShibaStudio.csproj",
+      "artifact": "ShibaStudio-windows-x64.zip",
+      "summary": "Native WebView2 host that starts or attaches to a local Shiba Studio server."
+    },
+    {
+      "id": "ios",
+      "name": "Shiba Studio for iOS",
+      "platform": "ios",
+      "kind": "companion",
+      "enabled": true,
+      "project": "apps/ios/ShibaStudio.xcodeproj",
+      "artifact": "ShibaStudio-ios-simulator.zip",
+      "summary": "Official iOS companion that pairs with a running Studio over LAN or Tailscale."
+    }
+  ]
+}

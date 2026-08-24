@@ -197,11 +197,88 @@ jobs:
           }
           NODE
 
+  native-windows:
+    name: Windows app · compile
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish Windows desktop host
+        run: |
+          dotnet publish apps/windows/ShibaStudio.csproj -c Release -r win-x64 --self-contained true -o dist/native/windows
+          New-Item -ItemType Directory -Force -Path dist/native/packages | Out-Null
+          Compress-Archive -Path dist/native/windows\* -DestinationPath dist/native/packages/ShibaStudio-windows-x64.zip -Force
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: shiba-studio-windows
+          path: dist/native/packages/ShibaStudio-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  native-ios:
+    name: iOS app · compile
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compile iOS companion
+        run: bash apps/ios/build.sh
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: shiba-studio-ios
+          path: dist/native/ios/ShibaStudio-ios-simulator.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  # Rolling GitHub Releases + shiba-studio.io/packages.html for push builds.
+  # Not part of CI OK — a Pages publish flake must not block promote.
+  publish-packages:
+    name: Publish packages page
+    needs: [native-windows, native-ios]
+    if: >-
+      always() &&
+      needs.native-windows.result == 'success' &&
+      needs.native-ios.result == 'success' &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: source
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+
+      - name: Check out public site
+        uses: actions/checkout@v6
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Publish rolling packages
+        run: node source/.github/scripts/publish-native-packages.mjs
+
   # Single aggregate check — the only required status check on main, so the
   # branch-protection contexts survive matrix/job renames above.
   ci-ok:
     name: CI OK
-    needs: [verify, audit, e2e, docker]
+    needs: [verify, audit, e2e, docker, native-windows, native-ios]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -223,7 +300,7 @@ jobs:
   # no-retrigger rule, so the healed commit gets a fresh full run).
   self-heal:
     name: Self-heal with Grok
-    needs: [verify, audit, e2e, docker]
+    needs: [verify, audit, e2e, docker, native-windows, native-ios]
     if: >-
       failure() &&
       github.ref == 'refs/heads/development' &&

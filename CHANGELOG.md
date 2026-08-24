@@ -10,6 +10,12 @@ are carried over automatically.
 
 ### Added
 
+- **Windows and iOS apps on the packages page.** Official clients live in
+  `apps/` and are offered at [packages.html](https://shiba-studio.io/packages.html).
+  CI compiles both on every push to `main` and `development`, attaches the
+  zips to rolling `packages-main` / `packages-development` releases, and
+  weekly maintain is instructed to keep that pipeline listed. Tagged `v*`
+  releases attach the same artifacts.
 - **Keyboard shortcuts overlay.** Press `?` when not typing, or `Ctrl`/`⌘`+`/`,
   or pick **Keyboard shortcuts** from the command palette. Studio-wide keys
   stay out of the Code IDE so Monaco keeps its own chords.

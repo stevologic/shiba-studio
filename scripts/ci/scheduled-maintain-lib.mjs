@@ -260,6 +260,7 @@ export function buildMaintainPrompt(mode, extras = {}) {
       "   Implement at most one bounded increment that belongs in Shiba Studio (Grok/xAI + local-first; do not add a multi-provider catalog).",
       "2) Look for ways to improve this scheduled automation (scripts/ci/scheduled-maintain*.mjs) and apply a small, safe improvement if one is clearly justified. Do not edit .github/workflows/ — GITHUB_TOKEN cannot push workflow files.",
       "If nothing belongs this week, call done with fixed=false and a one-line reason. Do not invent work.",
+      "Keep the Windows and iOS native apps (apps/) and the public packages page listed and compiling; fix app sources or site/packages.html when they drift. Do not edit .github/workflows/ — GITHUB_TOKEN cannot push workflow files.",
       "Never weaken proxy.ts or lib/terminal-server.ts origin checks, never delete tests, never disable CI OK.",
       `Budget: at most ${budget.maxSteps} tool calls.`,
     ].join("\n");

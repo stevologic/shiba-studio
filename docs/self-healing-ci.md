@@ -51,6 +51,12 @@ The `promote` job runs after the aggregate `CI OK` job succeeds on
 
 `CI OK` exists so branch protection tracks a single stable context instead
 of every matrix leg name; keep it in sync with the job list in `ci.yml`.
+That list includes the Windows and iOS app compile jobs (`native-windows`,
+`native-ios`) so a broken desktop/companion project fails the same gate as
+`npm test`. Successful pushes to `main` and `development` then publish those
+artifacts to rolling GitHub Releases and [the packages page](https://shiba-studio.io/packages.html)
+via the `publish-packages` job (not required for CI OK, so a Pages flake
+cannot block promote).
 
 Manual escape hatches: repo admins can still push to `main` directly
 (`enforce_admins` is off), and deleting the `GROK_API_KEY` secret turns the

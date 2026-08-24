@@ -33,7 +33,8 @@ Next.js 16 (App Router, Turbopack) · React 19 · Tailwind 4 · Node ≥ 22.5 wi
 | `lib/app-events.ts`, `lib/live-events.ts` | Live change feed: stores emit on write → `/api/events` (SSE) → shell/board refresh without polling or page reloads |
 | `lib/brand.ts` | Brand source of truth: the shiba mark SVG and the 1200×630 share card that every committed icon is rendered from |
 | `scripts/verify-*.ts` | The functional verification suite (`verify-all.ts` chains them) |
-| `site/` | Marketing `index.html` / `docs.html` published to the `gh-pages` branch |
+| `site/` | Marketing `index.html` / `docs.html` / `packages.html` published to the `gh-pages` branch |
+| `apps/` | Official Windows (WebView2 host) and iOS (companion) clients; catalog in `apps/catalog.json` |
 | `playwright.config.ts`, `e2e/*.spec.ts` | Browser E2E (nav, settings, search) — `npm run test:e2e` |
 
 ## Scripts
@@ -44,6 +45,8 @@ npm run build     # production build
 npm run start     # serve the build (binds 127.0.0.1)
 npm test          # scripts/verify-all.ts — the full gate (isolated data dir)
 npm run test:e2e  # Playwright browser E2E (needs `npx playwright install chromium` + a build)
+npm run build:windows  # Windows desktop host (.NET 8, Windows only)
+npm run build:ios      # iOS companion (Xcode, macOS only)
 ```
 
 `dev:lan` / `start:lan` bind the classified gateway on all interfaces but expose only scoped Companion/native-node routes. `dev:lan:studio` / `start:lan:studio` explicitly add the full Studio for private-network peers — see [SECURITY.md](../SECURITY.md) first.
