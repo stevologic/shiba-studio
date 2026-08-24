@@ -17,7 +17,10 @@ struct PreferencesView: View {
         }
         .padding(20)
         .frame(width: 420, height: 180)
-        .onChange(of: channel) { _, value in persist(channel: value, autoUpdate: autoUpdate) }
+        .onChange(of: channel) { _, value in
+            persist(channel: value, autoUpdate: autoUpdate)
+            Task { await DesktopApp.shared.checkForUpdates(manual: false) }
+        }
         .onChange(of: autoUpdate) { _, value in persist(channel: channel, autoUpdate: value) }
     }
 

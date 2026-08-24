@@ -19,9 +19,11 @@ sealed class MainForm : Form
     readonly Label _splashTitle;
     readonly Label _splashDetail;
     readonly MenuStrip _menu;
+    readonly System.Windows.Forms.Timer _updateTimer;
     bool _webReady;
     Uri? _origin;
     bool _updateInFlight;
+    DateTime _lastUpdateCheck = DateTime.MinValue;
 
     public MainForm()
     {
@@ -48,9 +50,22 @@ sealed class MainForm : Form
         Controls.Add(_menu);
         MainMenuStrip = _menu;
 
+        _updateTimer = new System.Windows.Forms.Timer { Interval = 30 * 60 * 1000 };
+        _updateTimer.Tick += async (_, _) => await CheckForUpdatesAsync(manual: false);
+
         HandleCreated += (_, _) => NativeWindowChrome.Apply(this);
         Load += async (_, _) => await BootAsync();
-        FormClosed += (_, _) => _host.Dispose();
+        Activated += async (_, _) =>
+        {
+            if (DateTime.UtcNow - _lastUpdateCheck < TimeSpan.FromMinutes(5)) return;
+            await CheckForUpdatesAsync(manual: false);
+        };
+        FormClosed += (_, _) =>
+        {
+            _updateTimer.Stop();
+            _updateTimer.Dispose();
+            _host.Dispose();
+        };
         KeyPreview = true;
         KeyDown += async (_, e) =>
         {
@@ -167,6 +182,7 @@ sealed class MainForm : Form
             _origin = await _host.StartAsync();
             await NavigateAsync(_origin);
             ShowStudio();
+            _updateTimer.Start();
             _ = CheckForUpdatesAsync(manual: false);
         }
         catch (Exception ex)
@@ -273,6 +289,7 @@ sealed class MainForm : Form
     {
         if (_updateInFlight) return;
         _updateInFlight = true;
+        _lastUpdateCheck = DateTime.UtcNow;
         try
         {
             var offer = await _updater.CheckAsync();

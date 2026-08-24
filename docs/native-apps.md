@@ -32,7 +32,8 @@ Studio data lives in `%LOCALAPPDATA%\ShibaStudio\data` on Windows and
 app bundle. Each app checks
 `https://shiba-studio.io/packages/manifest.json` and updates itself when
 the channel you downloaded (`main` or `development`) publishes a new SHA.
-Switch channels from Preferences / Settings.
+It checks on launch, when the window is focused, and every 30 minutes while
+running. Switch channels from Preferences / Settings.
 
 `scripts/pack-desktop-runtime.mjs` embeds official Node 22, the production
 `.next` tree, and `node_modules` (including `node-pty` built on that OS).

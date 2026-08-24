@@ -50,6 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .darkAqua)
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Task { await DesktopApp.shared.checkForUpdates(manual: false) }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         DesktopApp.shared.stop()
     }
@@ -80,6 +84,8 @@ final class DesktopApp: ObservableObject {
     private let updater = AppUpdater()
     private var started = false
     private var updateInFlight = false
+    private var lastUpdateCheck = Date.distantPast
+    private var updateTimer: Timer?
 
     func start() async {
         guard !started else { return }
@@ -90,6 +96,12 @@ final class DesktopApp: ObservableObject {
             let origin = try await host.start()
             url = origin
             phase = .ready
+            updateTimer?.invalidate()
+            updateTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { _ in
+                Task { @MainActor in
+                    await DesktopApp.shared.checkForUpdates(manual: false)
+                }
+            }
             await checkForUpdates(manual: false)
         } catch {
             phase = .failed
@@ -98,6 +110,8 @@ final class DesktopApp: ObservableObject {
     }
 
     func stop() {
+        updateTimer?.invalidate()
+        updateTimer = nil
         host.stop()
     }
 
@@ -127,8 +141,10 @@ final class DesktopApp: ObservableObject {
     }
 
     func checkForUpdates(manual: Bool) async {
+        if !manual && Date().timeIntervalSince(lastUpdateCheck) < 5 * 60 { return }
         if updateInFlight { return }
         updateInFlight = true
+        lastUpdateCheck = Date()
         defer { updateInFlight = false }
         do {
             guard let offer = try await updater.check() else {

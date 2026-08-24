@@ -9,7 +9,14 @@ struct UpdateOffer: Sendable {
 final class AppUpdater: @unchecked Sendable {
     func check() async throws -> UpdateOffer? {
         let channel = AppIdentity.resolvedChannel()
-        let (data, response) = try await URLSession.shared.data(from: AppIdentity.manifestURL)
+        var request = URLRequest(url: AppIdentity.manifestURL.appending(queryItems: [
+            URLQueryItem(name: "channel", value: channel),
+            URLQueryItem(name: "t", value: String(Int(Date().timeIntervalSince1970))),
+        ]))
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("ShibaStudio-Desktop/0.2", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
@@ -86,6 +93,8 @@ final class AppUpdater: @unchecked Sendable {
 
     private func download(_ url: URL, to dest: URL) async throws {
         var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("ShibaStudio-Desktop/0.2", forHTTPHeaderField: "User-Agent")
         let (temp, response) = try await URLSession.shared.download(for: request)
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {

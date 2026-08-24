@@ -57,6 +57,9 @@ function main() {
   assert.doesNotMatch(windowsHost, /npm run start/);
   assert.match(read('apps/windows/AppIdentity.cs'), /https:\/\/shiba-studio\.io\/packages\/manifest\.json/);
   assert.match(read('apps/windows/AppUpdater.cs'), /ShibaStudio-Desktop/);
+  assert.match(read('apps/windows/AppUpdater.cs'), /NoCache/);
+  assert.match(read('apps/windows/AppUpdater.cs'), /channel=/);
+  assert.match(read('apps/windows/MainForm.cs'), /30 \* 60 \* 1000/);
   const mainForm = read('apps/windows/MainForm.cs');
   assert.match(mainForm, /WebView2/);
   assert.match(mainForm, /MenuStrip/);
@@ -89,6 +92,9 @@ function main() {
   assert.doesNotMatch(macHost, /npm run start/);
   assert.match(read('apps/macos/ShibaStudio/AppIdentity.swift'), /https:\/\/shiba-studio\.io\/packages\/manifest\.json/);
   assert.match(read('apps/macos/ShibaStudio/AppUpdater.swift'), /ShibaStudio-Desktop/);
+  assert.match(read('apps/macos/ShibaStudio/AppUpdater.swift'), /reloadIgnoringLocalCacheData/);
+  assert.match(read('apps/macos/ShibaStudio/App.swift'), /30 \* 60/);
+  assert.match(read('apps/macos/ShibaStudio/App.swift'), /applicationDidBecomeActive/);
   assert.match(read('apps/macos/build.sh'), /xcodebuild/);
   assert.match(read('apps/macos/build.sh'), /generic\/platform=macOS/);
   assert.match(read('apps/macos/build.sh'), /--no-zip/);

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace ShibaStudio;
@@ -21,8 +22,8 @@ sealed class AppUpdater
     public async Task<UpdateOffer?> CheckAsync(CancellationToken cancellationToken = default)
     {
         var channel = AppIdentity.ResolvedChannel();
-        using var response = await Http.GetAsync(AppIdentity.ManifestUrl, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        using var request = FreshGet(ManifestUrlFor(channel));
+        using var response = await Http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
         if (!doc.RootElement.TryGetProperty("channels", out var channels)) return null;
         if (!channels.TryGetProperty(channel, out var snapshot)) return null;
@@ -64,9 +65,23 @@ sealed class AppUpdater
         Process.Start(start);
     }
 
+    static HttpRequestMessage FreshGet(string url)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true, NoStore = true };
+        request.Headers.Pragma.ParseAdd("no-cache");
+        return request;
+    }
+
+    static string ManifestUrlFor(string channel)
+    {
+        return $"{AppIdentity.ManifestUrl}?channel={Uri.EscapeDataString(channel)}&t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+    }
+
     static async Task DownloadAsync(string url, string dest, CancellationToken cancellationToken)
     {
-        using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var request = FreshGet(url);
+        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await using var output = File.Create(dest);
