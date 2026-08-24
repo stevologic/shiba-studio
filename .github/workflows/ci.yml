@@ -509,7 +509,9 @@ jobs:
             ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
             if [ "$ahead" = "0" ]; then
               echo "Promotion is on main — dispatching CI so packages-main publishes."
-              gh workflow run ci.yml --ref main
+              # Use the API: `gh workflow run` shells out to git and this job
+              # has no checkout.
+              gh api --method POST "repos/$REPO/actions/workflows/ci.yml/dispatches" -f ref=main
               exit 0
             fi
             echo "Waiting for promotion merge (ahead_by=$ahead) attempt=$attempt"
