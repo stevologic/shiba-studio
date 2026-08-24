@@ -81,6 +81,11 @@ function main() {
   assert.match(ci, /Publish packages page/);
   assert.match(
     ci,
+    /secrets\.REPOSITORY_TRAFFIC_TOKEN \|\| github\.token/,
+    'packages publish must reuse the established gh-pages write token',
+  );
+  assert.match(
+    ci,
     /github\.ref == 'refs\/heads\/main' \|\| github\.ref == 'refs\/heads\/development'/,
   );
 

@@ -273,6 +273,8 @@ jobs:
         with:
           ref: gh-pages
           path: site
+          # Same token the traffic publisher already uses to write gh-pages.
+          token: ${{ secrets.REPOSITORY_TRAFFIC_TOKEN || github.token }}
 
       - name: Publish rolling packages
         run: node source/.github/scripts/publish-native-packages.mjs
