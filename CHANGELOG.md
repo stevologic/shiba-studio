@@ -23,6 +23,10 @@ are carried over automatically.
 
 ### Fixed
 
+- **Windows store-lock waits under contention.** Multi-process Board/agent
+  writes share `.ownership-stores`; the lock wait (and the concurrency
+  verifier child) now allows 60s/120s on Windows so Node 24 CI does not
+  flake at the old 30s ceiling.
 - **Grok issue automation can push again.** Agents are fenced off
   `.github/workflows/*` because `GITHUB_TOKEN` cannot update workflow files
   (run 31644453870 failed the push, then closed the issue as if nothing
