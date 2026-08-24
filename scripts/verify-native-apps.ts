@@ -36,7 +36,9 @@ function main() {
   assert.match(windowsCsproj, /net8\.0-windows/);
   assert.match(read('apps/windows/Program.cs'), /MainForm/);
   assert.match(read('apps/windows/StudioHost.cs'), /npm run start/);
-  assert.match(read('apps/windows/MainForm.cs'), /WebView2/);
+  const mainForm = read('apps/windows/MainForm.cs');
+  assert.match(mainForm, /WebView2/);
+  assert.doesNotMatch(mainForm, /static readonly Color Text/, 'Form.Text must not be shadowed by a color field');
   assert.equal(existsSync(path.join(ROOT, 'apps/windows/shiba.ico')), true, 'Windows app icon');
 
   const pbx = read('apps/ios/ShibaStudio.xcodeproj/project.pbxproj');

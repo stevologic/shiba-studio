@@ -9,8 +9,7 @@ sealed class MainForm : Form
 {
     static readonly Color Bg = Color.FromArgb(10, 10, 10);
     static readonly Color Panel = Color.FromArgb(17, 17, 17);
-    static readonly Color Border = Color.FromArgb(38, 38, 38);
-    static readonly Color Text = Color.FromArgb(245, 245, 245);
+    static readonly Color Ink = Color.FromArgb(245, 245, 245);
     static readonly Color Muted = Color.FromArgb(163, 163, 163);
 
     readonly TextBox _address;
@@ -29,7 +28,7 @@ sealed class MainForm : Form
         MinimumSize = new Size(960, 640);
         Size = new Size(1280, 840);
         BackColor = Bg;
-        ForeColor = Text;
+        ForeColor = Ink;
         Font = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point);
 
         var chrome = new Panel
@@ -48,7 +47,7 @@ sealed class MainForm : Form
             Height = 28,
             BorderStyle = BorderStyle.FixedSingle,
             BackColor = Color.Black,
-            ForeColor = Text,
+            ForeColor = Ink,
             Text = StudioHost.DefaultOrigin,
         };
 

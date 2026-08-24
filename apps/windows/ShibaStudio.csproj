@@ -13,6 +13,7 @@
     <Version>0.2.0</Version>
     <InformationalVersion>0.2.0</InformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <InvariantGlobalization>true</InvariantGlobalization>
     <DebugType>embedded</DebugType>
   </PropertyGroup>
