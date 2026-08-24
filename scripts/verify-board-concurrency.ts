@@ -57,7 +57,7 @@ async function waitForOutput(run: ChildRun, text: string, timeoutMs = 10_000): P
 
 async function runChild(args: string[], dataDir: string): Promise<string> {
   const run = startChild(args, dataDir);
-  const timeout = setTimeout(() => run.child.kill(), 60_000);
+    const timeout = setTimeout(() => run.child.kill(), process.platform === 'win32' ? 120_000 : 60_000);
   timeout.unref?.();
   try {
     const result = await run.completed;
