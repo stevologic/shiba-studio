@@ -129,8 +129,11 @@
     <a href="#workspaces">Chat workspaces</a>
     <a href="#annotate">Annotation sub-browser</a>
     <a href="#meetings">Meetings (Beta)</a>
+    <a href="#phone">Phone assistant</a>
     <a href="#board">Board</a>
     <a href="#code">Code IDE</a>
+    <a href="#artifacts">Artifact Studio</a>
+    <a href="#memories">Memories</a>
     <a href="#agents">Agents</a>
     <a href="#automations">Automations</a>
     <a href="#capabilities">Capabilities</a>
@@ -201,6 +204,7 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
         <li><strong>Rich cards</strong> — a fenced <code>shiba-card</code> JSON block becomes live stats, progress, checklists, timelines, callouts, media, sparklines, bars, or multi-series timecharts. Malformed payloads fall back to code, never losing content.</li>
         <li><strong>Stream resilience</strong> — long tool-using turns get extended timeouts; HTML/proxy dumps and aborts normalize to short user-facing recovery text.</li>
         <li><strong>Quota</strong> — the QUOTA pill reports live spend against your monthly budget from Settings.</li>
+        <li><strong>Keyboard shortcuts</strong> — press <code>?</code> or Ctrl/⌘+/ for the studio cheatsheet (palette, terminal, slash commands, Code IDE). <code>Ctrl+K</code> stays the command palette.</li>
         <li><strong>Housekeeping</strong> — export any conversation as Markdown (with reasoning and token counts), edit-and-resend your messages, regenerate the last answer.</li>
       </ul>
     </section>
@@ -267,6 +271,11 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
       <div class="callout">Full detail lives in the repo guide: <a href="https://github.com/stevologic/shiba-studio/blob/development/docs/meetings.md">docs/meetings.md</a>.</div>
     </section>
 
+    <section id="phone">
+      <h2>Grok phone assistant</h2>
+      <p>Call the Voice Agent Builder number and dictate Studio commands. Settings issues a one-time <code>shiba_phone_</code> bearer; Grok invokes the public MCP/command URL and Shiba creates Board cards, runs git, remembers facts, or starts durable work. Incoming SIP webhooks can join the same tool session.</p>
+    </section>
+
     <section id="board">
       <h2>Board</h2>
       <p>The Board is the shared Kanban for people and agents. Cards can be created manually, assigned to an agent, started as agent work, and tracked through Backlog, Todo, In Progress, In Review, Done, or Cancelled.</p>
@@ -286,11 +295,21 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
       <div class="callout">Repo guide: <a href="https://github.com/stevologic/shiba-studio/blob/development/docs/code.md">docs/code.md</a>.</div>
     </section>
 
+    <section id="artifacts">
+      <h2>Artifact Studio</h2>
+      <p>Treat generated HTML, PDF, and Office files as first-class objects: immutable checkpoint-backed previews, visual evidence, anchored annotations, rollback, and revocable publishing.</p>
+    </section>
+
+    <section id="memories">
+      <h2>Learning &amp; Memories</h2>
+      <p>Agents automatically recall relevant local knowledge before runs and can extract durable facts, decisions, procedures, preferences, and lessons afterward in <strong>Review</strong> or <strong>Automatic</strong> mode. The Memories page provides search, approval, editing, pinning, archiving, scope moves, provenance, and deletion.</p>
+    </section>
+
     <section id="agents">
       <h2>Agents</h2>
       <p>Agents are autonomous workers, each with its own model, workspace, git worktree, integration scopes, skills, peers, and persistent memory.</p>
       <ul>
-        <li><strong>Local agents</strong> run on your machine with the full toolbelt: files, shell, a controlled headless Chrome, web research, image generation, Obsidian, GitHub PRs, and 30+ tools total (browse the live catalog on the Capabilities page).</li>
+        <li><strong>Local agents</strong> run on your machine with the full toolbelt: files, shell, a controlled headless Chrome, web research, image generation, Obsidian, GitHub PRs, and 40+ tools total (browse the live catalog on the Capabilities page).</li>
         <li><strong>Cloud agents</strong> run against Grok cloud services and connected cloud integrations only — no access to this machine.</li>
         <li><strong>Skills</strong> shape personality and procedure; custom skills are authored in-app and injected into prompts.</li>
         <li><strong>Peers</strong> let agents message each other and fan out work.</li>
@@ -374,7 +393,7 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
     </section>
 
     <footer>
-      <span>Shiba Studio — dual licensed: <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE-AGPL-3.0">AGPL-3.0-or-later</a> · <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE-COMMERCIAL.md">commercial available</a> (<a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE">LICENSE</a>). <a href="index.html">Home</a> · <a href="traffic/">Traffic</a> · <a href="https://github.com/stevologic/shiba-studio">GitHub</a></span>
+      <span>Shiba Studio — dual licensed: <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE">AGPL-3.0-or-later</a> · <a href="https://github.com/stevologic/shiba-studio/blob/main/COMMERCIAL.md">commercial available</a> (<a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE">LICENSE</a>). <a href="index.html">Home</a> · <a href="traffic/">Traffic</a> · <a href="https://github.com/stevologic/shiba-studio">GitHub</a></span>
     </footer>
   </main>
 </div>

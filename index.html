@@ -529,6 +529,16 @@
         <p>Fenced <code>shiba-card</code> JSON in any agent markdown becomes live stats, progress, checklists, timelines, callouts, media, sparklines, bars, or multi-series timecharts.</p></div>
       <div class="card"><div class="ico">🔌</div><h3>Capabilities</h3>
         <p>GitHub, Slack, Google Drive, Discord, X, Reddit (Devvit), Obsidian, Vercel, Netlify, Linear, Jira, MCP servers, and custom skills. Linear/Jira stay Board-scoped.</p></div>
+      <div class="card"><div class="ico">📞</div><h3>Grok phone assistant</h3>
+        <p>Call the Voice Agent Builder number and dictate Studio commands. Settings issues a one-time bearer; Grok hits the public MCP and Shiba creates Board cards, runs git, remembers facts, or starts durable work.</p></div>
+      <div class="card"><div class="ico">🧠</div><h3>Learning &amp; Memories</h3>
+        <p>Agents recall local knowledge before runs and can extract durable facts afterward in Review or Automatic mode. Search, pin, archive, and edit memories with full provenance.</p></div>
+      <div class="card"><div class="ico">🗂️</div><h3>Artifact Studio</h3>
+        <p>Checkpoint-backed HTML, PDF, and Office previews with anchored review, visual verification, rollback, and revocable publishing — finished work as a first-class object.</p></div>
+      <div class="card"><div class="ico">📱</div><h3>Companion &amp; native nodes</h3>
+        <p>A paired, scoped PWA for pending approvals and voice requests, plus an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.</p></div>
+      <div class="card"><div class="ico">⌨️</div><h3>Keyboard shortcuts</h3>
+        <p>Press <code>?</code> or Ctrl/⌘+/ for the studio cheatsheet — command palette, terminal, slash commands, and Code IDE keys — without stealing Monaco’s own chords.</p></div>
       <div class="card"><div class="ico">🔒</div><h3>Local-first, audited</h3>
         <p>Credentials AES-256-GCM encrypted at rest. Runs, chats, and every action in an embedded SQLite audit log. Zero telemetry — reach it as <code>shiba.local</code> on your LAN.</p></div>
     </div>
@@ -561,7 +571,7 @@
 
   <section id="download">
     <h2>Download &amp; install</h2>
-    <p class="sub">Clone, install, run. Requires <strong>Node.js ≥ 22.5</strong> and Git — no native modules, no build tools.</p>
+    <p class="sub">Clone, install, run. Requires <strong>Node.js ≥ 22.5</strong> and Git. The database is built-in <code>node:sqlite</code>; <code>npm install</code> compiles the optional host-terminal helper.</p>
     <div class="dl">
       <div class="tabs" role="tablist">
         <button class="tab" data-os="windows" role="tab">🪟 Windows</button>
@@ -617,7 +627,7 @@ npm run dev</pre>
       <div class="foot-brand">
         <img class="foot-logo" src="logo.svg" alt="Shiba Studio logo" />
         <span>Shiba Studio — the localhost Grok agent studio.<br/>
-        <span class="foot-license">Dual licensed: <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE-AGPL-3.0">AGPL-3.0-or-later</a> · <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE-COMMERCIAL.md">commercial available</a>. See <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE">LICENSE</a>.</span></span>
+        <span class="foot-license">Dual licensed: <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE">AGPL-3.0-or-later</a> · <a href="https://github.com/stevologic/shiba-studio/blob/main/COMMERCIAL.md">commercial available</a>. See <a href="https://github.com/stevologic/shiba-studio/blob/main/LICENSE">LICENSE</a>.</span></span>
       </div>
       <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
         <a href="docs.html">Docs</a>
