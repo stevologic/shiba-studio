@@ -34,7 +34,7 @@ are carried over automatically.
 
 - **Windows store-lock waits under contention.** Multi-process Board/agent
   writes share `.ownership-stores`; the lock wait (and the concurrency
-  verifier child) now allows 60s/120s on Windows so Node 24 CI does not
+  verifier child) now allows 90s/180s on Windows so Node 24 CI does not
   flake at the old 30s ceiling.
 
 - **Grok issue automation can push again.** Agents are fenced off

@@ -39,7 +39,7 @@ async function main() {
   assert(desk.includes('WorkspaceDiffPanel'), 'shiba-studio diff panel');
 
   const storeLock = await read('lib/store-file-lock.ts');
-  assert(storeLock.includes("process.platform === 'win32' ? 60_000"), 'Windows store lock waits longer than POSIX');
+  assert(storeLock.includes("process.platform === 'win32' ? 90_000"), 'Windows store lock waits longer than POSIX');
 
   const shortcuts = await read('lib/keyboard-shortcuts.ts');
   assert(shortcuts.includes('STUDIO_SHORTCUTS'), 'shortcut catalog export');
