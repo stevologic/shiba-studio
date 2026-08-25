@@ -39,6 +39,7 @@ function main() {
   assert.match(packer, /'next', 'dist', 'bin', 'next'/);
   assert.match(packer, /app\.json/);
   assert.match(packer, /copyTree/);
+  assert.match(packer, /const stack = new Set/);
   assert.match(packer, /lstatSync/);
   assert.match(packer, /parts\.includes\('\.bin'\)/);
   assert.match(packer, /function fsPath/);

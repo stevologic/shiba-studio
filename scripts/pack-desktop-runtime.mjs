@@ -146,7 +146,11 @@ function copyFileReliable(from, to) {
     } catch (error) {
       last = error;
       const code = error && typeof error === 'object' && 'code' in error ? error.code : '';
-      if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') continue;
+      if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
+        // Windows AV / indexer briefly locks newly created dest files.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * attempt);
+        continue;
+      }
       throw new Error(`copy ${from} → ${to}: ${error instanceof Error ? error.message : error}`);
     }
   }
@@ -160,11 +164,21 @@ function copyFiltered(from, to, root) {
 }
 
 // Prefer a native recursive copy per top-level entry; Windows junctions make
-// dereference throw, so those trees fall back to a manual walk.
+// dereference throw, so those trees use a manual walk with cycle detection.
 function copySmart(from, to, root) {
   from = normalizePath(from);
   to = normalizePath(to);
   if (shouldSkip(from, root)) return;
+
+  const stack = new Set();
+
+  // npm on Windows plants junctions throughout node_modules. cpSync({
+  // dereference: true }) throws EPERM / EINVAL / ELOOP on those, and a
+  // follow-up rmSync can delete the source tree through a dest junction.
+  if (process.platform === 'win32') {
+    copyTree(from, to, root, stack);
+    return;
+  }
 
   let stat;
   try {
@@ -174,7 +188,7 @@ function copySmart(from, to, root) {
   }
 
   if (stat.isSymbolicLink() || stat.isFile() || !stat.isDirectory()) {
-    copyTree(from, to, root, new Set());
+    copyTree(from, to, root, stack);
     return;
   }
 
@@ -191,7 +205,7 @@ function copySmart(from, to, root) {
       });
     } catch {
       rmSync(fsPath(childTo), { recursive: true, force: true });
-      copyTree(childFrom, childTo, root, new Set());
+      copyTree(childFrom, childTo, root, stack);
     }
   }
 }
@@ -226,7 +240,7 @@ function copyTree(from, to, root, stack) {
     try {
       real = resolveReal(from);
     } catch {
-      return;
+      // Still copy the directory we can see; cycle detection uses `from`.
     }
     if (stack.has(real)) return;
     stack.add(real);
