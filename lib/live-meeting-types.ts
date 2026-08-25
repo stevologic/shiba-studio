@@ -1,5 +1,5 @@
 /**
- * Live Meetings (Beta) — a spoken, agent-led project review.
+ * Live Meetings — a spoken, agent-led project review.
  * The creator (director) and one agent (senior engineer) talk through the
  * project; the agent presents visuals, initiates real Board work the moment
  * the director asks for it, and the meeting ends in minutes whose remaining

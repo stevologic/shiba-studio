@@ -1,16 +1,22 @@
-# Meetings (Beta)
+# Meetings
 
-<img src="images/meetings.png" alt="Meetings beta: start a spoken agent-led project review with agent, project, and focus controls" width="880" />
+<img src="images/meetings.png" alt="Meetings: start a spoken agent-led project review with agent, project, and focus controls" width="880" />
 
 Meetings turns an agent into a colleague you sit down with. Instead of typing prompts, you hold a spoken project review: the agent leads — presenting what it has been building — while you steer with your voice. The agent puts real material on a visual stage as it talks, and the meeting ends in minutes with a todo list you can send to the Board in one click.
 
 Think of it as a director meeting a senior engineer about the project they're delivering.
 
-> **Beta.** The flow is functional end to end; expect rough edges around voice capture on non-Chromium browsers and long meetings. Agent turns stream live over SSE so long reviews stay responsive.
+Spoken interaction uses **Grok Voice 2.0** (`grok-voice-think-fast-2.0`) when an xAI cloud key or OAuth session is connected. The meeting engine stays the brain (visuals, Board cards, minutes). Voice 2.0 is the ears and mouth: server VAD, barge-in, and interruptible spoken replies. If Voice 2.0 is unavailable, the room falls back to browser speech (Chrome/Edge) plus `/api/tts`.
 
 ## Starting a meeting
 
-From the **Meetings** tab:
+From the **Meetings** tab the lobby is three sections:
+
+- **Start a review** — who you are meeting, what you are reviewing, and an optional focus.
+- **Active** — reviews still in the room, ready to rejoin.
+- **History** — ended meetings with minutes.
+
+Fields:
 
 - **With** — the agent you're meeting. Its chat Skill personality, description, and default TTS voice carry into the room.
 - **About project** — a Studio project, or *Whole workspace* to review the agent's workspace directly.
@@ -20,17 +26,18 @@ While the room is prepared, the agent builds a **meeting brief** on the server: 
 
 ## The room
 
-The room has two surfaces:
+The room has two surfaces plus a voice status line:
 
+- **Voice HUD** — glanceable phase: connecting, listening, thinking, speaking. Shows `grok-voice-think-fast-2.0` when Voice 2.0 is live.
 - **The stage** (left) — whatever the agent is currently presenting. Earlier visuals stay one click away in the history strip below, and in the transcript.
-- **The conversation rail** (right) — live transcript, suggestion chips, and the composer.
+- **The conversation rail** (right) — live transcript, suggestion chips, and the composer. Typing always works.
 
 ### Talking
 
-- **Mic on** → speak naturally; pause to send (Web Speech API — Chrome/Edge). The mic pauses while the agent replies and resumes after.
-- **Voice on/off** → agent replies are spoken with its Grok TTS voice (`/api/tts`), or muted for text-only reviews.
-- **Stop voice** → while a reply is being read aloud, a stop control appears next to it in the transcript; stopping the audio never interrupts the meeting itself.
-- Typing always works; both inputs land in the same conversation.
+- **Mic on** → speak naturally. With Grok Voice 2.0 the room uses server VAD and you can barge in by talking. The fallback path (Web Speech API — Chrome/Edge) pauses to send.
+- **Voice on/off** → agent replies are spoken (Voice 2.0 `force_message`, or `/api/tts` in fallback), or muted for text-only reviews.
+- **Stop voice** → cuts the current spoken reply without ending the meeting.
+- If you stay quiet, the agent keeps leading the review.
 
 ### Annotating visuals
 
@@ -53,7 +60,7 @@ Markdown visuals also render **rich cards**: a fenced `shiba-card` code block ho
 
 ### Steering
 
-Each agent turn includes 2–4 **suggestion chips** — AI-assisted directions phrased as things you might say (*"Show me the riskiest code path"*). Click one to send it, or ignore them and drive the meeting yourself. If you stay quiet, the agent keeps leading.
+Each agent turn includes 2–4 **suggestion chips** — AI-assisted directions phrased as things you might say (*"Show me the riskiest code path"*). Click one to send it, or ignore them and drive the meeting yourself.
 
 ### Initiating work mid-meeting
 
@@ -68,17 +75,17 @@ Meetings initiate work, not just talk about it. When you ask for something to ha
 - **Decisions** — only explicit decisions from the conversation.
 - **Todos** — only what you requested or both of you agreed on, each with context for whoever picks it up. Work already created live during the meeting is on the Board and is not repeated here.
 
-Select todos and **Add to project board** — after an explicit confirmation, each becomes a Board card in **Todo**, labelled `meeting`, linked to the meeting in its description, and attached to the meeting's project. Conversion is idempotent: a todo can only ever create one card, and converted todos show their card key in the minutes.
+Select todos and **Add to Board** — after an explicit confirmation, each becomes a Board card in **Todo**, labelled `meeting`, linked to the meeting in its description, and attached to the meeting's project. Conversion is idempotent: a todo can only ever create one card, and converted todos show their card key in the minutes.
 
-Past meetings (and their minutes) stay in the lobby until you delete them. Deleting a meeting never deletes Board cards it created.
+Past meetings (and their minutes) stay in History until you delete them. Deleting a meeting never deletes Board cards it created.
 
 ## Safety and storage
 
-- **No audio is stored.** Speech is transcribed in the browser (Web Speech API) and only text reaches the server. This is different from the audio-upload transcription pipeline, which has its own consent and retention flow.
-- Meetings live in the local SQLite store (`live_meetings` table) like every other Studio record.
+- **No Live Meeting audio is stored.** Voice 2.0 streams to xAI for the session only. The durable contract is text turns in SQLite (`live_meetings`). This is different from the Companion audio-upload transcription pipeline, which has its own consent and retention flow.
+- The browser never receives the xAI API key. `POST /api/live-meetings/:id/voice-session` mints a short-lived ephemeral token.
 - Durable outputs follow your explicit requests: mid-meeting Board cards are created only when you ask for work in the conversation, and converting minutes todos requires a confirmation click. Ending a meeting alone never mutates the Board.
 - Turns are model calls metered under Usage (source `other`, tagged with the meeting id).
 
 ## Voice integration scope
 
-For how Live Meetings should reuse `/api/tts` and relate to Companion voice routes (and what must stay separate), see [Live Meetings voice integration scope (SHIB-45)](./research/live-meetings-voice-integration-scope.md).
+Live Meetings conversational I/O is Voice 2.0 first, with Web Speech + `/api/tts` as fallback. Companion `/api/companion/voice` and `/api/meetings` remain a separate recording/STT store — do not merge them. The earlier inventory lives in [Live Meetings voice integration scope (SHIB-45)](./research/live-meetings-voice-integration-scope.md).

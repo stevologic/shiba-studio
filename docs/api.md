@@ -150,7 +150,7 @@ The primary Studio surface calls these **Automations**. Every recurring, one-tim
 
 The former Doctor page has been removed. These endpoints remain for diagnostics automation and backwards compatibility.
 
-### Live Meetings (Beta UI)
+### Live Meetings
 
 The **Meetings** primary tab is a spoken agent-led project review surface. Turns stream over SSE; minutes and Board conversion require explicit confirmation. See [Meetings](meetings.md).
 
@@ -162,6 +162,7 @@ The **Meetings** primary tab is a spoken agent-led project review surface. Turns
 | POST | `/api/live-meetings/:id/turn/stream` | Streaming agent turn (SSE) — preferred for long reviews. |
 | POST | `/api/live-meetings/:id/end` | End the meeting and generate minutes + content-derived title. |
 | POST | `/api/live-meetings/:id/board` | After exact confirmation, convert selected minute todos into Board cards (idempotent). |
+| GET/POST | `/api/live-meetings/:id/voice-session` | Check Grok Voice 2.0 availability, or mint an ephemeral `grok-voice-think-fast-2.0` token for the room. |
 
 ### Context and Companion voice storage
 

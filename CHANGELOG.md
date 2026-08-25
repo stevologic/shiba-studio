@@ -10,6 +10,18 @@ are carried over automatically.
 
 ### Added
 
+- **Meetings with Grok Voice 2.0.** Spoken reviews use `grok-voice-think-fast-2.0`
+  (ears and mouth) while the existing meeting engine stays the brain. The host
+  mints an ephemeral token; the browser never sees the xAI API key. Server VAD,
+  barge-in, interruptible `force_message` replies, and an idle re-engage keep
+  the agent leading. Web Speech + `/api/tts` remain the fallback when Voice 2.0
+  is unavailable. Live Meeting audio is still not stored.
+
+### Changed
+
+- **Meetings is out of Beta.** Nav, lobby, room, docs, and the site no longer
+  label the surface as a preview. The lobby is Start a review / Active /
+  History; the room has a glanceable voice phase.
 - **Double-click Windows and macOS apps.** Official hosts in `apps/` ship a
   bundled Studio runtime (Node 22 + production `next start` on loopback).
   Download from [packages.html](https://shiba-studio.io/packages.html),

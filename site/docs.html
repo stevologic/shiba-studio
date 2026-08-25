@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Shiba Studio Docs — install, chat, agents, automations, configuration</title>
-<meta name="description" content="Complete documentation for Shiba Studio: installation on Windows/macOS/Linux, Grok Chat with rich cards and message queue, Meetings beta, Board Gantt and Linear/Jira sync, Code IDE, agents, automations, capabilities, sync, and configuration." />
+<meta name="description" content="Complete documentation for Shiba Studio: installation on Windows/macOS/Linux, Grok Chat with rich cards and message queue, Meetings with Grok Voice 2.0, Board Gantt and Linear/Jira sync, Code IDE, agents, automations, capabilities, sync, and configuration." />
 <link rel="icon" href="favicon.ico" sizes="32x32" />
 <link rel="icon" type="image/svg+xml" href="logo.svg" />
 <link rel="apple-touch-icon" href="apple-touch-icon.png" />
@@ -130,7 +130,7 @@
     <a href="#commands">Slash commands</a>
     <a href="#workspaces">Chat workspaces</a>
     <a href="#annotate">Annotation sub-browser</a>
-    <a href="#meetings">Meetings (Beta)</a>
+    <a href="#meetings">Meetings</a>
     <a href="#phone">Phone assistant</a>
     <a href="#board">Board</a>
     <a href="#code">Code IDE</a>
@@ -150,7 +150,7 @@
     <h1>Shiba Studio documentation</h1>
     <p class="lead">
       Everything you need to install, drive, and configure the localhost Grok agent studio —
-      from your first chat and Meetings beta reviews to headless scheduled agents and the Code IDE.
+      from your first chat and Meetings reviews to headless scheduled agents and the Code IDE.
     </p>
 
     <section id="getting-started">
@@ -262,13 +262,14 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
     </section>
 
     <section id="meetings">
-      <h2>Meetings (Beta)</h2>
-      <p>Meetings turns an agent into a colleague you sit down with. Hold a spoken project review: the agent leads — presenting what it has been building — while you steer with your voice or text. Turns stream over SSE; the room has a visual stage and a conversation rail.</p>
+      <h2>Meetings</h2>
+      <p>Meetings turns an agent into a colleague you sit down with. Hold a spoken project review: the agent leads — presenting what it has been building — while you steer with Grok Voice 2.0 or text. Turns stream over SSE; the room has a visual stage and a conversation rail.</p>
       <ul>
+        <li><strong>Grok Voice 2.0</strong> — <code>grok-voice-think-fast-2.0</code> for listening and spoken replies (ephemeral token; the API key stays on the host). Browser speech + TTS is the fallback.</li>
         <li><strong>Stage visuals</strong> — real workspace code excerpts (never model-invented), SVG diagrams, markdown notes, and live screenshots via the studio browser. Recent visuals stay in context so &ldquo;explain this&rdquo; works.</li>
         <li><strong>Steering</strong> — AI suggestion chips each turn; annotate the stage with a sketch layer and share markup into the transcript.</li>
         <li><strong>Minutes</strong> — end the meeting for summary, direction, decisions, and todos. Confirm to create Board cards (idempotent); deleting a meeting never deletes those cards.</li>
-        <li><strong>Privacy</strong> — no audio is stored for live meetings (browser STT only); only text reaches the server.</li>
+        <li><strong>Privacy</strong> — no Live Meeting audio is stored; only text turns reach the server.</li>
       </ul>
       <div class="callout">Full detail lives in the repo guide: <a href="https://github.com/stevologic/shiba-studio/blob/development/docs/meetings.md">docs/meetings.md</a>.</div>
     </section>
