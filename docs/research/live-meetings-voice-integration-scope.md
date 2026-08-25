@@ -3,7 +3,7 @@
 **Card:** SHIB-45 · Scope voice integration using TTS and companion routes  
 **Requested in:** ShibaStudio: Live meetings feature enhancement planning (2026-07-23)  
 **Role:** Analyst scope (no product code change required by this card)  
-**Status:** Complete inventory + recommended work packages  
+**Status:** Inventory complete. Meetings now uses Grok Voice 2.0 (`grok-voice-think-fast-2.0`) as the room interaction path, with Web Speech + `/api/tts` fallback. Companion recording routes stay separate.  
 **Primary surfaces reviewed:** `/api/tts`, `/api/companion/*` (esp. `voice`), `/api/live-meetings/*`, `/api/meetings/*`, Meetings room UI, Companion PWA voice UI, Grok Chat voice mode
 
 ---

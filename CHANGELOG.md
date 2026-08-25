@@ -10,15 +10,29 @@ are carried over automatically.
 
 ### Added
 
-- **Windows and macOS desktop apps on the packages page.** Official hosts
-  live in `apps/` and are offered at [packages.html](https://shiba-studio.io/packages.html).
-  CI compiles both on every push to `main` and `development` (and on the
-  `workflow_dispatch` re-runs that self-heal, weekly maintain, and promote
-  use so a `GITHUB_TOKEN` merge still publishes `packages-main`),
-  attaches the zips to rolling `packages-main` / `packages-development`
-  releases, and weekly maintain is instructed to keep that pipeline listed.
-  Tagged `v*` releases attach the same artifacts. The Apple offering is a
-  Mac desktop host, not an iPhone/iPad companion.
+- **Meetings with Grok Voice 2.0.** Spoken reviews use `grok-voice-think-fast-2.0`
+  (ears and mouth) while the existing meeting engine stays the brain. The host
+  mints an ephemeral token; the browser never sees the xAI API key. Server VAD,
+  barge-in, interruptible `force_message` replies, and an idle re-engage keep
+  the agent leading. Web Speech + `/api/tts` remain the fallback when Voice 2.0
+  is unavailable. Live Meeting audio is still not stored.
+
+### Changed
+
+- **Meetings is out of Beta.** Nav, lobby, room, docs, and the site no longer
+  label the surface as a preview. The lobby is Start a review / Active /
+  History; the room has a glanceable voice phase.
+- **Double-click Windows and macOS apps.** Official hosts in `apps/` ship a
+  bundled Studio runtime (Node 22 + production `next start` on loopback).
+  Download from [packages.html](https://shiba-studio.io/packages.html),
+  open the app, and the same web UI fills a native window — no clone, no
+  system Node, no terminal. Each build follows the `main` or `development`
+  channel and updates itself when that branch publishes a new SHA. CI
+  packages both on every push (and on the `workflow_dispatch` re-runs that
+  self-heal, weekly maintain, and promote use so a `GITHUB_TOKEN` merge
+  still publishes `packages-main`). Tagged `v*` releases attach the same
+  artifacts. The Apple offering is a Mac desktop host, not an iPhone/iPad
+  companion.
 - **Keyboard shortcuts overlay.** Press `?` when not typing, or `Ctrl`/`⌘`+`/`,
   or pick **Keyboard shortcuts** from the command palette. Studio-wide keys
   stay out of the Code IDE so Monaco keeps its own chords.

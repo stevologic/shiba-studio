@@ -8,7 +8,7 @@ below shows the real interaction paths (GitHub renders it inline).
 flowchart TB
     subgraph Surfaces["Surfaces — what you touch"]
         Chat["Grok Chat<br/>slash commands · rich cards · message queue"]
-        Meetings["Meetings beta<br/>voice review · stage visuals · minutes"]
+        Meetings["Meetings<br/>Grok Voice 2.0 · stage visuals · minutes"]
         BoardUI["Board<br/>Kanban · Gantt Timeline · Linear/Jira sync"]
         CodeIDE["Code IDE<br/>Monaco · Git · GitHub · terminal"]
         SubBrowser["Annotation sub-browser<br/>interact / annotate / scroll"]
@@ -18,10 +18,10 @@ flowchart TB
         Dashboard["Dashboard<br/>readiness badges, recent runs"]
         LogsUI["Logs page<br/>audit trail, deep links"]
         Phone["Phone assistant<br/>Grok number · MCP · spoken commands"]
-        NativeApps["Windows + macOS apps<br/>packages page · compile on push"]
+        NativeApps["Windows + macOS apps<br/>bundled runtime · auto-update"]
     end
 
-    NativeApps -->|"host or pair"| Chat
+    NativeApps -->|"same Studio UI"| Chat
 
     subgraph Engine["Engine — what does the work"]
         Gateway["Model gateway (grok-client)<br/>xAI key / OAuth / Grok CLI / local server"]

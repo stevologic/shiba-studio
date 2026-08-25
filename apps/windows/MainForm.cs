@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -8,216 +9,366 @@ namespace ShibaStudio;
 sealed class MainForm : Form
 {
     static readonly Color Bg = Color.FromArgb(10, 10, 10);
-    static readonly Color Panel = Color.FromArgb(17, 17, 17);
     static readonly Color Ink = Color.FromArgb(245, 245, 245);
     static readonly Color Muted = Color.FromArgb(163, 163, 163);
 
-    readonly TextBox _address;
-    readonly Button _go;
-    readonly Button _start;
-    readonly Button _companion;
-    readonly Label _status;
-    readonly WebView2 _web;
     readonly StudioHost _host = new();
+    readonly AppUpdater _updater = new();
+    readonly WebView2 _web;
+    readonly Panel _splash;
+    readonly Label _splashTitle;
+    readonly Label _splashDetail;
+    readonly MenuStrip _menu;
+    readonly System.Windows.Forms.Timer _updateTimer;
     bool _webReady;
+    Uri? _origin;
+    bool _updateInFlight;
+    DateTime _lastUpdateCheck = DateTime.MinValue;
 
     public MainForm()
     {
-        Text = "Shiba Studio";
+        Text = AppIdentity.ProductName;
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(960, 640);
         Size = new Size(1280, 840);
         BackColor = Bg;
         ForeColor = Ink;
         Font = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point);
+        Icon = LoadIcon();
 
-        var chrome = new Panel
-        {
-            Dock = DockStyle.Top,
-            Height = 56,
-            BackColor = Panel,
-            Padding = new Padding(12, 10, 12, 10),
-        };
-
-        _address = new TextBox
-        {
-            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
-            Location = new Point(12, 14),
-            Width = 640,
-            Height = 28,
-            BorderStyle = BorderStyle.FixedSingle,
-            BackColor = Color.Black,
-            ForeColor = Ink,
-            Text = StudioHost.DefaultOrigin,
-        };
-
-        _go = MakeButton("Open", 0);
-        _start = MakeButton("Start local Studio", 1);
-        _companion = MakeButton("Companion", 2);
-
-        _status = new Label
-        {
-            Dock = DockStyle.Bottom,
-            Height = 28,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(12, 0, 12, 0),
-            ForeColor = Muted,
-            BackColor = Panel,
-            Text = "Connecting…",
-        };
-
+        _menu = BuildMenu();
         _web = new WebView2
         {
             Dock = DockStyle.Fill,
             DefaultBackgroundColor = Color.Black,
+            Visible = false,
         };
-
-        chrome.Controls.Add(_address);
-        chrome.Controls.Add(_go);
-        chrome.Controls.Add(_start);
-        chrome.Controls.Add(_companion);
-        chrome.Resize += (_, _) => LayoutChrome(chrome);
+        _splash = BuildSplash(out _splashTitle, out _splashDetail);
 
         Controls.Add(_web);
-        Controls.Add(_status);
-        Controls.Add(chrome);
-        LayoutChrome(chrome);
+        Controls.Add(_splash);
+        Controls.Add(_menu);
+        MainMenuStrip = _menu;
 
-        _go.Click += async (_, _) => await NavigateAsync(Companion: false);
-        _companion.Click += async (_, _) => await NavigateAsync(Companion: true);
-        _start.Click += async (_, _) => await StartStudioAsync();
-        _address.KeyDown += async (_, e) =>
+        _updateTimer = new System.Windows.Forms.Timer { Interval = 30 * 60 * 1000 };
+        _updateTimer.Tick += async (_, _) => await CheckForUpdatesAsync(manual: false);
+
+        HandleCreated += (_, _) => NativeWindowChrome.Apply(this);
+        Load += async (_, _) => await BootAsync();
+        Activated += async (_, _) =>
         {
-            if (e.KeyCode == Keys.Enter)
+            if (DateTime.UtcNow - _lastUpdateCheck < TimeSpan.FromMinutes(5)) return;
+            await CheckForUpdatesAsync(manual: false);
+        };
+        FormClosed += (_, _) =>
+        {
+            _updateTimer.Stop();
+            _updateTimer.Dispose();
+            _host.Dispose();
+        };
+        KeyPreview = true;
+        KeyDown += async (_, e) =>
+        {
+            if (e.KeyCode == Keys.F5 || (e.Control && e.KeyCode == Keys.R))
             {
-                e.SuppressKeyPress = true;
-                await NavigateAsync(Companion: false);
+                e.Handled = true;
+                await ReloadAsync();
+            }
+            else if (e.KeyCode == Keys.F12)
+            {
+                e.Handled = true;
+                _web.CoreWebView2?.OpenDevToolsWindow();
+            }
+            else if (e.Control && e.KeyCode == Keys.Oemcomma)
+            {
+                e.Handled = true;
+                ShowPreferences();
             }
         };
-        Load += async (_, _) => await InitializeWebAsync();
-        FormClosed += (_, _) => _host.Dispose();
     }
 
-    Button MakeButton(string label, int index)
+    MenuStrip BuildMenu()
     {
-        return new Button
+        var menu = new MenuStrip
         {
-            Text = label,
-            Tag = index,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.White,
-            ForeColor = Color.Black,
-            Height = 30,
-            Width = index == 1 ? 150 : 110,
-            Cursor = Cursors.Hand,
+            Dock = DockStyle.Top,
+            BackColor = Bg,
+            ForeColor = Ink,
+            Renderer = new DarkMenuRenderer(),
+            Padding = new Padding(6, 2, 6, 2),
+            GripStyle = ToolStripGripStyle.Hidden,
         };
+        var studio = new ToolStripMenuItem("&Studio");
+        studio.DropDownItems.Add(Item("&Reload", async () => await ReloadAsync(), Keys.F5));
+        studio.DropDownItems.Add(Item("&Companion", async () => await OpenCompanionAsync()));
+        studio.DropDownItems.Add(new ToolStripSeparator());
+        studio.DropDownItems.Add(Item("Check for &Updates…", async () => await CheckForUpdatesAsync(manual: true)));
+        studio.DropDownItems.Add(Item("&Preferences…", ShowPreferences));
+        studio.DropDownItems.Add(new ToolStripSeparator());
+        studio.DropDownItems.Add(Item("E&xit", Close));
+
+        var view = new ToolStripMenuItem("&View");
+        view.DropDownItems.Add(Item("&Developer Tools", () => _web.CoreWebView2?.OpenDevToolsWindow(), Keys.F12));
+
+        var help = new ToolStripMenuItem("&Help");
+        help.DropDownItems.Add(Item("&Packages page", OpenPackagesPage));
+        help.DropDownItems.Add(Item("&About Shiba Studio", ShowAbout));
+
+        menu.Items.Add(studio);
+        menu.Items.Add(view);
+        menu.Items.Add(help);
+        return menu;
     }
 
-    void LayoutChrome(Control chrome)
+    static ToolStripMenuItem Item(string text, Action action, Keys shortcut = Keys.None)
     {
-        var right = chrome.ClientSize.Width - 12;
-        foreach (var button in new[] { _companion, _start, _go })
+        var item = new ToolStripMenuItem(text);
+        if (shortcut != Keys.None) item.ShortcutKeys = shortcut;
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    static ToolStripMenuItem Item(string text, Func<Task> action, Keys shortcut = Keys.None)
+    {
+        var item = new ToolStripMenuItem(text);
+        if (shortcut != Keys.None) item.ShortcutKeys = shortcut;
+        item.Click += async (_, _) => await action();
+        return item;
+    }
+
+    Panel BuildSplash(out Label title, out Label detail)
+    {
+        var panel = new Panel
         {
-            right -= button.Width;
-            button.Location = new Point(right, 13);
-            right -= 8;
+            Dock = DockStyle.Fill,
+            BackColor = Bg,
+        };
+        title = new Label
+        {
+            Text = AppIdentity.ProductName,
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI Semibold", 22f, FontStyle.Bold, GraphicsUnit.Point),
+            ForeColor = Ink,
+            Dock = DockStyle.None,
+        };
+        detail = new Label
+        {
+            Text = "Starting…",
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = Muted,
+            Dock = DockStyle.None,
+        };
+        panel.Controls.Add(title);
+        panel.Controls.Add(detail);
+        var titleLabel = title;
+        var detailLabel = detail;
+        panel.Resize += (_, _) =>
+        {
+            titleLabel.Size = new Size(panel.ClientSize.Width, 40);
+            titleLabel.Location = new Point(0, Math.Max(40, panel.ClientSize.Height / 2 - 36));
+            detailLabel.Size = new Size(panel.ClientSize.Width, 28);
+            detailLabel.Location = new Point(0, titleLabel.Bottom + 8);
+        };
+        return panel;
+    }
+
+    async Task BootAsync()
+    {
+        NativeWindowChrome.Apply(this);
+        SetSplash("Starting Shiba Studio…");
+        try
+        {
+            await InitializeWebAsync();
+            _origin = await _host.StartAsync();
+            await NavigateAsync(_origin);
+            ShowStudio();
+            _updateTimer.Start();
+            _ = CheckForUpdatesAsync(manual: false);
         }
-        _address.Width = Math.Max(240, right - 20);
+        catch (Exception ex)
+        {
+            SetSplash(ex.Message);
+        }
     }
 
     async Task InitializeWebAsync()
     {
-        try
+        AppIdentity.EnsureUserFolders();
+        var env = await CoreWebView2Environment.CreateAsync(userDataFolder: AppIdentity.WebViewDirectory);
+        await _web.EnsureCoreWebView2Async(env);
+        _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+        _web.CoreWebView2.Settings.AreDevToolsEnabled = true;
+        _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
+        _web.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = true;
+        _web.CoreWebView2.Profile.PreferredColorScheme = CoreWebView2PreferredColorScheme.Dark;
+        _web.CoreWebView2.DocumentTitleChanged += (_, _) =>
         {
-            var profile = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ShibaStudio",
-                "webview");
-            Directory.CreateDirectory(profile);
-            var env = await CoreWebView2Environment.CreateAsync(userDataFolder: profile);
-            await _web.EnsureCoreWebView2Async(env);
-            _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
-            _web.CoreWebView2.Settings.AreDevToolsEnabled = true;
-            _web.CoreWebView2.DocumentTitleChanged += (_, _) =>
+            var title = _web.CoreWebView2.DocumentTitle;
+            Text = string.IsNullOrWhiteSpace(title) || title.Contains(AppIdentity.ProductName, StringComparison.OrdinalIgnoreCase)
+                ? (string.IsNullOrWhiteSpace(title) ? AppIdentity.ProductName : title)
+                : $"{title} — {AppIdentity.ProductName}";
+        };
+        _web.CoreWebView2.NewWindowRequested += (_, e) =>
+        {
+            e.Handled = true;
+            OpenUrl(e.Uri);
+        };
+        _web.CoreWebView2.NavigationStarting += (_, e) =>
+        {
+            if (!IsStudioUrl(e.Uri))
             {
-                var title = _web.CoreWebView2.DocumentTitle;
-                Text = string.IsNullOrWhiteSpace(title) ? "Shiba Studio" : $"{title} — Shiba Studio";
-            };
-            _webReady = true;
-            _status.Text = StudioHost.FindStudioRoot() is string root
-                ? $"Ready · checkout {root}"
-                : "Ready · connect a running Studio or set SHIBA_STUDIO_ROOT";
-            await NavigateAsync(Companion: false);
-        }
-        catch (WebView2RuntimeNotFoundException)
+                e.Cancel = true;
+                OpenExternal(e.Uri);
+            }
+        };
+        _web.CoreWebView2.PermissionRequested += (_, e) =>
         {
-            _status.Text = "Install the Evergreen WebView2 runtime, then reopen Shiba Studio.";
-            MessageBox.Show(
-                this,
-                "Microsoft Edge WebView2 Runtime is required.\nDownload it from https://developer.microsoft.com/microsoft-edge/webview2/",
-                "Shiba Studio",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-        }
-        catch (Exception ex)
-        {
-            _status.Text = ex.Message;
-        }
+            if (IsStudioUrl(e.Uri)) e.State = CoreWebView2PermissionState.Allow;
+        };
+        _webReady = true;
     }
 
-    async Task NavigateAsync(bool Companion)
+    async Task NavigateAsync(Uri url)
     {
         if (!_webReady) return;
-        if (!TryNormalizeOrigin(_address.Text, out var origin, out var error))
-        {
-            _status.Text = error;
-            return;
-        }
-        _address.Text = origin;
-        var url = Companion ? new Uri(new Uri(origin + "/"), "companion").ToString() : origin;
-        _status.Text = $"Opening {url}";
-        _web.CoreWebView2.Navigate(url);
+        _web.CoreWebView2.Navigate(url.ToString());
         await Task.CompletedTask;
     }
 
-    async Task StartStudioAsync()
+    async Task ReloadAsync()
     {
-        _start.Enabled = false;
-        try
+        if (_webReady) _web.CoreWebView2.Reload();
+        await Task.CompletedTask;
+    }
+
+    async Task OpenCompanionAsync()
+    {
+        if (_origin is null) return;
+        await NavigateAsync(new Uri(_origin, "companion"));
+    }
+
+    void ShowStudio()
+    {
+        _splash.Visible = false;
+        _web.Visible = true;
+        _web.BringToFront();
+    }
+
+    void SetSplash(string detail)
+    {
+        _splash.Visible = true;
+        _splash.BringToFront();
+        _web.Visible = false;
+        _splashDetail.Text = detail;
+    }
+
+    void ShowPreferences()
+    {
+        using var dialog = new PreferencesForm();
+        if (dialog.ShowDialog(this) == DialogResult.OK && AppIdentity.ReadPrefs().AutoUpdate)
         {
-            if (!TryNormalizeOrigin(_address.Text, out var origin, out var error))
-            {
-                _status.Text = error;
-                return;
-            }
-            _address.Text = origin;
-            _status.Text = "Starting local Studio…";
-            var result = await _host.StartAsync(origin);
-            _status.Text = result;
-            await NavigateAsync(Companion: false);
-        }
-        catch (Exception ex)
-        {
-            _status.Text = ex.Message;
-        }
-        finally
-        {
-            _start.Enabled = true;
+            _ = CheckForUpdatesAsync(manual: true);
         }
     }
 
-    static bool TryNormalizeOrigin(string raw, out string origin, out string error)
+    void ShowAbout()
     {
-        origin = StudioHost.DefaultOrigin;
-        error = "";
-        var text = string.IsNullOrWhiteSpace(raw) ? StudioHost.DefaultOrigin : raw.Trim();
-        if (!text.Contains("://", StringComparison.Ordinal)) text = "http://" + text;
-        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        var stamp = AppIdentity.ReadStamp();
+        var sha = AppIdentity.ShortSha();
+        MessageBox.Show(
+            this,
+            $"{AppIdentity.ProductName}\nChannel: {AppIdentity.ResolvedChannel()}\nRevision: {(string.IsNullOrEmpty(sha) ? "local" : sha)}\n{(stamp.BuiltAt ?? "")}\n\n{AppIdentity.PackagesPage}",
+            "About Shiba Studio",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    static void OpenPackagesPage() => OpenExternal(AppIdentity.PackagesPage);
+
+    async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (_updateInFlight) return;
+        _updateInFlight = true;
+        _lastUpdateCheck = DateTime.UtcNow;
+        try
         {
-            error = "Enter an http(s) Studio origin such as http://127.0.0.1:3000";
-            return false;
+            var offer = await _updater.CheckAsync();
+            if (offer is null)
+            {
+                if (manual)
+                {
+                    MessageBox.Show(this, "You're on the latest build for this channel.", AppIdentity.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                return;
+            }
+
+            var prefs = AppIdentity.ReadPrefs();
+            if (!manual && !prefs.AutoUpdate) return;
+            if (!manual && prefs.AutoUpdate)
+            {
+                await ApplyUpdateAsync(offer);
+                return;
+            }
+
+            var result = MessageBox.Show(
+                this,
+                $"A newer {offer.Channel} build is available ({offer.Sha[..Math.Min(7, offer.Sha.Length)]}). Update now?",
+                AppIdentity.ProductName,
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+            if (result == DialogResult.Yes) await ApplyUpdateAsync(offer);
         }
-        origin = uri.GetLeftPart(UriPartial.Authority);
-        return true;
+        catch (Exception ex)
+        {
+            if (manual)
+            {
+                MessageBox.Show(this, ex.Message, AppIdentity.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        finally
+        {
+            _updateInFlight = false;
+        }
+    }
+
+    async Task ApplyUpdateAsync(UpdateOffer offer)
+    {
+        SetSplash("Updating Shiba Studio…");
+        var progress = new Progress<string>(SetSplash);
+        await _updater.DownloadAndApplyAsync(offer, progress);
+        Close();
+    }
+
+    void OpenUrl(string uri)
+    {
+        if (IsStudioUrl(uri) && _webReady) _web.CoreWebView2.Navigate(uri);
+        else OpenExternal(uri);
+    }
+
+    static bool IsStudioUrl(string uri)
+    {
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed)) return false;
+        if (parsed.Scheme is not ("http" or "https")) return false;
+        return parsed.Host is "127.0.0.1" or "localhost" or "::1";
+    }
+
+    static void OpenExternal(string uri)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+        }
+        catch (Exception)
+        {
+            // The user can still copy the URL from the packages page.
+        }
+    }
+
+    static Icon? LoadIcon()
+    {
+        var ico = Path.Combine(AppContext.BaseDirectory, "shiba.ico");
+        return File.Exists(ico) ? new Icon(ico) : null;
     }
 }

@@ -5,8 +5,21 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-DERIVED="${1:-$ROOT/dist/native/macos-derived}"
-OUT="${2:-$ROOT/dist/native/macos}"
+DERIVED=""
+OUT=""
+NO_ZIP=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-zip) NO_ZIP=1 ;;
+    *)
+      if [ -z "$DERIVED" ]; then DERIVED="$arg"
+      elif [ -z "$OUT" ]; then OUT="$arg"
+      fi
+      ;;
+  esac
+done
+DERIVED="${DERIVED:-$ROOT/dist/native/macos-derived}"
+OUT="${OUT:-$ROOT/dist/native/macos}"
 PROJECT="$ROOT/apps/macos/ShibaStudio.xcodeproj"
 
 if ! command -v xcodebuild >/dev/null 2>&1; then
@@ -38,6 +51,10 @@ fi
 
 rm -rf "$OUT/ShibaStudio.app"
 cp -R "$APP" "$OUT/ShibaStudio.app"
+if [ "$NO_ZIP" -eq 1 ]; then
+  echo "Wrote $OUT/ShibaStudio.app"
+  exit 0
+fi
 rm -f "$OUT/ShibaStudio-macos.zip"
 (
   cd "$OUT"

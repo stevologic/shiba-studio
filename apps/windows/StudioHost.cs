@@ -1,76 +1,24 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http;
-using System.Text.Json;
+using System.Net.Sockets;
 
 namespace ShibaStudio;
 
 /// <summary>
-/// Locates a Shiba Studio checkout and optionally starts <c>npm run start</c>.
-/// The Windows app is a host, not a second copy of the Node server.
+/// Starts the bundled Studio production server (`next start`) on loopback.
+/// The Windows app is a native host around that same web UI — not a second product.
 /// </summary>
 sealed class StudioHost : IDisposable
 {
-    public const string DefaultOrigin = "http://127.0.0.1:3000";
     public const string HealthPath = "/api/health";
 
-    static readonly HttpClient Http = new()
-    {
-        Timeout = TimeSpan.FromSeconds(2),
-    };
+    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(2) };
 
     Process? _process;
     bool _disposed;
 
-    public Process? Process => _process;
-
-    public static string? FindNode()
-    {
-        return FindOnPath("node.exe") ?? FindOnPath("node");
-    }
-
-    public static string? FindNpm()
-    {
-        return FindOnPath("npm.cmd") ?? FindOnPath("npm");
-    }
-
-    public static string? FindStudioRoot()
-    {
-        var fromEnv = Environment.GetEnvironmentVariable("SHIBA_STUDIO_ROOT");
-        if (IsStudioRoot(fromEnv)) return Path.GetFullPath(fromEnv!);
-
-        var configured = ReadConfiguredRoot();
-        if (IsStudioRoot(configured)) return Path.GetFullPath(configured!);
-
-        var exeDir = AppContext.BaseDirectory;
-        foreach (var candidate in new[]
-        {
-            exeDir,
-            Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..")),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShibaStudio", "checkout"),
-        })
-        {
-            if (IsStudioRoot(candidate)) return candidate;
-        }
-
-        return null;
-    }
-
-    public static bool IsStudioRoot(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return false;
-        var packageJson = Path.Combine(path, "package.json");
-        if (!File.Exists(packageJson)) return false;
-        try
-        {
-            using var doc = JsonDocument.Parse(File.ReadAllText(packageJson));
-            return doc.RootElement.TryGetProperty("name", out var name)
-                && string.Equals(name.GetString(), "shiba-studio", StringComparison.Ordinal);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
+    public Uri? Origin { get; private set; }
 
     public static async Task<bool> IsHealthyAsync(string origin, CancellationToken cancellationToken = default)
     {
@@ -85,51 +33,92 @@ sealed class StudioHost : IDisposable
         }
     }
 
-    public async Task<string> StartAsync(string origin, CancellationToken cancellationToken = default)
+    public async Task<Uri> StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (await IsHealthyAsync(origin, cancellationToken).ConfigureAwait(false))
+        if (!AppIdentity.IsBundledRuntime())
         {
-            return "Already running";
+            throw new InvalidOperationException(
+                "This copy of Shiba Studio is missing its bundled runtime. Download a packages build from https://shiba-studio.io/packages.html");
         }
 
-        var root = FindStudioRoot()
-            ?? throw new InvalidOperationException(
-                "No Shiba Studio checkout found. Clone the repo, set SHIBA_STUDIO_ROOT, or connect to a Studio that is already running.");
-        var npm = FindNpm()
-            ?? throw new InvalidOperationException("npm was not found on PATH. Install Node.js 22.5 or later.");
+        var port = ReservePort(AppIdentity.ReadStamp().PreferredPort ?? AppIdentity.PreferredPort);
+        var origin = new Uri($"http://127.0.0.1:{port}");
+        if (await IsHealthyAsync(origin.ToString(), cancellationToken).ConfigureAwait(false))
+        {
+            Origin = origin;
+            return origin;
+        }
 
+        AppIdentity.EnsureUserFolders();
+        Directory.CreateDirectory(Path.GetDirectoryName(AppIdentity.LogFile)!);
+        var log = new StreamWriter(new FileStream(AppIdentity.LogFile, FileMode.Create, FileAccess.Write, FileShare.Read))
+        {
+            AutoFlush = true,
+        };
+
+        var stamp = AppIdentity.ReadStamp();
         var startInfo = new ProcessStartInfo
         {
-            FileName = npm,
-            Arguments = "run start",
-            WorkingDirectory = root,
+            FileName = AppIdentity.NodeBinary,
+            Arguments = $"\"{AppIdentity.NextCli}\" start -H 127.0.0.1 --port {port}",
+            WorkingDirectory = AppIdentity.RuntimeDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
         startInfo.Environment["HOST"] = "127.0.0.1";
+        startInfo.Environment["PORT"] = port.ToString();
+        startInfo.Environment["NODE_ENV"] = "production";
+        startInfo.Environment["SHIBA_PROJECT_ROOT"] = AppIdentity.RuntimeDirectory;
+        startInfo.Environment["SHIBA_DATA_DIR"] = AppIdentity.DataDirectory;
+        startInfo.Environment["SHIBA_SECRET_KEY_FILE"] = Path.Combine(AppIdentity.DataDirectory, "shiba-studio.key");
+        startInfo.Environment["SHIBA_GIT_COMMIT"] = stamp.Sha ?? "";
+        startInfo.Environment["TERMINAL_WS_PORT"] = (port + 1).ToString();
+        startInfo.Environment["TERMINAL_WS_HOST"] = "127.0.0.1";
+        startInfo.Environment["PUPPETEER_SKIP_DOWNLOAD"] = "1";
+        startInfo.Environment["NEXT_TELEMETRY_DISABLED"] = "1";
 
         _process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start npm run start.");
+            ?? throw new InvalidOperationException("Failed to start the bundled Studio server.");
+        _process.OutputDataReceived += (_, e) => { if (e.Data is not null) { try { log.WriteLine(e.Data); } catch (ObjectDisposedException) { } } };
+        _process.ErrorDataReceived += (_, e) => { if (e.Data is not null) { try { log.WriteLine(e.Data); } catch (ObjectDisposedException) { } } };
+        _process.Exited += (_, _) => { try { log.Dispose(); } catch (ObjectDisposedException) { } };
+        _process.EnableRaisingEvents = true;
+        _process.BeginOutputReadLine();
+        _process.BeginErrorReadLine();
 
-        var deadline = DateTime.UtcNow.AddSeconds(90);
-        while (DateTime.UtcNow < deadline)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (_process.HasExited)
+            var deadline = DateTime.UtcNow.AddSeconds(120);
+            while (DateTime.UtcNow < deadline)
             {
-                throw new InvalidOperationException($"Studio host exited with code {_process.ExitCode}.");
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_process.HasExited)
+                {
+                    throw new InvalidOperationException(
+                        $"Studio exited with code {_process.ExitCode}. See {AppIdentity.LogFile}");
+                }
+                if (await IsHealthyAsync(origin.ToString(), cancellationToken).ConfigureAwait(false))
+                {
+                    Origin = origin;
+                    return origin;
+                }
+                await Task.Delay(400, cancellationToken).ConfigureAwait(false);
             }
-            if (await IsHealthyAsync(origin, cancellationToken).ConfigureAwait(false))
-            {
-                return $"Started from {root}";
-            }
-            await Task.Delay(500, cancellationToken).ConfigureAwait(false);
-        }
 
-        throw new TimeoutException("Studio started but /api/health did not become ready in 90s.");
+            throw new TimeoutException($"Studio started but /api/health did not become ready. See {AppIdentity.LogFile}");
+        }
+        catch
+        {
+            if (_process is { HasExited: false })
+            {
+                try { _process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+            }
+            throw;
+        }
     }
 
     public void Dispose()
@@ -144,37 +133,27 @@ sealed class StudioHost : IDisposable
         _process?.Dispose();
     }
 
+    static int ReservePort(int preferred)
+    {
+        for (var port = preferred; port < preferred + 16; port++)
+        {
+            try
+            {
+                var listener = new TcpListener(IPAddress.Loopback, port);
+                listener.Start();
+                listener.Stop();
+                return port;
+            }
+            catch (SocketException)
+            {
+                // try the next port
+            }
+        }
+        throw new InvalidOperationException("No free loopback port was found for Shiba Studio.");
+    }
+
     static string Combine(string origin, string path)
     {
         return new Uri(new Uri(origin.EndsWith('/') ? origin : origin + "/", UriKind.Absolute), path.TrimStart('/')).ToString();
-    }
-
-    static string? FindOnPath(string fileName)
-    {
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var candidate = Path.Combine(dir.Trim(), fileName);
-            if (File.Exists(candidate)) return candidate;
-        }
-        return null;
-    }
-
-    static string? ReadConfiguredRoot()
-    {
-        var file = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "ShibaStudio",
-            "host.json");
-        if (!File.Exists(file)) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(File.ReadAllText(file));
-            return doc.RootElement.TryGetProperty("studioRoot", out var root) ? root.GetString() : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
     }
 }

@@ -12,7 +12,7 @@
       "enabled": true,
       "project": "apps/windows/ShibaStudio.csproj",
       "artifact": "ShibaStudio-windows-x64.zip",
-      "summary": "Native WebView2 host that starts or attaches to a local Shiba Studio server."
+      "summary": "Native WebView2 app. Double-click to run the same Studio UI; updates itself when main or development moves."
     },
     {
       "id": "macos",
@@ -22,7 +22,7 @@
       "enabled": true,
       "project": "apps/macos/ShibaStudio.xcodeproj",
       "artifact": "ShibaStudio-macos.zip",
-      "summary": "Native WKWebView host for Mac that starts or attaches to a local Shiba Studio server."
+      "summary": "Native WKWebView app for Mac. Double-click to run the same Studio UI; updates itself when its channel moves."
     }
   ]
 }

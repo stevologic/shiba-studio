@@ -129,7 +129,7 @@ async function main() {
       && !primaryNav.includes("label: 'Routines'")
       && !primaryNav.includes("label: 'Doctor'")
       && !primaryNav.includes("label: 'Attention'"),
-    'primary navigation exposes Dashboard, Automations, and the Meetings beta without retired surfaces',
+    'primary navigation exposes Dashboard, Automations, and Meetings without retired surfaces',
   );
   check(
     studio.includes('<AttentionBell count={navStats.attentionOpen} />') && !studio.includes('AttentionInbox'),
@@ -152,11 +152,38 @@ async function main() {
   );
   check(
     appTabs.includes("'meetings'") && !appTabs.includes("'doctor'") && !appTabs.includes("'attention'"),
-    'the Meetings beta route is in the app route contract while retired Doctor and Attention routes stay absent',
+    'the Meetings route is in the app route contract while retired Doctor and Attention routes stay absent',
   );
   check(
     studio.includes('MeetingsPanel') && !studio.includes('MeetingCapturePanel') && !studio.includes('DoctorPage'),
-    'the shell mounts the live Meetings beta panel, not the retired capture or Doctor panels',
+    'the shell mounts the live Meetings panel, not the retired capture or Doctor panels',
+  );
+  check(
+    !studio.includes("stat: 'beta'")
+      && !studio.includes('Meetings is a beta feature')
+      && !studio.includes('MEETINGS (Beta)'),
+    'primary navigation does not label Meetings as Beta',
+  );
+  const meetingsPanel = await source('components/meetings-panel.tsx');
+  check(
+    !meetingsPanel.includes('Meetings (Beta)')
+      && !meetingsPanel.includes('>Beta</span>')
+      && meetingsPanel.includes('Start a review')
+      && meetingsPanel.includes('/> Active</div>')
+      && meetingsPanel.includes('/> History</div>'),
+    'Meetings lobby is Start a review / Active / History without a Beta badge',
+  );
+  check(
+    meetingsPanel.includes('GROK_VOICE_MODEL')
+      && meetingsPanel.includes('LiveMeetingVoiceClient')
+      && meetingsPanel.includes('Grok Voice 2.0'),
+    'Meetings room uses Grok Voice 2.0 for spoken interaction',
+  );
+  const grokVoice = await source('lib/grok-voice.ts');
+  check(
+    grokVoice.includes("GROK_VOICE_MODEL = 'grok-voice-think-fast-2.0'")
+      && grokVoice.includes('grok-voice-latest'),
+    'Meetings pins Grok Voice 2.0 and documents the latest alias',
   );
 
   const automations = await source('components/routines-panel.tsx');

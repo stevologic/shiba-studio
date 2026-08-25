@@ -32,11 +32,11 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 
 - **Dashboard & approvals** — a focused operational home for readiness and recent runs, plus a quiet top-bar alert bell containing only exact actions that are currently waiting for approval.
 - **Artifact Studio** — checkpoint-backed HTML/PDF/Office previews with anchored review, visual verification, rollback, and revocable publishing.
-- **Remote and native companions** — a paired, scoped, encrypted-offline PWA for pending approvals and voice requests, official compiled **Windows** and **macOS** desktop apps on the [packages page](https://shiba-studio.io/packages.html), and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
+- **Remote and native companions** — a paired, scoped, encrypted-offline PWA for pending approvals and voice requests, official **Windows** and **macOS** apps on the [packages page](https://shiba-studio.io/packages.html) (double-click to run the same Studio UI; each channel updates itself), and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
 - **Grok phone assistant** — call the Voice Agent Builder number and dictate Studio commands. Settings issues a one-time `shiba_phone_` bearer; Grok invokes the public MCP/command URL and Shiba creates Board cards, runs git, remembers facts, or starts durable work.
 
 - **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, **rich cards** (`shiba-card` fences for stats, progress, checklists, timelines, callouts, media, sparklines, bars, timecharts, or agent-designed custom layouts), inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Queue more messages while a reply streams; stick-to-bottom tracks growing reasoning; transport failures surface as short friendly copy instead of HTML dumps. Bind any chat to a **workspace folder** and Grok reads, writes, and searches its files directly.
-- **Meetings (Beta)** — spoken, agent-led project reviews: the agent presents real code, diagrams, markdown, and live screenshots on a stage while you steer by voice or text. Create Board cards mid-meeting in the same turn, or convert minutes to cards with one confirmation.
+- **Meetings** — spoken, agent-led project reviews with Grok Voice 2.0: the agent presents real code, diagrams, markdown, and live screenshots on a stage while you steer by voice or text. Create Board cards mid-meeting in the same turn, or convert minutes to cards with one confirmation.
 - **Code IDE** — a first-class Monaco workspace with multi-file tabs, VS Code-grade syntax services, repository search, structured Git staging/branches/history, GitHub pull requests/issues/actions, diagnostics, and the real host terminal.
 - **Agents** — autonomous workers with their own model, workspace, git worktree, integration scopes, skills, and peers. Automations select an agent as the execution owner; timing and triggers do not live in agent configuration. Local agents get files, shell, and a controlled Chrome; cloud agents run against Grok cloud services only.
 - **Learning & Memories** — agents automatically recall relevant local knowledge before runs and can extract durable facts, decisions, procedures, preferences, and lessons afterward in **Review** or **Automatic** mode. The Memories page provides search, approval, editing, pinning, archiving, scope moves, provenance, and deletion.
@@ -58,9 +58,9 @@ local model server (LM Studio, Ollama, llama.cpp). Fresh installs default to
 | <img src="docs/images/dashboard.png" alt="Dashboard: hero, readiness badges, quick stats, and recent agent runs with statuses and view-answer links" /> | <img src="docs/images/chat.png" alt="Grok Chat: session rail, streaming replies, workspace binding, voice and model controls" /> |
 | Readiness badges for every model source, live quick stats, and recent runs with one-click answers and full execution traces. | Sessions with tools, voice, project context — Grok, a single agent, or the whole team. Queue messages while a reply streams. |
 
-| Meetings (Beta) | Shared Board |
+| Meetings | Shared Board |
 | :---: | :---: |
-| <img src="docs/images/meetings.png" alt="Meetings beta: start a spoken agent-led project review with agent, project, and focus; past meetings with minutes" /> | <img src="docs/images/board.png" alt="Board page: Linear-style Kanban with Backlog/Todo/In Progress/In Review columns, Timeline Gantt, and Sync" /> |
+| <img src="docs/images/meetings.png" alt="Meetings: start a spoken agent-led project review with agent, project, and focus; past meetings with minutes" /> | <img src="docs/images/board.png" alt="Board page: Linear-style Kanban with Backlog/Todo/In Progress/In Review columns, Timeline Gantt, and Sync" /> |
 | Spoken agent-led reviews with a visual stage; create Board work mid-meeting or land minutes as cards after you confirm. | People and agents share one Kanban — search, queue work, Timeline Gantt for delivered work, Linear/Jira sync optional. |
 
 | Automations | Capabilities |
@@ -250,7 +250,7 @@ tested `grok 0.2.103` binary.
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install on Windows/macOS/Linux, first run, connecting model sources |
 | [Grok Chat](docs/chat.md) | Sessions, models & reasoning, rich cards, message queue, attachments, slash commands, annotation sub-browser, quotas |
-| [Meetings (Beta)](docs/meetings.md) | Spoken agent-led project reviews with a visual stage, streaming turns, AI steering, mid-meeting Board actions, and minutes → Board cards |
+| [Meetings](docs/meetings.md) | Spoken agent-led project reviews with Grok Voice 2.0, a visual stage, streaming turns, AI steering, mid-meeting Board actions, and minutes → Board cards |
 | [Code IDE](docs/code.md) | Monaco editing, workspace search, Git staging and branches, GitHub activity, keyboard shortcuts, and terminal access |
 | [Board](docs/board.md) | Shared Kanban, search, queue work, delivered-work Gantt, agent-run cards, Linear/Jira mirroring, and private Grok Files snapshots |
 | [Agents](docs/agents.md) | Local vs cloud agents, workspaces & worktrees, skills, peers, run history |
@@ -261,7 +261,7 @@ tested `grok 0.2.103` binary.
 | [Capability Packs](docs/capability-packs.md) | Governed learn → review → activate workflow packs, permissions, versions, rollback, and uninstall |
 | [Artifact Studio](docs/artifact-studio.md) | Immutable previews, visual evidence, annotations, live refresh, rollback, and publishing |
 | [Native Nodes](docs/native-nodes.md) | Signed Windows-helper protocol and compatibility API for existing paired nodes |
-| [Native apps](docs/native-apps.md) | Windows and macOS desktop hosts, packages page, and compile-on-push CI |
+| [Native apps](docs/native-apps.md) | Windows and macOS apps, bundled runtime, auto-update, packages page |
 | [Grok Build CLI](docs/cli.md) | Official installation and provenance, authenticated readiness, one-shot chat/agent delegation, output and safety contracts |
 | [Grok Build Harnesses](docs/grok-build-harnesses.md) | Managed headless requests, persistent `grok agent stdio` ACP, and external attachment/callback boundaries |
 | [API Reference](docs/api.md) | Every `/api/*` endpoint, curl examples, and the in-app interactive explorer at `/api-docs` |
@@ -276,7 +276,7 @@ tested `grok 0.2.103` binary.
 - **Rich cards in any agent markdown** — fenced `shiba-card` JSON becomes live KPI tiles, progress bars, checklists, timelines, callouts, media layouts, sparklines, bar charts, multi-series timecharts, or custom declarative layouts (chat, meetings, run output).
 - **Message queue + resilient streams** — keep typing while a reply generates; long tool-using turns get longer timeouts; proxy HTML/timeouts collapse to short user-facing recovery text.
 - **Chat workspaces** — point a chat at any folder with `/workspace` (or the topbar folder button); file reads/writes/searches and `/git` commands run inside it, so "fix the failing test in this repo" just works.
-- **Meetings beta** — voice-first delivery reviews with real code excerpts, diagrams, and screenshots on a shared stage; create Board cards live mid-meeting, or confirm minutes todos onto the Board.
+- **Meetings** — Grok Voice 2.0 delivery reviews with real code excerpts, diagrams, and screenshots on a shared stage; create Board cards live mid-meeting, or confirm minutes todos onto the Board.
 - **Board search & queue** — filter cards by SHIB ID or free text; queue work for a busy assignee instead of losing the Start click.
 - **Auto-titled chats** — a low-end model summarizes each new conversation into a title after the first exchange.
 - **Run provenance everywhere** — dashboard runs, agent history, Automation history, and the audit log all deep-link to full execution traces; removing an execution owner safely retires its Automations while preserving history.
@@ -317,8 +317,8 @@ Full threat model and vulnerability reporting: [SECURITY.md](SECURITY.md) · Pri
 | `npm run dev:lan:studio` / `start:lan:studio` | Expose the complete Studio to trusted private-network peers — read [SECURITY.md](SECURITY.md) first |
 | `npm test` | Full functional verification suite — isolated, never touches your live data |
 | `npm run test:e2e` | Playwright browser E2E (run `npx playwright install chromium` + `npm run build` first) |
-| `npm run build:windows` | Compile the Windows desktop host (requires .NET 8 on Windows) |
-| `npm run build:macos` | Compile the macOS desktop host (requires Xcode on a Mac) |
+| `npm run build:windows` | Compile the Windows host shell (requires .NET 8 on Windows) |
+| `npm run build:macos` | Compile the macOS host shell (requires Xcode on a Mac) |
 
 ## Contributing & support
 
