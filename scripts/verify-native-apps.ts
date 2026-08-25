@@ -72,6 +72,8 @@ function main() {
   assert.match(mainForm, /MenuStrip/);
   assert.match(mainForm, /Check for &Updates/);
   assert.match(mainForm, /NativeWindowChrome/);
+  assert.match(mainForm, /var titleLabel = title/);
+  assert.match(mainForm, /var detailLabel = detail/);
   assert.doesNotMatch(mainForm, /Start local Studio/);
   assert.doesNotMatch(mainForm, /class TextBox|new TextBox/);
   assert.doesNotMatch(mainForm, /static readonly Color Text/, 'Form.Text must not be shadowed by a color field');
