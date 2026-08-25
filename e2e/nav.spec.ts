@@ -44,8 +44,8 @@ test('primary navigation keeps the simplified product surface', async ({ page })
   await expect(sidebar.getByRole('link', { name: 'Dashboard', exact: true })).toHaveAttribute('href', '/');
   await expect(sidebar.getByRole('link', { name: 'Code', exact: true })).toHaveAttribute('href', '/code');
   await expect(sidebar.getByRole('link', { name: 'Automations', exact: true })).toHaveAttribute('href', '/automations');
-  // Live Meetings beta is a first-class primary surface again.
   await expect(sidebar.getByRole('link', { name: 'Meetings', exact: true })).toHaveAttribute('href', '/meetings');
+  await expect(sidebar.getByRole('link', { name: 'Meetings', exact: true })).not.toHaveText(/beta/i);
   await expect(sidebar.getByRole('link', { name: 'Traffic', exact: true })).toHaveCount(0);
   await expect(page.locator('.footer-bar').getByRole('link', { name: 'Traffic', exact: true })).toHaveAttribute('href', '/traffic');
 
@@ -57,10 +57,12 @@ test('primary navigation keeps the simplified product surface', async ({ page })
   await expect(page.locator('.top-bar').getByRole('button', { name: /Approvals/ })).toBeVisible();
 });
 
-test('Meetings beta surface is directly reachable', async ({ page }) => {
+test('Meetings surface is directly reachable without a Beta label', async ({ page }) => {
   const response = await page.goto('/meetings', { waitUntil: 'domcontentloaded' });
   expect(response?.status()).toBe(200);
-  await expect(page.locator('body')).toContainText(/Meeting|Meetings|review/i);
+  await expect(page.locator('body')).toContainText(/Meetings/i);
+  await expect(page.locator('body')).toContainText(/Start a review/i);
+  await expect(page.locator('.page-title')).not.toContainText(/beta/i);
 });
 
 for (const retiredPath of ['/doctor', '/attention']) {

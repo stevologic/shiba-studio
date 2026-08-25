@@ -8,7 +8,7 @@ below shows the real interaction paths (GitHub renders it inline).
 flowchart TB
     subgraph Surfaces["Surfaces — what you touch"]
         Chat["Grok Chat<br/>slash commands · rich cards · message queue"]
-        Meetings["Meetings beta<br/>voice review · stage visuals · minutes"]
+        Meetings["Meetings<br/>Grok Voice 2.0 · stage visuals · minutes"]
         BoardUI["Board<br/>Kanban · Gantt Timeline · Linear/Jira sync"]
         CodeIDE["Code IDE<br/>Monaco · Git · GitHub · terminal"]
         SubBrowser["Annotation sub-browser<br/>interact / annotate / scroll"]

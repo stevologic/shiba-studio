@@ -3304,7 +3304,7 @@ export default function ShibaStudio() {
           {([
             { id: 'dashboard', label: 'Dashboard', icon: Home, stat: navStats.tasksActive > 0 ? String(navStats.tasksActive) : null },
             { id: 'chat', label: 'Grok Chat', icon: MessageSquare, stat: navStats.chatSessions > 0 ? String(navStats.chatSessions) : null },
-            { id: 'meetings', label: 'Meetings', icon: Presentation, stat: 'beta' },
+            { id: 'meetings', label: 'Meetings', icon: Presentation, stat: null },
             { id: 'projects', label: 'Projects', icon: FolderKanban, stat: navStats.projects > 0 ? String(navStats.projects) : null },
             // Open = backlog + todo + in progress: the work still ahead of review.
             { id: 'board', label: 'Board', icon: KanbanSquare, stat: navStats.boardOpen > 0 ? String(navStats.boardOpen) : null },
@@ -3359,7 +3359,6 @@ export default function ShibaStudio() {
                     : item.id === 'projects' ? `${item.stat} project(s)`
                     : item.id === 'memories' ? `${item.stat} stored memory item(s)`
                     : item.id === 'workspace' ? `${item.stat} file(s) in workspace`
-                    : item.id === 'meetings' ? 'Meetings is a beta feature'
                     : item.id === 'automations' ? `${item.stat} scheduled automation(s)`
                     : item.id === 'integrations' ? `${item.stat} configured integration(s)`
                     : item.id === 'usage'
@@ -4017,7 +4016,7 @@ export default function ShibaStudio() {
           {/* FILES — every deliverable agents have written, across all runs */}
           {tab === 'files' && <FilesPanel />}
 
-          {/* MEETINGS (Beta) — spoken agent-led project reviews with a visual stage */}
+          {/* MEETINGS — spoken agent-led project reviews with a visual stage */}
           {tab === 'meetings' && (
             <MeetingsPanel agents={agents} onOpenBoard={() => navigateToTab('board')} />
           )}

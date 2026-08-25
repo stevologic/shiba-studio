@@ -1,5 +1,5 @@
 /**
- * Live Meetings (Beta) engine — spoken, agent-led project reviews.
+ * Live Meetings engine — spoken, agent-led project reviews.
  *
  * A meeting is a turn-based conversation between the creator (director) and
  * one agent (senior engineer). The agent leads: it presents delivered work
@@ -297,7 +297,7 @@ async function buildMeetingBrief(input: {
 /* ── Turn engine ── */
 
 const MEETING_ROLE = [
-  'You are in a live Meetings (Beta) session: a spoken project review between you — the senior engineer who has been building this project — and the creator, who directs it.',
+  'You are in a live Meetings session: a spoken project review between you — the senior engineer who has been building this project — and the creator, who directs it.',
   'You LEAD the meeting. Present what has been implemented, walk through the work like a delivery review, and propose direction — but always yield to what the director wants to discuss.',
   'Meetings initiate work, not just talk about it: when the director asks for something to be done, create the Board card via "actions" in that same turn and confirm it out loud. Never make them wait for the meeting minutes.',
   'Speaking style: natural spoken language that will be read aloud, 2 to 5 short sentences per turn. No markdown, bullet lists, code, URLs, or emoji inside the spoken text. Be concrete: name real files, features, commits, and Board cards from the project material below.',

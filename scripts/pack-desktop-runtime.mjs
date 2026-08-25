@@ -87,7 +87,7 @@ function parseArgs(argv) {
 
 function readPackageName(root) {
   const file = path.join(root, 'package.json');
-  if (!existsSync(fsPath(file))) fail(`Missing ${file}`);
+  if (!existsSafe(file)) fail(`Missing ${file}`);
   const pkg = JSON.parse(readFileSync(fsPath(file), 'utf8'));
   if (pkg.name !== 'shiba-studio') fail(`${file} is not shiba-studio`);
   return pkg;
@@ -96,21 +96,36 @@ function readPackageName(root) {
 function assertBuild(root) {
   const nextDir = path.join(root, '.next');
   const nextCli = path.join(root, 'node_modules', 'next', 'dist', 'bin', 'next');
-  if (!existsSync(fsPath(nextDir))) fail(`No production build at ${nextDir}. Run npm run build first.`);
-  if (!existsSync(fsPath(nextCli))) fail(`Next CLI missing at ${nextCli}. Run npm ci first.`);
+  if (!existsSafe(nextDir)) fail(`No production build at ${nextDir}. Run npm run build first.`);
+  if (!existsSafe(nextCli)) fail(`Next CLI missing at ${nextCli}. Run npm ci first.`);
 }
 
 // Keep \\?\ prefixes off logical paths. path.join / relative / cycle detection
 // all break once a Windows realpath leaks the long-path prefix back in.
+//
+// Bare drive letters stay "C:" after path.normalize. Node's lstat/realpath of
+// "C:" (or "\\?\C:" without a trailing slash) throws EISDIR — that is what
+// killed the Windows packer when a D: workspace followed a junction onto C:.
 function normalizePath(p) {
   if (!p) return p;
-  let next = p;
+  let next = String(p);
   if (next.startsWith('\\\\?\\UNC\\')) next = `\\\\${next.slice(8)}`;
   else if (next.startsWith('\\\\?\\')) next = next.slice(4);
+  if (/^[A-Za-z]:$/.test(next)) return `${next}\\`;
+  if (/^[A-Za-z]:[\\/]/.test(next) || next.startsWith('\\\\')) {
+    return path.win32.normalize(next);
+  }
   return path.normalize(next);
 }
 
+function isDriveRoot(p) {
+  if (!p) return false;
+  const stripped = normalizePath(p).replace(/[\\/]+$/, '');
+  return /^[A-Za-z]:$/.test(stripped);
+}
+
 function shouldSkip(src, root) {
+  if (isDriveRoot(src)) return true;
   const rel = path.relative(normalizePath(root), normalizePath(src));
   const parts = !rel || rel.startsWith('..') || path.isAbsolute(rel)
     ? normalizePath(src).split(path.sep)
@@ -126,14 +141,38 @@ function shouldSkip(src, root) {
 // Node can still hit MAX_PATH when copying node_modules into dist/native/...
 function fsPath(p) {
   if (process.platform !== 'win32') return p;
-  const resolved = path.resolve(normalizePath(p));
+  const logical = normalizePath(p);
+  if (isDriveRoot(logical)) return `\\\\?\\${logical.replace(/[\\/]+$/, '')}\\`;
+  const resolved = path.resolve(logical);
   if (resolved.startsWith('\\\\?\\')) return resolved;
   if (resolved.startsWith('\\\\')) return `\\\\?\\UNC\\${resolved.slice(2)}`;
   return `\\\\?\\${resolved}`;
 }
 
 function resolveReal(p) {
-  return normalizePath(realpathSync(fsPath(p)));
+  const logical = normalizePath(p);
+  if (isDriveRoot(logical)) return null;
+  // realpath the logical path first. realpathSync("\\?\C:\...") from a D:
+  // cwd walks the C: volume and lstat("C:") throws EISDIR.
+  try {
+    const resolved = normalizePath(realpathSync(logical));
+    return isDriveRoot(resolved) ? null : resolved;
+  } catch {
+    try {
+      const resolved = normalizePath(realpathSync(fsPath(logical)));
+      return isDriveRoot(resolved) ? null : resolved;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function existsSafe(p) {
+  try {
+    return existsSync(fsPath(p));
+  } catch {
+    return false;
+  }
 }
 
 function copyFileReliable(from, to) {
@@ -158,7 +197,7 @@ function copyFileReliable(from, to) {
 }
 
 function copyFiltered(from, to, root) {
-  if (!existsSync(fsPath(from))) return;
+  if (!existsSafe(from)) return;
   mkdirSync(fsPath(path.dirname(to)), { recursive: true });
   copySmart(from, to, root);
 }
@@ -212,40 +251,67 @@ function copySmart(from, to, root) {
 
 // Walk and copy real files. `fs.cpSync({ dereference: true })` throws on Windows
 // npm junctions (EPERM / EINVAL / ELOOP) and can loop on circular links.
+function copyThroughLink(from, to, root, stack) {
+  let names;
+  try {
+    names = readdirSync(fsPath(from));
+  } catch {
+    try {
+      copyFileReliable(from, to);
+    } catch {
+      return;
+    }
+    return;
+  }
+  if (stack.has(from)) return;
+  stack.add(from);
+  mkdirSync(fsPath(to), { recursive: true });
+  for (const name of names) {
+    copyTree(path.join(from, name), path.join(to, name), root, stack);
+  }
+  stack.delete(from);
+}
+
 function copyTree(from, to, root, stack) {
   from = normalizePath(from);
   to = normalizePath(to);
-  if (shouldSkip(from, root)) return;
+  if (isDriveRoot(from) || shouldSkip(from, root)) return;
 
   let stat;
   try {
     stat = lstatSync(fsPath(from));
-  } catch {
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : '';
+    if (code === 'EISDIR' || code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') return;
     return;
   }
 
   if (stat.isSymbolicLink()) {
-    let target;
-    try {
-      target = resolveReal(from);
-    } catch {
+    const target = resolveReal(from);
+    if (target && !isDriveRoot(target)) {
+      copyTree(target, to, root, stack);
       return;
     }
-    copyTree(target, to, root, stack);
+    if (isDriveRoot(target)) return;
+    // Junction realpath failed (or pointed at a volume root). Copy through
+    // the link path so npm packages still land in the runtime zip.
+    copyThroughLink(from, to, root, stack);
     return;
   }
 
   if (stat.isDirectory()) {
-    let real = from;
-    try {
-      real = resolveReal(from);
-    } catch {
-      // Still copy the directory we can see; cycle detection uses `from`.
-    }
-    if (stack.has(real)) return;
+    const real = resolveReal(from) || from;
+    if (isDriveRoot(real) || stack.has(real)) return;
     stack.add(real);
     mkdirSync(fsPath(to), { recursive: true });
-    for (const name of readdirSync(fsPath(from))) {
+    let names;
+    try {
+      names = readdirSync(fsPath(from));
+    } catch {
+      stack.delete(real);
+      return;
+    }
+    for (const name of names) {
       copyTree(path.join(from, name), path.join(to, name), root, stack);
     }
     stack.delete(real);
@@ -253,16 +319,22 @@ function copyTree(from, to, root, stack) {
   }
 
   if (!stat.isFile()) return;
-  copyFileReliable(from, to);
+  try {
+    copyFileReliable(from, to);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('EISDIR') || message.includes('ENOENT')) return;
+    throw error;
+  }
 }
 
 function copyFileIfExists(from, to) {
-  if (!existsSync(fsPath(from))) return;
+  if (!existsSafe(from)) return;
   copyFileReliable(from, to);
 }
 
 function copyNode(out, platform) {
-  const source = resolveReal(process.execPath);
+  const source = resolveReal(process.execPath) || process.execPath;
   const dest = platform === 'windows'
     ? path.join(out, 'node.exe')
     : path.join(out, 'bin', 'node');
@@ -288,6 +360,8 @@ function writeIdentity(out, { platform, channel, sha, nodePath }) {
   writeFileSync(fsPath(path.join(out, 'app.json')), `${JSON.stringify(identity, null, 2)}\n`);
   return identity;
 }
+
+export { normalizePath, isDriveRoot, fsPath, resolveReal };
 
 export function packDesktopRuntime(options) {
   const { out, platform, channel, sha, root, skipNode } = options;
@@ -338,7 +412,7 @@ if (import.meta.url === invoked) {
   try {
     main();
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : error}\n`);
+    process.stderr.write(`${error instanceof Error ? (error.stack || error.message) : error}\n`);
     process.exit(1);
   }
 }

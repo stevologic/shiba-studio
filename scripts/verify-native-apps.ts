@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   NATIVE_APP_CATALOG_PATH,
   NATIVE_APP_CHANNELS,
@@ -18,7 +19,21 @@ function read(rel: string): string {
   return readFileSync(path.join(ROOT, rel), 'utf8');
 }
 
-function main() {
+async function assertPackerPathGuards() {
+  const mod = await import(pathToFileURL(path.join(ROOT, 'scripts/pack-desktop-runtime.mjs')).href) as {
+    normalizePath: (value: string) => string;
+    isDriveRoot: (value: string) => boolean;
+  };
+  assert.equal(mod.normalizePath('C:'), 'C:\\');
+  assert.equal(mod.normalizePath('\\\\?\\C:'), 'C:\\');
+  assert.equal(mod.isDriveRoot('C:'), true);
+  assert.equal(mod.isDriveRoot('C:\\'), true);
+  assert.equal(mod.isDriveRoot('c:\\'), true);
+  assert.equal(mod.isDriveRoot('C:\\Users'), false);
+  assert.equal(mod.isDriveRoot('D:\\a\\shiba-studio\\shiba-studio'), false);
+}
+
+async function main() {
   const catalog = loadNativeAppCatalog(ROOT);
   assert.equal(catalog.apps.length, 2);
   assert.deepEqual(catalog.channels, [...NATIVE_APP_CHANNELS]);
@@ -44,6 +59,10 @@ function main() {
   assert.match(packer, /parts\.includes\('\.bin'\)/);
   assert.match(packer, /function fsPath/);
   assert.match(packer, /function normalizePath/);
+  assert.match(packer, /function isDriveRoot/);
+  assert.match(packer, /EISDIR/);
+  assert.match(packer, /\[A-Za-z\]:\$/);
+  assert.match(packer, /copyThroughLink/);
   assert.match(packer, /win32/);
   assert.equal(existsSync(path.join(ROOT, 'scripts/ci/pack-windows-app.ps1')), true);
   assert.equal(existsSync(path.join(ROOT, 'scripts/ci/pack-macos-app.sh')), true);
@@ -72,6 +91,8 @@ function main() {
   assert.match(mainForm, /MenuStrip/);
   assert.match(mainForm, /Check for &Updates/);
   assert.match(mainForm, /NativeWindowChrome/);
+  assert.match(mainForm, /var titleLabel = title/);
+  assert.match(mainForm, /var detailLabel = detail/);
   assert.doesNotMatch(mainForm, /Start local Studio/);
   assert.doesNotMatch(mainForm, /class TextBox|new TextBox/);
   assert.doesNotMatch(mainForm, /static readonly Color Text/, 'Form.Text must not be shadowed by a color field');
@@ -210,7 +231,11 @@ function main() {
   assert.equal(merged.channels.development?.sha, 'abc');
   assert.equal(merged.channels.main, undefined);
 
+  await assertPackerPathGuards();
   console.log('verify-native-apps: OK');
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

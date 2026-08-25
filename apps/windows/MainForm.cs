@@ -162,12 +162,14 @@ sealed class MainForm : Form
         };
         panel.Controls.Add(title);
         panel.Controls.Add(detail);
+        var titleLabel = title;
+        var detailLabel = detail;
         panel.Resize += (_, _) =>
         {
-            title.Size = new Size(panel.ClientSize.Width, 40);
-            title.Location = new Point(0, Math.Max(40, panel.ClientSize.Height / 2 - 36));
-            detail.Size = new Size(panel.ClientSize.Width, 28);
-            detail.Location = new Point(0, title.Bottom + 8);
+            titleLabel.Size = new Size(panel.ClientSize.Width, 40);
+            titleLabel.Location = new Point(0, Math.Max(40, panel.ClientSize.Height / 2 - 36));
+            detailLabel.Size = new Size(panel.ClientSize.Width, 28);
+            detailLabel.Location = new Point(0, titleLabel.Bottom + 8);
         };
         return panel;
     }

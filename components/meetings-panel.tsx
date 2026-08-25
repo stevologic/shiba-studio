@@ -1,10 +1,9 @@
 'use client';
 
 /**
- * Meetings (Beta) — spoken, agent-led project reviews.
- * Lobby (start/browse meetings) → live room (voice conversation + visual
- * stage + Board work initiated mid-meeting) → minutes (summary, direction,
- * decisions, remaining todos → Board cards).
+ * Meetings — spoken, agent-led project reviews.
+ * Lobby (start a review / active / history) → live room (Grok Voice 2.0
+ * conversation + visual stage + Board work mid-meeting) → minutes.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -34,6 +33,8 @@ import { confirmDialog } from '@/components/confirm-dialog';
 import { subscribeLiveEvents } from '@/lib/live-events';
 import { loadClientJson } from '@/lib/client-json';
 import { splitSpeechChunks, takeNextUtterance } from '@/lib/xai-tts';
+import { GROK_VOICE_MODEL, GROK_VOICE_SAMPLE_RATE } from '@/lib/grok-voice';
+import { LiveMeetingVoiceClient, type LiveMeetingVoiceTransport } from '@/lib/live-meeting-voice-client';
 import type { Agent } from '@/lib/types';
 import type {
   LiveMeetingRecord,
@@ -45,7 +46,7 @@ import type {
 
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
 
-type RoomPhase = 'idle' | 'listening' | 'thinking' | 'speaking';
+type RoomPhase = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking';
 
 /** Reuse window for shared read-only resources (projects, agents), matching
  *  the chat panels — long enough to collapse mount-time duplicate GETs. */
@@ -523,6 +524,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
   const [annotating, setAnnotating] = useState(false);
   const [stageStrokes, setStageStrokes] = useState<Record<string, AnnotationStroke[]>>({});
   const [annotationNote, setAnnotationNote] = useState('');
+  const [voiceTransport, setVoiceTransport] = useState<LiveMeetingVoiceTransport>('connecting');
 
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -530,6 +532,15 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
   const busyRef = useRef(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const voiceIdRef = useRef<string>('eve');
+  const voiceTransportRef = useRef<LiveMeetingVoiceTransport>('connecting');
+  const voiceClientRef = useRef<LiveMeetingVoiceClient | null>(null);
+  const openingSpokenRef = useRef(false);
+  const grokSpeakingRef = useRef(false);
+
+  const setVoiceTransportSafe = useCallback((next: LiveMeetingVoiceTransport) => {
+    voiceTransportRef.current = next;
+    setVoiceTransport(next);
+  }, []);
 
   const speechSupported = typeof window !== 'undefined' && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
@@ -578,6 +589,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
     }
     // Settle the in-flight play promise so a pending turn never hangs.
     speakDoneRef.current?.();
+    voiceClientRef.current?.cancelPlayback();
   }, []);
 
   const stopMic = useCallback(() => {
@@ -659,6 +671,10 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
 
   const enqueueSpeech = useCallback((chunk: string) => {
     if (!chunk.trim()) return;
+    if (voiceTransportRef.current === 'grok' && voiceClientRef.current?.connected) {
+      voiceClientRef.current.speak(chunk);
+      return;
+    }
     speakQueueRef.current.push({ text: chunk, epoch: speechEpochRef.current });
     pumpSynthesis();
     void playSpeechQueue();
@@ -666,6 +682,10 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
 
   /** Speak a complete reply (used for the opening turn and replays). */
   const speakWhole = useCallback((text: string) => {
+    if (voiceTransportRef.current === 'grok' && voiceClientRef.current?.connected) {
+      voiceClientRef.current.speak(text);
+      return;
+    }
     for (const chunk of splitSpeechChunks(text)) {
       speakQueueRef.current.push({ text: chunk, epoch: speechEpochRef.current });
     }
@@ -756,7 +776,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
       setBusy(false);
       // If nothing is being spoken, settle the phase here; otherwise the
       // speech queue's finally handles it when audio ends.
-      if (!ttsActiveRef.current) setPhase(micOnRef.current ? 'listening' : 'idle');
+      if (!ttsActiveRef.current && !grokSpeakingRef.current) setPhase(micOnRef.current ? 'listening' : 'idle');
       // The restart effect below resumes listening once busy/speaking clear.
     }
   }, [meeting.id, meeting.status, voiceOut, applyMeeting, enqueueSpeech, stopSpeaking, stageTurn]);
@@ -768,6 +788,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
   // the restart effect below then spins it up again while the mic stays on.
   const [recognitionEpoch, setRecognitionEpoch] = useState(0);
   const startRecognition = useCallback(() => {
+    if (voiceTransportRef.current === 'grok') return;
     const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Ctor || recognitionRef.current || busyRef.current) return;
     const recognition = new Ctor();
@@ -819,12 +840,21 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
 
   function toggleMic() {
     if (micOn) {
+      voiceClientRef.current?.setMuted(true);
       stopMic();
       setPhase('idle');
       return;
     }
+    if (voiceTransportRef.current === 'grok') {
+      stopSpeaking();
+      voiceClientRef.current?.setMuted(false);
+      micOnRef.current = true;
+      setMicOn(true);
+      setPhase('listening');
+      return;
+    }
     if (!speechSupported) {
-      toast.error('Voice input needs Chrome or Edge (Web Speech API)');
+      toast.error('Voice input needs Chrome or Edge, or a connected Grok Voice 2.0 session');
       return;
     }
     // Turning the mic on IS the director interrupting: cut the agent's voice
@@ -850,20 +880,93 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
     return () => { cancelled = true; };
   }, [initial.agentId]);
 
-  // Speak the opening turn when entering a fresh room with voice on.
-  const openedRef = useRef(false);
-  useEffect(() => {
-    if (openedRef.current) return;
-    openedRef.current = true;
+  const speakOpeningIfNeeded = useCallback(() => {
+    if (openingSpokenRef.current) return;
     const opening = initial.turns.length === 1 && initial.turns[0].role === 'agent' ? initial.turns[0] : null;
-    if (!opening || !voiceOut) return;
-    // rAF keeps setState (speaking phase) out of the synchronous effect body.
-    const frame = requestAnimationFrame(() => { speakWhole(opening.text); });
-    return () => cancelAnimationFrame(frame);
+    if (!opening || !voiceOut) {
+      openingSpokenRef.current = true;
+      return;
+    }
+    openingSpokenRef.current = true;
+    speakWhole(opening.text);
+  }, [initial.turns, voiceOut, speakWhole]);
+
+  // Prefer Grok Voice 2.0 (mic + spoken replies). Fall back to Web Speech + TTS.
+  useEffect(() => {
+    let cancelled = false;
+    if (initial.status !== 'active') {
+      void Promise.resolve().then(() => {
+        if (!cancelled) setVoiceTransportSafe('none');
+      });
+      return () => { cancelled = true; };
+    }
+    const client = new LiveMeetingVoiceClient(initial.id, GROK_VOICE_SAMPLE_RATE, {
+      onUserTranscript: (text) => { void sendTurnRef.current(text); },
+      onInterim: (text) => { setInterim(text); },
+      onSpeechStarted: () => {
+        if (ttsActiveRef.current || voiceClientRef.current) stopSpeaking();
+      },
+      onSpeaking: (active) => {
+        grokSpeakingRef.current = active;
+        setSpeaking(active);
+        if (active) setPhase('speaking');
+        else if (!busyRef.current) setPhase(micOnRef.current ? 'listening' : 'idle');
+      },
+      onError: (message) => { toast.error(message); },
+      onDisconnected: () => {
+        if (cancelled || voiceTransportRef.current !== 'grok') return;
+        setVoiceTransportSafe('legacy');
+        toast.error('Grok Voice 2.0 disconnected — using browser speech');
+      },
+    });
+    voiceClientRef.current = client;
+    void Promise.resolve().then(() => {
+      if (!cancelled) setPhase('connecting');
+    });
+    const fallbackTimer = window.setTimeout(() => {
+      if (cancelled || voiceTransportRef.current !== 'connecting') return;
+      setVoiceTransportSafe('legacy');
+      setPhase(micOnRef.current ? 'listening' : 'idle');
+      speakOpeningIfNeeded();
+    }, 12_000);
+    void client.connect(voiceIdRef.current).then(() => {
+      if (cancelled) {
+        client.close();
+        return;
+      }
+      window.clearTimeout(fallbackTimer);
+      setVoiceTransportSafe('grok');
+      client.setMuted(false);
+      micOnRef.current = true;
+      setMicOn(true);
+      setPhase('listening');
+      speakOpeningIfNeeded();
+    }).catch(() => {
+      if (cancelled) return;
+      window.clearTimeout(fallbackTimer);
+      setVoiceTransportSafe('legacy');
+      setPhase(micOnRef.current ? 'listening' : 'idle');
+      speakOpeningIfNeeded();
+    });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(fallbackTimer);
+      voiceClientRef.current = null;
+      client.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initial.id, initial.status]);
 
   useEffect(() => () => { stopMic(); stopSpeaking(); }, [stopMic, stopSpeaking]);
+
+  // If the director stays quiet, the agent keeps leading the review.
+  useEffect(() => {
+    if (meeting.status !== 'active' || busy || speaking || !micOn) return;
+    const timer = window.setTimeout(() => {
+      void sendTurnRef.current('(The director is still here and quiet. Keep leading the review.)');
+    }, 14_000);
+    return () => window.clearTimeout(timer);
+  }, [meeting.status, meeting.turns.length, busy, speaking, micOn]);
 
   // If we rejoined while the minutes are being written, wait for them.
   useEffect(() => {
@@ -902,12 +1005,34 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
     }
   }
 
-  const phaseCopy: Record<RoomPhase, string> = {
-    idle: micOn ? 'Listening' : 'Mic off — type or turn the mic on',
-    listening: 'Listening — pause to send',
-    thinking: `${meeting.agentName} is thinking…`,
-    speaking: `${meeting.agentName} is speaking`,
-  };
+  const phaseCopy = ((): string => {
+    switch (phase) {
+      case 'connecting':
+        return 'Connecting Grok Voice 2.0…';
+      case 'listening':
+        return voiceTransport === 'grok'
+          ? 'Listening — talk whenever you want'
+          : 'Listening — pause to send';
+      case 'thinking':
+        return `${meeting.agentName} is thinking…`;
+      case 'speaking':
+        return `${meeting.agentName} is speaking`;
+      case 'idle':
+        return micOn ? 'Listening' : 'Mic off — type or turn the mic on';
+      default: {
+        const _exhaustive: never = phase;
+        return _exhaustive;
+      }
+    }
+  })();
+
+  const phaseDot = phase === 'thinking' || phase === 'connecting'
+    ? 'bg-[var(--warning)]'
+    : phase === 'speaking'
+      ? 'bg-[var(--success)]'
+      : micOn
+        ? 'bg-[var(--success)]'
+        : 'bg-[var(--border-light)]';
 
   if (meeting.status === 'ended') {
     return (
@@ -947,13 +1072,13 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
     <div className="page-content flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
       <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
         <div className="min-w-0">
-          <div className="page-title flex items-center gap-2 truncate">
-            {meeting.title}
-            <span className="text-[10px] uppercase tracking-widest border border-default rounded px-1.5 py-0.5 text-dim flex-shrink-0">Beta</span>
-          </div>
-          <div className="text-xs text-dim flex items-center gap-2">
-            <span className={`inline-block w-1.5 h-1.5 rounded-full ${phase === 'thinking' ? 'bg-[var(--warning)]' : phase === 'speaking' ? 'bg-[var(--success)]' : micOn ? 'bg-[var(--success)]' : 'bg-[var(--border-light)]'}`} aria-hidden />
-            {phaseCopy[phase]}
+          <div className="page-title truncate">{meeting.title}</div>
+          <div className="text-xs text-dim flex items-center gap-2 flex-wrap">
+            <span className={`inline-block w-1.5 h-1.5 rounded-full ${phaseDot} ${phase === 'listening' || phase === 'connecting' ? 'animate-pulse' : ''}`} aria-hidden />
+            {phaseCopy}
+            <span className="text-[10px] uppercase tracking-widest border border-default rounded px-1.5 py-0.5">
+              {voiceTransport === 'grok' ? GROK_VOICE_MODEL : voiceTransport === 'connecting' ? 'Voice' : 'Browser speech'}
+            </span>
             {meeting.error && <span className="text-error">Last turn failed — try again</span>}
           </div>
         </div>
@@ -961,7 +1086,11 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
           <button
             type="button"
             className="grok-btn grok-btn-ghost text-xs flex items-center gap-1.5"
-            onClick={() => { stopSpeaking(); setVoiceOut((value) => !value); setPhase(micOnRef.current ? 'listening' : 'idle'); }}
+            onClick={() => {
+              stopSpeaking();
+              setVoiceOut((value) => !value);
+              setPhase(micOnRef.current ? 'listening' : 'idle');
+            }}
             title={voiceOut ? 'Mute the agent voice (text only)' : 'Speak agent replies aloud'}
           >
             {voiceOut ? <Volume2 size={13} aria-hidden /> : <VolumeX size={13} aria-hidden />}
@@ -1075,7 +1204,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
         </div>
 
         {/* Conversation rail */}
-        <div className="w-[300px] flex-shrink-0 flex flex-col min-h-0">
+        <div className="w-[340px] flex-shrink-0 flex flex-col min-h-0">
           <div ref={transcriptRef} className="grok-card p-3 flex-1 overflow-y-auto space-y-3">
             {meeting.turns.map((turn: LiveMeetingTurn) => (
               <div key={turn.id}>
@@ -1151,7 +1280,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
                 <button
                   key={index}
                   type="button"
-                  className="text-[11px] px-2 py-1 rounded-full border border-default text-muted hover:text-primary hover:border-[var(--border-light)]"
+                  className="text-xs px-2.5 py-1.5 rounded-full border border-default text-muted hover:text-primary hover:border-[var(--border-light)]"
                   onClick={() => void sendTurn(suggestion)}
                   disabled={busy}
                 >
@@ -1169,7 +1298,13 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
               type="button"
               onClick={toggleMic}
               className={`p-2 rounded border ${micOn ? 'border-[var(--success)] text-success' : 'border-default text-dim hover:text-primary'}`}
-              title={speechSupported ? (micOn ? 'Turn the microphone off' : 'Talk to the agent') : 'Voice input needs Chrome or Edge'}
+              title={
+                voiceTransport === 'grok'
+                  ? (micOn ? 'Mute the microphone' : 'Talk — Grok Voice 2.0 is listening')
+                  : speechSupported
+                    ? (micOn ? 'Turn the microphone off' : 'Talk to the agent')
+                    : 'Voice input needs Grok Voice 2.0 or Chrome/Edge'
+              }
               aria-label={micOn ? 'Turn microphone off' : 'Turn microphone on'}
               aria-pressed={micOn}
             >
@@ -1221,6 +1356,14 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
       ? Date.parse(b.createdAt) - Date.parse(a.createdAt)
       : Date.parse(a.createdAt) - Date.parse(b.createdAt));
   }, [meetings, listProject, listSort]);
+  const activeMeetings = useMemo(
+    () => visibleMeetings.filter((meeting) => meeting.status === 'active' || meeting.status === 'summarizing'),
+    [visibleMeetings],
+  );
+  const historyMeetings = useMemo(
+    () => visibleMeetings.filter((meeting) => meeting.status === 'ended'),
+    [visibleMeetings],
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -1312,20 +1455,53 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
     );
   }
 
+  function meetingCard(meeting: LiveMeetingRecord) {
+    return (
+      <div key={meeting.id} className="grok-card p-4 flex flex-col gap-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="text-sm text-primary font-medium leading-snug">{meeting.title}</div>
+          <span className={`text-[10px] uppercase tracking-wide flex-shrink-0 ${meeting.status === 'active' ? 'text-success' : 'text-dim'}`}>
+            {meeting.status === 'active' ? 'Live' : meeting.status === 'summarizing' ? 'Wrapping up' : 'Ended'}
+          </span>
+        </div>
+        <div className="text-xs text-dim">
+          {meeting.agentName}{meeting.projectName ? ` · ${meeting.projectName}` : ''} · {meetingDate(meeting.createdAt)}
+          {' · '}{meeting.turns.length} turn(s)
+          {meeting.minutes ? ` · ${meeting.minutes.todos.length} todo(s)` : ''}
+        </div>
+        {meeting.minutes?.summary && (
+          <div className="text-xs text-muted line-clamp-2">{meeting.minutes.summary}</div>
+        )}
+        <div className="flex items-center gap-2 mt-auto pt-1">
+          <button type="button" className="grok-btn grok-btn-ghost text-xs" onClick={() => setActive(meeting)}>
+            {meeting.status === 'active' ? 'Rejoin' : meeting.status === 'summarizing' ? 'Open room' : 'Open minutes'}
+          </button>
+          <button
+            type="button"
+            className="grok-btn grok-btn-ghost text-xs text-error ml-auto"
+            onClick={() => void removeMeeting(meeting)}
+            disabled={deleting === meeting.id}
+            aria-label={`Delete ${meeting.title}`}
+          >
+            {deleting === meeting.id ? <Loader2 size={12} className="animate-spin" aria-hidden /> : <Trash2 size={12} aria-hidden />}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page-content">
-      <div className="page-title flex items-center gap-2">
-        Meetings
-        <span className="text-[10px] uppercase tracking-widest border border-default rounded px-1.5 py-0.5 text-dim">Beta</span>
-      </div>
+      <div className="page-title">Meetings</div>
       <div className="page-subtitle">
-        Sit down with an agent like a colleague. They walk you through what they&apos;ve built — code, diagrams, live screens —
-        you steer with your voice, and the meeting ends in minutes with todos you can send straight to the Board.
+        Sit down with an agent like a colleague. They lead the review on a visual stage —
+        you steer with Grok Voice 2.0 or text — and the meeting ends in minutes you can send to the Board.
       </div>
 
       <div className="grok-card p-5 mt-4">
-        <div className="page-section-title"><Presentation size={16} className="opacity-70" aria-hidden /> Start a meeting</div>
-        <div className="flex items-end gap-3 flex-wrap mt-3">
+        <div className="page-section-title"><Presentation size={16} className="opacity-70" aria-hidden /> Start a review</div>
+        <div className="text-xs text-dim mt-1 mb-3">Who you&apos;re meeting, what you&apos;re reviewing, then an optional focus.</div>
+        <div className="flex items-end gap-3 flex-wrap">
           <label className="text-xs text-dim flex flex-col gap-1">
             With
             <select className="grok-select text-sm min-w-[180px]" value={agentId} onChange={(event) => setAgentId(event.target.value)}>
@@ -1356,7 +1532,7 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
             disabled={starting || !agentId}
           >
             {starting ? <Loader2 size={15} className="animate-spin" aria-hidden /> : <Mic size={15} aria-hidden />}
-            {starting ? 'Agent is preparing…' : 'Start meeting'}
+            {starting ? 'Agent is preparing…' : 'Start a review'}
           </button>
         </div>
         {starting && (
@@ -1366,8 +1542,17 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
         )}
       </div>
 
+      {activeMeetings.length > 0 && (
+        <div className="mt-6">
+          <div className="page-section-title"><Monitor size={16} className="opacity-70" aria-hidden /> Active</div>
+          <div className="grid gap-3 mt-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+            {activeMeetings.map(meetingCard)}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-3 flex-wrap mt-6">
-        <div className="page-section-title"><ClipboardList size={16} className="opacity-70" aria-hidden /> Past meetings</div>
+        <div className="page-section-title"><ClipboardList size={16} className="opacity-70" aria-hidden /> History</div>
         {meetings.length > 1 && (
           <div className="flex items-center gap-2">
             <label className="sr-only" htmlFor="meetings-list-project">Filter meetings by project</label>
@@ -1401,36 +1586,11 @@ export default function MeetingsPanel({ agents, onOpenBoard }: {
       {loaded && meetings.length > 0 && visibleMeetings.length === 0 && (
         <div className="text-sm text-dim mt-2">No meetings match this filter.</div>
       )}
+      {loaded && meetings.length > 0 && visibleMeetings.length > 0 && historyMeetings.length === 0 && activeMeetings.length > 0 && (
+        <div className="text-sm text-dim mt-2">No ended meetings yet — active reviews are listed above.</div>
+      )}
       <div className="grid gap-3 mt-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-        {visibleMeetings.map((meeting) => (
-          <div key={meeting.id} className="grok-card p-4 flex flex-col gap-2">
-            <div className="flex items-start justify-between gap-2">
-              <div className="text-sm text-primary font-medium leading-snug">{meeting.title}</div>
-              <span className={`text-[10px] uppercase tracking-wide flex-shrink-0 ${meeting.status === 'active' ? 'text-success' : 'text-dim'}`}>
-                {meeting.status === 'active' ? 'Live' : meeting.status === 'summarizing' ? 'Wrapping up' : 'Ended'}
-              </span>
-            </div>
-            <div className="text-xs text-dim">
-              {meeting.agentName}{meeting.projectName ? ` · ${meeting.projectName}` : ''} · {meetingDate(meeting.createdAt)}
-              {' · '}{meeting.turns.length} turn(s)
-              {meeting.minutes ? ` · ${meeting.minutes.todos.length} todo(s)` : ''}
-            </div>
-            <div className="flex items-center gap-2 mt-auto pt-1">
-              <button type="button" className="grok-btn grok-btn-ghost text-xs" onClick={() => setActive(meeting)}>
-                {meeting.status === 'active' ? 'Rejoin' : 'Open minutes'}
-              </button>
-              <button
-                type="button"
-                className="grok-btn grok-btn-ghost text-xs text-error ml-auto"
-                onClick={() => void removeMeeting(meeting)}
-                disabled={deleting === meeting.id}
-                aria-label={`Delete ${meeting.title}`}
-              >
-                {deleting === meeting.id ? <Loader2 size={12} className="animate-spin" aria-hidden /> : <Trash2 size={12} aria-hidden />}
-              </button>
-            </div>
-          </div>
-        ))}
+        {historyMeetings.map(meetingCard)}
       </div>
     </div>
   );
