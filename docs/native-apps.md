@@ -39,7 +39,9 @@ running. Switch channels from Preferences / Settings.
 `.next` tree, and `node_modules` (including `node-pty` built on that OS).
 It copies through Windows junctions with a manual walk (macOS still prefers
 native `cpSync`, then the same walk) and uses `\\?\` only at the filesystem
-boundary so skip rules and cycle detection still see normal paths. CI must
+boundary so skip rules and cycle detection still see normal paths. Junctions
+that resolve to a volume root (`C:\`, `/`, a UNC share root) are skipped so
+a GitHub runner workspace on `D:` cannot pack the system drive. CI must
 pack on Windows and macOS — native addons are not portable.
 
 ## Compile on every push

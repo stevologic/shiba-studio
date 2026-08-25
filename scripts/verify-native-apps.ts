@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -23,6 +24,10 @@ async function assertPackerPathGuards() {
   const mod = await import(pathToFileURL(path.join(ROOT, 'scripts/pack-desktop-runtime.mjs')).href) as {
     normalizePath: (value: string) => string;
     isDriveRoot: (value: string) => boolean;
+    isVolumeRoot: (value: string) => boolean;
+    isOutsideRoot: (src: string, root: string) => boolean;
+    shouldSkip: (src: string, root: string) => boolean;
+    copyFiltered: (from: string, to: string, root: string) => void;
   };
   assert.equal(mod.normalizePath('C:'), 'C:\\');
   assert.equal(mod.normalizePath('\\\\?\\C:'), 'C:\\');
@@ -31,6 +36,49 @@ async function assertPackerPathGuards() {
   assert.equal(mod.isDriveRoot('c:\\'), true);
   assert.equal(mod.isDriveRoot('C:\\Users'), false);
   assert.equal(mod.isDriveRoot('D:\\a\\shiba-studio\\shiba-studio'), false);
+  assert.equal(mod.isVolumeRoot('C:'), true);
+  assert.equal(mod.isVolumeRoot('C:\\'), true);
+  assert.equal(mod.isVolumeRoot('\\\\?\\C:\\'), true);
+  assert.equal(mod.isVolumeRoot('/'), true);
+  assert.equal(mod.isVolumeRoot('\\\\server\\share'), true);
+  assert.equal(mod.isVolumeRoot('\\\\server\\share\\pkg'), false);
+  assert.equal(mod.isVolumeRoot('D:\\a\\shiba-studio\\shiba-studio'), false);
+  assert.equal(mod.isOutsideRoot('C:\\Windows', 'D:\\a\\shiba-studio\\shiba-studio'), true);
+  assert.equal(mod.shouldSkip('C:\\', 'D:\\a\\shiba-studio\\shiba-studio'), true);
+  assert.equal(mod.shouldSkip('C:\\Windows', 'D:\\a\\shiba-studio\\shiba-studio'), true);
+
+  const scratch = mkdtempSync(path.join(os.tmpdir(), 'shiba-packer-'));
+  try {
+    const root = path.join(scratch, 'project');
+    const dest = path.join(scratch, 'out');
+    const keep = path.join(root, 'keep');
+    const realPkg = path.join(root, 'node_modules', 'real-pkg');
+    const alias = path.join(root, 'node_modules', 'alias');
+    const outside = path.join(scratch, 'outside');
+    mkdirSync(keep, { recursive: true });
+    mkdirSync(realPkg, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(path.join(keep, 'ok.txt'), 'ok\n');
+    writeFileSync(path.join(realPkg, 'index.js'), 'module.exports = 1;\n');
+    writeFileSync(path.join(outside, 'secret.txt'), 'nope\n');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    try {
+      symlinkSync(realPkg, alias, linkType);
+      symlinkSync(outside, path.join(root, 'trap'), linkType);
+    } catch (error) {
+      if (process.platform === 'win32') throw error;
+      // Some CI images refuse privileged symlink creation; the path guards above still run.
+      return;
+    }
+    mod.copyFiltered(root, dest, root);
+    assert.equal(existsSync(path.join(dest, 'keep', 'ok.txt')), true);
+    assert.equal(existsSync(path.join(dest, 'node_modules', 'real-pkg', 'index.js')), true);
+    assert.equal(existsSync(path.join(dest, 'node_modules', 'alias', 'index.js')), true);
+    assert.equal(existsSync(path.join(dest, 'trap', 'secret.txt')), false);
+    assert.equal(existsSync(path.join(dest, 'secret.txt')), false);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 async function main() {
@@ -60,6 +108,9 @@ async function main() {
   assert.match(packer, /function fsPath/);
   assert.match(packer, /function normalizePath/);
   assert.match(packer, /function isDriveRoot/);
+  assert.match(packer, /function isVolumeRoot/);
+  assert.match(packer, /function isOutsideRoot/);
+  assert.match(packer, /function readLinkTarget/);
   assert.match(packer, /EISDIR/);
   assert.match(packer, /\[A-Za-z\]:\$/);
   assert.match(packer, /copyThroughLink/);

@@ -62,6 +62,12 @@ are carried over automatically.
 
 ### Fixed
 
+- **Windows desktop packer no longer walks volume-root junctions.** Three
+  self-heals still copied through a junction after `realpath` of `C:\`
+  became `null`, which packed the runner system drive. The packer now
+  treats volume roots as skip targets and only follows junctions that
+  stay inside the project.
+
 - **Windows store-lock waits under contention.** Multi-process Board/agent
   writes share `.ownership-stores`; the lock wait (and the concurrency
   verifier child) now allows 90s/180s on Windows so Node 24 CI does not
