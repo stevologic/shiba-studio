@@ -10,6 +10,8 @@ are carried over automatically.
 
 ### Added
 
+- **Ephemeral chat from anywhere.** `Ctrl`/`⌘`+`N` starts a durable session; `Ctrl`/`⌘`+`Shift`+`N`, the top-bar eye-off control, and the command palette start an incognito chat (no memories, deleted when the page closes) — the same pattern as ChatGPT temporary chat and Claude incognito.
+
 - **Meetings with Grok Voice 2.0.** Spoken reviews use `grok-voice-think-fast-2.0`
   (ears and mouth) while the existing meeting engine stays the brain. The host
   mints an ephemeral token; the browser never sees the xAI API key. Server VAD,
@@ -18,6 +20,8 @@ are carried over automatically.
   is unavailable. Live Meeting audio is still not stored.
 
 ### Changed
+
+- **In-range dependency refresh.** MCP SDK 1.30, Playwright 1.62, Puppeteer 25.9, lucide 1.34, Slack Web API 7.19, and matching lockfile bumps. Root `npm audit` stays at 0.
 
 - **Meetings is out of Beta.** Nav, lobby, room, docs, and the site no longer
   label the surface as a preview. The lobby is Start a review / Active /

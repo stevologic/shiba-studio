@@ -31,7 +31,7 @@ Every message exposes **Fork**, which creates a new session containing the immut
 
 Sessions are grouped by linked project in the chat rail. A completed assistant message increments unread state once, including detached task delivery; selecting the session advances its durable read cursor.
 
-An **ephemeral chat** stores no Shiba memory: automatic recall and memory tools are removed server-side, memory slash commands are rejected at the API boundary, and autonomous background learning is unavailable. Forks inherit the ephemeral lifecycle. Ephemeral chats cannot be archived, are deleted explicitly with the normal close action, and the browser sends deletion for every open ephemeral session on `pagehide`.
+An **ephemeral chat** stores no Shiba memory: automatic recall and memory tools are removed server-side, memory slash commands are rejected at the API boundary, and autonomous background learning is unavailable. Start one from the top-bar eye-off control, `Ctrl`/`⌘`+`Shift`+`N`, the command palette, or the session-rail button. Forks inherit the ephemeral lifecycle. Ephemeral chats cannot be archived, are deleted explicitly with the normal close action, and the browser sends deletion for every open ephemeral session on `pagehide`.
 
 ## Durability and upgrades
 

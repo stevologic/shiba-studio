@@ -56,8 +56,18 @@ test('keyboard shortcuts overlay opens from the top bar', async ({ page }) => {
   await trigger.click();
   await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
   await expect(page.getByText('Command palette and global search')).toBeVisible();
+  await expect(page.getByText('New ephemeral chat')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toHaveCount(0);
+});
+
+test('top-bar ephemeral chat creates an incognito session', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  const trigger = page.getByRole('button', { name: 'New ephemeral chat' });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await expect(page).toHaveURL(/\/chat\/.+/);
+  await expect(page.getByText(/ephemeral/i).first()).toBeVisible();
 });
 
 test('logs page seeds search from ?q=', async ({ page }) => {

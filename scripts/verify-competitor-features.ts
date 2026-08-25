@@ -35,6 +35,9 @@ async function main() {
   assert(desk.includes('KeyboardShortcutsOverlay'), 'shiba-studio imports shortcuts overlay');
   assert(desk.includes('showShortcuts'), 'shiba-studio shortcuts state');
   assert(desk.includes("e.key === '/'"), 'shiba-studio Ctrl+/ handler');
+  assert(desk.includes("e.key.toLowerCase() === 'n'"), 'shiba-studio Ctrl+N new-chat handler');
+  assert(desk.includes("id: 'new-ephemeral-chat'"), 'command palette offers ephemeral chat');
+  assert(desk.includes("aria-label=\"New ephemeral chat\""), 'top bar exposes ephemeral chat');
   assert(desk.includes('/api/execute/stream'), 'shiba-studio uses streaming execute');
   assert(desk.includes('WorkspaceDiffPanel'), 'shiba-studio diff panel');
 
@@ -44,6 +47,7 @@ async function main() {
   const shortcuts = await read('lib/keyboard-shortcuts.ts');
   assert(shortcuts.includes('STUDIO_SHORTCUTS'), 'shortcut catalog export');
   assert(shortcuts.includes('Command palette and global search'), 'catalog covers Ctrl+K');
+  assert(shortcuts.includes('New ephemeral chat'), 'catalog covers Ctrl+Shift+N ephemeral chat');
   assert(shortcuts.includes('Toggle the host terminal'), 'catalog covers terminal');
   const overlay = await read('components/keyboard-shortcuts-overlay.tsx');
   assert(overlay.includes('aria-labelledby="shortcuts-heading"'), 'shortcuts overlay a11y');
@@ -80,6 +84,7 @@ async function main() {
 
   const site = await read('site/index.html');
   assert(site.includes('Grok phone assistant'), 'marketing site covers phone assistant');
+  assert(site.includes('ephemeral chat'), 'marketing site covers ephemeral chats');
   assert(site.includes('Artifact Studio'), 'marketing site covers Artifact Studio');
   assert(site.includes('COMMERCIAL.md'), 'marketing site license link is current');
   assert(site.includes('packages.html'), 'marketing site links the packages page');

@@ -8,7 +8,7 @@ import {
   Check, ChevronDown, ChevronUp, X, RefreshCw, Terminal, Globe, Camera, BarChart3, Upload, FileText,
   CloudUpload, Command, Menu, ScrollText, History, Eye, ChevronsLeft, ChevronsRight,
   KeyRound, Server, Cpu, ShieldCheck, Sparkles, Volume2, Gauge, Archive, Bug, Brain, CopyPlus, Code2, Presentation,
-  Keyboard
+  Keyboard, EyeOff
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { CommandPaletteItem } from '@/components/command-palette';
@@ -69,6 +69,7 @@ const KeyboardShortcutsOverlay = dynamic(() => import('@/components/keyboard-sho
 const FolderBrowseModal = dynamic(() => import('@/components/folder-browse-modal'));
 const ToolApprovalModal = dynamic(() => import('@/components/tool-approval-modal'));
 import { createClientId } from '@/lib/client-id';
+import { registerBrowserEphemeralSession } from '@/lib/ephemeral-chat-lifecycle';
 import { isEditableShortcutTarget } from '@/lib/keyboard-shortcuts';
 import { toast } from '@/lib/toast';
 import { getTerminalOpen, setTerminalOpen, toggleTerminalOpen, subscribeTerminalOpen } from '@/lib/terminal-ui-store';
@@ -498,19 +499,25 @@ export default function ShibaStudio() {
     }
   }, [pathname, router]);
 
-  /** Top-bar New Chat — create a fresh session and jump straight into it. */
-  const startNewChat = useCallback(async () => {
+  /** Top-bar / palette / Ctrl+N — create a fresh session and jump straight into it. */
+  const startNewChat = useCallback(async (opts: { ephemeral?: boolean } = {}) => {
+    const ephemeral = !!opts.ephemeral;
     try {
       const res = await fetch('/api/chat-sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'create', defaults: {} }),
+        body: JSON.stringify({
+          action: 'create',
+          defaults: { ephemeral },
+        }),
       });
       const data = await res.json();
       if (!data.ok || !data.session) throw new Error(data.error || 'Could not create chat');
+      if (data.session.ephemeral) registerBrowserEphemeralSession(String(data.session.id));
       // New chat ends any active Grok Voice session.
       endVoiceIfSessionChanges(data.session.id);
       navigateToChatSession(data.session.id);
+      toast.success(ephemeral ? 'New ephemeral chat' : 'New chat session');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Could not create chat');
     }
@@ -3135,9 +3142,18 @@ export default function ShibaStudio() {
       {
         id: 'new-chat',
         label: 'New Chat Session',
+        hint: 'Ctrl+N',
         group: 'Actions',
-        keywords: ['chat', 'session'],
-        run: () => navigateToTab('chat'),
+        keywords: ['chat', 'session', 'new'],
+        run: () => void startNewChat(),
+      },
+      {
+        id: 'new-ephemeral-chat',
+        label: 'New ephemeral chat',
+        hint: 'Ctrl+Shift+N',
+        group: 'Actions',
+        keywords: ['chat', 'incognito', 'temporary', 'private', 'ephemeral'],
+        run: () => void startNewChat({ ephemeral: true }),
       },
       {
         id: 'sync',
@@ -3165,7 +3181,7 @@ export default function ShibaStudio() {
       },
       ...agentCmds,
     ];
-  }, [agents, navigateToTab]);
+  }, [agents, navigateToTab, startNewChat]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -3187,12 +3203,20 @@ export default function ShibaStudio() {
         e.preventDefault();
         setShowCommandPalette(false);
         setShowShortcuts(true);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+        if (e.target instanceof Element && e.target.closest('.monaco-editor')) return;
+        e.preventDefault();
+        setShowCommandPalette(false);
+        setShowShortcuts(false);
+        void startNewChat({ ephemeral: e.shiftKey });
       }
       // Ctrl+` is also handled in StudioTerminal; keep palette-only here to avoid double-toggle.
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [startNewChat]);
 
   // Escape closes the topmost modal only (stack: trace → details → run log).
   useEffect(() => {
@@ -3566,8 +3590,22 @@ export default function ShibaStudio() {
               <Terminal size={14} /> <span className="hidden sm:inline">Terminal</span>
             </button>
             <button onClick={() => setShowSyncModal(true)} className="grok-btn grok-btn-ghost"><RefreshCw size={14}/> <span className="hidden sm:inline">Sync</span></button>
-            <button onClick={() => void startNewChat()} className="grok-btn grok-btn-secondary" title="Start a fresh Grok chat session">
+            <button
+              type="button"
+              onClick={() => void startNewChat()}
+              className="grok-btn grok-btn-secondary"
+              title="Start a fresh Grok chat session (Ctrl+N)"
+            >
               <MessageSquare size={14}/> <span className="hidden sm:inline">New Chat</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void startNewChat({ ephemeral: true })}
+              className="grok-btn grok-btn-ghost"
+              title="New ephemeral chat — no memories, deleted when this page closes (Ctrl+Shift+N)"
+              aria-label="New ephemeral chat"
+            >
+              <EyeOff size={14}/>
             </button>
             <button onClick={openCreateAgent} className="grok-btn grok-btn-primary"><Plus size={15}/> <span className="hidden sm:inline">New Agent</span></button>
           </div>
