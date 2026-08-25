@@ -27,6 +27,8 @@ export const STUDIO_SHORTCUTS: StudioShortcutGroup[] = [
     id: 'chat',
     title: 'Chat',
     items: [
+      { keys: 'Ctrl+N', macKeys: '⌘N', action: 'New chat session' },
+      { keys: 'Ctrl+Shift+N', macKeys: '⌘⇧N', action: 'New ephemeral chat' },
       { keys: '/', action: 'Open slash-command autocomplete' },
       { keys: 'Enter', action: 'Send or queue the composer' },
     ],

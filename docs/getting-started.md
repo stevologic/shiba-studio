@@ -65,7 +65,7 @@ On a fresh install the **dashboard shows a 3-step checklist** — connect a mode
    - **Local models** — enable, point at your server (e.g. `http://127.0.0.1:11434/v1` for Ollama), *Test Connection*, then choose which models are selectable.
 2. Watch the **top-bar readiness badges** — one per source: `XAI TOKEN`, `OAUTH 2.0`, `GROK CLI`, `LOCAL`.
 3. **Set a default model and workspace** in Settings.
-4. **Say hello** — press *New Chat* in the top bar. Type `/help` to see everything chat can do. Press `?` (or Ctrl/⌘+/) for the studio keyboard-shortcut overlay. You can queue more messages while a reply streams, and agents can render **rich cards** (`shiba-card` fences) in replies.
+4. **Say hello** — press *New Chat* in the top bar (`Ctrl`/`⌘`+`N`), or the eye-off control for an ephemeral chat (`Ctrl`/`⌘`+`Shift`+`N`). Type `/help` to see everything chat can do. Press `?` (or Ctrl/⌘+/) for the studio keyboard-shortcut overlay. You can queue more messages while a reply streams, and agents can render **rich cards** (`shiba-card` fences) in replies.
 5. **Create an agent** — Agents → *Create Agent*: pick a model, workspace, integration scopes, and optionally a schedule. Run it from the **Automations** page and watch the live execution trace.
 6. **Optional — Meetings** — open **Meetings**, pick an agent and project, start a spoken review with Grok Voice 2.0; end the meeting to get minutes you can send to the **Board**.
 7. **Optional — Phone assistant** — Settings → Phone assistant: generate a token, expose Studio at an `https` `SHIBA_PUBLIC_ORIGIN`, paste the MCP URL and bearer into [Voice Agent Builder](https://console.x.ai), then call the Grok number and dictate commands (`create a task…`, `git status`, `start work on…`).

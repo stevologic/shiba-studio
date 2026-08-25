@@ -13,7 +13,7 @@
  *     --channel development \
  *     --sha "$(git rev-parse HEAD)"
  */
-import { copyFileSync, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -124,8 +124,29 @@ function isDriveRoot(p) {
   return /^[A-Za-z]:$/.test(stripped);
 }
 
+// Junctions that resolve to a volume root must not be walked. The three
+// self-heals still called copyThroughLink after resolveReal() turned "C:\"
+// into null, which packed the entire C: drive from a D: GitHub runner.
+function isVolumeRoot(p) {
+  if (!p) return false;
+  const logical = normalizePath(p);
+  if (isDriveRoot(logical)) return true;
+  const stripped = logical.replace(/[\\/]+$/, '');
+  if (logical === '/' || logical === '\\' || stripped === '') return true;
+  return /^\\\\[^\\/]+\\[^\\/]+$/.test(stripped);
+}
+
+function isOutsideRoot(src, root) {
+  const from = normalizePath(root);
+  const to = normalizePath(src);
+  const rel = path.relative(from, to);
+  if (!rel) return false;
+  if (path.isAbsolute(rel)) return true;
+  return rel === '..' || rel.startsWith(`..${path.sep}`) || rel.startsWith('../');
+}
+
 function shouldSkip(src, root) {
-  if (isDriveRoot(src)) return true;
+  if (isVolumeRoot(src) || isOutsideRoot(src, root)) return true;
   const rel = path.relative(normalizePath(root), normalizePath(src));
   const parts = !rel || rel.startsWith('..') || path.isAbsolute(rel)
     ? normalizePath(src).split(path.sep)
@@ -151,19 +172,31 @@ function fsPath(p) {
 
 function resolveReal(p) {
   const logical = normalizePath(p);
-  if (isDriveRoot(logical)) return null;
+  if (isVolumeRoot(logical)) return logical;
   // realpath the logical path first. realpathSync("\\?\C:\...") from a D:
   // cwd walks the C: volume and lstat("C:") throws EISDIR.
   try {
-    const resolved = normalizePath(realpathSync(logical));
-    return isDriveRoot(resolved) ? null : resolved;
+    return normalizePath(realpathSync(logical));
   } catch {
     try {
-      const resolved = normalizePath(realpathSync(fsPath(logical)));
-      return isDriveRoot(resolved) ? null : resolved;
+      return normalizePath(realpathSync(fsPath(logical)));
     } catch {
       return null;
     }
+  }
+}
+
+function readLinkTarget(p) {
+  try {
+    let target = String(readlinkSync(fsPath(p)));
+    if (target.startsWith('\\??\\')) target = target.slice(4);
+    target = normalizePath(target);
+    if (!path.isAbsolute(target) && !/^[A-Za-z]:$/.test(target.replace(/[\\/]+$/, ''))) {
+      target = normalizePath(path.join(path.dirname(normalizePath(p)), target));
+    }
+    return target;
+  } catch {
+    return null;
   }
 }
 
@@ -236,6 +269,16 @@ function copySmart(from, to, root) {
     const childFrom = path.join(from, name);
     const childTo = path.join(to, name);
     if (shouldSkip(childFrom, root)) continue;
+    let childStat;
+    try {
+      childStat = lstatSync(fsPath(childFrom));
+    } catch {
+      continue;
+    }
+    if (childStat.isSymbolicLink()) {
+      copyTree(childFrom, childTo, root, stack);
+      continue;
+    }
     try {
       cpSync(fsPath(childFrom), fsPath(childTo), {
         recursive: true,
@@ -252,6 +295,14 @@ function copySmart(from, to, root) {
 // Walk and copy real files. `fs.cpSync({ dereference: true })` throws on Windows
 // npm junctions (EPERM / EINVAL / ELOOP) and can loop on circular links.
 function copyThroughLink(from, to, root, stack) {
+  from = normalizePath(from);
+  to = normalizePath(to);
+  if (isVolumeRoot(from) || shouldSkip(from, root)) return;
+  const real = resolveReal(from);
+  if (real && (isVolumeRoot(real) || shouldSkip(real, root))) return;
+  const linkTarget = readLinkTarget(from);
+  if (linkTarget && (isVolumeRoot(linkTarget) || isOutsideRoot(linkTarget, root))) return;
+
   let names;
   try {
     names = readdirSync(fsPath(from));
@@ -275,7 +326,7 @@ function copyThroughLink(from, to, root, stack) {
 function copyTree(from, to, root, stack) {
   from = normalizePath(from);
   to = normalizePath(to);
-  if (isDriveRoot(from) || shouldSkip(from, root)) return;
+  if (isVolumeRoot(from) || shouldSkip(from, root)) return;
 
   let stat;
   try {
@@ -288,20 +339,22 @@ function copyTree(from, to, root, stack) {
 
   if (stat.isSymbolicLink()) {
     const target = resolveReal(from);
-    if (target && !isDriveRoot(target)) {
+    if (target) {
+      if (isVolumeRoot(target) || shouldSkip(target, root)) return;
       copyTree(target, to, root, stack);
       return;
     }
-    if (isDriveRoot(target)) return;
-    // Junction realpath failed (or pointed at a volume root). Copy through
-    // the link path so npm packages still land in the runtime zip.
+    const linkTarget = readLinkTarget(from);
+    if (!linkTarget || isVolumeRoot(linkTarget) || isOutsideRoot(linkTarget, root)) return;
+    // realpath failed but the junction still points inside the project
+    // (typical npm nest). Copy through the link path only in that case.
     copyThroughLink(from, to, root, stack);
     return;
   }
 
   if (stat.isDirectory()) {
     const real = resolveReal(from) || from;
-    if (isDriveRoot(real) || stack.has(real)) return;
+    if (isVolumeRoot(real) || stack.has(real)) return;
     stack.add(real);
     mkdirSync(fsPath(to), { recursive: true });
     let names;
@@ -361,7 +414,7 @@ function writeIdentity(out, { platform, channel, sha, nodePath }) {
   return identity;
 }
 
-export { normalizePath, isDriveRoot, fsPath, resolveReal };
+export { normalizePath, isDriveRoot, isVolumeRoot, isOutsideRoot, fsPath, resolveReal, readLinkTarget, shouldSkip, copyFiltered };
 
 export function packDesktopRuntime(options) {
   const { out, platform, channel, sha, root, skipNode } = options;
