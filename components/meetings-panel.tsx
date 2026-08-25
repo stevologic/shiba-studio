@@ -926,6 +926,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
     const fallbackTimer = window.setTimeout(() => {
       if (cancelled || voiceTransportRef.current !== 'connecting') return;
       setVoiceTransportSafe('legacy');
+      setPhase(micOnRef.current ? 'listening' : 'idle');
       speakOpeningIfNeeded();
     }, 12_000);
     void client.connect(voiceIdRef.current).then(() => {
@@ -944,6 +945,7 @@ function MeetingRoom({ meeting: initial, onExit, onMeetingChanged, onOpenBoard }
       if (cancelled) return;
       window.clearTimeout(fallbackTimer);
       setVoiceTransportSafe('legacy');
+      setPhase(micOnRef.current ? 'listening' : 'idle');
       speakOpeningIfNeeded();
     });
     return () => {
