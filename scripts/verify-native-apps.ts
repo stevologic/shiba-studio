@@ -42,6 +42,7 @@ function main() {
   assert.match(packer, /lstatSync/);
   assert.match(packer, /parts\.includes\('\.bin'\)/);
   assert.match(packer, /function fsPath/);
+  assert.match(packer, /function normalizePath/);
   assert.match(packer, /win32/);
   assert.equal(existsSync(path.join(ROOT, 'scripts/ci/pack-windows-app.ps1')), true);
   assert.equal(existsSync(path.join(ROOT, 'scripts/ci/pack-macos-app.sh')), true);

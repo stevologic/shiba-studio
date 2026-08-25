@@ -37,9 +37,10 @@ running. Switch channels from Preferences / Settings.
 
 `scripts/pack-desktop-runtime.mjs` embeds official Node 22, the production
 `.next` tree, and `node_modules` (including `node-pty` built on that OS).
-It walks the tree itself (no `fs.cpSync` dereference) so Windows junctions
-and paths longer than `MAX_PATH` do not abort the package. CI must pack on
-Windows and macOS — native addons are not portable.
+It copies through Windows junctions (native `cpSync` first, then a manual
+walk) and uses `\\?\` only at the filesystem boundary so skip rules and
+cycle detection still see normal paths. CI must pack on Windows and macOS —
+native addons are not portable.
 
 ## Compile on every push
 

@@ -13,7 +13,7 @@
  *     --channel development \
  *     --sha "$(git rev-parse HEAD)"
  */
-import { copyFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -100,36 +100,107 @@ function assertBuild(root) {
   if (!existsSync(fsPath(nextCli))) fail(`Next CLI missing at ${nextCli}. Run npm ci first.`);
 }
 
+// Keep \\?\ prefixes off logical paths. path.join / relative / cycle detection
+// all break once a Windows realpath leaks the long-path prefix back in.
+function normalizePath(p) {
+  if (!p) return p;
+  let next = p;
+  if (next.startsWith('\\\\?\\UNC\\')) next = `\\\\${next.slice(8)}`;
+  else if (next.startsWith('\\\\?\\')) next = next.slice(4);
+  return path.normalize(next);
+}
+
 function shouldSkip(src, root) {
-  const rel = path.relative(root, src);
-  if (!rel || rel.startsWith('..')) return false;
-  const parts = rel.split(path.sep);
+  const rel = path.relative(normalizePath(root), normalizePath(src));
+  const parts = !rel || rel.startsWith('..') || path.isAbsolute(rel)
+    ? normalizePath(src).split(path.sep)
+    : rel.split(path.sep);
   if (parts.some((part) => SKIP_DIR_NAMES.has(part))) return true;
   if (parts[0] === '.next' && parts[1] === 'cache') return true;
-  if (parts[0] === 'node_modules' && parts.includes('.cache')) return true;
+  if (parts.includes('node_modules') && parts.includes('.cache')) return true;
   // Windows npm uses cmd shims / junctions here; the hosts invoke Next by path.
-  if (parts[0] === 'node_modules' && parts.includes('.bin')) return true;
+  if (parts.includes('node_modules') && parts.includes('.bin')) return true;
   return false;
 }
 
 // Node can still hit MAX_PATH when copying node_modules into dist/native/...
 function fsPath(p) {
   if (process.platform !== 'win32') return p;
-  const resolved = path.resolve(p);
+  const resolved = path.resolve(normalizePath(p));
   if (resolved.startsWith('\\\\?\\')) return resolved;
   if (resolved.startsWith('\\\\')) return `\\\\?\\UNC\\${resolved.slice(2)}`;
   return `\\\\?\\${resolved}`;
 }
 
+function resolveReal(p) {
+  return normalizePath(realpathSync(fsPath(p)));
+}
+
+function copyFileReliable(from, to) {
+  let last;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      mkdirSync(fsPath(path.dirname(to)), { recursive: true });
+      copyFileSync(fsPath(from), fsPath(to));
+      return;
+    } catch (error) {
+      last = error;
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : '';
+      if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') continue;
+      throw new Error(`copy ${from} → ${to}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  throw new Error(`copy ${from} → ${to}: ${last instanceof Error ? last.message : last}`);
+}
+
 function copyFiltered(from, to, root) {
   if (!existsSync(fsPath(from))) return;
   mkdirSync(fsPath(path.dirname(to)), { recursive: true });
-  copyTree(from, to, root, new Set());
+  copySmart(from, to, root);
+}
+
+// Prefer a native recursive copy per top-level entry; Windows junctions make
+// dereference throw, so those trees fall back to a manual walk.
+function copySmart(from, to, root) {
+  from = normalizePath(from);
+  to = normalizePath(to);
+  if (shouldSkip(from, root)) return;
+
+  let stat;
+  try {
+    stat = lstatSync(fsPath(from));
+  } catch {
+    return;
+  }
+
+  if (stat.isSymbolicLink() || stat.isFile() || !stat.isDirectory()) {
+    copyTree(from, to, root, new Set());
+    return;
+  }
+
+  mkdirSync(fsPath(to), { recursive: true });
+  for (const name of readdirSync(fsPath(from))) {
+    const childFrom = path.join(from, name);
+    const childTo = path.join(to, name);
+    if (shouldSkip(childFrom, root)) continue;
+    try {
+      cpSync(fsPath(childFrom), fsPath(childTo), {
+        recursive: true,
+        dereference: true,
+        filter: (src) => !shouldSkip(src, root),
+      });
+    } catch {
+      rmSync(fsPath(childTo), { recursive: true, force: true });
+      copyTree(childFrom, childTo, root, new Set());
+    }
+  }
 }
 
 // Walk and copy real files. `fs.cpSync({ dereference: true })` throws on Windows
 // npm junctions (EPERM / EINVAL / ELOOP) and can loop on circular links.
 function copyTree(from, to, root, stack) {
+  from = normalizePath(from);
+  to = normalizePath(to);
   if (shouldSkip(from, root)) return;
 
   let stat;
@@ -142,7 +213,7 @@ function copyTree(from, to, root, stack) {
   if (stat.isSymbolicLink()) {
     let target;
     try {
-      target = realpathSync(fsPath(from));
+      target = resolveReal(from);
     } catch {
       return;
     }
@@ -153,7 +224,7 @@ function copyTree(from, to, root, stack) {
   if (stat.isDirectory()) {
     let real = from;
     try {
-      real = realpathSync(fsPath(from));
+      real = resolveReal(from);
     } catch {
       return;
     }
@@ -168,23 +239,20 @@ function copyTree(from, to, root, stack) {
   }
 
   if (!stat.isFile()) return;
-  mkdirSync(fsPath(path.dirname(to)), { recursive: true });
-  copyFileSync(fsPath(from), fsPath(to));
+  copyFileReliable(from, to);
 }
 
 function copyFileIfExists(from, to) {
   if (!existsSync(fsPath(from))) return;
-  mkdirSync(fsPath(path.dirname(to)), { recursive: true });
-  copyFileSync(fsPath(from), fsPath(to));
+  copyFileReliable(from, to);
 }
 
 function copyNode(out, platform) {
-  const source = realpathSync(process.execPath);
+  const source = resolveReal(process.execPath);
   const dest = platform === 'windows'
     ? path.join(out, 'node.exe')
     : path.join(out, 'bin', 'node');
-  mkdirSync(fsPath(path.dirname(dest)), { recursive: true });
-  copyFileSync(source, fsPath(dest));
+  copyFileReliable(source, dest);
   if (platform !== 'windows') chmodSync(fsPath(dest), 0o755);
   return dest;
 }
