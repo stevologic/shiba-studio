@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-25T03:46:38.988Z",
+  "updatedAt": "2026-08-25T03:54:50.902Z",
   "page": "https://shiba-studio.io/packages.html",
   "channels": {
     "development": {
@@ -21,8 +21,8 @@
       }
     },
     "main": {
-      "sha": "d91ac223d8bb0578affda3fee76ab3aa8db14aa9",
-      "runUrl": "https://github.com/stevologic/shiba-studio/actions/runs/32782932480",
+      "sha": "0319e2625ae94332c37811806220d9a1f36b3c9d",
+      "runUrl": "https://github.com/stevologic/shiba-studio/actions/runs/32806618738",
       "releaseUrl": "https://github.com/stevologic/shiba-studio/releases/tag/packages-main",
       "apps": {
         "windows": {
