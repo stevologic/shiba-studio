@@ -3359,7 +3359,6 @@ export default function ShibaStudio() {
                     : item.id === 'projects' ? `${item.stat} project(s)`
                     : item.id === 'memories' ? `${item.stat} stored memory item(s)`
                     : item.id === 'workspace' ? `${item.stat} file(s) in workspace`
-                    : item.id === 'meetings' ? 'Spoken project reviews'
                     : item.id === 'automations' ? `${item.stat} scheduled automation(s)`
                     : item.id === 'integrations' ? `${item.stat} configured integration(s)`
                     : item.id === 'usage'
