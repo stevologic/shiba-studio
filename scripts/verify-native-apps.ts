@@ -211,7 +211,7 @@ async function main() {
   assert.doesNotMatch(ci, /native-ios:/);
   assert.match(ci, /publish-packages:/);
   assert.match(ci, /scripts\/ci\/pack-windows-app\.ps1/);
-  assert.doesNotMatch(ci, /scripts\/ci\/pack-macos-app\.sh/);
+  assert.doesNotMatch(ci, /bash scripts\/ci\/pack-macos-app\.sh/);
   assert.match(ci, /native-windows:[\s\S]*?actions\/setup-node/);
   assert.match(ci, /native-windows:[\s\S]*?npm run build/);
   assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows\]/);
@@ -242,7 +242,7 @@ async function main() {
   assert.match(release, /native-windows:/);
   assert.doesNotMatch(release, /native-macos:/);
   assert.match(release, /scripts\/ci\/pack-windows-app\.ps1/);
-  assert.doesNotMatch(release, /scripts\/ci\/pack-macos-app\.sh/);
+  assert.doesNotMatch(release, /bash scripts\/ci\/pack-macos-app\.sh/);
   assert.match(release, /ShibaStudio-windows-x64\.zip/);
   assert.doesNotMatch(release, /ShibaStudio-macos\.zip/);
   assert.doesNotMatch(release, /ShibaStudio-ios-simulator\.zip/);
