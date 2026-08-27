@@ -1,9 +1,11 @@
 # Native apps
 
-Official **Windows** and **macOS** desktop apps for Shiba Studio. They are
-packaged on every push to `main` and `development` by `.github/workflows/ci.yml`,
-attached to rolling GitHub Releases (`packages-main`, `packages-development`),
-and offered on the public [packages page](../site/packages.html).
+Official **Windows** and **macOS** desktop apps for Shiba Studio. Windows is
+packaged on every push to `main` and `development` by `.github/workflows/ci.yml`
+and attached to rolling GitHub Releases (`packages-main`, `packages-development`).
+macOS builds are local / Luigi (`scripts/ci/pack-macos-app.sh`), not a
+GitHub-hosted macOS runner. Both are offered on the public
+[packages page](../site/packages.html).
 
 Each app is a thin native host around the **same** production Studio UI.
 Double-click starts a bundled Node + `next start` on loopback. The window
@@ -40,4 +42,5 @@ pwsh -File scripts/ci/pack-windows-app.ps1
 bash scripts/ci/pack-macos-app.sh
 ```
 
-Tagged `v*` releases also attach these artifacts via `.github/workflows/release.yml`.
+Tagged `v*` releases attach the Windows zip via `.github/workflows/release.yml`.
+The macOS zip is a local / Luigi attach.

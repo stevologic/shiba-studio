@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -207,16 +207,16 @@ async function main() {
   const ci = read('.github/workflows/ci.yml');
   assert.match(ci, /branches: \[main, development\]/);
   assert.match(ci, /native-windows:/);
-  assert.match(ci, /native-macos:/);
+  assert.doesNotMatch(ci, /native-macos:/);
   assert.doesNotMatch(ci, /native-ios:/);
   assert.match(ci, /publish-packages:/);
   assert.match(ci, /scripts\/ci\/pack-windows-app\.ps1/);
-  assert.match(ci, /scripts\/ci\/pack-macos-app\.sh/);
+  assert.doesNotMatch(ci, /scripts\/ci\/pack-macos-app\.sh/);
   assert.match(ci, /native-windows:[\s\S]*?actions\/setup-node/);
-  assert.match(ci, /native-macos:[\s\S]*?actions\/setup-node/);
   assert.match(ci, /native-windows:[\s\S]*?npm run build/);
-  assert.match(ci, /native-macos:[\s\S]*?npm run build/);
-  assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows, native-macos\]/);
+  assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows\]/);
+  assert.match(ci, /needs: \[native-windows\]/);
+  assert.doesNotMatch(ci, /needs\.native-macos/);
   assert.match(ci, /Publish packages page/);
   assert.match(
     ci,
@@ -240,12 +240,24 @@ async function main() {
 
   const release = read('.github/workflows/release.yml');
   assert.match(release, /native-windows:/);
-  assert.match(release, /native-macos:/);
+  assert.doesNotMatch(release, /native-macos:/);
   assert.match(release, /scripts\/ci\/pack-windows-app\.ps1/);
-  assert.match(release, /scripts\/ci\/pack-macos-app\.sh/);
+  assert.doesNotMatch(release, /scripts\/ci\/pack-macos-app\.sh/);
   assert.match(release, /ShibaStudio-windows-x64\.zip/);
-  assert.match(release, /ShibaStudio-macos\.zip/);
+  assert.doesNotMatch(release, /ShibaStudio-macos\.zip/);
   assert.doesNotMatch(release, /ShibaStudio-ios-simulator\.zip/);
+  assert.match(release, /needs: \[verify, native-windows\]/);
+
+  for (const name of readdirSync(path.join(ROOT, '.github/workflows'))) {
+    if (!name.endsWith('.yml') && !name.endsWith('.yaml')) continue;
+    const text = read(`.github/workflows/${name}`);
+    assert.doesNotMatch(
+      text,
+      /(?:^|\n)\s*(?:runs-on:\s*|os:\s*\[[^\]]*)macos-latest/,
+      `${name} must not schedule a GitHub-hosted macOS runner`,
+    );
+    assert.doesNotMatch(text, /macos-latest/, `${name} must not mention macos-latest`);
+  }
 
   const weekly = read('scripts/ci/scheduled-maintain-lib.mjs');
   assert.match(weekly, /Windows and macOS/);

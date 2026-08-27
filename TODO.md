@@ -30,7 +30,7 @@ Ordered by priority: ship-blockers first, then hardening, then polish and growth
 
 ## 4. CI, tests & platforms
 
-- [x] **GitHub Actions matrix** — lint/typecheck/build/`npm test` on windows/macos/ubuntu × Node 22.5/24, plus an audit job (`.github/workflows/ci.yml`).
+- [x] **GitHub Actions matrix** — lint/typecheck/build/`npm test` on windows/ubuntu × Node 22/24, plus an audit job (`.github/workflows/ci.yml`). macOS packages are local / Luigi, not a GitHub-hosted macOS runner.
 - [ ] **Zero out lint debt.** `lib/`, `app/api/`, `scripts/`, and `types/` are now **clean**. Remaining ~190 problems live entirely in `components/*.tsx` (≈124 in `shiba-studio.tsx`, 12 `grok-chat-panel`, 11 `chat-sessions-panel`, rest singles) — mostly `no-explicit-any` plus react-compiler `set-state-in-effect`/`no-img-element` warnings needing careful UI refactors. CI lint stays `continue-on-error` until zero; pairs with the component split below.
 - [x] **Browser E2E suite (Playwright)** — `playwright.config.ts` plus nav, settings/search, chat isolation, IDE, and loading specs. Wired into CI as a required Ubuntu/Chromium job under **CI OK**.
 - [x] **Test isolation** — `npm test` runs every script against a fresh temp `SHIBA_DATA_DIR`; also fixed this session: `verify-theme` leaked its spawned server on Windows (tree-kill + dynamic free port now), which had been silently breaking later runs via port squatting.

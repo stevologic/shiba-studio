@@ -13,8 +13,9 @@ Shiba Studio runs entirely on your machine. The only outbound traffic goes to xA
 Compiled **Windows** and **macOS** apps are offered on the public
 [packages page](https://shiba-studio.io/packages.html). Download the channel
 you want, double-click, and Studio runs — no clone, no Node install, no
-terminal. CI packages both on every push to `main` and `development` and
+terminal. CI packages Windows on every push to `main` and `development` and
 publishes rolling `packages-main` / `packages-development` GitHub Releases.
+macOS builds are local / Luigi, not a GitHub-hosted macOS runner.
 Each app updates itself when that branch moves. Source install remains
 available for contributors. See [Native apps](native-apps.md).
 

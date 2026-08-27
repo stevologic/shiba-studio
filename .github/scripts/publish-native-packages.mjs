@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 /**
- * Publish compiled Windows/macOS packages for the current branch channel.
+ * Publish compiled native packages for the current branch channel.
+ *
+ * GitHub Actions supplies the Windows zip. macOS zips are local / Luigi
+ * (not a GitHub-hosted macOS runner) and are optional: a missing Mac
+ * artifact keeps the previous rolling-release asset and manifest entry.
  *
  * Expects:
  *   source/                 repo checkout
  *   site/                   gh-pages checkout
- *   artifacts/              downloaded native zips
+ *   artifacts/              downloaded native zips (Windows required from CI)
  *   CHANNEL                 main | development
  *   GH_TOKEN / GITHUB_TOKEN
  */
@@ -53,22 +57,50 @@ function walk(dir) {
 
 function findArtifact(fileName) {
   const matches = walk(artifactsRoot).filter((file) => path.basename(file) === fileName);
-  if (!matches.length) {
-    throw new Error(`Missing compiled artifact ${fileName} under ${artifactsRoot}`);
-  }
-  return matches[0];
+  return matches[0] || null;
 }
 
-const apps = {};
+function loadExistingManifest(manifestPath) {
+  if (!existsSync(manifestPath)) {
+    return { version: 1, updatedAt: new Date(0).toISOString(), page: pageUrl, channels: {} };
+  }
+  try {
+    return JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return { version: 1, updatedAt: new Date(0).toISOString(), page: pageUrl, channels: {} };
+  }
+}
+
+const siteManifestPath = path.join(siteRoot, 'packages', 'manifest.json');
+const existing = existsSync(siteRoot)
+  ? loadExistingManifest(siteManifestPath)
+  : { version: 1, updatedAt: new Date(0).toISOString(), page: pageUrl, channels: {} };
+const previousApps = existing.channels?.[channel]?.apps || {};
+
+const apps = { ...previousApps };
 const uploadFiles = [];
+const uploaded = [];
 for (const app of catalog.apps) {
   const file = findArtifact(app.artifact);
+  if (!file) {
+    if (!previousApps[app.id]) {
+      console.log(`Skipping ${app.artifact} (not in this run; no previous ${channel} entry).`);
+    } else {
+      console.log(`Keeping previous ${channel} ${app.artifact}; not in this run.`);
+    }
+    continue;
+  }
   uploadFiles.push(file);
+  uploaded.push(app.id);
   apps[app.id] = {
     name: app.name,
     file: app.artifact,
     url: `${server}/${repo}/releases/download/${tag}/${app.artifact}`,
   };
+}
+
+if (!uploadFiles.length) {
+  throw new Error(`No compiled artifacts found under ${artifactsRoot}`);
 }
 
 function sh(cmd, args, opts = {}) {
@@ -80,7 +112,8 @@ function sh(cmd, args, opts = {}) {
 }
 
 const notes = [
-  `Rolling ${channel} Windows and macOS packages compiled from ${sha || 'HEAD'}.`,
+  `Rolling ${channel} packages from ${sha || 'HEAD'} (${uploaded.join(', ') || 'none'} this run).`,
+  'Windows is compiled on GitHub Actions. macOS builds are local / Luigi, not a GitHub-hosted macOS runner.',
   runUrl ? `CI run: ${runUrl}` : '',
   'The macOS zip is an unsigned universal .app. First launch may need right-click → Open until a Developer ID certificate is added.',
 ].filter(Boolean).join('\n');
@@ -122,16 +155,6 @@ for (const name of ['index.html', 'docs.html', 'packages.html']) {
   if (existsSync(from)) cpSync(from, path.join(siteRoot, name));
 }
 
-const manifestPath = path.join(siteRoot, 'packages', 'manifest.json');
-let existing = { version: 1, updatedAt: new Date(0).toISOString(), page: pageUrl, channels: {} };
-if (existsSync(manifestPath)) {
-  try {
-    existing = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  } catch {
-    existing = { version: 1, updatedAt: new Date(0).toISOString(), page: pageUrl, channels: {} };
-  }
-}
-
 const manifest = {
   version: 1,
   updatedAt: new Date().toISOString(),
@@ -139,7 +162,7 @@ const manifest = {
   channels: { ...(existing.channels || {}) },
 };
 manifest.channels[channel] = { sha, runUrl, releaseUrl, apps };
-writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+writeFileSync(siteManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
 const git = (args) => sh('git', args, { cwd: siteRoot, env: { ...process.env, GH_TOKEN: token } });
 git(['config', 'user.name', 'github-actions[bot]']);
@@ -149,7 +172,7 @@ const dirty = spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: siteRoot 
 if (dirty.status === 0) {
   console.log('Packages page is already current.');
 } else {
-  git(['commit', '-m', `chore(pages): publish ${channel} Windows and macOS packages`]);
+  git(['commit', '-m', `chore(pages): publish ${channel} native packages`]);
   git(['push', 'origin', 'HEAD:gh-pages']);
 }
 

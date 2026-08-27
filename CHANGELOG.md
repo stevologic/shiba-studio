@@ -21,6 +21,11 @@ are carried over automatically.
 
 ### Changed
 
+- **No GitHub-hosted macOS runners.** Actions no longer uses a macOS
+  matrix leg or a `native-macos` job. Windows still packages on
+  `windows-latest`; macOS builds are local / Luigi
+  (`scripts/ci/pack-macos-app.sh`), not a GitHub-hosted macOS runner.
+
 - **In-range dependency refresh.** MCP SDK 1.30, Playwright 1.62, Puppeteer 25.9, lucide 1.34, Slack Web API 7.19, and matching lockfile bumps. Root `npm audit` stays at 0.
 
 - **Meetings is out of Beta.** Nav, lobby, room, docs, and the site no longer
@@ -32,10 +37,11 @@ are carried over automatically.
   open the app, and the same web UI fills a native window — no clone, no
   system Node, no terminal. Each build follows the `main` or `development`
   channel and updates itself when that branch publishes a new SHA. CI
-  packages both on every push (and on the `workflow_dispatch` re-runs that
+  packages Windows on every push (and on the `workflow_dispatch` re-runs that
   self-heal, weekly maintain, and promote use so a `GITHUB_TOKEN` merge
-  still publishes `packages-main`). Tagged `v*` releases attach the same
-  artifacts. The Apple offering is a Mac desktop host, not an iPhone/iPad
+  still publishes `packages-main`). macOS builds are local / Luigi, not a
+  GitHub-hosted macOS runner. Tagged `v*` releases attach the Windows zip.
+  The Apple offering is a Mac desktop host, not an iPhone/iPad
   companion.
 - **Keyboard shortcuts overlay.** Press `?` when not typing, or `Ctrl`/`⌘`+`/`,
   or pick **Keyboard shortcuts** from the command palette. Studio-wide keys

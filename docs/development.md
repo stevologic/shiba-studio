@@ -47,7 +47,8 @@ npm test          # scripts/verify-all.ts — the full gate (isolated data dir)
 npm run test:e2e  # Playwright browser E2E (needs `npx playwright install chromium` + a build)
 npm run build:windows  # Windows host shell (.NET 8, Windows only)
 npm run build:macos    # macOS host shell (Xcode, Mac only)
-# Full packages (after npm run build): scripts/ci/pack-windows-app.ps1 / pack-macos-app.sh
+# Full packages (after npm run build): scripts/ci/pack-windows-app.ps1 (CI / Windows)
+# pack-macos-app.sh (local / Luigi; not a GitHub-hosted macOS runner)
 ```
 
 `dev:lan` / `start:lan` bind the classified gateway on all interfaces but expose only scoped Companion/native-node routes. `dev:lan:studio` / `start:lan:studio` explicitly add the full Studio for private-network peers — see [SECURITY.md](../SECURITY.md) first.

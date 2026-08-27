@@ -86,8 +86,9 @@
     <h1>Packages</h1>
     <p class="lead">
       Official Windows and macOS apps. Double-click and they run the same Studio
-      as the browser — no clone, no Node install, no terminal. CI packages both
-      on every push to <code>main</code> and <code>development</code>. Each app
+      as the browser — no clone, no Node install, no terminal. CI packages
+      Windows on every push to <code>main</code> and <code>development</code>.
+      macOS builds are local / Luigi, not a GitHub-hosted macOS runner. Each app
       updates itself when its channel moves.
     </p>
   </header>
@@ -113,8 +114,8 @@
         <a class="btn btn-primary" id="macos-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-macos.zip">Download stable (main)</a>
         <a class="btn btn-ghost" id="macos-development" href="https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-macos.zip">Download development</a>
       </div>
-      <p class="meta channel-main" data-app="macos">Stable channel updates on every push to main.</p>
-      <p class="meta channel-development" data-app="macos">Development channel updates on every push to development.</p>
+      <p class="meta channel-main" data-app="macos">Stable macOS builds are produced locally / Luigi.</p>
+      <p class="meta channel-development" data-app="macos">Development macOS builds are produced locally / Luigi.</p>
     </article>
   </div>
 

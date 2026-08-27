@@ -52,13 +52,14 @@ The `promote` job runs after the aggregate `CI OK` job succeeds on
    Actions API (this job has no checkout, so `gh workflow run` cannot be
    used). A `github-actions` auto-merge uses `GITHUB_TOKEN` and does not
    start the main push pipeline; the dispatch is what compiles and
-   publishes the stable Windows/macOS packages.
+   publishes the stable Windows packages.
 
 `CI OK` exists so branch protection tracks a single stable context instead
 of every matrix leg name; keep it in sync with the job list in `ci.yml`.
-That list includes the Windows and macOS app package jobs (`native-windows`,
-`native-macos`) so a broken desktop host or packer fails the same gate as
-`npm test`. Successful compiles on `main` and `development` (a direct push
+That list includes the Windows app package job (`native-windows`) so a
+broken desktop host or packer fails the same gate as `npm test`. macOS
+packages are built locally / Luigi, not on a GitHub-hosted macOS runner.
+Successful Windows compiles on `main` and `development` (a direct push
 or the `workflow_dispatch` re-run that self-heal and weekly maintain use)
 then publish those artifacts to rolling GitHub Releases and
 [the packages page](https://shiba-studio.io/packages.html) via the
