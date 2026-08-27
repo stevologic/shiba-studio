@@ -1,9 +1,11 @@
 # Native apps
 
-Official **Windows** and **macOS** desktop apps for Shiba Studio. They are
-packaged on every push to `main` and `development` by `.github/workflows/ci.yml`,
-attached to rolling GitHub Releases (`packages-main`, `packages-development`),
-and offered on the public [packages page](../site/packages.html).
+Official **Windows** and **macOS** desktop apps for Shiba Studio. Both are
+built locally / Luigi (`scripts/ci/pack-windows-app.ps1` and
+`scripts/ci/pack-macos-app.sh`), not on GitHub-hosted desktop runners, and
+offered on the public [packages page](../site/packages.html). Rolling GitHub
+Releases (`packages-main`, `packages-development`) receive those zips when
+Luigi attaches them.
 
 Each app is a thin native host around the **same** production Studio UI.
 Double-click starts a bundled Node + `next start` on loopback. The window
@@ -30,7 +32,7 @@ dotnet publish apps/windows/ShibaStudio.csproj -c Release -r win-x64 --self-cont
 bash apps/macos/build.sh --no-zip
 ```
 
-Full CI-shaped package (after `npm ci && npm run build && npm prune --omit=dev`):
+Full local / Luigi package (after `npm ci && npm run build && npm prune --omit=dev`):
 
 ```powershell
 pwsh -File scripts/ci/pack-windows-app.ps1
@@ -40,4 +42,5 @@ pwsh -File scripts/ci/pack-windows-app.ps1
 bash scripts/ci/pack-macos-app.sh
 ```
 
-Tagged `v*` releases also attach these artifacts via `.github/workflows/release.yml`.
+Tagged `v*` releases publish notes via `.github/workflows/release.yml`.
+Windows and macOS zips are local / Luigi attaches.

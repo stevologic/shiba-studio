@@ -21,6 +21,12 @@ are carried over automatically.
 
 ### Changed
 
+- **Ubuntu-only GitHub Actions.** CI no longer uses GitHub-hosted Windows
+  or macOS runners for tests or packaging. The verify matrix is Ubuntu ×
+  Node 22/24. `native-windows` and `native-macos` jobs are gone. Desktop
+  zips are local / Luigi; Release and the packages page do not require a
+  CI-built zip.
+
 - **In-range dependency refresh.** MCP SDK 1.30, Playwright 1.62, Puppeteer 25.9, lucide 1.34, Slack Web API 7.19, and matching lockfile bumps. Root `npm audit` stays at 0.
 
 - **Meetings is out of Beta.** Nav, lobby, room, docs, and the site no longer
@@ -31,11 +37,10 @@ are carried over automatically.
   Download from [packages.html](https://shiba-studio.io/packages.html),
   open the app, and the same web UI fills a native window — no clone, no
   system Node, no terminal. Each build follows the `main` or `development`
-  channel and updates itself when that branch publishes a new SHA. CI
-  packages both on every push (and on the `workflow_dispatch` re-runs that
-  self-heal, weekly maintain, and promote use so a `GITHUB_TOKEN` merge
-  still publishes `packages-main`). Tagged `v*` releases attach the same
-  artifacts. The Apple offering is a Mac desktop host, not an iPhone/iPad
+  channel and updates itself when that branch publishes a new SHA. Windows
+  and macOS builds are local / Luigi, not GitHub-hosted desktop runners.
+  Tagged `v*` releases publish notes; Luigi attaches the desktop zips.
+  The Apple offering is a Mac desktop host, not an iPhone/iPad
   companion.
 - **Keyboard shortcuts overlay.** Press `?` when not typing, or `Ctrl`/`⌘`+`/`,
   or pick **Keyboard shortcuts** from the command palette. Studio-wide keys
