@@ -21,10 +21,11 @@ are carried over automatically.
 
 ### Changed
 
-- **No GitHub-hosted macOS runners.** Actions no longer uses a macOS
-  matrix leg or a `native-macos` job. Windows still packages on
-  `windows-latest`; macOS builds are local / Luigi
-  (`scripts/ci/pack-macos-app.sh`), not a GitHub-hosted macOS runner.
+- **Ubuntu-only GitHub Actions.** CI no longer uses GitHub-hosted Windows
+  or macOS runners for tests or packaging. The verify matrix is Ubuntu ×
+  Node 22/24. `native-windows` and `native-macos` jobs are gone. Desktop
+  zips are local / Luigi; Release and the packages page do not require a
+  CI-built zip.
 
 - **In-range dependency refresh.** MCP SDK 1.30, Playwright 1.62, Puppeteer 25.9, lucide 1.34, Slack Web API 7.19, and matching lockfile bumps. Root `npm audit` stays at 0.
 
@@ -36,11 +37,9 @@ are carried over automatically.
   Download from [packages.html](https://shiba-studio.io/packages.html),
   open the app, and the same web UI fills a native window — no clone, no
   system Node, no terminal. Each build follows the `main` or `development`
-  channel and updates itself when that branch publishes a new SHA. CI
-  packages Windows on every push (and on the `workflow_dispatch` re-runs that
-  self-heal, weekly maintain, and promote use so a `GITHUB_TOKEN` merge
-  still publishes `packages-main`). macOS builds are local / Luigi, not a
-  GitHub-hosted macOS runner. Tagged `v*` releases attach the Windows zip.
+  channel and updates itself when that branch publishes a new SHA. Windows
+  and macOS builds are local / Luigi, not GitHub-hosted desktop runners.
+  Tagged `v*` releases publish notes; Luigi attaches the desktop zips.
   The Apple offering is a Mac desktop host, not an iPhone/iPad
   companion.
 - **Keyboard shortcuts overlay.** Press `?` when not typing, or `Ctrl`/`⌘`+`/`,

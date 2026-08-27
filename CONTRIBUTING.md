@@ -32,12 +32,12 @@ this Next.js version.
    `~/.shiba-studio` data.
 4. **Build:** `npm run build` must succeed.
 
-CI runs those four on Windows/Linux × Node 22/24, plus `npm audit`
-(high+), Playwright Chromium E2E, a Docker image smoke test, and a package
-job for the Windows app. macOS builds are local / Luigi, not a GitHub-hosted
-macOS runner. The aggregate **CI OK** check is what
-branch protection requires. Pushes to `main` and `development` also publish
-the Windows binary to the [packages page](https://shiba-studio.io/packages.html). `npx eslint
+CI runs those four on Ubuntu × Node 22/24, plus `npm audit`
+(high+), Playwright Chromium E2E, and a Docker image smoke test. Windows and
+macOS builds are local / Luigi, not GitHub-hosted desktop runners. The
+aggregate **CI OK** check is what
+branch protection requires. Pushes to `main` and `development` also refresh
+the [packages page](https://shiba-studio.io/packages.html). `npx eslint
 lib app/api scripts types` must stay clean; component lint is still
 non-blocking.
 

@@ -3,9 +3,8 @@ name: Release
 # Tag a commit `v*` (matching package.json's version) to cut a GitHub Release:
 #   git tag v0.2.0 && git push origin v0.2.0
 # The in-app footer notice compares against the latest release of this repo.
-# The Windows package compiled by this workflow is attached to the tag.
-# macOS builds are local / Luigi (`scripts/ci/pack-macos-app.sh`), not a
-# GitHub-hosted macOS runner.
+# Windows and macOS zips are local / Luigi attaches. This workflow does not
+# run a GitHub-hosted desktop runner or require a CI-built zip.
 
 on:
   push:
@@ -62,44 +61,8 @@ jobs:
           path: RELEASE_NOTES.md
           if-no-files-found: error
 
-  native-windows:
-    name: Windows app · package
-    runs-on: windows-latest
-    timeout-minutes: 45
-    env:
-      PUPPETEER_SKIP_DOWNLOAD: '1'
-      NEXT_TELEMETRY_DISABLED: '1'
-      NODE_OPTIONS: --max-old-space-size=4096
-      CHANNEL: main
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - name: Build Studio and package the Windows app
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          npm ci
-          if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit $LASTEXITCODE" }
-          npm run build
-          if ($LASTEXITCODE -ne 0) { throw "npm run build failed with exit $LASTEXITCODE" }
-          npm prune --omit=dev
-          if ($LASTEXITCODE -ne 0) { throw "npm prune failed with exit $LASTEXITCODE" }
-          pwsh -File scripts/ci/pack-windows-app.ps1
-      - uses: actions/upload-artifact@v6
-        with:
-          name: shiba-studio-windows
-          path: dist/native/packages/ShibaStudio-windows-x64.zip
-          if-no-files-found: error
-
   release:
-    needs: [verify, native-windows]
+    needs: [verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -111,11 +74,8 @@ jobs:
           set -euo pipefail
           mkdir -p dist/release
           cp artifacts/release-notes/RELEASE_NOTES.md dist/release/RELEASE_NOTES.md
-          cp artifacts/shiba-studio-windows/ShibaStudio-windows-x64.zip dist/release/
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           body_path: dist/release/RELEASE_NOTES.md
           generate_release_notes: false
-          files: |
-            dist/release/ShibaStudio-windows-x64.zip

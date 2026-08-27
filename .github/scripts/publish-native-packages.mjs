@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * Publish compiled native packages for the current branch channel.
+ * Refresh the public packages page for the current branch channel.
  *
- * GitHub Actions supplies the Windows zip. macOS zips are local / Luigi
- * (not a GitHub-hosted macOS runner) and are optional: a missing Mac
+ * Windows and macOS zips are local / Luigi. GitHub Actions does not
+ * compile them and this script must not require a CI-built zip. A missing
  * artifact keeps the previous rolling-release asset and manifest entry.
  *
  * Expects:
  *   source/                 repo checkout
  *   site/                   gh-pages checkout
- *   artifacts/              downloaded native zips (Windows required from CI)
+ *   artifacts/              optional native zips (Luigi may drop them here)
  *   CHANNEL                 main | development
  *   GH_TOKEN / GITHUB_TOKEN
  */
@@ -100,7 +100,7 @@ for (const app of catalog.apps) {
 }
 
 if (!uploadFiles.length) {
-  throw new Error(`No compiled artifacts found under ${artifactsRoot}`);
+  console.log(`No native zips under ${artifactsRoot}; Luigi attaches Windows and macOS locally.`);
 }
 
 function sh(cmd, args, opts = {}) {
@@ -112,26 +112,30 @@ function sh(cmd, args, opts = {}) {
 }
 
 const notes = [
-  `Rolling ${channel} packages from ${sha || 'HEAD'} (${uploaded.join(', ') || 'none'} this run).`,
-  'Windows is compiled on GitHub Actions. macOS builds are local / Luigi, not a GitHub-hosted macOS runner.',
+  `Rolling ${channel} packages from ${sha || 'HEAD'} (${uploaded.join(', ') || 'page only'} this run).`,
+  'Windows and macOS builds are local / Luigi, not GitHub-hosted desktop runners.',
   runUrl ? `CI run: ${runUrl}` : '',
   'The macOS zip is an unsigned universal .app. First launch may need right-click → Open until a Developer ID certificate is added.',
 ].filter(Boolean).join('\n');
 
 const view = spawnSync('gh', ['release', 'view', tag, '--repo', repo], { encoding: 'utf8' });
-if (view.status !== 0) {
-  sh('gh', [
-    'release', 'create', tag,
-    '--repo', repo,
-    '--title', `Shiba Studio packages (${channel})`,
-    '--notes', notes,
-    '--target', sha || channel,
-    ...(channel === 'development' ? ['--prerelease'] : []),
-    ...uploadFiles,
-  ]);
-} else {
-  sh('gh', ['release', 'edit', tag, '--repo', repo, '--notes', notes, '--target', sha || channel]);
-  sh('gh', ['release', 'upload', tag, '--repo', repo, '--clobber', ...uploadFiles]);
+if (uploadFiles.length) {
+  if (view.status !== 0) {
+    sh('gh', [
+      'release', 'create', tag,
+      '--repo', repo,
+      '--title', `Shiba Studio packages (${channel})`,
+      '--notes', notes,
+      '--target', sha || channel,
+      ...(channel === 'development' ? ['--prerelease'] : []),
+      ...uploadFiles,
+    ]);
+  } else {
+    sh('gh', ['release', 'edit', tag, '--repo', repo, '--notes', notes, '--target', sha || channel]);
+    sh('gh', ['release', 'upload', tag, '--repo', repo, '--clobber', ...uploadFiles]);
+  }
+} else if (view.status === 0) {
+  console.log(`Leaving existing ${tag} assets in place.`);
 }
 
 const keep = new Set(catalog.apps.map((app) => app.artifact));
@@ -161,7 +165,9 @@ const manifest = {
   page: pageUrl,
   channels: { ...(existing.channels || {}) },
 };
-manifest.channels[channel] = { sha, runUrl, releaseUrl, apps };
+if (uploadFiles.length) {
+  manifest.channels[channel] = { sha, runUrl, releaseUrl, apps };
+}
 writeFileSync(siteManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
 const git = (args) => sh('git', args, { cwd: siteRoot, env: { ...process.env, GH_TOKEN: token } });

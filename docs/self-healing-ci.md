@@ -51,20 +51,17 @@ The `promote` job runs after the aggregate `CI OK` job succeeds on
 3. Waits for that merge, then dispatches `ci.yml` on `main` through the
    Actions API (this job has no checkout, so `gh workflow run` cannot be
    used). A `github-actions` auto-merge uses `GITHUB_TOKEN` and does not
-   start the main push pipeline; the dispatch is what compiles and
-   publishes the stable Windows packages.
+   start the main push pipeline; the dispatch is what refreshes the
+   packages page on `main`.
 
 `CI OK` exists so branch protection tracks a single stable context instead
 of every matrix leg name; keep it in sync with the job list in `ci.yml`.
-That list includes the Windows app package job (`native-windows`) so a
-broken desktop host or packer fails the same gate as `npm test`. macOS
-packages are built locally / Luigi, not on a GitHub-hosted macOS runner.
-Successful Windows compiles on `main` and `development` (a direct push
-or the `workflow_dispatch` re-run that self-heal and weekly maintain use)
-then publish those artifacts to rolling GitHub Releases and
-[the packages page](https://shiba-studio.io/packages.html) via the
-`publish-packages` job (not required for CI OK, so a Pages flake
-cannot block promote).
+That list is Ubuntu-only (`verify`, `audit`, `e2e`, `docker`). Windows and
+macOS packages are built locally / Luigi, not on GitHub-hosted desktop
+runners. The `publish-packages` job (not required for CI OK, so a Pages
+flake cannot block promote) refreshes
+[the packages page](https://shiba-studio.io/packages.html) without waiting
+on a CI-built zip.
 
 Manual escape hatches: repo admins can still push to `main` directly
 (`enforce_admins` is off), and deleting the `GROK_API_KEY` secret turns the

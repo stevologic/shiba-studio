@@ -42,37 +42,27 @@ native `cpSync`, then the same walk) and uses `\\?\` only at the filesystem
 boundary so skip rules and cycle detection still see normal paths. Junctions
 that resolve to a volume root (`C:\`, `/`, a UNC share root) are skipped so
 a GitHub runner workspace on `D:` cannot pack the system drive. Windows
-packages on GitHub Actions; macOS packages are local / Luigi — native
-addons are not portable, and the Mac zip cannot be produced on Ubuntu.
+and macOS packages are local / Luigi — native addons are not portable,
+and those zips cannot be produced on Ubuntu (no wine pack, no
+`xcodebuild` on Actions).
 
-## Compile on every push
+## Packages page, not CI packaging
 
-`.github/workflows/ci.yml` already runs on `main` and `development`. One
-required package job sits on that same pipeline:
+GitHub Actions is Ubuntu-only. It does not package desktop apps and must
+not grow a wine pack or Ubuntu `xcodebuild` job. Windows and macOS zips
+are built locally / Luigi (commands below).
 
-- `native-windows` — `npm run build` + `scripts/ci/pack-windows-app.ps1`
+After a **push** or **workflow_dispatch** to `main` or `development` (not
+on pull requests), `publish-packages` refreshes `packages.html` on the
+`gh-pages` site. It does not require a CI-built zip. Luigi attaches
+`ShibaStudio-windows-x64.zip` and `ShibaStudio-macos.zip` to the rolling
+`packages-main` / `packages-development` releases when those builds are
+cut.
 
-That job is part of **CI OK**, so a broken Windows host or packer fails
-promotion the same way a red `npm test` does. The Grok self-heal job on
-`development` also watches it.
-
-macOS packages are built locally / Luigi with `scripts/ci/pack-macos-app.sh`.
-They are not compiled on a GitHub-hosted macOS runner (and must not be
-converted to an Ubuntu job — `xcodebuild` will not work there).
-
-After a green Windows package on a **push** or **workflow_dispatch** to
-`main` or `development` (not on pull requests), `publish-packages` updates:
-
-1. the rolling GitHub Release `packages-main` or `packages-development`;
-2. `packages/manifest.json` and `packages.html` on the `gh-pages` site.
-
-A Windows-only publish keeps any previously uploaded macOS zip on that
-rolling release. Luigi attaches a new `ShibaStudio-macos.zip` locally when
-a Mac build is cut.
-
-Promote re-dispatches CI on `main` after a bot merge so the stable Windows
-channel is not skipped. Tagged `v*` releases attach the Windows zip via
-`.github/workflows/release.yml`; the macOS zip is a local / Luigi attach.
+Promote re-dispatches CI on `main` after a bot merge so the packages page
+on the stable channel is not skipped. Tagged `v*` releases publish notes
+via `.github/workflows/release.yml`; desktop zips are a local / Luigi
+attach.
 
 ## Local compile
 
@@ -86,8 +76,8 @@ npm run build:windows
 npm run build:macos
 ```
 
-Full package (needs a production `npm run build` first). Windows matches
-CI; macOS is the local / Luigi path:
+Full package (needs a production `npm run build` first). Both are the
+local / Luigi path:
 
 ```powershell
 pwsh -File scripts/ci/pack-windows-app.ps1

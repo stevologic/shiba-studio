@@ -206,16 +206,15 @@ async function main() {
 
   const ci = read('.github/workflows/ci.yml');
   assert.match(ci, /branches: \[main, development\]/);
-  assert.match(ci, /native-windows:/);
+  assert.match(ci, /runs-on: ubuntu-latest/);
+  assert.doesNotMatch(ci, /native-windows:/);
   assert.doesNotMatch(ci, /native-macos:/);
   assert.doesNotMatch(ci, /native-ios:/);
   assert.match(ci, /publish-packages:/);
-  assert.match(ci, /scripts\/ci\/pack-windows-app\.ps1/);
+  assert.doesNotMatch(ci, /pack-windows-app\.ps1/);
   assert.doesNotMatch(ci, /bash scripts\/ci\/pack-macos-app\.sh/);
-  assert.match(ci, /native-windows:[\s\S]*?actions\/setup-node/);
-  assert.match(ci, /native-windows:[\s\S]*?npm run build/);
-  assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows\]/);
-  assert.match(ci, /needs: \[native-windows\]/);
+  assert.match(ci, /needs: \[verify, audit, e2e, docker\]/);
+  assert.doesNotMatch(ci, /needs\.native-windows/);
   assert.doesNotMatch(ci, /needs\.native-macos/);
   assert.match(ci, /Publish packages page/);
   assert.match(
@@ -239,24 +238,20 @@ async function main() {
   );
 
   const release = read('.github/workflows/release.yml');
-  assert.match(release, /native-windows:/);
+  assert.doesNotMatch(release, /native-windows:/);
   assert.doesNotMatch(release, /native-macos:/);
-  assert.match(release, /scripts\/ci\/pack-windows-app\.ps1/);
+  assert.doesNotMatch(release, /pack-windows-app\.ps1/);
   assert.doesNotMatch(release, /bash scripts\/ci\/pack-macos-app\.sh/);
-  assert.match(release, /ShibaStudio-windows-x64\.zip/);
+  assert.doesNotMatch(release, /ShibaStudio-windows-x64\.zip/);
   assert.doesNotMatch(release, /ShibaStudio-macos\.zip/);
   assert.doesNotMatch(release, /ShibaStudio-ios-simulator\.zip/);
-  assert.match(release, /needs: \[verify, native-windows\]/);
+  assert.match(release, /needs: \[verify\]/);
 
   for (const name of readdirSync(path.join(ROOT, '.github/workflows'))) {
     if (!name.endsWith('.yml') && !name.endsWith('.yaml')) continue;
     const text = read(`.github/workflows/${name}`);
-    assert.doesNotMatch(
-      text,
-      /(?:^|\n)\s*(?:runs-on:\s*|os:\s*\[[^\]]*)macos-latest/,
-      `${name} must not schedule a GitHub-hosted macOS runner`,
-    );
     assert.doesNotMatch(text, /macos-latest/, `${name} must not mention macos-latest`);
+    assert.doesNotMatch(text, /windows-latest/, `${name} must not mention windows-latest`);
   }
 
   const weekly = read('scripts/ci/scheduled-maintain-lib.mjs');
