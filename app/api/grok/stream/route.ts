@@ -121,13 +121,15 @@ export async function POST(req: NextRequest) {
   // same knowledge the agent gets during autonomous runs.
   let agentName: string | null = null;
   let chatAgent: import('@/lib/types').Agent | null = null;
+  const { loadAgents } = await import('@/lib/persistence');
+  const { normalizeAgent } = await import('@/lib/types');
+  const allAgents = (await loadAgents()).map(normalizeAgent);
   const sessionTarget = requestChatSession?.chatTarget?.trim() || '';
   const trustedAgentId = requestChatSession
     ? (sessionTarget && sessionTarget !== 'grok' && sessionTarget !== 'all' ? sessionTarget : '')
     : (body.agentId ? String(body.agentId) : '');
   if (trustedAgentId) {
-    const { loadAgents } = await import('@/lib/persistence');
-    const agent = (await loadAgents()).find((candidate) => candidate.id === trustedAgentId) || null;
+    const agent = allAgents.find((candidate) => candidate.id === trustedAgentId) || null;
     if (requestChatSession && !agent) {
       return new Response(JSON.stringify({ error: 'Chat agent no longer exists' }), { status: 409 });
     }
@@ -136,7 +138,10 @@ export async function POST(req: NextRequest) {
       agentName = agent.name;
       if (requestChatSession) {
         const { buildAgentChatSystem } = await import('@/lib/chat-skill');
-        systemParts.push(buildAgentChatSystem(agent));
+        systemParts.push(buildAgentChatSystem(
+          agent,
+          allAgents.filter((peer) => peer.id !== agent.id).map((peer) => ({ id: peer.id, name: peer.name })),
+        ));
       }
     }
     try {
@@ -266,6 +271,12 @@ export async function POST(req: NextRequest) {
     ].join('\n'));
   }
 
+  {
+    const { peerDirectoryLine } = await import('@/lib/agent-group-chat');
+    const directory = peerDirectoryLine(allAgents, chatAgent?.id);
+    if (directory) systemParts.push(directory);
+  }
+
   if (backgroundSessionId && toolsEnabled) {
     // Long-running work requires a verified durable chat destination.
     systemParts.push([
@@ -290,6 +301,8 @@ export async function POST(req: NextRequest) {
         content: String(message.content || ''),
         thinking: message.thinking ? String(message.thinking) : undefined,
         attachments: Array.isArray(message.attachments) ? message.attachments : undefined,
+        agentId: message.agentId,
+        agentName: message.agentName,
       }));
     const { prepareSessionContext } = await import('@/lib/context-engine');
     preparedSessionContext = prepareSessionContext({
@@ -333,6 +346,8 @@ export async function POST(req: NextRequest) {
         content: String(m.content || ''),
         attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
         thinking: m.thinking ? String(m.thinking) : undefined,
+        agentId: m.agentId,
+        agentName: m.agentName,
       });
     }
   } else if (body.prompt) {
@@ -389,6 +404,67 @@ export async function POST(req: NextRequest) {
     return false;
   }
 
+  const emitPeerFollowUpTurns = async (opts: {
+    send: (event: import('@/lib/chat-types').ChatStreamEvent) => void;
+    assistantText: string;
+    extraPeerIds: string[];
+  }) => {
+    const { findMentionedAgents, resolveAgentRef } = await import('@/lib/agent-group-chat');
+    const { streamAgentFollowUpTurns } = await import('@/lib/multi-agent-chat');
+    const refs = allAgents.map((agent) => ({ id: agent.id, name: agent.name }));
+    const userText = String(lastUser?.content || '');
+    const mentioned = findMentionedAgents(
+      `${userText}\n${opts.assistantText}`,
+      refs,
+      chatAgent?.id,
+    );
+    const queued: Array<{ id: string; name: string }> = [];
+    const seen = new Set<string>();
+    for (const raw of opts.extraPeerIds) {
+      const hit = resolveAgentRef(raw, refs);
+      if (!hit || hit.id === chatAgent?.id || seen.has(hit.id)) continue;
+      seen.add(hit.id);
+      queued.push(hit);
+    }
+    for (const peer of mentioned) {
+      if (peer.id === chatAgent?.id || seen.has(peer.id)) continue;
+      seen.add(peer.id);
+      queued.push(peer);
+    }
+    if (!queued.length) return;
+    const history = messages
+      .filter((message) => message.role === 'user' || message.role === 'assistant')
+      .map((message) => ({
+        role: message.role as 'user' | 'assistant',
+        content: String(message.content || ''),
+        agentId: message.agentId,
+        agentName: message.agentName,
+      }));
+    if (opts.assistantText.trim()) {
+      history.push({
+        role: 'assistant',
+        content: opts.assistantText.trim(),
+        agentId: chatAgent?.id,
+        agentName: chatAgent?.name || 'Grok',
+      });
+    }
+    const alreadySpoke = new Set<string>(chatAgent ? [chatAgent.id] : []);
+    for await (const event of streamAgentFollowUpTurns({
+      model,
+      cloudKey: body.key || auth.token || undefined,
+      signal: req.signal,
+      agents: allAgents,
+      queue: queued,
+      alreadySpoke,
+      history,
+      sessionId: requestChatSession?.id || null,
+      addressedBy: chatAgent?.name || 'Grok',
+      reasoningEffort: requestChatSession?.reasoningEffort || body.reasoningEffort,
+    })) {
+      opts.send(event);
+    }
+  };
+
   const stream = useAgentTools
     ? new ReadableStream({
         async start(controller) {
@@ -397,6 +473,8 @@ export async function POST(req: NextRequest) {
             controller.enqueue(encoder.encode(encodeSseEvent(event)));
           // Hoisted so the catch path can recover without TDZ / scope errors.
           const toolsUsed: string[] = [];
+          const addressedPeerIds: string[] = [];
+          let assistantText = '';
           let wroteContent = false;
           try {
             const { grokChat } = await import('@/lib/grok-client');
@@ -418,7 +496,7 @@ export async function POST(req: NextRequest) {
             ]);
             /** Always available for plain chat (no agent required). */
             const CHAT_CORE_TOOL_NAMES = new Set([
-              'web_search', 'web_fetch', 'memory_save', 'memory_recall', 'session_search', 'meeting_search', 'generate_image',
+              'web_search', 'web_fetch', 'memory_save', 'memory_recall', 'session_search', 'meeting_search', 'generate_image', 'edit_image', 'generate_video',
               'terminal_exec',
             ]);
             const MEMORY_TOOL_NAMES = new Set(['memory_save', 'memory_recall', 'memory_forget']);
@@ -442,6 +520,8 @@ export async function POST(req: NextRequest) {
                 case 'browser_extract': return 'Extracting page text';
                 case 'background_task': return `Starting background task: “${short(args.prompt, 100)}”`;
                 case 'background_status': return args.task_id ? `Checking background task ${short(args.task_id, 12)}` : 'Listing background tasks';
+                case 'talk_to_agent': return `Talking to ${short(args.agent || args.agentId || args.name, 80)}`;
+                case 'send_to_peer': return `Messaging ${short(args.agentId || args.agent || args.name, 80)}`;
                 default: return `${name}(${short(JSON.stringify(args), 100)})`;
               }
             };
@@ -488,7 +568,7 @@ export async function POST(req: NextRequest) {
             // Reddit publishing in interactive/background agent runs, where the
             // exact call is approved (or explicitly authorized by autonomous dispatch).
             const tools = agent
-              ? getToolDefinitions(agent.integrations, false).filter((tool) => tool.function.name !== 'reddit_submit')
+              ? getToolDefinitions(agent.integrations, allAgents.some((peer) => peer.id !== agent.id)).filter((tool) => tool.function.name !== 'reddit_submit')
               : [];
             // Always merge chat-core research tools so plain Grok Chat can look things up.
             {
@@ -505,6 +585,25 @@ export async function POST(req: NextRequest) {
             }
             // Background dispatch: long-running work runs as an agent run while
             // the chat stays responsive; results post back into this session.
+            const roomPeers = allAgents.filter((peer) => peer.id !== agent?.id);
+            if (roomPeers.length) {
+              tools.push({
+                type: 'function',
+                function: {
+                  name: 'talk_to_agent',
+                  description:
+                    'Address another Shiba agent in this chat by name or id. They will reply next in this same room. The human sees both turns.',
+                  parameters: {
+                    type: 'object',
+                    properties: {
+                      agent: { type: 'string', description: 'Agent name or id' },
+                      message: { type: 'string', description: 'What they should hear or do' },
+                    },
+                    required: ['agent', 'message'],
+                  },
+                },
+              });
+            }
             if (backgroundSessionId) tools.push(
               {
                 type: 'function',
@@ -665,7 +764,9 @@ export async function POST(req: NextRequest) {
 
                 // Final answer only — never emit mid-loop prose as the user reply.
                 if (text) {
-                  send({ type: 'content', delta: msg.content || '' });
+                  const delta = msg.content || '';
+                  assistantText += delta;
+                  send({ type: 'content', delta });
                   wroteContent = true;
                 } else if (toolsUsed.length && !wroteContent && completionNudges < MAX_COMPLETION_NUDGES) {
                   // Empty final after tools — force a synthesis turn.
@@ -726,7 +827,7 @@ export async function POST(req: NextRequest) {
               const CHAT_SEQUENTIAL_TOOLS = new Set([
                 'browser_navigate', 'browser_click', 'browser_type', 'browser_screenshot', 'browser_extract',
                 'terminal_exec', 'grok_cli', 'github_create_pr', 'schedule_task',
-                'background_task', 'background_status',
+                'background_task', 'background_status', 'talk_to_agent', 'send_to_peer',
                 'sandbox_exec', 'sandbox_write_file',
               ]);
               const preExecuted = new Map<string, { result: unknown; sideEffect?: string; screenshot?: string }>();
@@ -827,6 +928,39 @@ export async function POST(req: NextRequest) {
                   });
                   continue;
                 }
+                if (fn.name === 'talk_to_agent') {
+                  const { resolveAgentRef } = await import('@/lib/agent-group-chat');
+                  const { postToAgentInbox } = await import('@/lib/agent-inbox');
+                  const hit = resolveAgentRef(String(args.agent || args.agentId || args.name || ''), allAgents);
+                  let result: unknown;
+                  if (!hit || hit.id === agent?.id) {
+                    result = {
+                      error: hit ? 'Cannot address yourself' : 'Unknown agent',
+                      available: allAgents
+                        .filter((peer) => peer.id !== agent?.id)
+                        .map((peer) => ({ id: peer.id, name: peer.name })),
+                    };
+                  } else {
+                    addressedPeerIds.push(hit.id);
+                    if (agent) postToAgentInbox(hit.id, agent.id, String(args.message || ''));
+                    result = {
+                      ok: true,
+                      agentId: hit.id,
+                      name: hit.name,
+                      note: `${hit.name} will reply next in this chat.`,
+                    };
+                    send({ type: 'thinking', delta: `Asked ${hit.name} to join this chat…\n` });
+                  }
+                  toolsUsed.push(fn.name);
+                  send({ type: 'thinking', delta: `${resultPreview(fn.name, result)}\n` });
+                  msgs.push({
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    name: fn.name,
+                    content: clipForModel(JSON.stringify(result), 8000),
+                  });
+                  continue;
+                }
                 const execAgent = agent && MEMORY_TOOL_NAMES.has(fn.name)
                   ? agent
                   : (!agent || WORKSPACE_TOOL_NAMES.has(fn.name) || CHAT_CORE_TOOL_NAMES.has(fn.name)
@@ -845,10 +979,24 @@ export async function POST(req: NextRequest) {
                     chatToolAuthorization,
                   );
                 toolsUsed.push(fn.name);
+                if (fn.name === 'send_to_peer') {
+                  const { resolveAgentRef } = await import('@/lib/agent-group-chat');
+                  const hit = resolveAgentRef(String(args.agentId || args.agent || args.name || ''), allAgents);
+                  if (hit && hit.id !== agent?.id) addressedPeerIds.push(hit.id);
+                }
                 // Files written this turn get linked under the response so the
                 // user can open them in the in-chat viewer.
                 if (fn.name === 'fs_write' && args?.path && !(out.result as { error?: string })?.error) {
                   const p = String(args.path);
+                  send({
+                    type: 'file-created',
+                    file: { name: p.replace(/\\/g, '/').split('/').pop() || p, path: p },
+                  });
+                }
+                if ((fn.name === 'generate_image' || fn.name === 'edit_image' || fn.name === 'generate_video')
+                  && (out.result as { path?: string })?.path
+                  && !(out.result as { error?: string })?.error) {
+                  const p = String((out.result as { path: string }).path);
                   send({
                     type: 'file-created',
                     file: { name: p.replace(/\\/g, '/').split('/').pop() || p, path: p },
@@ -887,6 +1035,7 @@ export async function POST(req: NextRequest) {
                 });
                 const finalText = finalResp.choices?.[0]?.message?.content?.trim();
                 if (finalText) {
+                  assistantText += finalText;
                   send({ type: 'content', delta: finalText });
                   wroteContent = true;
                 }
@@ -894,12 +1043,11 @@ export async function POST(req: NextRequest) {
             }
 
             if (!wroteContent) {
-              send({
-                type: 'content',
-                delta: toolsUsed.length
-                  ? `I started looking this up (${[...new Set(toolsUsed)].join(', ')}) but ran out of steps before finishing. Ask me to continue and I’ll complete the answer.`
-                  : 'I could not finish that answer in time. Please try again or rephrase.',
-              });
+              const fallback = toolsUsed.length
+                ? `I started looking this up (${[...new Set(toolsUsed)].join(', ')}) but ran out of steps before finishing. Ask me to continue and I’ll complete the answer.`
+                : 'I could not finish that answer in time. Please try again or rephrase.';
+              assistantText += fallback;
+              send({ type: 'content', delta: fallback });
             }
 
             if (toolsUsed.length) {
@@ -908,6 +1056,11 @@ export async function POST(req: NextRequest) {
                 workspace: workspaceDir || null,
               });
             }
+            await emitPeerFollowUpTurns({
+              send,
+              assistantText,
+              extraPeerIds: addressedPeerIds,
+            });
             send({ type: 'done', model });
           } catch (e: unknown) {
             if (isAbortLikeError(e) && req.signal.aborted) {
@@ -931,7 +1084,10 @@ export async function POST(req: NextRequest) {
     : new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
+      const send = (event: import('@/lib/chat-types').ChatStreamEvent) =>
+        controller.enqueue(encoder.encode(encodeSseEvent(event)));
       let emittedContent = false;
+      let assistantText = '';
       try {
         for await (const event of grokChatStream({
           model,
@@ -944,9 +1100,19 @@ export async function POST(req: NextRequest) {
           usageContext: { source: 'chat', sourceId: requestChatSession?.id },
           conversationId: requestChatSession?.id,
         })) {
-          if (event.type === 'content' && event.delta) emittedContent = true;
-          controller.enqueue(encoder.encode(encodeSseEvent(event)));
+          if (event.type === 'done') continue;
+          if (event.type === 'content' && event.delta) {
+            emittedContent = true;
+            assistantText += event.delta;
+          }
+          send(event);
         }
+        await emitPeerFollowUpTurns({
+          send,
+          assistantText,
+          extraPeerIds: [],
+        });
+        send({ type: 'done', model });
       } catch (e: unknown) {
         if (isAbortLikeError(e) && req.signal.aborted) {
           // quiet stop
@@ -954,9 +1120,9 @@ export async function POST(req: NextRequest) {
           const friendly = formatUserFacingStreamError(e);
           if (friendly) {
             if (!emittedContent) {
-              controller.enqueue(encoder.encode(encodeSseEvent({ type: 'content', delta: friendly })));
+              send({ type: 'content', delta: friendly });
             } else {
-              controller.enqueue(encoder.encode(encodeSseEvent({ type: 'error', message: friendly })));
+              send({ type: 'error', message: friendly });
             }
           }
         }

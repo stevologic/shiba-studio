@@ -24,7 +24,8 @@ The target select chooses *who* answers:
 
 - **Grok (default)** — plain Grok with your global uploads as context.
 - **A specific agent** — chats in that agent's voice with its Skill personality and live integration context (e.g. its whole Obsidian vault). Local agents keep their real toolbelt in chat — files, shell, and the browser — so *"open example.com and read the headline"* actually drives headless Chrome, appends a screenshot of the final page to the reply, and `/annotate` lets you watch or take over the same page.
-- **All agents** — every agent answers in parallel; Grok synthesizes a unified reply with per-agent perspectives. (Text-only.)
+- **All agents** — a shared **agent room**. Everyone takes turns in the same transcript (not a hidden panel plus summary). Type `@Name` to address someone; they can `@Name` each other too. With Grok Voice on, the same target is a live spoken circle.
+- **@mentions from any chat** — while talking to Grok or one agent, `@Name` (or the `talk_to_agent` / `send_to_peer` tools) pulls that agent into this conversation for a follow-up turn. Composer autocomplete lists agents after `@`.
 
 ## Models, reasoning, attachments
 
@@ -62,6 +63,7 @@ Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dism
 | `/agent <name\|grok\|all>` | Switch who answers the chat |
 | `/model <name>` | Switch the Grok session model; selected agents keep their configured model |
 | `/tools on\|off` | Enable or disable automatic model tool calls for this chat; explicit slash commands still work |
+| `/grok` · `/grok login` | Open the Studio Terminal and launch interactive Grok Build (or sign-in). Alias: `/cli` |
 | `/project <name\|off>` | Link or detach project context |
 | `/git status` | Branch, changed files, and recent commits of the workspace |
 | `/git diff [--staged]` | Show unstaged or staged changes |

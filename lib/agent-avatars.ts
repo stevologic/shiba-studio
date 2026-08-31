@@ -19,11 +19,35 @@ export const ALIEN_AVATARS: AlienAvatar[] = Array.from({ length: ALIEN_AVATAR_CO
 
 const byId = new Map(ALIEN_AVATARS.map((a) => [a.id, a]));
 
+/** Generated Grok Imagine portraits live under /api/agent-avatars/<uuid>. */
+export const IMAGINE_AVATAR_PREFIX = 'imagine:';
+const IMAGINE_FILE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function parseImagineAvatarId(avatarId?: string | null): string | null {
+  const raw = String(avatarId || '').trim();
+  if (!raw.startsWith(IMAGINE_AVATAR_PREFIX)) return null;
+  const fileId = raw.slice(IMAGINE_AVATAR_PREFIX.length).trim().toLowerCase();
+  if (!IMAGINE_FILE_ID_RE.test(fileId)) return null;
+  return fileId;
+}
+
+export function imagineAvatarRef(fileId: string): string {
+  const id = String(fileId || '').trim().toLowerCase();
+  if (!IMAGINE_FILE_ID_RE.test(id)) throw new Error('Invalid Imagine avatar id');
+  return `${IMAGINE_AVATAR_PREFIX}${id}`;
+}
+
+export function isImagineAvatarId(id?: string | null): boolean {
+  return parseImagineAvatarId(id) != null;
+}
+
 export function isValidAvatarId(id: string): boolean {
-  return byId.has(id);
+  return byId.has(id) || isImagineAvatarId(id);
 }
 
 export function getAvatarPath(avatarId?: string): string {
+  const imagineId = parseImagineAvatarId(avatarId);
+  if (imagineId) return `/api/agent-avatars/${imagineId}`;
   if (avatarId && byId.has(avatarId)) return byId.get(avatarId)!.path;
   return ALIEN_AVATARS[0].path;
 }

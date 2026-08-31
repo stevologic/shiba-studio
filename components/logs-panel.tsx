@@ -434,8 +434,8 @@ export default function LogsPanel() {
                               src={liveAgent ? resolveAgentAvatarPath(liveAgent) : MISSING_AGENT_AVATAR_PATH}
                               alt=""
                               className="agent-avatar-xs shrink-0"
-                              width={16}
-                              height={16}
+                              width={26}
+                              height={26}
                               title={liveAgent ? agent : `${agent} — this agent has since been deleted`}
                             />
                           )}

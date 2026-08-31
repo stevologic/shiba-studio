@@ -22,6 +22,9 @@ export interface ChatMessagePayload {
   thinking?: string;
   attachments?: ChatAttachment[];
   model?: string;
+  /** Present when this assistant turn was spoken by a specific agent. */
+  agentId?: string;
+  agentName?: string;
 }
 
 /** A file written during a chat turn (fs_write) — linked under the response. */
@@ -34,8 +37,11 @@ export interface ChatFileRef {
 export type ChatStreamEvent =
   | { type: 'thinking'; delta: string }
   | { type: 'content'; delta: string }
+  | { type: 'agent-turn-start'; agentId: string; name: string; messageId: string; model?: string }
   | { type: 'agent-perspective'; agentId: string; name: string; content: string }
   | { type: 'file-created'; file: ChatFileRef }
+  | { type: 'citation'; url: string; title?: string; tool?: string }
+  | { type: 'tool-trace'; name: string; detail?: string }
   | { type: 'usage'; usage: Record<string, unknown> }
   | { type: 'done'; model: string }
   | { type: 'error'; message: string };

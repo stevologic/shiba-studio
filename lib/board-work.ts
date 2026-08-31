@@ -163,6 +163,18 @@ function evidenceFromRun(run: AgentRun): WorkEvidence[] {
       case 'generate_image':
         add('change', toolPath ? `Generated ${toolPath}` : 'Generated an image');
         break;
+      case 'edit_image':
+        add('change', toolPath ? `Edited ${toolPath}` : 'Edited an image');
+        break;
+      case 'generate_video':
+        add('change', toolPath ? `Generated ${toolPath}` : 'Generated a video');
+        break;
+      case 'gmail_send':
+        add('external', 'Sent a Gmail message');
+        break;
+      case 'youtube_upload':
+        add('external', 'Uploaded a YouTube video');
+        break;
       case 'obsidian_write':
         add('change', 'Updated an Obsidian note');
         break;
@@ -525,7 +537,7 @@ async function filePathsFromTrace(run: AgentRun, workDir: string): Promise<Works
     if (tool.name === 'fs_write') {
       if (!completedResult && !(legacyToolOnlyTrace && !traceStepFailed(traceStep))) continue;
       candidates.push((tool.args as { path?: unknown } | undefined)?.path);
-    } else if (tool.name === 'generate_image') {
+    } else if (tool.name === 'generate_image' || tool.name === 'edit_image' || tool.name === 'generate_video') {
       if (!completedResult && !(legacyToolOnlyTrace && !traceStepFailed(traceStep))) continue;
       candidates.push((tool.result as { path?: unknown } | undefined)?.path);
     } else if (tool.name === 'workspace_change') {

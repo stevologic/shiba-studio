@@ -146,8 +146,8 @@ function RoutineCard({
               src={agent ? resolveAgentAvatarPath(agent) : MISSING_AGENT_AVATAR_PATH}
               alt=""
               className="agent-avatar-xs shrink-0"
-              width={20}
-              height={20}
+              width={26}
+              height={26}
               unoptimized
               title={agent ? undefined : 'Assigned agent no longer exists'}
             />

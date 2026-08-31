@@ -69,6 +69,8 @@ export async function POST(req: NextRequest) {
         role: m.role,
         content: String(m.content || ''),
         attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
+        agentId: m.agentId,
+        agentName: m.agentName,
       });
     }
   }

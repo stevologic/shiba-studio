@@ -1,5 +1,5 @@
-// Core integrations: GitHub, Slack, Google Drive, Discord, X, Reddit, Obsidian,
-// Vercel, Netlify, plus Board-scoped Linear and Jira sync.
+// Core integrations: GitHub, Slack, Google Drive, Gmail, YouTube, Discord, X, Reddit,
+// Obsidian, Vercel, Netlify, plus Board-scoped Linear and Jira sync.
 // All scoped per-agent via config. Credentials stored server-side in config.
 // Lazy imports to avoid heavy top-level cjs/esm issues in tests.
 
@@ -225,6 +225,320 @@ export async function driveListFolders(max = 200): Promise<Array<{ id: string; n
     orderBy: 'name',
   });
   return (res.data.files || []).map((f) => ({ id: f.id || '', name: f.name || '(unnamed)' })).filter((f) => f.id);
+}
+
+async function gmailAuth(): Promise<unknown> {
+  const { google } = await import('googleapis');
+  const gmail = creds.gmail;
+  const globalGmail = defaultCreds.gmail;
+  const scopedAccessToken = gmail?.accessToken
+    && gmail.accessToken !== globalGmail?.accessToken;
+  if (scopedAccessToken) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: gmail.accessToken });
+    return auth;
+  }
+  const { getValidGmailToken } = await import('./google-oauth');
+  const token = await getValidGmailToken();
+  if (token) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: token });
+    return auth;
+  }
+  if (gmail?.accessToken) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: gmail.accessToken });
+    return auth;
+  }
+  return null;
+}
+
+async function gmailClient() {
+  const auth = await gmailAuth();
+  if (!auth) throw new Error('Gmail not configured — sign in with Google on the Capabilities page');
+  const { google } = await import('googleapis');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return google.gmail({ version: 'v1', auth: auth as any });
+}
+
+export async function testGmail(): Promise<{ ok: boolean; email?: string; error?: string }> {
+  try {
+    const auth = await gmailAuth();
+    if (!auth) return { ok: false, error: 'No Gmail credentials — sign in with Google' };
+    const { google } = await import('googleapis');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const gmail = google.gmail({ version: 'v1', auth: auth as any });
+    const profile = await gmail.users.getProfile({ userId: 'me' });
+    return { ok: true, email: profile.data.emailAddress || undefined };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Gmail test failed' };
+  }
+}
+
+export async function gmailListMessages(query = '', max = 10) {
+  const { parseGmailPayload } = await import('./gmail');
+  const gmail = await gmailClient();
+  const limit = Math.max(1, Math.min(25, Number(max) || 10));
+  const list = await gmail.users.messages.list({
+    userId: 'me',
+    q: String(query || '').slice(0, 500) || undefined,
+    maxResults: limit,
+  });
+  const ids = (list.data.messages || []).map((m) => m.id).filter((id): id is string => !!id);
+  const messages = [];
+  for (const id of ids) {
+    const full = await gmail.users.messages.get({
+      userId: 'me',
+      id,
+      format: 'metadata',
+      metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+    });
+    const parsed = parseGmailPayload(full.data.payload, {
+      id: full.data.id || id,
+      threadId: full.data.threadId || '',
+      snippet: full.data.snippet || '',
+      labelIds: full.data.labelIds,
+    });
+    messages.push({
+      id: parsed.id,
+      threadId: parsed.threadId,
+      from: parsed.from,
+      to: parsed.to,
+      subject: parsed.subject,
+      date: parsed.date,
+      snippet: parsed.snippet,
+      unread: parsed.unread,
+    });
+  }
+  return messages;
+}
+
+export async function gmailReadMessage(id: string) {
+  const { assertGmailMessageId, parseGmailPayload } = await import('./gmail');
+  const gmail = await gmailClient();
+  const full = await gmail.users.messages.get({
+    userId: 'me',
+    id: assertGmailMessageId(id),
+    format: 'full',
+  });
+  return parseGmailPayload(full.data.payload, {
+    id: full.data.id || id,
+    threadId: full.data.threadId || '',
+    snippet: full.data.snippet || '',
+    labelIds: full.data.labelIds,
+  });
+}
+
+export async function gmailSendMessage(input: {
+  to: string;
+  subject: string;
+  body: string;
+  cc?: string;
+  bcc?: string;
+  threadId?: string;
+}): Promise<{ id: string; threadId: string; to: string[] }> {
+  const { assertGmailMessageId, encodeGmailRfc2822, gmailHeader, parseEmailList } = await import('./gmail');
+  const to = parseEmailList(input.to);
+  if (!to.length) throw new Error('gmail_send requires at least one To address');
+  const cc = input.cc ? parseEmailList(input.cc) : [];
+  const bcc = input.bcc ? parseEmailList(input.bcc) : [];
+  const subject = String(input.subject || '').trim();
+  if (!subject) throw new Error('gmail_send requires a subject');
+  const body = String(input.body || '');
+  if (!body.trim()) throw new Error('gmail_send requires a body');
+
+  let inReplyTo = '';
+  let references = '';
+  const threadId = input.threadId ? assertGmailMessageId(input.threadId) : '';
+  const gmail = await gmailClient();
+  if (threadId) {
+    const thread = await gmail.users.threads.get({
+      userId: 'me',
+      id: threadId,
+      format: 'metadata',
+      metadataHeaders: ['Message-ID', 'References'],
+    });
+    const last = (thread.data.messages || []).at(-1);
+    inReplyTo = gmailHeader(last?.payload?.headers || [], 'Message-ID');
+    references = [gmailHeader(last?.payload?.headers || [], 'References'), inReplyTo].filter(Boolean).join(' ');
+  }
+
+  const sent = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: {
+      raw: encodeGmailRfc2822({ to, cc, bcc, subject, body, inReplyTo, references }),
+      ...(threadId ? { threadId } : {}),
+    },
+  });
+  return {
+    id: sent.data.id || '',
+    threadId: sent.data.threadId || threadId,
+    to,
+  };
+}
+
+async function youtubeAuth(): Promise<unknown> {
+  const { google } = await import('googleapis');
+  const youtube = creds.youtube;
+  const globalYoutube = defaultCreds.youtube;
+  const scopedAccessToken = youtube?.accessToken
+    && youtube.accessToken !== globalYoutube?.accessToken;
+  if (scopedAccessToken) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: youtube.accessToken });
+    return auth;
+  }
+  const { getValidYoutubeToken } = await import('./google-oauth');
+  const token = await getValidYoutubeToken();
+  if (token) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: token });
+    return auth;
+  }
+  if (youtube?.accessToken) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: youtube.accessToken });
+    return auth;
+  }
+  return null;
+}
+
+async function youtubeClient() {
+  const auth = await youtubeAuth();
+  if (!auth) throw new Error('YouTube not configured — sign in with Google on the Capabilities page');
+  const { google } = await import('googleapis');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return google.youtube({ version: 'v3', auth: auth as any });
+}
+
+export async function testYoutube(): Promise<{ ok: boolean; email?: string; channelTitle?: string; channelId?: string; error?: string }> {
+  try {
+    const auth = await youtubeAuth();
+    if (!auth) return { ok: false, error: 'No YouTube credentials — sign in with Google' };
+    const { google } = await import('googleapis');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const youtube = google.youtube({ version: 'v3', auth: auth as any });
+    const channels = await youtube.channels.list({ part: ['snippet', 'contentDetails'], mine: true });
+    const channel = channels.data.items?.[0];
+    return {
+      ok: true,
+      channelId: channel?.id || undefined,
+      channelTitle: channel?.snippet?.title || undefined,
+    };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : 'YouTube test failed' };
+  }
+}
+
+export async function youtubeSearchVideos(query: string, max = 8) {
+  const q = String(query || '').trim();
+  if (!q) throw new Error('youtube_search requires a query');
+  const youtube = await youtubeClient();
+  const limit = Math.max(1, Math.min(15, Number(max) || 8));
+  const res = await youtube.search.list({
+    part: ['snippet'],
+    q: q.slice(0, 200),
+    type: ['video'],
+    maxResults: limit,
+  });
+  return (res.data.items || []).map((item) => {
+    const id = item.id?.videoId || '';
+    return {
+      id,
+      title: item.snippet?.title || '',
+      channel: item.snippet?.channelTitle || '',
+      publishedAt: item.snippet?.publishedAt || '',
+      description: (item.snippet?.description || '').slice(0, 280),
+      url: id ? `https://www.youtube.com/watch?v=${id}` : '',
+    };
+  }).filter((v) => v.id);
+}
+
+export async function youtubeListMine(max = 8) {
+  const youtube = await youtubeClient();
+  const limit = Math.max(1, Math.min(15, Number(max) || 8));
+  const channels = await youtube.channels.list({ part: ['contentDetails', 'snippet'], mine: true });
+  const channel = channels.data.items?.[0];
+  const uploads = channel?.contentDetails?.relatedPlaylists?.uploads;
+  if (!uploads) return { channelTitle: channel?.snippet?.title || '', videos: [] as Array<Record<string, string>> };
+  const items = await youtube.playlistItems.list({
+    part: ['snippet', 'contentDetails'],
+    playlistId: uploads,
+    maxResults: limit,
+  });
+  return {
+    channelTitle: channel?.snippet?.title || '',
+    channelId: channel?.id || '',
+    videos: (items.data.items || []).map((item) => {
+      const id = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId || '';
+      return {
+        id,
+        title: item.snippet?.title || '',
+        publishedAt: item.snippet?.publishedAt || item.contentDetails?.videoPublishedAt || '',
+        url: id ? `https://www.youtube.com/watch?v=${id}` : '',
+      };
+    }).filter((v) => v.id),
+  };
+}
+
+export async function youtubeGetVideo(idOrUrl: string) {
+  const { parseYoutubeVideoId, youtubeWatchUrl } = await import('./youtube');
+  const id = parseYoutubeVideoId(idOrUrl);
+  const youtube = await youtubeClient();
+  const res = await youtube.videos.list({
+    part: ['snippet', 'contentDetails', 'statistics', 'status'],
+    id: [id],
+  });
+  const video = res.data.items?.[0];
+  if (!video) throw new Error(`YouTube video not found: ${id}`);
+  return {
+    id,
+    title: video.snippet?.title || '',
+    channel: video.snippet?.channelTitle || '',
+    publishedAt: video.snippet?.publishedAt || '',
+    description: (video.snippet?.description || '').slice(0, 2_000),
+    duration: video.contentDetails?.duration || '',
+    privacy: video.status?.privacyStatus || '',
+    views: video.statistics?.viewCount || '',
+    url: youtubeWatchUrl(id),
+  };
+}
+
+export async function youtubeUploadVideo(input: {
+  filePath: string;
+  title: string;
+  description?: string;
+  privacy?: string;
+}): Promise<{ id: string; url: string; title: string; privacy: string }> {
+  const { assertYoutubeUploadPath, parseYoutubePrivacy, youtubeWatchUrl } = await import('./youtube');
+  const filePath = assertYoutubeUploadPath(input.filePath);
+  const title = String(input.title || '').trim().slice(0, 100);
+  if (!title) throw new Error('youtube_upload requires a title');
+  const privacy = parseYoutubePrivacy(input.privacy, 'unlisted');
+  const fs = await import('fs');
+  const stat = await fs.promises.stat(filePath).catch(() => null);
+  if (!stat?.isFile()) throw new Error(`Video file not found: ${filePath}`);
+  const MAX_BYTES = 256 * 1024 * 1024;
+  if (stat.size > MAX_BYTES) throw new Error('YouTube upload is limited to 256 MB from this studio');
+  const youtube = await youtubeClient();
+  const res = await youtube.videos.insert({
+    part: ['snippet', 'status'],
+    requestBody: {
+      snippet: {
+        title,
+        description: String(input.description || '').slice(0, 5_000),
+        categoryId: '22',
+      },
+      status: {
+        privacyStatus: privacy,
+        selfDeclaredMadeForKids: false,
+      },
+    },
+    media: { body: fs.createReadStream(filePath) },
+  });
+  const id = res.data.id || '';
+  if (!id) throw new Error('YouTube upload returned no video id');
+  return { id, url: youtubeWatchUrl(id), title, privacy };
 }
 
 const DISCORD_API = 'https://discord.com/api/v10';

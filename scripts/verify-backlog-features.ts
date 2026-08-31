@@ -227,8 +227,19 @@ async function main() {
   assert(runtime2.includes('clipForModel(JSON.stringify'), 'run tool results clip with markers');
   assert(runtime2.includes('Grounding:'), 'agent run grounding rules');
   assert((await read('lib/multi-agent-chat.ts')).includes('asUntrustedContext'), 'multi-agent wraps integration context');
+  assert((await read('lib/multi-agent-chat.ts')).includes('agent-turn-start'), 'multi-agent room emits per-speaker bubbles');
+  assert((await read('lib/agent-group-chat.ts')).includes('findMentionedAgents'), 'chat @mentions resolve agents');
   assert((await read('lib/chat-skill.ts')).includes('Faithfulness rules'), 'synthesis no-fabrication rules');
   assert((await read('lib/agent-power-tools.ts')).includes('clipForModel'), 'web fetch clips with markers');
+  assert((await read('lib/agent-power-tools.ts')).includes('grok-imagine-image-1.5'), 'image gen prefers Grok Imagine 1.5');
+  assert((await read('components/shiba-studio.tsx')).includes('/api/agents/imagine-avatar'), 'agent editor can generate Imagine avatars');
+  assert((await read('lib/integration-catalog.ts')).includes("id: 'gmail'"), 'Gmail is a catalogued integration');
+  assert((await read('lib/agent-runtime.ts')).includes('gmail_send'), 'Gmail-scoped agents get send/list/read tools');
+  assert((await read('lib/integration-catalog.ts')).includes("id: 'youtube'"), 'YouTube is a catalogued integration');
+  assert((await read('lib/agent-runtime.ts')).includes('youtube_upload'), 'YouTube-scoped agents get search/list/get/upload tools');
+  assert((await read('lib/xai-imagine.ts')).includes('/v1/images/edits'), 'Imagine edit client posts to /v1/images/edits');
+  assert((await read('lib/xai-imagine.ts')).includes('/v1/videos/generations'), 'Imagine video client posts to /v1/videos/generations');
+  assert((await read('lib/xai-responses.ts')).includes("type: 'x_search'"), 'Responses path attaches native x_search');
 
   await log('PASS: all backlog feature structural checks');
   process.exit(0);

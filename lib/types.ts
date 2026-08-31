@@ -7,6 +7,8 @@ export interface IntegrationScope {
   github: boolean;
   slack: boolean;
   googledrive: boolean;
+  gmail: boolean;
+  youtube: boolean;
   discord: boolean;
   x: boolean;
   reddit: boolean;
@@ -19,6 +21,8 @@ export const EMPTY_INTEGRATION_SCOPE: IntegrationScope = {
   github: false,
   slack: false,
   googledrive: false,
+  gmail: false,
+  youtube: false,
   discord: false,
   x: false,
   reddit: false,
@@ -41,7 +45,7 @@ export interface AgentLearningConfig {
 export interface Agent {
   id: string;
   name: string;
-  /** Alien avatar id, e.g. alien-01 … alien-50 */
+  /** Alien catalog id (`alien-01` … `alien-50`) or `imagine:<uuid>` for a Grok Imagine portrait. */
   avatar?: string;
   model: GrokModel;
   description?: string;
@@ -154,6 +158,20 @@ export interface IntegrationCreds {
     refreshToken?: string;
     tokenExpiry?: string; // ISO — when accessToken expires
     email?: string;
+  };
+  gmail?: {
+    accessToken?: string;
+    refreshToken?: string;
+    tokenExpiry?: string;
+    email?: string;
+  };
+  youtube?: {
+    accessToken?: string;
+    refreshToken?: string;
+    tokenExpiry?: string;
+    email?: string;
+    channelTitle?: string;
+    channelId?: string;
   };
   discord?: {
     token: string; // Bot token

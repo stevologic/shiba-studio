@@ -13,6 +13,8 @@ Provide credentials once. Most integrations become tools and context for agents 
 | **GitHub** | Personal access token | `github_create_issue`, `github_list_repos`, `github_create_pr` (+ `/git pr` in chat) |
 | **Slack** | Bot token + default channel; optional App-Level Token (xapp-…) + Socket Mode to **listen for @mentions** | `slack_post`; when listen is on, @mentions run a studio agent and reply in-thread |
 | **Google Drive** | Sign in with Google (popup OAuth). One-time setup: create an OAuth client (Desktop app, or Web application with the redirect URI the card shows — `http://localhost:3000/api/google-oauth/callback`), enable the Drive API, paste the client ID+secret. Tokens are captured and refreshed automatically. Service-account JSON is an advanced fallback | `drive_list`, `drive_upload` |
+| **Gmail** | Sign in with Google on the Gmail card (same OAuth client as Drive). Enable the Gmail API on that Google Cloud project. Tokens are stored separately from Drive so you can disconnect one without the other | `gmail_list`, `gmail_read`, `gmail_send` |
+| **YouTube** | Sign in with Google on the YouTube card (same OAuth client as Drive). Enable YouTube Data API v3. Tokens stay separate from Drive/Gmail | `youtube_search`, `youtube_list`, `youtube_get`, `youtube_upload` (default unlisted) |
 | **Discord** | Bot token + channel id; optional **listen for @mentions** (Gateway + Message Content intent) | `discord_post`; when listen is on, @mentions run a studio agent and reply |
 | **X** | API key/secret + access token/secret | `x_post` |
 | **Reddit Devvit** | Deploy the bundled `devvit/reddit-bridge` companion to a subreddit, obtain External Endpoints access, and save its exact `*-external.devvit.net` origin plus a managed `devvit_at_…` app token | `reddit_read_posts`, `reddit_submit` — read and publish text/link posts in the installed community as the Devvit app account (Ask mode requires exact approval; autonomous/YOLO runs require explicit Reddit-posting intent in the task) |
@@ -57,9 +59,11 @@ Filterable, grouped, and annotated with what unlocks each tool (local agents onl
 | **Web & Research** | `web_search` (keyless DuckDuckGo), `web_fetch` (page → clean text) |
 | **Browser Automation** | `browser_navigate`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_extract` |
 | **Memory** | `memory_save`, `memory_recall`, `memory_forget` — scoped facts persist across runs; relevant memories are recalled automatically and optional post-run learning feeds the Memories review queue |
-| **AI Generation** | `generate_image` — xAI image generation; saves to the workspace and shows in the trace |
+| **AI Generation** | `generate_image` — Grok Imagine (prefers `grok-imagine-image-1.5`); `edit_image` — Imagine `/v1/images/edits` on a workspace still; `generate_video` — Imagine `/v1/videos/generations` with poll until done. Files land in the workspace and show in the trace. Agent editor **Imagine** uses image generation for square avatar portraits |
 | **Integrations** | the agent-scoped service tools above; Linear and Jira sync through Board rather than direct agent tools |
 | **Orchestration** | `schedule_task`, `send_to_peer`, `grok_cli` (one-shot official Grok Build delegation with plain or JSON-schema-constrained output, turn limits, reasoning effort, self-verification, and best-of-N) |
+
+Cloud grok-4+ chat streams use the xAI **Responses** path with native server tools `x_search`, `web_search`, and `code_interpreter` (executed by xAI, not DuckDuckGo or the X OAuth timeline tool). Citations from those calls appear on the turn. ACP `grok agent stdio`, Collections, and Batches are evaluated and deferred — they are a poor fit for this local studio loop.
 | **MCP** | `mcp_list_tools`, `mcp_invoke` |
 
 ## Grok Build and coding harnesses

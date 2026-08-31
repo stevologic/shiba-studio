@@ -50,8 +50,17 @@ grok models
 
 Shiba locates `grok` on `PATH`, reads its version, and uses `grok models` as
 the readiness probe for authentication and model discovery. A binary can
-therefore be installed but not yet ready to run; in that case, open a terminal,
-finish Grok Build's sign-in flow, and run `grok models` again.
+therefore be installed but not yet ready to run. Sign-in happens **in the
+Studio Terminal**: Settings → Grok Build CLI → **Sign in in Terminal**, the
+terminal bar **Grok** button, command palette **Launch Grok CLI in Terminal**,
+or chat `/grok login`. Shiba types the detected binary into the shared host
+PTY (`grok --no-auto-update login`) so the official login UI runs where you
+can see it. When the CLI is already authenticated, the same controls launch
+the interactive TUI (`grok --no-auto-update`), optionally `cd`'ing into the
+chat workspace first.
+
+Headless chat routing (`-p`) is unchanged. Interactive Grok is a third
+surface: the real TUI in the PTY, not ACP stdio.
 
 For credential safety, Shiba does not pass an ambient `XAI_API_KEY` to an
 arbitrary executable discovered by name on `PATH`. Normal cached `grok login`
@@ -64,6 +73,28 @@ an existing `.exe`; Unix paths must be executable).
 **Settings → Grok Build CLI** shows the detected path and version, readiness,
 and the CLI's model list. Detection is cached briefly, and the top bar and
 provider rail show the CLI badge when the command is ready.
+
+## Interactive Grok in the Studio Terminal
+
+Grok Build's login flow and agent TUI need a real terminal. Shiba already
+owns one (the shared host PTY behind Ctrl+`). Launching Grok there is how
+the CLI becomes usable without leaving the studio:
+
+| Control | What it does |
+| --- | --- |
+| Terminal bar **Grok** | Auto: sign in if needed, otherwise start the TUI |
+| Code → bottom **Terminal** tab | Same shared PTY, docked in the editor (Ctrl+` on Code) |
+| Settings → **Open in Terminal** / **Sign in in Terminal** | Same launch, explicit intent |
+| Command palette | **Launch Grok CLI in Terminal** |
+| Chat `/grok` | Opens the terminal and launches; `/grok login` forces sign-in |
+| Agent `terminal_exec` of `grok` or `grok login` | Redirected to this launch so the tool does not hang waiting on a TUI |
+
+The PTY receives the **absolute detected path**, quoted for PowerShell, cmd,
+Git Bash, or WSL. `--no-auto-update` is always set. Ambient `XAI_API_KEY` is
+not injected into the PTY; interactive Grok uses the operator's normal
+`grok login` cache. If a `terminal_exec` waiter is already running, the
+dedicated launch refuses until that command finishes (or the session is
+restarted).
 
 ## The two official embedding modes
 

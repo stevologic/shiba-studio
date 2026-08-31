@@ -505,6 +505,53 @@ async function executeAgentToolScoped(
           screenshot: img.dataUrl,
         };
       }
+      case 'edit_image': {
+        const { editXaiImage, readWorkspaceImageDataUri, saveEditedImage } = await import('./xai-imagine');
+        const { loadConfig } = await import('./persistence');
+        const { resolveCloudBearer } = await import('./xai-oauth');
+        const auth = await resolveCloudBearer(await loadConfig());
+        if (!auth.token) {
+          return { result: { error: 'Image edit needs cloud xAI credentials (API key or OAuth) — configure them in Settings.' }, sideEffect: 'edit_image blocked: no cloud auth' };
+        }
+        const imagePath = run.taskId
+          ? (await resolveTaskPath({ taskId: run.taskId, requestedPath: String(args.image || ''), workDir, access: 'read' })).absolute
+          : agentPath(workDir, String(args.image || ''));
+        const source = await readWorkspaceImageDataUri(imagePath);
+        const edited = await editXaiImage({ prompt: String(args.prompt || ''), image: { url: source.dataUri } }, auth.token);
+        const saved = await saveEditedImage(workDir, edited);
+        return {
+          result: { path: saved.path, revisedPrompt: saved.revisedPrompt, model: saved.model },
+          sideEffect: `edited image → ${saved.path}`,
+          screenshot: saved.dataUrl,
+        };
+      }
+      case 'generate_video': {
+        const { generateXaiVideo, readWorkspaceImageDataUri, saveGeneratedVideo } = await import('./xai-imagine');
+        const { loadConfig } = await import('./persistence');
+        const { resolveCloudBearer } = await import('./xai-oauth');
+        const auth = await resolveCloudBearer(await loadConfig());
+        if (!auth.token) {
+          return { result: { error: 'Video generation needs cloud xAI credentials (API key or OAuth) — configure them in Settings.' }, sideEffect: 'generate_video blocked: no cloud auth' };
+        }
+        let imageUrl: string | undefined;
+        if (args.image) {
+          const imagePath = run.taskId
+            ? (await resolveTaskPath({ taskId: run.taskId, requestedPath: String(args.image), workDir, access: 'read' })).absolute
+            : agentPath(workDir, String(args.image));
+          imageUrl = (await readWorkspaceImageDataUri(imagePath)).dataUri;
+        }
+        const generated = await generateXaiVideo({
+          prompt: String(args.prompt || ''),
+          imageUrl,
+          duration: args.duration == null ? undefined : Number(args.duration),
+          resolution: args.resolution ? String(args.resolution) : undefined,
+        }, auth.token);
+        const saved = await saveGeneratedVideo(workDir, generated);
+        return {
+          result: { path: saved.path, url: saved.url, model: saved.model },
+          sideEffect: `generated video → ${saved.path}`,
+        };
+      }
       case 'browser_navigate': {
         const r = await Browser.browserNavigate(args.url, runIdForBrowser);
         return { result: r, sideEffect: `navigated to ${r.url}` };
@@ -596,6 +643,49 @@ async function executeAgentToolScoped(
         const folders = (agent.driveFolders || []).map((f) => f.id).filter(Boolean);
         const r = await Ints.driveUploadText(args.name, args.content, folders);
         return { result: r, sideEffect: `uploaded ${args.name} to Drive${folders.length ? ' (scoped folder)' : ''}` };
+      }
+      case 'gmail_list': {
+        const r = await Ints.gmailListMessages(args.query ? String(args.query) : '', args.max == null ? 10 : Number(args.max));
+        return { result: r, sideEffect: `listed ${r.length} Gmail message(s)` };
+      }
+      case 'gmail_read': {
+        const r = await Ints.gmailReadMessage(String(args.id || ''));
+        return { result: r, sideEffect: `read Gmail ${r.id || args.id}` };
+      }
+      case 'gmail_send': {
+        const r = await Ints.gmailSendMessage({
+          to: String(args.to || ''),
+          subject: String(args.subject || ''),
+          body: String(args.body || ''),
+          cc: args.cc ? String(args.cc) : undefined,
+          bcc: args.bcc ? String(args.bcc) : undefined,
+          threadId: args.threadId ? String(args.threadId) : undefined,
+        });
+        return { result: r, sideEffect: `sent Gmail to ${r.to.join(', ')}` };
+      }
+      case 'youtube_search': {
+        const r = await Ints.youtubeSearchVideos(String(args.query || ''), args.max == null ? 8 : Number(args.max));
+        return { result: r, sideEffect: `searched YouTube for "${String(args.query || '').slice(0, 80)}"` };
+      }
+      case 'youtube_list': {
+        const r = await Ints.youtubeListMine(args.max == null ? 8 : Number(args.max));
+        return { result: r, sideEffect: `listed ${r.videos.length} YouTube upload(s)` };
+      }
+      case 'youtube_get': {
+        const r = await Ints.youtubeGetVideo(String(args.id || ''));
+        return { result: r, sideEffect: `read YouTube ${r.id}` };
+      }
+      case 'youtube_upload': {
+        const filePath = run.taskId
+          ? (await resolveTaskPath({ taskId: run.taskId, requestedPath: String(args.path || ''), workDir, access: 'read' })).absolute
+          : agentPath(workDir, String(args.path || ''));
+        const r = await Ints.youtubeUploadVideo({
+          filePath,
+          title: String(args.title || ''),
+          description: args.description ? String(args.description) : undefined,
+          privacy: args.privacy ? String(args.privacy) : undefined,
+        });
+        return { result: r, sideEffect: `uploaded YouTube ${r.id} (${r.privacy})` };
       }
       case 'obsidian_list': {
         const creds = Ints.getIntegrationCreds();
@@ -700,8 +790,23 @@ async function executeAgentToolScoped(
         return { result: r, sideEffect: `set Netlify env ${r.key}` };
       }
       case 'send_to_peer': {
-        postToAgentInbox(args.agentId, agent.id, args.message);
-        return { result: 'message queued to peer', sideEffect: `sent message to agent ${args.agentId}` };
+        const rawTarget = String(args.agentId || args.agent || args.name || '').trim();
+        const { loadAgents } = await import('./persistence');
+        const roster = (await loadAgents()).map((candidate) => ({ id: candidate.id, name: candidate.name }));
+        const { resolveAgentRef } = await import('./agent-group-chat');
+        const hit = resolveAgentRef(rawTarget, roster);
+        const toId = hit?.id || rawTarget;
+        if (!toId) return { result: { error: 'agentId is required' }, sideEffect: 'peer address missing' };
+        postToAgentInbox(toId, agent.id, String(args.message || ''));
+        return {
+          result: {
+            queued: true,
+            toAgentId: toId,
+            toName: hit?.name || toId,
+            note: 'They will reply in this chat when the current turn is a shared room; otherwise the note waits in their inbox.',
+          },
+          sideEffect: `sent message to agent ${hit?.name || toId}`,
+        };
       }
       case 'schedule_task': {
         const schedRes = await scheduleFromAgentTool(agent.id, String(args.when || ''), String(args.prompt || ''));

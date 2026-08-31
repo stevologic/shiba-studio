@@ -1,6 +1,11 @@
 import { grokConversationId, XAI_BASE, XAI_CONV_ID_HEADER } from './grok-client';
 import type { ChatMessagePayload, ChatStreamEvent, ReasoningEffort } from './chat-types';
 import { parseModelRef, supportsReasoning } from './model-providers';
+import {
+  buildXaiResponsesRequestBody,
+  mapXaiResponsesEvent,
+  shouldUseXaiResponsesApi,
+} from './xai-responses';
 
 const DEFAULT_LOCAL_GROK_BASE = 'http://127.0.0.1:1234/v1';
 
@@ -33,25 +38,7 @@ function hasMultimodalInput(messages: ChatMessagePayload[]): boolean {
 
 function shouldUseResponsesApi(provider: string, modelId: string, messages: ChatMessagePayload[]): boolean {
   // Responses API streams reasoning for grok-4+ generations (including 4.6).
-  return provider === 'cloud' && (hasMultimodalInput(messages) || /grok-(?:[4-9]|\d{2,})/i.test(modelId));
-}
-
-function buildResponsesInput(messages: ChatMessagePayload[]) {
-  return messages.map((m) => {
-    if (m.attachments?.length) {
-      const parts: Record<string, unknown>[] = [];
-      for (const att of m.attachments) {
-        if (att.kind === 'image' && att.dataUrl) {
-          parts.push({ type: 'input_image', image_url: att.dataUrl, detail: 'high' });
-        } else if (att.kind === 'file' && att.fileId) {
-          parts.push({ type: 'input_file', file_id: att.fileId });
-        }
-      }
-      if ((m.content || '').trim()) parts.push({ type: 'input_text', text: m.content });
-      return { role: m.role, content: parts };
-    }
-    return { role: m.role, content: m.content ?? '' };
-  });
+  return shouldUseXaiResponsesApi(provider, modelId, hasMultimodalInput(messages));
 }
 
 function buildCompletionsMessages(messages: ChatMessagePayload[]) {
@@ -105,25 +92,38 @@ async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGenerator
 }
 
 function* mapResponsesEvent(raw: Record<string, unknown>): Generator<ChatStreamEvent> {
-  const type = String(raw.type || '');
+  yield* mapXaiResponsesEvent(raw);
+}
 
-  if (type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') {
-    const delta = String(raw.delta || '');
-    if (delta) yield { type: 'thinking', delta };
-    return;
+export function buildGrokChatStreamRequest(params: {
+  model: string;
+  messages: ChatMessagePayload[];
+  base?: string;
+  conversationId?: string;
+  reasoningEffort?: ReasoningEffort;
+  builtinServerTools?: boolean;
+}): { url: string; body: Record<string, unknown>; useResponses: boolean } {
+  const ref = parseModelRef(params.model);
+  const useResponses = shouldUseResponsesApi(ref.provider, ref.id, params.messages);
+  const base = (params.base || XAI_BASE).replace(/\/$/, '');
+  if (useResponses) {
+    const body = buildXaiResponsesRequestBody({
+      model: ref.id,
+      messages: params.messages,
+      stream: true,
+      conversationId: params.conversationId,
+      reasoningEffort: params.reasoningEffort && supportsReasoning(ref.id) ? params.reasoningEffort : undefined,
+      builtinTools: params.builtinServerTools !== false && ref.provider === 'cloud',
+    });
+    return { url: `${base}/responses`, body, useResponses: true };
   }
-
-  if (type === 'response.output_text.delta') {
-    const delta = String(raw.delta || '');
-    if (delta) yield { type: 'content', delta };
-    return;
-  }
-
-  if (type === 'response.completed' || type === 'response.done') {
-    const response = raw.response as Record<string, unknown> | undefined;
-    const usage = response?.usage as Record<string, unknown> | undefined;
-    if (usage) yield { type: 'usage', usage };
-  }
+  const body: Record<string, unknown> = {
+    model: ref.id,
+    messages: buildCompletionsMessages(params.messages),
+    stream: true,
+    ...(ref.provider === 'cloud' ? { stream_options: { include_usage: true } } : {}),
+  };
+  return { url: `${base}/chat/completions`, body, useResponses: false };
 }
 
 function* mapCompletionsChunk(raw: Record<string, unknown>): Generator<ChatStreamEvent> {
@@ -161,31 +161,19 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
     base = normalizeLocalBase(cfg.localGrokBaseUrl);
   }
 
-  const url = useResponses ? `${base}/responses` : `${base}/chat/completions`;
-  const body: Record<string, unknown> = useResponses
-    ? {
-        model: ref.id,
-        input: buildResponsesInput(params.messages),
-        stream: true,
-        store: false,
-        ...(conversationId ? { prompt_cache_key: conversationId } : {}),
-      }
-    : {
-        model: ref.id,
-        messages: buildCompletionsMessages(params.messages),
-        stream: true,
-        ...(ref.provider === 'cloud' ? { stream_options: { include_usage: true } } : {}),
-        temperature: params.temperature ?? 0.7,
-        max_tokens: params.max_tokens ?? 4096,
-      };
-
-  // Reasoning params are only attached for models that actually accept them
-  // (explicit non-reasoning variants and legacy models get none, regardless
-  // of what the client sent).
-  if (params.reasoningEffort && supportsReasoning(ref.id)) {
-    if (useResponses) {
-      if (params.reasoningEffort !== 'low') body.reasoning = { effort: params.reasoningEffort };
-    } else {
+  const built = buildGrokChatStreamRequest({
+    model: params.model,
+    messages: params.messages,
+    base,
+    conversationId,
+    reasoningEffort: params.reasoningEffort,
+  });
+  const url = built.url;
+  const body = built.body;
+  if (!useResponses) {
+    body.temperature = params.temperature ?? 0.7;
+    body.max_tokens = params.max_tokens ?? 4096;
+    if (params.reasoningEffort && supportsReasoning(ref.id)) {
       body.reasoning_effort = params.reasoningEffort;
     }
   }

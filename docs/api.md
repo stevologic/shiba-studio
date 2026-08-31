@@ -65,7 +65,7 @@ curl -s -X POST http://127.0.0.1:3000/api/config \
 | GET | `/api/config` | Settings with secrets masked, auth flags, secret-key location. |
 | POST | `/api/config` | Update settings. Body is a partial config, e.g. `{ "usageBudgetUsd": 50 }`, `{ "toolApprovalMode": "ask" }`, `{ "dailyBudgetUsd": 10, "budgetHardStop": true }`, `{ "action": "testLocalGrok", "localGrokBaseUrl": "…" }`. |
 | GET | `/api/integrations` | Configured integration credentials with secret fields masked + channel-listener status. |
-| POST | `/api/integrations` | `{ action: 'save'\|'delete'\|'test', which, creds }` — save/remove/test one integration. |
+| POST | `/api/integrations` | `{ action: 'save'\|'delete'\|'test'\|'disconnect-drive'\|'disconnect-gmail'\|'disconnect-youtube', which, creds }` — save/remove/test one integration, or drop Google Drive/Gmail/YouTube OAuth tokens. |
 
 ### Agents & runs
 
@@ -75,6 +75,8 @@ Agents are execution owners. Trigger and schedule management is available only t
 | --- | --- | --- |
 | GET | `/api/agents` | All execution owners (models, workspaces, scopes, skills, peers). |
 | POST | `/api/agents` | `{ action: 'create'\|'update'\|'delete', … }` — manage agents. |
+| POST | `/api/agents/imagine-avatar` | Generate a square Grok Imagine portrait. Body: `{ prompt?, name?, description? }`. Returns `{ avatar: "imagine:<uuid>", url }`. |
+| GET | `/api/agent-avatars/<uuid>` | Raw Imagine avatar bytes (only stored portraits). |
 | GET | `/api/memories` | Search/filter memories by `q`, `agentId`, `status`, or `source`; returns stats and scope labels. |
 | POST | `/api/memories` | `{ action: 'create'|'update'|'delete'|'clear', … }` — manage, approve, pin, archive, move, or remove memories. |
 | GET | `/api/runs` | Run summaries. Filters: `?agentId`, `?scheduleId=<automationId>`, `?scheduledOnly=1`, `?limit`. `?id=<runId>` returns one run **with its full trace**. The `scheduleId` field name is retained for run-record compatibility and carries the Automation id. |
@@ -130,9 +132,10 @@ The primary Studio surface calls these **Automations**. Every recurring, one-tim
 | --- | --- | --- |
 | GET/POST | `/api/chat-sessions` | List / create / update / delete chat sessions. |
 | POST | `/api/grok/stream` | Stream a chat turn (SSE) — the main chat endpoint. Long agentic turns set `maxDuration` high; transport/provider failures are normalized into short user-facing messages. |
-| POST | `/api/grok/multi-agent-stream` | "All agents" group chat with synthesis (SSE). |
+| POST | `/api/grok/multi-agent-stream` | "All agents" shared room: sequential in-character turns (SSE). `agent-turn-start` opens a bubble per speaker. |
 | POST | `/api/grok/voice-group-turn` | Multi-agent free-talk turn for Grok Voice group mode. |
 | POST | `/api/grok-cli/stream` | Stream a chat turn through a managed, one-shot official Grok Build process (SSE). Shiba launches `grok --no-auto-update -p … --output-format streaming-json` and projects the CLI's NDJSON events into the chat stream. See [CLI](cli.md). |
+| POST | `/api/terminal` | Host PTY actions: `exec`, `write`, `restart`, or `grok` to launch interactive Grok Build (`intent`: `auto`\|`agent`\|`login`, optional `cwd`). |
 | GET | `/api/grok-cli/status` | Official Grok Build detection: installed path/version plus authenticated model readiness from `grok models`. `?checkUpdate=1` also checks for a newer released binary. |
 | POST | `/api/chat-tools` | Run chat research, memory, and X actions (`search`, `fetch`, `remember`, `recall`, `forget`, `post_x`). Git, Board, and Obsidian commands use their dedicated endpoints. |
 | POST | `/api/chat/upload` | Attach files/images to a chat. |
