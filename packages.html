@@ -86,8 +86,8 @@
     <h1>Packages</h1>
     <p class="lead">
       Official Windows and macOS apps. Double-click and they run the same Studio
-      as the browser — no clone, no Node install, no terminal. Windows and macOS
-      builds are local / Luigi, not GitHub-hosted desktop runners. Each app
+      as the browser — no clone, no Node install, no terminal. CI packages both
+      on every push to <code>main</code> and <code>development</code>. Each app
       updates itself when its channel moves.
     </p>
   </header>
@@ -101,8 +101,8 @@
         <a class="btn btn-primary" id="windows-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-windows-x64.zip">Download stable (main)</a>
         <a class="btn btn-ghost" id="windows-development" href="https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-windows-x64.zip">Download development</a>
       </div>
-      <p class="meta channel-main" data-app="windows">Stable Windows builds are produced locally / Luigi.</p>
-      <p class="meta channel-development" data-app="windows">Development Windows builds are produced locally / Luigi.</p>
+      <p class="meta channel-main" data-app="windows">Stable channel updates on every push to main.</p>
+      <p class="meta channel-development" data-app="windows">Development channel updates on every push to development.</p>
     </article>
 
     <article class="card" id="macos">
@@ -113,8 +113,8 @@
         <a class="btn btn-primary" id="macos-main" href="https://github.com/stevologic/shiba-studio/releases/download/packages-main/ShibaStudio-macos.zip">Download stable (main)</a>
         <a class="btn btn-ghost" id="macos-development" href="https://github.com/stevologic/shiba-studio/releases/download/packages-development/ShibaStudio-macos.zip">Download development</a>
       </div>
-      <p class="meta channel-main" data-app="macos">Stable macOS builds are produced locally / Luigi.</p>
-      <p class="meta channel-development" data-app="macos">Development macOS builds are produced locally / Luigi.</p>
+      <p class="meta channel-main" data-app="macos">Stable channel updates on every push to main.</p>
+      <p class="meta channel-development" data-app="macos">Development channel updates on every push to development.</p>
     </article>
   </div>
 
