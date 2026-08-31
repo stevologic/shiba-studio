@@ -50,9 +50,6 @@ are carried over automatically.
 - **Grok prompt-cache routing.** Durable chat, agent, meeting, and voice
   turns send `x-grok-conv-id` / `prompt_cache_key` so consecutive turns can
   reuse xAI's published cached-prompt discount.
-
-### Changed
-
 - **Weekly maintain can read ChatGPT/Codex docs.** `fetch_url` now allows
   `learn.chatgpt.com`, prefers Markdown/`text/plain`, extracts prose from
   JS app shells, and rejects redirects off the host allowlist. Workflow
