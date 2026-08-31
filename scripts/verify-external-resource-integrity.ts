@@ -13,6 +13,7 @@ interface RemoteFile {
   bytes: number;
   created_at: number;
   content: Buffer;
+  expiresAfter?: string | null;
 }
 
 async function exists(target: string): Promise<boolean> {
@@ -54,11 +55,13 @@ async function main(): Promise<void> {
         bytes: content.length,
         content,
       });
+      created.expiresAfter = form.get('expires_after') == null ? null : String(form.get('expires_after'));
       return Response.json({
         id: created.id,
         filename: created.filename,
         bytes: created.bytes,
         created_at: created.created_at,
+        expires_at: created.expiresAfter ? Math.floor(created.created_at / 1000) + Number(created.expiresAfter) : null,
       });
     }
     if (parsed.pathname.endsWith('/files') && method === 'GET') {
@@ -116,6 +119,7 @@ async function main(): Promise<void> {
       return parsed._shibaOwnership?.schema === 'shiba-external-resource-v1';
     });
     assert(firstOwnedSnapshot, 'entity snapshot embeds exact Shiba ownership proof');
+    assert.equal(firstOwnedSnapshot.expiresAfter ?? null, null, 'entity snapshots stay permanent on xAI Files');
     deleteFailures.set(firstOwnedSnapshot.id, 1);
     const secondPush = await entitySync.pushKind('agents');
     assert.equal(secondPush.ok, true, secondPush.error);
@@ -156,6 +160,14 @@ async function main(): Promise<void> {
     assert.match(chatRemote.filename, /^shiba-chat-[0-9a-f-]{36}\.pdf$/);
     assert.notEqual(chatRemote.filename, uploadPayload.attachment.name,
       'remote UUID filename makes crash recovery ownership unambiguous');
+    const filesApi = await import('../lib/xai-files');
+    assert.equal(filesApi.CHAT_FILE_EXPIRES_AFTER_SECONDS, 2_592_000);
+    assert.equal(filesApi.normalizeXaiFileExpiresAfter(60), 3_600);
+    assert.equal(filesApi.normalizeXaiFileExpiresAfter(2_592_001), 2_592_000);
+    assert.equal(filesApi.normalizeXaiFileExpiresAfter(0), undefined);
+    assert.equal(filesApi.normalizeXaiFileExpiresAfter(null), undefined);
+    assert.equal(chatRemote.expiresAfter, String(filesApi.CHAT_FILE_EXPIRES_AFTER_SECONDS),
+      'chat attachments get a 30-day xAI Files TTL as a safety net');
 
     const providerLookalike = addRemote({
       id: 'provider-chat-lookalike',

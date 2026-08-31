@@ -7,6 +7,7 @@ import {
   downloadXaiFileContent,
   listXaiFiles,
   uploadXaiFile,
+  CHAT_FILE_EXPIRES_AFTER_SECONDS,
   type XaiFileMeta,
 } from './xai-files';
 
@@ -300,7 +301,9 @@ export async function uploadOwnedXaiChatFile(input: {
     authFingerprint: await authFingerprint(token, input.authSource || null),
   });
   try {
-    const meta = await uploadXaiFile(intent.filename, input.content, token);
+    const meta = await uploadXaiFile(intent.filename, input.content, token, {
+      expiresAfterSeconds: CHAT_FILE_EXPIRES_AFTER_SECONDS,
+    });
     completeUploadIntent(intent.id, meta);
     return meta;
   } catch (error) {

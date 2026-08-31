@@ -10,6 +10,8 @@ are carried over automatically.
 
 ### Added
 
+- **xAI Files TTL for chat attachments.** Chat uploads now send `expires_after=2592000` (30 days, the Files API maximum) so abandoned Grok document objects auto-delete if local tombstone cleanup never runs. Durable cloud-sync files and entity snapshots stay permanent.
+
 - **Ephemeral chat from anywhere.** `Ctrl`/`⌘`+`N` starts a durable session; `Ctrl`/`⌘`+`Shift`+`N`, the top-bar eye-off control, and the command palette start an incognito chat (no memories, deleted when the page closes) — the same pattern as ChatGPT temporary chat and Claude incognito.
 
 - **Meetings with Grok Voice 2.0.** Spoken reviews use `grok-voice-think-fast-2.0`
