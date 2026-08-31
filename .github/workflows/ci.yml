@@ -23,12 +23,11 @@ permissions:
 
 jobs:
   verify:
-    name: ${{ matrix.os }} · Node ${{ matrix.node }}
-    runs-on: ${{ matrix.os }}
+    name: Ubuntu · Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
         # 22 = latest 22 LTS (node:sqlite is unflagged there; it needs
         # --experimental-sqlite on 22.5–22.11, which the app relies on).
         node: ['22', '24']
@@ -197,88 +196,13 @@ jobs:
           }
           NODE
 
-  native-windows:
-    name: Windows app · package
-    runs-on: windows-latest
-    timeout-minutes: 45
-    env:
-      PUPPETEER_SKIP_DOWNLOAD: '1'
-      NEXT_TELEMETRY_DISABLED: '1'
-      NODE_OPTIONS: --max-old-space-size=4096
-      CHANNEL: ${{ github.ref_name }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Build Studio and package the Windows app
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          npm ci
-          if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit $LASTEXITCODE" }
-          npm run build
-          if ($LASTEXITCODE -ne 0) { throw "npm run build failed with exit $LASTEXITCODE" }
-          npm prune --omit=dev
-          if ($LASTEXITCODE -ne 0) { throw "npm prune failed with exit $LASTEXITCODE" }
-          pwsh -File scripts/ci/pack-windows-app.ps1
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: shiba-studio-windows
-          path: dist/native/packages/ShibaStudio-windows-x64.zip
-          if-no-files-found: error
-          retention-days: 30
-
-  native-macos:
-    name: macOS app · package
-    runs-on: macos-latest
-    timeout-minutes: 45
-    env:
-      PUPPETEER_SKIP_DOWNLOAD: '1'
-      NEXT_TELEMETRY_DISABLED: '1'
-      NODE_OPTIONS: --max-old-space-size=4096
-      CHANNEL: ${{ github.ref_name }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Build Studio and package the macOS app
-        run: |
-          npm ci
-          npm run build
-          npm prune --omit=dev
-          bash scripts/ci/pack-macos-app.sh
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: shiba-studio-macos
-          path: dist/native/packages/ShibaStudio-macos.zip
-          if-no-files-found: error
-          retention-days: 30
-
-  # Rolling GitHub Releases + shiba-studio.io/packages.html for push builds.
+  # Refresh shiba-studio.io/packages.html on push builds.
   # Not part of CI OK — a Pages publish flake must not block promote.
+  # Windows and macOS zips are local / Luigi. This job does not wait on a
+  # desktop runner and does not require a CI-built zip.
   publish-packages:
     name: Publish packages page
-    needs: [native-windows, native-macos]
     if: >-
-      always() &&
-      needs.native-windows.result == 'success' &&
-      needs.native-macos.result == 'success' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development')
     runs-on: ubuntu-latest
@@ -292,10 +216,6 @@ jobs:
         with:
           path: source
           persist-credentials: false
-
-      - uses: actions/download-artifact@v6
-        with:
-          path: artifacts
 
       - name: Check out public site
         uses: actions/checkout@v6
@@ -312,7 +232,7 @@ jobs:
   # branch-protection contexts survive matrix/job renames above.
   ci-ok:
     name: CI OK
-    needs: [verify, audit, e2e, docker, native-windows, native-macos]
+    needs: [verify, audit, e2e, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -334,7 +254,7 @@ jobs:
   # no-retrigger rule, so the healed commit gets a fresh full run).
   self-heal:
     name: Self-heal with Grok
-    needs: [verify, audit, e2e, docker, native-windows, native-macos]
+    needs: [verify, audit, e2e, docker]
     if: >-
       failure() &&
       github.ref == 'refs/heads/development' &&
@@ -533,7 +453,7 @@ jobs:
           fi
           # github-actions auto-merge uses GITHUB_TOKEN, so the merge push to
           # main does not start workflows. Wait until main has the promotion,
-          # then dispatch CI so Windows/macOS packages still compile and publish.
+          # then dispatch CI so the packages page on main still publishes.
           for attempt in $(seq 1 40); do
             ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
             if [ "$ahead" = "0" ]; then

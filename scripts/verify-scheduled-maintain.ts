@@ -167,9 +167,9 @@ async function main() {
   assert.match(ci, /Promote development → main/);
   assert.match(ci, /gh pr merge .* --auto/);
   assert.match(ci, /github\.ref == 'refs\/heads\/development'/);
-  assert.match(ci, /native-windows:/);
-  assert.match(ci, /native-macos:/);
-  assert.match(ci, /needs: \[verify, audit, e2e, docker, native-windows, native-macos\]/);
+  assert.doesNotMatch(ci, /native-windows:/);
+  assert.doesNotMatch(ci, /native-macos:/);
+  assert.match(ci, /needs: \[verify, audit, e2e, docker\]/);
   assert.match(
     ci,
     /Gate — production build before the functional suite[\s\S]*npm run build[\s\S]*Gate — functional suite must pass before pushing[\s\S]*npm test/,
