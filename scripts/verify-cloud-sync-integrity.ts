@@ -31,8 +31,10 @@ async function main(): Promise<void> {
     const parsed = new URL(url);
     const method = String(init.method || 'GET').toUpperCase();
     if (parsed.pathname.endsWith('/files') && method === 'POST') {
-      const upload = (init.body as FormData).get('file') as File;
+      const form = init.body as FormData;
+      const upload = form.get('file') as File;
       const content = Buffer.from(await upload.arrayBuffer());
+      assert.equal(form.get('expires_after'), null, 'durable cloud-sync uploads must stay permanent');
       const id = `remote-${++sequence}`;
       const record: RemoteFile = {
         id,

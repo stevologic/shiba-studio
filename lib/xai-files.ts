@@ -14,6 +14,34 @@ export interface XaiFileMeta {
 
 export const XAI_CONSOLE_FILES_URL = 'https://console.x.ai/team/default/files';
 
+/** xAI Files `expires_after` is 1 hour–30 days, measured from upload. */
+export const XAI_FILE_EXPIRES_AFTER_MIN_SECONDS = 3_600;
+export const XAI_FILE_EXPIRES_AFTER_MAX_SECONDS = 2_592_000;
+/**
+ * Safety-net TTL for ephemeral chat attachments. Shiba still tombstones
+ * unreferenced chat files after a day; this only bounds abandoned xAI objects
+ * if the coordinator never runs. Durable cloud-sync and entity snapshots stay
+ * permanent.
+ */
+export const CHAT_FILE_EXPIRES_AFTER_SECONDS = XAI_FILE_EXPIRES_AFTER_MAX_SECONDS;
+
+export interface XaiFileUploadOptions {
+  expiresAfterSeconds?: number | null;
+}
+
+/** Clamp a Files API TTL, or omit it when the caller wants a permanent object. */
+export function normalizeXaiFileExpiresAfter(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  const seconds = Math.round(n);
+  if (seconds <= 0) return undefined;
+  return Math.min(
+    XAI_FILE_EXPIRES_AFTER_MAX_SECONDS,
+    Math.max(XAI_FILE_EXPIRES_AFTER_MIN_SECONDS, seconds),
+  );
+}
+
 export function isPublicUrlEligible(filename: string): boolean {
   return /\.(png|jpe?g|pdf|mp4)$/i.test(filename);
 }
@@ -56,9 +84,18 @@ export async function listXaiFiles(keyOverride?: string): Promise<XaiFileMeta[]>
   return all;
 }
 
-export async function uploadXaiFile(filename: string, content: Buffer, keyOverride?: string): Promise<XaiFileMeta> {
+export async function uploadXaiFile(
+  filename: string,
+  content: Buffer,
+  keyOverride?: string,
+  options?: XaiFileUploadOptions,
+): Promise<XaiFileMeta> {
   const form = new FormData();
+  // Purpose and TTL must precede the file part so xAI sees them on the same
+  // multipart request (the SDK deepObject form is also order-sensitive).
   form.append('purpose', 'assistants');
+  const expiresAfter = normalizeXaiFileExpiresAfter(options?.expiresAfterSeconds);
+  if (expiresAfter != null) form.append('expires_after', String(expiresAfter));
   form.append('file', new Blob([new Uint8Array(content)]), filename);
 
   const res = await cloudFetch(`${XAI_BASE}/files`, {
