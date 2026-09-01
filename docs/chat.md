@@ -47,6 +47,10 @@ The expanded voice HUD and the minimized sidebar dock both expose two direct pla
 
 Both controls have visible labels or tooltips, keyboard focus, accessible names, and native disabled states. Minimizing Grok Voice does not change their behavior; it only moves the controls into the sidebar dock.
 
+## Grok Bot — operate Studio from the desktop Bot
+
+[Grok Bot](grok-bot.md) attaches to this Studio as a Streamable HTTP MCP server. Settings → **Grok Bot** issues a `shiba_grokbot_` bearer (shown once). Paste the loopback MCP URL into Grok Bot Settings → Plugins, or run the copied `grok mcp add --transport http` command. The Bot can file Board cards, dispatch durable work, and read agents/tasks/approvals. Each call is logged into a **Grok Bot** chat session. Approvals still happen in Studio.
+
 ## Phone assistant — dictate from the Grok number
 
 Call the number from [Voice Agent Builder](https://console.x.ai) (each xAI account includes a free number) and speak Studio commands. Grok does not reach localhost; Settings → **Phone assistant** generates a `shiba_phone_` bearer and the public MCP URL. Paste both into the Voice Agent as a remote MCP server (or a `dictate_command` function tool). The handler runs the same actions as chat slash commands — create a Board card, list the board, git, memory, search, or start durable work — and writes the exchange into a **Phone assistant** chat session.

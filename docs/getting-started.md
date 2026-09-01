@@ -69,7 +69,8 @@ On a fresh install the **dashboard shows a 3-step checklist** — connect a mode
 4. **Say hello** — press *New Chat* in the top bar (`Ctrl`/`⌘`+`N`), or the eye-off control for an ephemeral chat (`Ctrl`/`⌘`+`Shift`+`N`). Type `/help` to see everything chat can do. Press `?` (or Ctrl/⌘+/) for the studio keyboard-shortcut overlay. You can queue more messages while a reply streams, and agents can render **rich cards** (`shiba-card` fences) in replies.
 5. **Create an agent** — Agents → *Create Agent*: pick a model, workspace, integration scopes, and optionally a schedule. Run it from the **Automations** page and watch the live execution trace.
 6. **Optional — Meetings** — open **Meetings**, pick an agent and project, start a spoken review with Grok Voice 2.0; end the meeting to get minutes you can send to the **Board**.
-7. **Optional — Phone assistant** — Settings → Phone assistant: generate a token, expose Studio at an `https` `SHIBA_PUBLIC_ORIGIN`, paste the MCP URL and bearer into [Voice Agent Builder](https://console.x.ai), then call the Grok number and dictate commands (`create a task…`, `git status`, `start work on…`).
+7. **Optional — Grok Bot** — Settings → Grok Bot: generate a token, paste the loopback MCP URL and bearer into Grok Bot Settings → Plugins (or `grok mcp add --transport http`). Ask the Bot to list the board or start Studio work. Cloud grok.com connectors need `https` `SHIBA_PUBLIC_ORIGIN`. See [Grok Bot](grok-bot.md).
+8. **Optional — Phone assistant** — Settings → Phone assistant: generate a token, expose Studio at an `https` `SHIBA_PUBLIC_ORIGIN`, paste the MCP URL and bearer into [Voice Agent Builder](https://console.x.ai), then call the Grok number and dictate commands (`create a task…`, `git status`, `start work on…`).
 
 ## Where your data lives
 

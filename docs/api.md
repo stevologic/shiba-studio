@@ -253,6 +253,8 @@ See [Native companion nodes](native-nodes.md) for the signed protocol, escalatio
 | GET | `/api/companion/data` | Authenticated redacted tasks/evidence/pending-approval/Routine projection plus sanitized voice-request status for devices with `action:voice`. |
 | POST | `/api/companion/actions` | Scoped, revision-bound, idempotent exact approval/deny, steering, cancel, or Routine action. |
 | POST | `/api/companion/voice` | Stream one consent-confirmed, SHA-256-bound microphone request from a device with `action:voice`. Supported audio is capped at 50 MB, retained locally for one day, transcribed through server-side xAI auth, and dispatched as a durable task. |
+| GET/POST | `/api/grok-bot/admin` | Localhost-only Grok Bot connector pairing: enable, rotate/revoke the `shiba_grokbot_` bearer, and copy loopback/public MCP URLs plus plugin JSON. |
+| GET/POST/DELETE | `/api/grok-bot/mcp` | Streamable HTTP MCP server Grok Bot, grok.com connectors, and `grok mcp add --transport http` call with the Grok Bot bearer. Tools wrap Board, agents, and the task ledger. |
 | GET/POST | `/api/phone/admin` | Localhost-only Grok phone-assistant pairing: enable, rotate/revoke the `shiba_phone_` bearer, save the displayed number or SIP webhook secret, and copy the public MCP URL. |
 | GET/POST/DELETE | `/api/phone/mcp` | Streamable HTTP MCP server the Voice Agent Builder (or any Speech-to-Speech `mcp` tool) calls with the phone bearer. `tools/call` runs the same Studio command executor as chat slash commands. |
 | POST | `/api/phone/command` | Same executor as MCP, as a JSON webhook (`utterance` or `{ tool, arguments }`). Used by custom function tools and tests. |

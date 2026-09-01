@@ -54,6 +54,10 @@ const PhoneAssistantCard = dynamic(
   () => import('@/components/phone-assistant-card').then((module) => module.PhoneAssistantCard),
   { loading: panelLoading },
 );
+const GrokBotCard = dynamic(
+  () => import('@/components/grok-bot-card').then((module) => module.GrokBotCard),
+  { loading: panelLoading },
+);
 const TaskDetailPage = dynamic(
   () => import('@/components/task-detail-page').then((module) => module.TaskDetailPage),
   { loading: panelLoading },
@@ -5692,6 +5696,13 @@ export default function ShibaStudio() {
                 </div>
 
               </div>
+              </section>
+              <section className="settings-section">
+                <h3 className="settings-section-title">Grok Bot</h3>
+                <div className="settings-section-sub text-[11px] text-dim">Connect Grok Bot (and grok.com MCP) so it can file Board work, dispatch Studio tasks, and read agents without leaving the Bot.</div>
+                <div className="settings-grid">
+                  <GrokBotCard />
+                </div>
               </section>
               <section className="settings-section">
                 <h3 className="settings-section-title">Phone assistant</h3>

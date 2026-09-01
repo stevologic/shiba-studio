@@ -369,6 +369,27 @@ export async function runDoctor(): Promise<DoctorReport> {
     phoneDetail,
     { data: { enabled: phoneEnabled, hasToken: phoneHasToken, publicHttps: phoneReachable } },
   ));
+  const grokBot = cfg.grokBot;
+  const grokBotEnabled = grokBot?.enabled === true;
+  const grokBotHasToken = !!grokBot?.tokenHash;
+  const grokBotStatus = !grokBotEnabled
+    ? 'ok'
+    : (!grokBotHasToken ? 'warning' : 'ok');
+  const grokBotDetail = !grokBotEnabled
+    ? 'Grok Bot connector is off. Enable it in Settings so Grok Bot can operate Board, agents, and tasks over MCP.'
+    : !grokBotHasToken
+      ? 'Grok Bot connector is on but no bearer token has been generated.'
+      : phoneReachable
+        ? `Grok Bot connector is paired. Desktop Bots can use loopback /api/grok-bot/mcp; cloud Grok can use ${publicOrigin}/api/grok-bot/mcp.`
+        : 'Grok Bot connector is paired. Desktop Grok Bot and Grok CLI can use http://127.0.0.1:3000/api/grok-bot/mcp. Set SHIBA_PUBLIC_ORIGIN to https for grok.com / xAI Remote MCP.';
+  checks.push(check(
+    'grok-bot-connector',
+    'network',
+    'Grok Bot connector',
+    grokBotStatus,
+    grokBotDetail,
+    { data: { enabled: grokBotEnabled, hasToken: grokBotHasToken, publicHttps: phoneReachable } },
+  ));
   const summary: Record<DoctorStatus, number> = { ok: 0, warning: 0, error: 0 };
   for (const item of checks) summary[item.status]++;
   return { generatedAt: new Date().toISOString(), safeMode: !!cfg.safeMode, summary, checks };

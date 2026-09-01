@@ -33,6 +33,7 @@ Shiba Studio is a **fully local web application** (Next.js 16) that turns Grok i
 - **Dashboard & approvals** — a focused operational home for readiness and recent runs, plus a quiet top-bar alert bell containing only exact actions that are currently waiting for approval.
 - **Artifact Studio** — checkpoint-backed HTML/PDF/Office previews with anchored review, visual verification, rollback, and revocable publishing.
 - **Remote and native companions** — a paired, scoped, encrypted-offline PWA for pending approvals and voice requests, official **Windows** and **macOS** apps on the [packages page](https://shiba-studio.io/packages.html) (double-click to run the same Studio UI; each channel updates itself), and an optional signed Windows helper with per-app, expiring GUI permissions and a visible capture state.
+- **Grok Bot connector** — pair Grok Bot (or grok.com / Grok CLI HTTP MCP) with a one-time `shiba_grokbot_` bearer. The Bot files Board cards, dispatches durable Studio work, and reads agents and approvals over Streamable HTTP.
 - **Grok phone assistant** — call the Voice Agent Builder number and dictate Studio commands. Settings issues a one-time `shiba_phone_` bearer; Grok invokes the public MCP/command URL and Shiba creates Board cards, runs git, remembers facts, or starts durable work.
 
 - **Grok Chat** — Claude-Desktop-class chat with streaming reasoning, markdown + syntax highlighting, **rich cards** (`shiba-card` fences for stats, progress, checklists, timelines, callouts, media, sparklines, bars, timecharts, or agent-designed custom layouts), inline images, multimodal attachments, per-session models, and slash commands that *act* (`/git pr`, `/search`, `/note`, …). Queue more messages while a reply streams; stick-to-bottom tracks growing reasoning; transport failures surface as short friendly copy instead of HTML dumps. Bind any chat to a **workspace folder** and Grok reads, writes, and searches its files directly. **Ephemeral chats** (`Ctrl`/`⌘`+`Shift`+`N`) skip memories and delete themselves when the page closes.
@@ -257,6 +258,7 @@ tested `grok 0.2.103` binary.
 | [Memories](docs/memories.md) | Automatic learning modes, relevance recall, review queue, scopes, safety, and management |
 | [Automations](docs/automations.md) | Recurring, one-time, monitored, and event triggers; traces, retries, and headless operation |
 | [Capabilities](docs/capabilities.md) | Integrations, skills, MCP servers, and the full built-in tool catalog |
+| [Grok Bot](docs/grok-bot.md) | Streamable HTTP MCP so Grok Bot / grok.com / Grok CLI can operate Board, agents, and tasks |
 | [Context Engine](docs/context-engine.md) | Bounded replay, deterministic compaction, citations, pinning, search, forks, and ephemeral chats |
 | [Capability Packs](docs/capability-packs.md) | Governed learn → review → activate workflow packs, permissions, versions, rollback, and uninstall |
 | [Artifact Studio](docs/artifact-studio.md) | Immutable previews, visual evidence, annotations, live refresh, rollback, and publishing |

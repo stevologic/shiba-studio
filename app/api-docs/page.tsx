@@ -86,9 +86,11 @@ const ENDPOINTS: Endpoint[] = [
 
   { group: 'Phone', method: 'GET', path: '/api/phone/admin', summary: 'Localhost-only phone-assistant status, public MCP URL, and Voice Agent setup.', sensitive: true },
   { group: 'Phone', method: 'POST', path: '/api/phone/command', summary: 'Execute a spoken or slash command with the phone bearer. Creates real Board cards and work.', mutating: true, body: JSON.stringify({ utterance: 'create a task to review the landing page' }, null, 2) },
+  { group: 'Grok Bot', method: 'GET', path: '/api/grok-bot/admin', summary: 'Localhost-only Grok Bot connector status, loopback/public MCP URLs, and plugin JSON.', sensitive: true },
+  { group: 'Grok Bot', method: 'POST', path: '/api/grok-bot/mcp', summary: 'Streamable HTTP MCP. Bearer required. tools/call wraps Board, agents, and the task ledger.', mutating: true, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_board_card', arguments: { title: 'Filed from Grok Bot' } } }, null, 2) },
 ];
 
-const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Automations', 'Observability', 'Content', 'Code IDE', 'CLI & Backup', 'Phone'];
+const GROUP_ORDER = ['Status', 'Config', 'Agents', 'Automations', 'Observability', 'Content', 'Code IDE', 'CLI & Backup', 'Phone', 'Grok Bot'];
 
 export default function ApiDocsPage() {
   const [selected, setSelected] = useState<Endpoint>(ENDPOINTS[0]);

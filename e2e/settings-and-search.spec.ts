@@ -6,6 +6,7 @@ test('Cost & safety settings save round-trip', async ({ page, request }) => {
 
   await page.goto('/settings', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('.settings-card', { hasText: 'Phone assistant' })).toBeVisible();
+  await expect(page.locator('.settings-card', { hasText: 'Grok Bot' })).toBeVisible();
   const card = page.locator('.settings-card', { hasText: 'Cost & safety' });
   await expect(card).toBeVisible();
 

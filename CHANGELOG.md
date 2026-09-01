@@ -10,6 +10,8 @@ are carried over automatically.
 
 ### Added
 
+- **Grok Bot MCP connector.** Settings → Grok Bot issues a one-time `shiba_grokbot_` bearer and a Streamable HTTP MCP URL. Grok Bot (desktop Plugins), Grok Build (`grok mcp add --transport http`), and grok.com / xAI Remote MCP can list agents, file Board cards, dispatch durable work, and read the attention inbox. Approvals stay in Studio. Off by default; admin is localhost-only.
+
 - **Interactive Grok CLI in the Studio Terminal.** Settings, the terminal bar, the command palette, chat `/grok`, and `terminal_exec grok` launch the official TUI (or `grok login`) in the shared host PTY — sign-in no longer requires leaving the app.
 
 - **Code IDE hosts the real terminal.** The editor bottom panel’s Terminal tab is the shared host PTY (not a decoy that only opened the overlay). On Code, Ctrl+` docks there; elsewhere it still floats. ANSI colors, Windows PTY mode, and Ctrl+Shift+C/V work so Grok’s TUI is usable.
@@ -80,9 +82,11 @@ are carried over automatically.
   `postcss` and `brace-expansion` 1.x/2.x are pinned to patched releases.
 - **Root advisory pins.** `hono` is overridden to 4.13.3 and Next's bundled
   `postcss` to 8.5.26 so root `npm audit` is clean at every severity.
-- **Public site matches shipped product.** gh-pages now documents the phone
-  assistant, Memories, Artifact Studio, Companion/native nodes, and keyboard
-  shortcuts, and the footer license links point at `LICENSE` / `COMMERCIAL.md`.
+- **Public site matches shipped product.** gh-pages now documents the Grok Bot
+  connector, Gmail and YouTube, Imagine avatars/edit/video, the agent chat room,
+  Grok CLI in the Code terminal, the phone assistant, Memories, Artifact Studio,
+  Companion/native nodes, and keyboard shortcuts. Footer license links point at
+  `LICENSE` / `COMMERCIAL.md`.
 
 ### Fixed
 

@@ -124,6 +124,11 @@ function isPublicPhoneIngress(pathname: string): boolean {
     || pathname === '/api/phone/incoming';
 }
 
+/** Grok Bot / grok.com / Grok CLI HTTP MCP — bearer on every call. */
+function isPublicGrokBotIngress(pathname: string): boolean {
+  return pathname === '/api/grok-bot/mcp';
+}
+
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const requestOrigin = visibleRequestOrigin(req);
@@ -154,6 +159,7 @@ export function proxy(req: NextRequest) {
     && !pathname.startsWith('/api/native-nodes/')
     && !isTokenizedArtifactPublication(req, pathname)
     && !isPublicPhoneIngress(pathname)
+    && !isPublicGrokBotIngress(pathname)
   ) {
     return NextResponse.json(
       { ok: false, error: 'LAN clients may access only the scoped Companion API.' },
@@ -165,6 +171,9 @@ export function proxy(req: NextRequest) {
   }
   if (lanCompanionBoundary && pathname.startsWith('/api/phone/admin')) {
     return NextResponse.json({ ok: false, error: 'Phone assistant administration is localhost-only.' }, { status: 403 });
+  }
+  if (lanCompanionBoundary && pathname.startsWith('/api/grok-bot/admin')) {
+    return NextResponse.json({ ok: false, error: 'Grok Bot administration is localhost-only.' }, { status: 403 });
   }
   if (lanCompanionBoundary && (pathname.startsWith('/api/native-nodes/admin') || pathname.startsWith('/api/native-nodes/captures'))) {
     return NextResponse.json({ ok: false, error: 'Native-node administration and captures are localhost-only.' }, { status: 403 });
@@ -183,6 +192,12 @@ export function proxy(req: NextRequest) {
     && !/^Bearer\s+shiba_phone_[A-Za-z0-9_-]{32,}$/i.test(req.headers.get('authorization') || '')
   ) {
     return NextResponse.json({ ok: false, error: 'A phone assistant bearer token is required.' }, { status: 401 });
+  }
+  if (
+    pathname === '/api/grok-bot/mcp'
+    && !/^Bearer\s+shiba_grokbot_[A-Za-z0-9_-]{32,}$/i.test(req.headers.get('authorization') || '')
+  ) {
+    return NextResponse.json({ ok: false, error: 'A Grok Bot bearer token is required.' }, { status: 401 });
   }
   if (
     (pathname.startsWith('/api/native-nodes/poll') || pathname.startsWith('/api/native-nodes/complete') || pathname.startsWith('/api/native-nodes/events'))

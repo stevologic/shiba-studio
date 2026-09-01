@@ -16,6 +16,7 @@ export async function GET() {
     || bundledGoogleClient()
   );
   const phone = cfg.phoneAssistant;
+  const grokBot = cfg.grokBot;
   const safe = {
     ...cfg,
     // Full secrets never reach the browser: keys go out as partial
@@ -32,6 +33,13 @@ export async function GET() {
       phoneNumber: phone?.phoneNumber || '',
       hasWebhookSecret: !!phone?.webhookSecret?.trim(),
       allowedCallers: Array.isArray(phone?.allowedCallers) ? phone.allowedCallers : [],
+    },
+    grokBot: {
+      enabled: grokBot?.enabled === true,
+      hasToken: !!grokBot?.tokenHash,
+      tokenPrefix: grokBot?.tokenPrefix || '',
+      createdAt: grokBot?.createdAt || '',
+      lastUsedAt: grokBot?.lastUsedAt || '',
     },
     hasKey: !!cfg.xaiApiKey,
     hasManagementKey: !!cfg.xaiManagementKey?.trim(),
