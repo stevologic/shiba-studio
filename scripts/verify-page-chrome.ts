@@ -53,6 +53,7 @@ const FEATURE_GUARDS: Array<{ file: string; mustInclude: string; label: string }
   { file: 'components/logs-panel.tsx', mustInclude: "exportLogs('csv')", label: 'logs CSV export' },
   { file: 'components/logs-panel.tsx', mustInclude: 'logs-search-input', label: 'logs search' },
   { file: 'components/shiba-studio.tsx', mustInclude: 'saveApiKey', label: 'settings API key form' },
+  { file: 'components/shiba-studio.tsx', mustInclude: 'GrokBotCard', label: 'settings Grok Bot connector card' },
   { file: 'components/projects-panel.tsx', mustInclude: 'createProject', label: 'project create' },
 ];
 

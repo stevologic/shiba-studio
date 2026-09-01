@@ -18,6 +18,7 @@ flowchart TB
         Dashboard["Dashboard<br/>readiness badges, recent runs"]
         LogsUI["Logs page<br/>audit trail, deep links"]
         Phone["Phone assistant<br/>Grok number · MCP · spoken commands"]
+        GrokBot["Grok Bot connector<br/>Streamable HTTP MCP"]
         NativeApps["Windows + macOS apps<br/>bundled runtime · auto-update"]
     end
 
@@ -47,6 +48,8 @@ flowchart TB
 
     Phone -->|"dictate_command / MCP / SIP"| ToolExec
     Phone -->|"Phone assistant session"| Chat
+    GrokBot -->|"board / tasks / agents MCP"| ToolExec
+    GrokBot -->|"Grok Bot session"| Chat
     Chat -->|"messages + tool loop"| Gateway
     Chat -->|"/git /x /search /note …"| ToolExec
     Chat -->|"/annotate"| SubBrowser

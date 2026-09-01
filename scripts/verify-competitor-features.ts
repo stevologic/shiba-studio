@@ -85,6 +85,7 @@ async function main() {
 
   const site = await read('site/index.html');
   assert(site.includes('Grok phone assistant'), 'marketing site covers phone assistant');
+  assert(site.includes('Grok Bot connector'), 'marketing site covers Grok Bot connector');
   assert(site.includes('ephemeral chat'), 'marketing site covers ephemeral chats');
   assert(site.includes('Artifact Studio'), 'marketing site covers Artifact Studio');
   assert(site.includes('COMMERCIAL.md'), 'marketing site license link is current');
@@ -92,6 +93,7 @@ async function main() {
   const publicDocs = await read('site/docs.html');
   assert(publicDocs.includes('40+ tools total'), 'public docs use current tool count');
   assert(publicDocs.includes('id="phone"'), 'public docs include phone assistant');
+  assert(publicDocs.includes('id="grok-bot"'), 'public docs include Grok Bot connector');
   assert(publicDocs.includes('packages.html'), 'public docs link the packages page');
   const packages = await read('site/packages.html');
   assert(packages.includes('Shiba Studio for Windows'), 'packages page offers the Windows app');

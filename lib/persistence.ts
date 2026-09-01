@@ -324,6 +324,9 @@ const DEFAULT_CONFIG: AppConfig = {
   phoneAssistant: {
     enabled: false,
   },
+  grokBot: {
+    enabled: false,
+  },
 };
 
 async function syncCloudAuthCache(cfg: AppConfig): Promise<void> {
@@ -367,6 +370,11 @@ async function loadConfigUnlocked(): Promise<AppConfig> {
         ...DEFAULT_CONFIG.phoneAssistant,
         ...(parsed.phoneAssistant || {}),
         enabled: parsed.phoneAssistant?.enabled === true,
+      },
+      grokBot: {
+        ...DEFAULT_CONFIG.grokBot,
+        ...(parsed.grokBot || {}),
+        enabled: parsed.grokBot?.enabled === true,
       },
     } as AppConfig;
     const { opened, hadPlaintext } = openConfigSecrets(stored);
@@ -418,6 +426,11 @@ export async function saveConfig(partial: Partial<AppConfig>) {
         ...(cur.phoneAssistant || DEFAULT_CONFIG.phoneAssistant),
         ...(partial.phoneAssistant || {}),
         enabled: partial.phoneAssistant?.enabled ?? cur.phoneAssistant?.enabled ?? false,
+      },
+      grokBot: {
+        ...(cur.grokBot || DEFAULT_CONFIG.grokBot),
+        ...(partial.grokBot || {}),
+        enabled: partial.grokBot?.enabled ?? cur.grokBot?.enabled ?? false,
       },
     };
     return writeConfigUnlocked(next);

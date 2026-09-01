@@ -372,6 +372,17 @@ export interface AppConfig {
     /** Optional E.164 allowlist; empty means any caller. */
     allowedCallers?: string[];
   };
+  /**
+   * Grok Bot / grok.com MCP connector. Disabled until the local user
+   * generates a token. The raw bearer is shown once and stored only as a hash.
+   */
+  grokBot?: {
+    enabled: boolean;
+    tokenHash?: string;
+    tokenPrefix?: string;
+    createdAt?: string;
+    lastUsedAt?: string;
+  };
 }
 
 export interface InterAgentMessage {
