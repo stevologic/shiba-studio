@@ -10,6 +10,9 @@
     <RootNamespace>ShibaStudio</RootNamespace>
     <Product>Shiba Studio</Product>
     <Company>Shiba Studio</Company>
+    <Authors>Shiba Studio</Authors>
+    <Copyright>Copyright © Shiba Studio</Copyright>
+    <Description>Shiba Studio desktop host</Description>
     <Version>0.2.0</Version>
     <InformationalVersion>0.2.0</InformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>

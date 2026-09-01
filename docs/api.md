@@ -82,7 +82,7 @@ Agents are execution owners. Trigger and schedule management is available only t
 | GET | `/api/runs` | Run summaries. Filters: `?agentId`, `?scheduleId=<automationId>`, `?scheduledOnly=1`, `?limit`. `?id=<runId>` returns one run **with its full trace**. The `scheduleId` field name is retained for run-record compatibility and carries the Automation id. |
 | POST | `/api/execute` | Run an agent once (non-streaming); returns the finished run. |
 | POST | `/api/execute/stream` | Run an agent with a live **SSE** trace (`{ agentId, prompt, … }`). |
-| POST | `/api/execute/approve` | Approve/deny a pending tool call (`{ approvalId, approved }`). |
+| POST | `/api/execute/approve` | Approve/deny a pending tool call (`{ approvalId, approved, always? }`). `always: true` remembers that tool for the agent or Grok Chat. |
 
 ### Tasks, evidence, and approvals
 
@@ -130,7 +130,7 @@ The primary Studio surface calls these **Automations**. Every recurring, one-tim
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET/POST | `/api/chat-sessions` | List / create / update / delete chat sessions. |
+| GET/POST | `/api/chat-sessions` | List / create / update / delete chat sessions. POST `openCanonical` reuses the durable Grok, 1:1 agent, or All-agents thread; `create` with `ephemeral: true` still starts a throwaway chat. |
 | POST | `/api/grok/stream` | Stream a chat turn (SSE) — the main chat endpoint. Long agentic turns set `maxDuration` high; transport/provider failures are normalized into short user-facing messages. |
 | POST | `/api/grok/multi-agent-stream` | "All agents" shared room: sequential in-character turns (SSE). `agent-turn-start` opens a bubble per speaker. |
 | POST | `/api/grok/voice-group-turn` | Multi-agent free-talk turn for Grok Voice group mode. |

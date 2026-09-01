@@ -52,6 +52,7 @@ sealed class AppUpdater
         ZipFile.ExtractToDirectory(zipPath, extracted, overwriteFiles: true);
         var payload = FindPayload(extracted)
             ?? throw new InvalidOperationException("The update zip did not contain ShibaStudio.exe.");
+        Motw.UnblockTree(payload);
 
         var script = Path.Combine(AppIdentity.UpdatesDirectory, "apply-update.cmd");
         File.WriteAllText(script, ApplyScript());

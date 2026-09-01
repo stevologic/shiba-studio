@@ -201,7 +201,7 @@ async function main() {
     assert(streamSource.includes("'background_task'"), 'ephemeral tool filter must remove learning background dispatch');
     assert(streamSource.includes('privateTools'), 'ephemeral tool filter should be enforced server-side');
     const sessionsPanelSource = await fs.readFile(path.join(process.cwd(), 'components/chat-sessions-panel.tsx'), 'utf8');
-    assert(sessionsPanelSource.includes('groupChatSessionsByProject'));
+    assert(sessionsPanelSource.includes('groupChatSessionsForRail'));
     assert(sessionsPanelSource.includes('registerBrowserEphemeralSession(created.id)'), 'only sessions created by this browser lifecycle are registered for close cleanup');
     const ephemeralLifecycleSource = await fs.readFile(path.join(process.cwd(), 'lib/ephemeral-chat-lifecycle.ts'), 'utf8');
     assert(ephemeralLifecycleSource.includes("window.addEventListener('pagehide'"), 'ephemeral cleanup follows the browser lifecycle rather than a SPA component unmount');
@@ -212,7 +212,7 @@ async function main() {
     assert(chatPanelSource.includes('forkFromMessage'));
     assert(chatPanelSource.includes("action: 'fork'"));
 
-    console.log('SESSION_LIFECYCLE_OK fork=immutable grouping=project unread=idempotent ephemeral=no-memory+delete-on-close-contract');
+    console.log('SESSION_LIFECYCLE_OK fork=immutable grouping=rail unread=idempotent ephemeral=no-memory+delete-on-close-contract');
   } finally {
     dbModule.closeDb();
     await fs.rm(root, { recursive: true, force: true });

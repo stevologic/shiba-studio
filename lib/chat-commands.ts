@@ -13,7 +13,7 @@ export interface ChatCommandDefinition {
 export const CHAT_COMMANDS: ChatCommandDefinition[] = [
   { id: 'help', syntax: '/help', insert: '/help', description: 'Show the complete command reference', category: 'Session', aliases: ['/commands', '/'] },
   { id: 'clear', syntax: '/clear', insert: '/clear', description: 'Clear this conversation after confirmation', category: 'Session' },
-  { id: 'agent', syntax: '/agent <name|grok|all>', insert: '/agent ', description: 'Switch who answers this chat', category: 'Session' },
+  { id: 'agent', syntax: '/agent <name|grok|all>', insert: '/agent ', description: 'Open Grok, a 1:1 agent thread, or the All-agents group room', category: 'Session' },
   { id: 'model', syntax: '/model <name>', insert: '/model ', description: 'Switch the session model', category: 'Session' },
   { id: 'tools', syntax: '/tools on|off', insert: '/tools ', description: 'Enable or disable automatic tool calls for this chat', category: 'Session' },
   { id: 'grok', syntax: '/grok [login]', insert: '/grok', description: 'Open the Studio Terminal and launch interactive Grok Build (or sign in)', category: 'Session', aliases: ['/cli'] },

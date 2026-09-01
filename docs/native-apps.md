@@ -22,10 +22,23 @@ to clone the repo or install Node.
 The OS wrapper stays thin and native:
 
 - **Windows** — dark DWM title bar, standard menu (Studio / View / Help),
-  Evergreen WebView2 for the page.
+  Evergreen WebView2 for the page. Minimize or close sends the window to the
+  system tray (notification area) so Studio keeps running; click the tray icon
+  or launch the app again to restore, and use **Exit** to quit. Preferences
+  can turn that off. The host manifest requests `asInvoker` so Windows
+  installer-detection does not flash an Unknown-publisher UAC prompt on the
+  large self-contained exe. Launch also clears Mark-of-the-Web
+  (`Zone.Identifier`) from the host and bundled `node.exe` so a GitHub zip
+  does not re-prompt for every child process. Luigi can Authenticode-sign
+  `ShibaStudio.exe` by setting `SHIBA_WINDOWS_PFX` (optional
+  `SHIBA_WINDOWS_PFX_PASSWORD`) when packing.
 - **macOS** — standard menu bar and Settings, thin title bar, WKWebView
-  for the page. The zip is unsigned; first launch of a downloaded build
-  may need right-click → Open. The bundled runtime is Apple Silicon.
+  for the page. Dark Aqua so Studio / View / Help menus stay light-on-dark.
+  Closing the window keeps the app in the menu bar (same idea as the Windows
+  tray); click the extra or the Dock icon to restore, and Quit to exit.
+  Preferences can turn that off. The zip is unsigned; first launch of a
+  downloaded build may need right-click → Open. The bundled runtime is
+  Apple Silicon.
 
 Studio data lives in `%LOCALAPPDATA%\ShibaStudio\data` on Windows and
 `~/Library/Application Support/ShibaStudio/data` on macOS, not inside the

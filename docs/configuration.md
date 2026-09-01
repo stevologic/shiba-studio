@@ -15,7 +15,7 @@ Settings is a card grid; each card maps to a concern:
 | **Default Model** | The model used by Grok Chat and new agents. Fresh installs and unset fallbacks use **Grok 4.6**. When both an API key and OAuth are connected, cloud models appear twice — `· OAuth` (SuperGrok/Premium+ quota) and `· Token` (pay-as-you-go) — so any picker can choose the credential per selection |
 | **Default Grok voice & speed** | Studio-wide TTS voice and speech rate for Grok Chat and voice mode |
 | **Grok Build CLI** | Auto-detected from PATH; version, path, and an update checker (`grok update --check`) |
-| **Agent Behavior** | Tool approval mode (Ask-before-act default vs YOLO auto-run), AGENTS.md/CLAUDE.md injection, and global instructions prepended to every agent and chat |
+| **Agent Behavior** | Tool approval mode (Ask-before-act default vs YOLO auto-run), AGENTS.md/CLAUDE.md injection, and global instructions prepended to every agent and chat. In Ask mode, agent chats and live runs show inline **Approve** / **Always approve** / **Deny**; Always approve remembers that tool for the agent (or Grok Chat) |
 | **Default Workspace** | Root folder for uploads, new agents, and the workspace explorer |
 | **Cost & safety** | Monthly + daily spend limits with an optional hard stop (blocks new cloud runs/chats at the limit), max concurrent runs, per-run token cap, and retention windows for runs and the audit log |
 | **Backup & restore** | One-file export of settings, agents, chats, projects, runs, and the audit log (includes the encryption key — treat like a password); restore on any machine |

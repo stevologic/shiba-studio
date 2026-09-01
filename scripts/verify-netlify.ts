@@ -76,7 +76,7 @@ async function main() {
   assert(/netlify:\s*\[\s*'token'\s*\]/.test(persistence), 'agent override secret field');
   log('OK persistence');
 
-  const approval = await read('lib/tool-approval.ts');
+  const approval = await read('lib/tool-approval-policy.ts');
   assert(approval.includes("'netlify_deploy'"), 'deploy gated');
   assert(approval.includes("'netlify_set_env'"), 'set_env gated');
   log('OK tool-approval');

@@ -1,37 +1,17 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { ToolApprovalMode } from './types';
+import {
+  APPROVAL_GATED_TOOLS,
+  canAlwaysApproveTool,
+  sanitizeApprovedToolNames,
+  toolNeedsApproval,
+} from './tool-approval-policy';
 
-export const APPROVAL_GATED_TOOLS = new Set([
-  'fs_write',
-  'shell_exec',
-  'terminal_exec',
-  'browser_navigate',
-  'browser_click',
-  'browser_type',
-  'github_create_issue',
-  'slack_post',
-  'discord_post',
-  'x_post',
-  'reddit_submit',
-  'drive_upload',
-  'gmail_send',
-  'youtube_upload',
-  'obsidian_write',
-  'vercel_deploy',
-  'vercel_set_env',
-  'netlify_deploy',
-  'netlify_set_env',
-  'grok_cli',
-  'mcp_invoke',
-  'memory_forget',
-  'delegate_task_team',
-  'native_node_action',
-]);
-
-export function toolNeedsApproval(toolName: string, mode: ToolApprovalMode | undefined): boolean {
-  if (toolName === 'native_node_action') return true;
-  return mode === 'ask' && APPROVAL_GATED_TOOLS.has(toolName);
-}
+export {
+  APPROVAL_GATED_TOOLS,
+  canAlwaysApproveTool,
+  sanitizeApprovedToolNames,
+  toolNeedsApproval,
+};
 
 export interface PendingApproval {
   id: string;
@@ -40,6 +20,8 @@ export interface PendingApproval {
   args: Record<string, unknown>;
   createdAt: string;
   expiresAt: string;
+  agentId?: string | null;
+  sessionId?: string | null;
 }
 
 type ApprovalResolver = (approved: boolean) => void;
@@ -63,6 +45,7 @@ export function beginToolApproval(
   toolName: string,
   args: Record<string, unknown>,
   timeoutMs = 5 * 60_000,
+  context?: { agentId?: string | null; sessionId?: string | null },
 ): { approvalId: string; wait: Promise<boolean> } {
   const id = uuidv4();
   const createdAt = new Date();
@@ -74,6 +57,8 @@ export function beginToolApproval(
     args,
     createdAt: createdAt.toISOString(),
     expiresAt: new Date(createdAt.getTime() + boundedTimeoutMs).toISOString(),
+    agentId: context?.agentId || null,
+    sessionId: context?.sessionId || null,
   };
 
   const wait = new Promise<boolean>((resolve) => {
@@ -122,4 +107,83 @@ export function resolveRunApprovals(runId: string, approved = false): number {
 
 export function getPendingApproval(approvalId: string): PendingApproval | null {
   return pending.get(approvalId)?.meta || null;
+}
+
+export async function loadAlwaysApprovedTools(agentId?: string | null): Promise<string[]> {
+  const { loadConfig } = await import('./persistence');
+  const cfg = await loadConfig();
+  const global = sanitizeApprovedToolNames(cfg.alwaysApprovedTools);
+  if (!agentId || agentId === '__chat__') return global;
+  const { loadAgents } = await import('./persistence');
+  const agent = (await loadAgents()).find((item) => item.id === agentId);
+  return sanitizeApprovedToolNames([
+    ...global,
+    ...(agent?.alwaysApprovedTools || []),
+  ]);
+}
+
+/** Remember a gated tool so Ask-before-act no longer prompts for it. */
+export async function rememberAlwaysApprovedTool(
+  toolName: string,
+  agentId?: string | null,
+): Promise<boolean> {
+  const name = String(toolName || '').trim();
+  if (!canAlwaysApproveTool(name)) return false;
+  if (agentId && agentId !== '__chat__') {
+    const { mutateAgents } = await import('./persistence');
+    return mutateAgents((agents) => {
+      const agent = agents.find((item) => item.id === agentId);
+      if (!agent) return false;
+      agent.alwaysApprovedTools = sanitizeApprovedToolNames([
+        ...(agent.alwaysApprovedTools || []),
+        name,
+      ]);
+      agent.updatedAt = new Date().toISOString();
+      return true;
+    });
+  }
+  const { loadConfig, saveConfig } = await import('./persistence');
+  const cfg = await loadConfig();
+  await saveConfig({
+    alwaysApprovedTools: sanitizeApprovedToolNames([
+      ...(cfg.alwaysApprovedTools || []),
+      name,
+    ]),
+  });
+  return true;
+}
+
+export async function awaitLiveToolApproval(opts: {
+  runId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  agentId?: string | null;
+  sessionId?: string | null;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  onRequest?: (pending: { approvalId: string; toolName: string; args: Record<string, unknown> }) => void;
+}): Promise<boolean> {
+  const { approvalId, wait } = beginToolApproval(
+    opts.runId,
+    opts.toolName,
+    opts.args,
+    opts.timeoutMs,
+    { agentId: opts.agentId, sessionId: opts.sessionId },
+  );
+  opts.onRequest?.({ approvalId, toolName: opts.toolName, args: opts.args });
+  if (!opts.signal) return wait;
+  if (opts.signal.aborted) {
+    resolveToolApproval(approvalId, false);
+    return false;
+  }
+  return await new Promise<boolean>((resolve) => {
+    const onAbort = () => {
+      resolveToolApproval(approvalId, false);
+    };
+    opts.signal!.addEventListener('abort', onAbort, { once: true });
+    void wait.then((approved) => {
+      opts.signal!.removeEventListener('abort', onAbort);
+      resolve(approved);
+    });
+  });
 }

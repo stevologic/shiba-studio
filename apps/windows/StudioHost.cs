@@ -51,6 +51,8 @@ sealed class StudioHost : IDisposable
         }
 
         AppIdentity.EnsureUserFolders();
+        Motw.Unblock(AppIdentity.NodeBinary);
+        Motw.UnblockTree(AppIdentity.RuntimeDirectory);
         Directory.CreateDirectory(Path.GetDirectoryName(AppIdentity.LogFile)!);
         var log = new StreamWriter(new FileStream(AppIdentity.LogFile, FileMode.Create, FileAccess.Write, FileShare.Read))
         {

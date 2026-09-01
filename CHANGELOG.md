@@ -10,6 +10,16 @@ are carried over automatically.
 
 ### Added
 
+- **Windows host can minimize to the system tray.** Minimize or close hides the window to the notification area (Studio stays running). Click the tray icon or launch the app again to restore; **Exit** from the tray or Studio menu quits. Toggle under Preferences.
+
+- **macOS host can stay in the menu bar.** Closing the window keeps Studio running as a menu extra (Open / Hide / Quit). Preferences can turn that off. Dark Aqua keeps the native Studio / View / Help menus light-on-dark.
+
+- **Windows host no longer flashes Unknown publisher.** The app manifest now
+  requests `asInvoker` (so installer-detection UAC stays off for the large
+  self-contained exe), launch clears Mark-of-the-Web on the host and bundled
+  Node, and `pack-windows-app.ps1` Authenticode-signs when `SHIBA_WINDOWS_PFX`
+  is set.
+
 - **Grok Bot MCP connector.** Settings → Grok Bot issues a one-time `shiba_grokbot_` bearer and a Streamable HTTP MCP URL. Grok Bot (desktop Plugins), Grok Build (`grok mcp add --transport http`), and grok.com / xAI Remote MCP can list agents, file Board cards, dispatch durable work, and read the attention inbox. Approvals stay in Studio. Off by default; admin is localhost-only.
 
 - **Interactive Grok CLI in the Studio Terminal.** Settings, the terminal bar, the command palette, chat `/grok`, and `terminal_exec grok` launch the official TUI (or `grok login`) in the shared host PTY — sign-in no longer requires leaving the app.
@@ -30,7 +40,7 @@ are carried over automatically.
 
 - **xAI Files TTL for chat attachments.** Chat uploads now send `expires_after=2592000` (30 days, the Files API maximum) so abandoned Grok document objects auto-delete if local tombstone cleanup never runs. Durable cloud-sync files and entity snapshots stay permanent.
 
-- **Ephemeral chat from anywhere.** `Ctrl`/`⌘`+`N` starts a durable session; `Ctrl`/`⌘`+`Shift`+`N`, the top-bar eye-off control, and the command palette start an incognito chat (no memories, deleted when the page closes) — the same pattern as ChatGPT temporary chat and Claude incognito.
+- **Ephemeral chat from anywhere.** `Ctrl`/`⌘`+`N` opens the durable Grok thread; `Ctrl`/`⌘`+`Shift`+`N`, the top-bar eye-off control, and the command palette start an incognito chat (no memories, deleted when the page closes) — the same pattern as ChatGPT temporary chat and Claude incognito.
 
 - **Meetings with Grok Voice 2.0.** Spoken reviews use `grok-voice-think-fast-2.0`
   (ears and mouth) while the existing meeting engine stays the brain. The host
@@ -40,6 +50,12 @@ are carried over automatically.
   is unavailable. Live Meeting audio is still not stored.
 
 ### Changed
+
+- **Windows menu text is light on the dark bar.** Studio / View / Help dropdowns paint item labels (and arrows) in the same near-white ink as the rest of the host instead of default black on black-adjacent chrome.
+
+- **Inline chat approvals.** Ask-before-act now pauses gated tools in agent chats (not only the Automations modal). The transcript shows Approve, Always approve, and Deny. Always approve remembers that tool for the agent (or Grok Chat); native desktop actions still need an exact click.
+
+- **One chat per agent.** Standalone Grok, each agent, and All agents each reuse a single durable thread that keeps that target’s context. The target picker and `/agent` open that room instead of rewriting the current transcript. The session rail groups Grok / Agents / Group, then Ephemeral, Forks, Archived, and leftover chats. Throwaway ephemeral chats still create a new session each time.
 
 - **Ubuntu-only GitHub Actions.** CI no longer uses GitHub-hosted Windows
   or macOS runners for tests or packaging. The verify matrix is Ubuntu ×

@@ -564,11 +564,9 @@ export async function POST(req: NextRequest) {
 
             const workspaceAgent = normalizeAgent({ id: '__chat__', name: 'Grok Chat' });
             // Base: agent tools if chatting as an agent; else empty.
-            // Chat has no live approval event protocol yet. Keep irreversible
-            // Reddit publishing in interactive/background agent runs, where the
-            // exact call is approved (or explicitly authorized by autonomous dispatch).
+            // Gated tools pause for an inline Approve / Always approve card.
             const tools = agent
-              ? getToolDefinitions(agent.integrations, allAgents.some((peer) => peer.id !== agent.id)).filter((tool) => tool.function.name !== 'reddit_submit')
+              ? getToolDefinitions(agent.integrations, allAgents.some((peer) => peer.id !== agent.id))
               : [];
             // Always merge chat-core research tools so plain Grok Chat can look things up.
             {
@@ -671,6 +669,36 @@ export async function POST(req: NextRequest) {
                 : { kind: 'global' },
             };
             const trustedToolRun = sessionProjectId ? { projectId: sessionProjectId } : {};
+            const approvalRunId = `chat:${requestChatSession?.id || 'direct'}`;
+            const approvalAgentId = agent?.id || null;
+            const { awaitLiveToolApproval, loadAlwaysApprovedTools, toolNeedsApproval } = await import('@/lib/tool-approval');
+            const requestChatToolApproval = async (
+              toolName: string,
+              toolArgs: Record<string, unknown>,
+            ): Promise<boolean> => {
+              const allowlist = await loadAlwaysApprovedTools(approvalAgentId);
+              if (!toolNeedsApproval(toolName, cfg.toolApprovalMode, allowlist)) return true;
+              let approvalId = '';
+              const approved = await awaitLiveToolApproval({
+                runId: approvalRunId,
+                toolName,
+                args: toolArgs,
+                agentId: approvalAgentId,
+                sessionId: requestChatSession?.id || null,
+                signal: req.signal,
+                onRequest: (pending) => {
+                  approvalId = pending.approvalId;
+                  send({
+                    type: 'approval_required',
+                    approvalId: pending.approvalId,
+                    toolName: pending.toolName,
+                    args: pending.args,
+                  });
+                },
+              });
+              if (approvalId) send({ type: 'approval_resolved', approvalId, approved });
+              return approved;
+            };
 
             if (workspaceDir) {
               send({
@@ -831,9 +859,10 @@ export async function POST(req: NextRequest) {
                 'sandbox_exec', 'sandbox_write_file',
               ]);
               const preExecuted = new Map<string, { result: unknown; sideEffect?: string; screenshot?: string }>();
+              const parallelAllowlist = await loadAlwaysApprovedTools(approvalAgentId);
               if (toolCalls.length > 1 && toolCalls.every((tc: { function?: { name?: string } }) => {
                 const n = tc.function?.name || '';
-                return n && !CHAT_SEQUENTIAL_TOOLS.has(n);
+                return n && !CHAT_SEQUENTIAL_TOOLS.has(n) && !toolNeedsApproval(n, cfg.toolApprovalMode, parallelAllowlist);
               })) {
                 await Promise.all(toolCalls.map(async (tc: { id: string; function: { name: string; arguments?: string } }) => {
                   const fn = tc.function;
@@ -866,6 +895,18 @@ export async function POST(req: NextRequest) {
                 let args: any = {};
                 try { args = JSON.parse(fn.arguments || '{}'); } catch { args = { raw: fn.arguments }; }
                 send({ type: 'thinking', delta: `⚙ ${toolLabel(fn.name, args)}\n` });
+                if (!(await requestChatToolApproval(fn.name, args))) {
+                  const denied = { denied: true, reason: 'User denied or approval timed out' };
+                  toolsUsed.push(fn.name);
+                  send({ type: 'thinking', delta: '✗ denied\n' });
+                  msgs.push({
+                    role: 'tool',
+                    tool_call_id: tc.id,
+                    name: fn.name,
+                    content: clipForModel(JSON.stringify(denied), 8000),
+                  });
+                  continue;
+                }
                 // Chat-level tools (not part of the agent runtime): background dispatch.
                 if (fn.name === 'background_task' || fn.name === 'background_status') {
                   const bg = await import('@/lib/background-tasks');
@@ -976,7 +1017,10 @@ export async function POST(req: NextRequest) {
                     SUBBROWSER_RUN_ID,
                     integrationCreds,
                     req.signal,
-                    chatToolAuthorization,
+                    {
+                      ...chatToolAuthorization,
+                      ...(fn.name === 'reddit_submit' ? { redditSubmitAuthorized: true } : {}),
+                    },
                   );
                 toolsUsed.push(fn.name);
                 if (fn.name === 'send_to_peer') {
@@ -1077,6 +1121,8 @@ export async function POST(req: NextRequest) {
               }
             }
           } finally {
+            const { resolveRunApprovals } = await import('@/lib/tool-approval');
+            resolveRunApprovals(approvalRunId, false);
             controller.close();
           }
         },

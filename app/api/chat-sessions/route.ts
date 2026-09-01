@@ -3,9 +3,11 @@ import {
   archiveChatSession,
   createChatSession,
   deleteChatSession,
+  openCanonicalChatSession,
   forkChatSession,
   getChatSession,
   groupChatSessionsByProject,
+  isCanonicalChatThread,
   listChatSessions,
   markChatSessionRead,
   searchChatSessions,
@@ -39,6 +41,15 @@ export async function POST(req: NextRequest) {
   if (body.action === 'create') {
     const session = await createChatSession(body.defaults || {});
     return NextResponse.json({ ok: true, session });
+  }
+
+  if (body.action === 'openCanonical') {
+    const result = await openCanonicalChatSession({
+      chatTarget: body.chatTarget ? String(body.chatTarget) : undefined,
+      chatModel: body.chatModel ? String(body.chatModel) : undefined,
+      title: body.title ? String(body.title) : undefined,
+    });
+    return NextResponse.json({ ok: true, ...result });
   }
 
   if (body.action === 'update') {
@@ -79,6 +90,9 @@ export async function POST(req: NextRequest) {
     try {
       const session = await getChatSession(body.id);
       if (!session) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      if (isCanonicalChatThread(session)) {
+        return NextResponse.json({ ok: true, session, skipped: 'canonical thread' });
+      }
       const firstUser = (session.messages || []).find((m) => m.role === 'user');
       const firstAssistant = (session.messages || []).find((m) => m.role === 'assistant');
       if (!firstUser || !firstAssistant) {

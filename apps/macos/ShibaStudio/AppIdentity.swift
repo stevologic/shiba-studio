@@ -65,17 +65,21 @@ enum AppIdentity {
         guard let data = try? Data(contentsOf: prefsFile),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
-            return Prefs(channel: nil, autoUpdate: true)
+            return Prefs(channel: nil, autoUpdate: true, keepInMenuBar: true)
         }
         return Prefs(
             channel: object["channel"] as? String,
-            autoUpdate: (object["autoUpdate"] as? Bool) ?? true
+            autoUpdate: (object["autoUpdate"] as? Bool) ?? true,
+            keepInMenuBar: (object["keepInMenuBar"] as? Bool) ?? true
         )
     }
 
     static func writePrefs(_ prefs: Prefs) {
         ensureUserFolders()
-        var object: [String: Any] = ["autoUpdate": prefs.autoUpdate]
+        var object: [String: Any] = [
+            "autoUpdate": prefs.autoUpdate,
+            "keepInMenuBar": prefs.keepInMenuBar,
+        ]
         if let channel = prefs.channel { object["channel"] = channel }
         if let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) {
             try? data.write(to: prefsFile)
@@ -106,5 +110,6 @@ enum AppIdentity {
     struct Prefs {
         var channel: String?
         var autoUpdate: Bool
+        var keepInMenuBar: Bool
     }
 }

@@ -16,6 +16,7 @@ import ConfirmHost, { confirmDialog } from '@/components/confirm-dialog';
 import MultitaskSidebar from '@/components/multitask-sidebar';
 import VoiceAgentNavDock from '@/components/voice-agent-nav-dock';
 import type { PendingToolApproval } from '@/components/tool-approval-modal';
+import ToolApprovalCard from '@/components/tool-approval-card';
 import type { ToolApprovalMode } from '@/lib/types';
 import MultimodalBadge from '@/components/multimodal-badge';
 import InfoHint from '@/components/info-hint';
@@ -505,25 +506,23 @@ export default function ShibaStudio() {
     }
   }, [pathname, router]);
 
-  /** Top-bar / palette / Ctrl+N — create a fresh session and jump straight into it. */
+  /** Top-bar / palette / Ctrl+N — open the durable Grok thread, or a new ephemeral chat. */
   const startNewChat = useCallback(async (opts: { ephemeral?: boolean } = {}) => {
     const ephemeral = !!opts.ephemeral;
     try {
       const res = await fetch('/api/chat-sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'create',
-          defaults: { ephemeral },
-        }),
+        body: JSON.stringify(ephemeral
+          ? { action: 'create', defaults: { ephemeral: true } }
+          : { action: 'openCanonical', chatTarget: 'grok' }),
       });
       const data = await res.json();
       if (!data.ok || !data.session) throw new Error(data.error || 'Could not create chat');
       if (data.session.ephemeral) registerBrowserEphemeralSession(String(data.session.id));
-      // New chat ends any active Grok Voice session.
       endVoiceIfSessionChanges(data.session.id);
       navigateToChatSession(data.session.id);
-      toast.success(ephemeral ? 'New ephemeral chat' : 'New chat session');
+      toast.success(ephemeral ? 'New ephemeral chat' : 'Opened Grok chat');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Could not create chat');
     }
@@ -2865,16 +2864,17 @@ export default function ShibaStudio() {
     }
   }
 
-  async function resolveToolApproval(approvalId: string, approved: boolean) {
+  async function resolveToolApproval(approvalId: string, approved: boolean, always = false) {
     try {
       const response = await fetch('/api/execute/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approvalId, approved }),
+        body: JSON.stringify({ approvalId, approved: approved || always, always }),
       });
       const data = await response.json() as { ok?: boolean; error?: string };
       if (!response.ok || !data.ok) throw new Error(data.error || 'Approval failed');
       setPendingToolApproval(null);
+      if (always) toast.success('Always approve saved for this agent');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Approval failed');
     }
@@ -3127,7 +3127,7 @@ export default function ShibaStudio() {
     if (seededEmptyAgentsRef.current) return;
     // Seed the sample agent only on a genuine first run. Once this install has
     // ever had agents (persisted flag), an empty roster means the user deleted
-    // them — never resurrect Explorer Agent against their wishes.
+    // them — never resurrect Orchestration Agent against their wishes.
     try {
       if (window.localStorage.getItem('shiba-seeded-agents')) {
         seededEmptyAgentsRef.current = true;
@@ -3143,9 +3143,9 @@ export default function ShibaStudio() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: 'Explorer Agent',
+          name: 'Orchestration Agent',
           model: cfg?.defaultGrokModel || pickDefaultModel(),
-          description: 'Default exploration + automation agent',
+          description: 'Default orchestration agent',
           autoAcceptBoardAssignments: false,
           workspace: { path: cfg?.defaultWorkspace || '.', useWorktree: true },
           integrations: { ...EMPTY_INTEGRATION_SCOPE },
@@ -3319,10 +3319,10 @@ export default function ShibaStudio() {
       },
       {
         id: 'new-chat',
-        label: 'New Chat Session',
+        label: 'Open Grok chat',
         hint: 'Ctrl+N',
         group: 'Actions',
-        keywords: ['chat', 'session', 'new'],
+        keywords: ['chat', 'session', 'new', 'grok'],
         run: () => void startNewChat(),
       },
       {
@@ -3800,9 +3800,10 @@ export default function ShibaStudio() {
               type="button"
               onClick={() => void startNewChat()}
               className="grok-btn grok-btn-secondary"
-              title="Start a fresh Grok chat session (Ctrl+N)"
+              title="Open Grok chat — one thread that keeps context (Ctrl+N)"
+              aria-label="Open Grok chat"
             >
-              <MessageSquare size={14}/> <span className="hidden sm:inline">New Chat</span>
+              <MessageSquare size={14}/> <span className="hidden sm:inline">Grok Chat</span>
             </button>
             <button
               type="button"
@@ -6245,24 +6246,16 @@ export default function ShibaStudio() {
             <div className="flex-1 min-h-0 overflow-auto space-y-3 pr-1">
               {pendingToolApproval && (
                 <div className="grok-card p-3" style={{ borderColor: 'var(--warning)' }}>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <ShieldCheck size={14} style={{ color: 'var(--warning)' }} />
-                    <span className="font-medium text-sm">Approval required</span>
-                  </div>
                   <div className="text-xs text-muted mb-2">
-                    This run is paused — the agent wants to run <span className="font-mono" style={{ color: 'var(--warning)' }}>{pendingToolApproval.toolName}</span>.
+                    This run is paused until you decide.
                   </div>
-                  {pendingToolApproval.args && Object.keys(pendingToolApproval.args).length > 0 && (
-                    <pre className="text-[11px] font-mono bg-black/40 p-2 rounded mb-2 max-h-32 overflow-auto">{JSON.stringify(pendingToolApproval.args, null, 2)}</pre>
-                  )}
-                  <div className="flex gap-2">
-                    <button type="button" className="grok-btn grok-btn-primary text-xs" onClick={() => void resolveToolApproval(pendingToolApproval.approvalId, true)}>
-                      <Check size={13} /> Approve
-                    </button>
-                    <button type="button" className="grok-btn grok-btn-secondary text-xs text-error" onClick={() => void resolveToolApproval(pendingToolApproval.approvalId, false)}>
-                      <X size={13} /> Deny
-                    </button>
-                  </div>
+                  <ToolApprovalCard
+                    toolName={pendingToolApproval.toolName}
+                    args={pendingToolApproval.args}
+                    onApprove={() => void resolveToolApproval(pendingToolApproval.approvalId, true)}
+                    onAlways={() => void resolveToolApproval(pendingToolApproval.approvalId, true, true)}
+                    onDeny={() => void resolveToolApproval(pendingToolApproval.approvalId, false)}
+                  />
                 </div>
               )}
               <div className="grok-card p-4 font-mono text-xs bg-black/40">
@@ -7018,6 +7011,7 @@ export default function ShibaStudio() {
         <ToolApprovalModal
           pending={pendingToolApproval}
           onApprove={(id) => void resolveToolApproval(id, true)}
+          onAlways={(id) => void resolveToolApproval(id, true, true)}
           onDeny={(id) => void resolveToolApproval(id, false)}
         />
       )}

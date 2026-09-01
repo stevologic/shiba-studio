@@ -311,6 +311,7 @@ const DEFAULT_CONFIG: AppConfig = {
   // Approval-required is the safe default for a public release; YOLO is an
   // explicit opt-in from Settings (existing configs keep their saved choice).
   toolApprovalMode: 'ask',
+  alwaysApprovedTools: [],
   budgetHardStop: true,
   maxConcurrentRuns: 3,
   disabledTools: [],

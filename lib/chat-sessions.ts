@@ -4,14 +4,26 @@ import path from 'path';
 import { dataDir } from './data-paths';
 import { v4 as uuidv4 } from 'uuid';
 import type { ChatSession } from './chat-session-types';
+import {
+  canonicalTitleForTarget,
+  isCanonicalChatThread,
+  isGenericChatTitle,
+  normalizeChatTarget,
+} from './chat-session-types';
 import { compactContextScope, deleteContextScope, indexSessionContext } from './context-engine';
 import { ownershipStoreFencePath, withStoreFileLock } from './store-file-lock';
 import { resolveDefaultCloudModel } from './model-providers';
 import { loadConfig } from './persistence';
 
 export type { ChatSession } from './chat-session-types';
-export { deriveSessionTitle } from './chat-session-types';
-export { groupChatSessionsByProject } from './chat-session-types';
+export {
+  canonicalTitleForTarget,
+  deriveSessionTitle,
+  groupChatSessionsByProject,
+  groupChatSessionsForRail,
+  isCanonicalChatThread,
+  normalizeChatTarget,
+} from './chat-session-types';
 
 const DATA_DIR = dataDir();
 const SESSIONS_FILE = path.join(DATA_DIR, 'chat-sessions.json');
@@ -156,6 +168,60 @@ export async function getChatSession(id: string): Promise<ChatSession | null> {
   return withStoreLock(async () => {
     const store = await loadStore();
     return store.sessions.find((s) => s.id === id) || null;
+  });
+}
+
+export async function openCanonicalChatSession(input: {
+  chatTarget?: string;
+  chatModel?: string;
+  title?: string;
+} = {}): Promise<{ session: ChatSession; created: boolean }> {
+  const chatTarget = normalizeChatTarget(input.chatTarget);
+  return withStoreLock(async () => {
+    const store = await loadStore();
+    const ranked = [...store.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const match = ranked.find((session) =>
+      isCanonicalChatThread(session)
+      && normalizeChatTarget(session.chatTarget) === chatTarget,
+    );
+    if (match) {
+      const desiredTitle = input.title?.trim() || canonicalTitleForTarget(chatTarget);
+      const nextTitle = isGenericChatTitle(match.title) ? desiredTitle : match.title;
+      const needsRestore = !!match.archived;
+      const needsRetitle = nextTitle !== match.title;
+      if (!needsRestore && !needsRetitle) return { session: match, created: false };
+      const idx = store.sessions.findIndex((session) => session.id === match.id);
+      const restored: ChatSession = {
+        ...match,
+        title: nextTitle,
+        archived: false,
+        archivedAt: undefined,
+        updatedAt: needsRestore ? new Date().toISOString() : match.updatedAt,
+      };
+      store.sessions[idx] = restored;
+      await saveStoreUnlocked(store.sessions);
+      return { session: restored, created: false };
+    }
+    const now = new Date().toISOString();
+    const session: ChatSession = {
+      id: uuidv4(),
+      title: input.title?.trim() || canonicalTitleForTarget(chatTarget),
+      chatTarget,
+      chatModel: input.chatModel || resolveDefaultCloudModel((await loadConfig()).defaultGrokModel),
+      projectId: null,
+      useGrokCli: false,
+      toolsEnabled: true,
+      reasoningEffort: 'low',
+      ephemeral: false,
+      unreadCount: 0,
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.sessions.unshift(session);
+    await saveStoreUnlocked(store.sessions);
+    indexSessionContext(session);
+    return { session, created: true };
   });
 }
 

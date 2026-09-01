@@ -29,7 +29,7 @@ Search results return an exact excerpt, stable source citation, matched terms, a
 
 Every message exposes **Fork**, which creates a new session containing the immutable message prefix through that exact source ID. The child records a `checkpoint-branch-v1` cursor with parent session, root session, source message, ordinal, and depth. Forking never updates the parent, and ordinary session patches cannot rewrite ancestry. The server-only `rewindChatSessionToMessage` primitive is the explicitly destructive counterpart used by synchronized task-checkpoint restore; it requires exact cursor confirmation, supports an optimistic last-message guard, and rebuilds the context index after truncation.
 
-Sessions are grouped by linked project in the chat rail. A completed assistant message increments unread state once, including detached task delivery; selecting the session advances its durable read cursor.
+The chat rail groups the durable Grok thread, one 1:1 thread per agent, and the All-agents group room, then ephemeral chats, forks, and leftovers. A completed assistant message increments unread state once, including detached task delivery; selecting the session advances its durable read cursor.
 
 An **ephemeral chat** stores no Shiba memory: automatic recall and memory tools are removed server-side, memory slash commands are rejected at the API boundary, and autonomous background learning is unavailable. Start one from the top-bar eye-off control, `Ctrl`/`⌘`+`Shift`+`N`, the command palette, or the session-rail button. Forks inherit the ephemeral lifecycle. Ephemeral chats cannot be archived, are deleted explicitly with the normal close action, and the browser sends deletion for every open ephemeral session on `pagehide`.
 

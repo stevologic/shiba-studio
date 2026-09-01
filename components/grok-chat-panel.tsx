@@ -22,7 +22,8 @@ import { registerBrowserEphemeralSession } from '@/lib/ephemeral-chat-lifecycle'
 import ChatMarkdown from '@/components/chat-markdown-lazy';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
-import type { ChatAttachment, ChatFileRef, ChatMessagePayload, ReasoningEffort } from '@/lib/chat-types';
+import type { ChatAttachment, ChatFileRef, ChatMessagePayload, ChatPendingApproval, ReasoningEffort } from '@/lib/chat-types';
+import ToolApprovalCard from '@/components/tool-approval-card';
 import { buildAgentChatSystem } from '@/lib/chat-skill';
 import { encodeModelRef, modelDisplayName, parseModelRef, providerLabel, providerTitle, supportsReasoning } from '@/lib/model-providers';
 import type { Agent } from '@/lib/types';
@@ -122,6 +123,8 @@ interface GrokChatPanelProps {
   onProjectUpdated?: () => void;
   session?: ChatSession | null;
   onSessionUpdated?: () => void;
+  /** Durable 1:1 / group threads switch by opening the canonical session. */
+  onOpenTarget?: (target: ChatTarget) => void;
   projects?: Project[];
   onProjectLinkChange?: (projectId: string | null) => void | Promise<void>;
   /** Settings default workspace — picker opens here when chat has no binding. */
@@ -139,6 +142,7 @@ type UiMessage = ChatMessagePayload & {
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   /** Files written during this turn (fs_write) — linked under the response. */
   files?: ChatFileRef[];
+  pendingApproval?: ChatPendingApproval;
 };
 
 function fmtTokenCount(n: number | undefined): string {
@@ -201,6 +205,7 @@ function toLiveMessages(messages: UiMessage[]): LiveChatUiMessage[] {
       files: m.files,
       usage: m.usage,
       streaming: m.streaming,
+      pendingApproval: m.pendingApproval,
     }));
 }
 
@@ -254,7 +259,7 @@ function welcomeForTarget(target: ChatTarget, agents: Agent[]): UiMessage {
   return {
     id: 'welcome',
     role: 'assistant',
-    content: 'Hello! I am Grok. Workspace global uploads are included in every reply. Pick an agent above to chat in their voice, @Name them from any chat, or use All agents for a shared room.',
+    content: 'Hello! I am Grok. This is your Grok thread — it keeps context. Open an agent for a 1:1 with that agent, or All agents for the group room. Ephemeral chats stay throwaway.',
   };
 }
 
@@ -336,6 +341,7 @@ export default function GrokChatPanel({
   onProjectUpdated,
   session = null,
   onSessionUpdated,
+  onOpenTarget,
   projects = [],
   onProjectLinkChange,
   defaultWorkspace = '',
@@ -370,6 +376,7 @@ export default function GrokChatPanel({
   const [toolsEnabled, setToolsEnabled] = useState(init.toolsEnabled);
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
   const [uploading, setUploading] = useState(false);
+  const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<{ src: string; name: string } | null>(null);
   const [showSubBrowser, setShowSubBrowser] = useState(false);
@@ -2170,19 +2177,21 @@ export default function GrokChatPanel({
     if (!session) return;
     const saved = uiToProjectMessages(msgs);
     const wasUntitled = !session.title || session.title === 'New chat';
+    const keepCanonicalTitle = !session.ephemeral && !session.branch;
     const running = opts?.running ?? saved.some((m) => m.streaming);
     await patchSession({
       ...opts?.extraPatch,
       messages: saved,
       running,
-      title: deriveSessionTitle(saved, session.title),
+      title: keepCanonicalTitle ? session.title : deriveSessionTitle(saved, session.title),
     });
     // First exchange of a fresh chat → have a low-end model write a real
     // title (server picks a fast/cheap model; falls back to the default).
     // Background turns also auto-title via finishLiveChatRun.
     const userCount = saved.filter((m) => m.role === 'user').length;
     if (
-      wasUntitled
+      !keepCanonicalTitle
+      && wasUntitled
       && userCount === 1
       && saved.some((m) => m.role === 'assistant' && !m.streaming)
       && !getLiveChatRun(session.id)?.streaming
@@ -2229,7 +2238,9 @@ export default function GrokChatPanel({
           toolsEnabled,
           workspaceDir,
           messages: durableHistory,
-          title: deriveSessionTitle(durableHistory, session.title),
+          title: (!session.ephemeral && !session.branch)
+            ? session.title
+            : deriveSessionTitle(durableHistory, session.title),
         },
       }),
     }).catch(() => null);
@@ -2259,12 +2270,47 @@ export default function GrokChatPanel({
     setMessages(next);
   }
 
+  async function decideChatApproval(approvalId: string, approved: boolean, always = false) {
+    if (!approvalId || approvalBusy) return;
+    setApprovalBusy(approvalId);
+    const toolName = messagesRef.current.find((m) => m.pendingApproval?.approvalId === approvalId)
+      ?.pendingApproval?.toolName;
+    try {
+      const response = await fetch('/api/execute/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalId, approved: approved || always, always }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Approval failed');
+      mapMessages((msgs) => msgs.map((m) => {
+        if (m.pendingApproval?.approvalId !== approvalId) return m;
+        return {
+          ...m,
+          pendingApproval: {
+            ...m.pendingApproval,
+            status: (always || approved) ? 'approved' : 'denied',
+          },
+        };
+      }), { streaming: true });
+      if (always && toolName) toast.success(`Always approve ${toolName}`);
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Approval failed');
+    } finally {
+      setApprovalBusy(null);
+    }
+  }
+
   /**
    * User explicitly picked Grok / an agent / All in the chat chrome.
-   * Updates the legacy direct-chat sticky picker immediately; a durable
-   * session writes its own chatTarget when a turn is actually sent.
+   * Durable 1:1 / group threads open that room; ephemeral chats retarget in place.
    */
   function updateChatTarget(next: ChatTarget) {
+    const durable = !!session && !session.ephemeral && !session.branch;
+    if (durable && next !== chatTarget && onOpenTarget) {
+      onOpenTarget(next);
+      return;
+    }
     setChatTarget(next);
     if (!session) setStickyChatTarget(next);
     if (next === 'all') setUseGrokCli(false);
@@ -2580,6 +2626,10 @@ export default function GrokChatPanel({
             url?: string;
             title?: string;
             detail?: string;
+            approvalId?: string;
+            toolName?: string;
+            args?: Record<string, unknown>;
+            approved?: boolean;
           };
           try {
             event = JSON.parse(payload);
@@ -2667,6 +2717,33 @@ export default function GrokChatPanel({
                     }
                   : m,
               ),
+              { streaming: true },
+            );
+          } else if (event.type === 'approval_required' && event.approvalId && event.toolName) {
+            const pending: ChatPendingApproval = {
+              approvalId: event.approvalId,
+              toolName: event.toolName,
+              args: event.args || {},
+              status: 'pending',
+            };
+            mapMessages((msgs) =>
+              msgs.map((m) => (m.id === targetId ? { ...m, pendingApproval: pending } : m)),
+              { streaming: true },
+            );
+          } else if (event.type === 'approval_resolved' && event.approvalId) {
+            const approved = !!event.approved;
+            const resolvedId = event.approvalId;
+            mapMessages((msgs) =>
+              msgs.map((m) => {
+                if (m.pendingApproval?.approvalId !== resolvedId) return m;
+                return {
+                  ...m,
+                  pendingApproval: {
+                    ...m.pendingApproval,
+                    status: approved ? 'approved' : 'denied',
+                  },
+                };
+              }),
               { streaming: true },
             );
           } else if (event.type === 'tool-trace' && event.name) {
@@ -3787,12 +3864,12 @@ export default function GrokChatPanel({
           title={
             autoSpeak && agents.length >= 2
               ? 'With Grok Voice on, “All agents” is a live multi-agent voice circle — they keep talking if you go quiet'
-              : 'Chat as Grok, a specific agent, or a shared agent room'
+              : 'Open Grok, a 1:1 agent thread, or the All-agents group room'
           }
         >
-          <option value="grok">Grok (default)</option>
+          <option value="grok">Grok</option>
           {agents.length > 0 && (
-            <optgroup label="Agents">
+            <optgroup label="Agents (1:1)">
               {agents.map((a) => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
@@ -3907,6 +3984,18 @@ export default function GrokChatPanel({
                     </div>
                   )}
                 </div>
+              )}
+
+              {m.pendingApproval && (
+                <ToolApprovalCard
+                  toolName={m.pendingApproval.toolName}
+                  args={m.pendingApproval.args}
+                  busy={approvalBusy === m.pendingApproval.approvalId}
+                  resolved={m.pendingApproval.status === 'pending' ? undefined : m.pendingApproval.status}
+                  onApprove={() => void decideChatApproval(m.pendingApproval!.approvalId, true)}
+                  onAlways={() => void decideChatApproval(m.pendingApproval!.approvalId, true, true)}
+                  onDeny={() => void decideChatApproval(m.pendingApproval!.approvalId, false)}
+                />
               )}
 
               {m.attachments?.length ? renderAttachments(m.attachments) : null}
@@ -4570,7 +4659,7 @@ export default function GrokChatPanel({
           : isSessionMode && project
           ? `Session chat · global uploads + ${project.files.length} linked project file(s) in context`
           : isSessionMode
-          ? 'Each session keeps its own agent, model, and history · global workspace uploads included'
+          ? 'This thread keeps this target’s context · global workspace uploads included'
           : project
           ? `Global workspace uploads + ${project.files.length} project file(s) included in every reply · chat history saved to this project`
           : chatTarget === 'all'

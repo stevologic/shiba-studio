@@ -83,6 +83,11 @@ export interface Agent {
   voiceId?: string;
   /** Local, per-agent learning and recall policy. */
   learning?: AgentLearningConfig;
+  /**
+   * Gated tools this agent may run without prompting while Ask-before-act is on.
+   * `native_node_action` can never be remembered.
+   */
+  alwaysApprovedTools?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -314,6 +319,11 @@ export interface AppConfig {
   cloudAuthMode?: CloudAuthMode;
   /** Tool execution policy for agent runs */
   toolApprovalMode?: ToolApprovalMode;
+  /**
+   * Gated tools remembered via Always approve in Grok Chat (and inherited by
+   * agents). `native_node_action` can never be stored here.
+   */
+  alwaysApprovedTools?: string[];
   /**
    * Tool function names the user has turned off globally (Capabilities → Tools).
    * Disabled tools are omitted from model tool lists and blocked if still called.

@@ -31,11 +31,16 @@ async function main() {
 
   assert((await read('lib/chat-sessions.ts')).includes('searchChatSessions'), 'session search');
   assert((await read('lib/chat-sessions.ts')).includes('archiveChatSession'), 'session archive');
+  assert((await read('lib/chat-sessions.ts')).includes('openCanonicalChatSession'), 'one durable thread per chat target');
   assert((await read('components/chat-sessions-panel.tsx')).includes('Search sessions'), 'session search UI');
 
   assert((await read('lib/tool-approval.ts')).includes('toolNeedsApproval'), 'tool approval');
+  assert((await read('lib/tool-approval.ts')).includes('rememberAlwaysApprovedTool'), 'always-approve persistence');
   assert((await read('app/api/execute/approve/route.ts')).includes('resolveToolApproval'), 'approve API');
+  assert((await read('app/api/execute/approve/route.ts')).includes('always'), 'approve API accepts always');
   assert((await read('components/tool-approval-modal.tsx')).includes('Approve tool execution'), 'approval modal');
+  assert((await read('components/grok-chat-panel.tsx')).includes('Always approve') || (await read('components/tool-approval-card.tsx')).includes('Always approve'), 'chat inline always-approve');
+  assert((await read('app/api/grok/stream/route.ts')).includes('approval_required'), 'chat stream emits live approvals');
 
   assert((await read('components/preview-rail.tsx')).includes('Preview Rail'), 'preview rail');
 

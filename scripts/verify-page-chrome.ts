@@ -44,6 +44,8 @@ const SURFACE_SOURCES: Record<(typeof PRIMARY_PAGE_SURFACES)[number], string[]> 
 const FEATURE_GUARDS: Array<{ file: string; mustInclude: string; label: string }> = [
   { file: 'components/chat-sessions-panel.tsx', mustInclude: 'chat-session-rail', label: 'chat session rail' },
   { file: 'components/chat-sessions-panel.tsx', mustInclude: 'GrokChatPanel', label: 'Grok chat panel mount' },
+  { file: 'components/chat-sessions-panel.tsx', mustInclude: "action: 'openCanonical'", label: 'canonical chat open' },
+  { file: 'components/chat-sessions-panel.tsx', mustInclude: 'New ephemeral chat', label: 'ephemeral chat control' },
   { file: 'components/workspace-page.tsx', mustInclude: 'ws-panel-scroll', label: 'workspace list-level scroll' },
   { file: 'components/workspace-page.tsx', mustInclude: 'ws-explorer', label: 'workspace explorer' },
   { file: 'components/workspace-page.tsx', mustInclude: "view === 'uploads'", label: 'workspace uploads view' },
@@ -54,6 +56,7 @@ const FEATURE_GUARDS: Array<{ file: string; mustInclude: string; label: string }
   { file: 'components/logs-panel.tsx', mustInclude: 'logs-search-input', label: 'logs search' },
   { file: 'components/shiba-studio.tsx', mustInclude: 'saveApiKey', label: 'settings API key form' },
   { file: 'components/shiba-studio.tsx', mustInclude: 'GrokBotCard', label: 'settings Grok Bot connector card' },
+  { file: 'components/shiba-studio.tsx', mustInclude: "name: 'Orchestration Agent'", label: 'default seeded agent name' },
   { file: 'components/projects-panel.tsx', mustInclude: 'createProject', label: 'project create' },
 ];
 
@@ -123,6 +126,8 @@ async function main() {
     lines.push(`OK feature: ${g.label}`);
   }
   console.log(`  OK ${FEATURE_GUARDS.length} feature guards`);
+  const agentSeed = await read('components/shiba-studio.tsx');
+  assert(!agentSeed.includes("name: 'Explorer Agent'"), 'default seed is no longer Explorer Agent');
 
   // Layout preserves
   const wsCss = css;

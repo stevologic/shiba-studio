@@ -6,9 +6,10 @@ Grok Chat is a working surface, not just a conversation: it streams reasoning, r
 
 ## Sessions
 
-- Chats live in the **collapsible session rail** on the left — searchable, archivable, and scalable to hundreds of sessions. Each session keeps its own model, chat target, reasoning effort, and full history.
-- **Auto-titling:** after the first exchange, a low-end model (grok-code-fast-1) summarizes the conversation into a 3–6 word title.
-- **New Chat** lives in the global top bar on every page (`Ctrl`/`⌘`+`N`). The eye-off control (or `Ctrl`/`⌘`+`Shift`+`N`, or **New ephemeral chat** in the command palette) starts an incognito session: no memory recall or writes, deleted when the browser page closes.
+- **One chat per agent.** Grok, each agent, and **All agents** each have a single durable thread that keeps context. Switching the target picker opens that thread instead of starting a new blank chat.
+- The **session rail** groups those threads (Grok, Agents, Group), then **Ephemeral** chats and forks. Search and archive still work.
+- **Auto-titling** still names ephemeral chats after the first exchange. Durable Grok / agent / group threads keep their persona name.
+- **Open Grok chat** lives in the global top bar (`Ctrl`/`⌘`+`N`) and reuses the Grok thread. The eye-off control (or `Ctrl`/`⌘`+`Shift`+`N`, or **New ephemeral chat** in the command palette) starts an incognito session: no memory recall or writes, deleted when the browser page closes.
 - Press **?** (or **Ctrl/Cmd+/**) for the studio keyboard-shortcut overlay — command palette, terminal, slash commands, and Code IDE keys.
 - Full history is sent with every prompt, so context always carries across turns.
 
@@ -20,12 +21,14 @@ As reasoning traces and tool activity grow, the transcript **sticks to the botto
 
 ## Chat targets
 
-The target select chooses *who* answers:
+The target select opens *which thread* you are in:
 
-- **Grok (default)** — plain Grok with your global uploads as context.
-- **A specific agent** — chats in that agent's voice with its Skill personality and live integration context (e.g. its whole Obsidian vault). Local agents keep their real toolbelt in chat — files, shell, and the browser — so *"open example.com and read the headline"* actually drives headless Chrome, appends a screenshot of the final page to the reply, and `/annotate` lets you watch or take over the same page.
-- **All agents** — a shared **agent room**. Everyone takes turns in the same transcript (not a hidden panel plus summary). Type `@Name` to address someone; they can `@Name` each other too. With Grok Voice on, the same target is a live spoken circle.
+- **Grok** — the standalone Grok thread, with your global uploads as context.
+- **A specific agent** — that agent's 1:1 thread (voice, Skill, integrations). Local agents keep their real toolbelt — files, shell, and the browser — so *"open example.com and read the headline"* actually drives headless Chrome.
+- **All agents** — the **group room**. Everyone takes turns in the same transcript. Type `@Name` to address someone; they can `@Name` each other too. With Grok Voice on, the same target is a live spoken circle.
+- **Ephemeral** — a throwaway chat that can still pick a target; it is not the durable 1:1.
 - **@mentions from any chat** — while talking to Grok or one agent, `@Name` (or the `talk_to_agent` / `send_to_peer` tools) pulls that agent into this conversation for a follow-up turn. Composer autocomplete lists agents after `@`.
+- **Inline tool approval** — in Ask-before-act mode, gated tools (`fs_write`, `shell_exec`, browser clicks, posts, deploys, …) pause the turn and show **Approve**, **Always approve**, and **Deny** on the agent’s bubble. Approve runs this call; Always approve remembers that tool for this agent (or for Grok Chat) so later calls skip the prompt. Desktop native actions still require an exact click every time. YOLO in Settings still auto-runs gated tools.
 
 ## Models, reasoning, attachments
 
@@ -64,7 +67,7 @@ Type `/` for an autocomplete menu (↑↓ navigate, Tab/Enter complete, Esc dism
 | Command | What it does |
 | --- | --- |
 | `/clear` | Clear the current conversation after confirmation |
-| `/agent <name\|grok\|all>` | Switch who answers the chat |
+| `/agent <name\|grok\|all>` | Open Grok, a 1:1 agent thread, or the All-agents group room |
 | `/model <name>` | Switch the Grok session model; selected agents keep their configured model |
 | `/tools on\|off` | Enable or disable automatic model tool calls for this chat; explicit slash commands still work |
 | `/grok` · `/grok login` | Open the Studio Terminal and launch interactive Grok Build (or sign-in). Alias: `/cli` |
