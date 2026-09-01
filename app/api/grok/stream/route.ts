@@ -474,6 +474,7 @@ export async function POST(req: NextRequest) {
           // Hoisted so the catch path can recover without TDZ / scope errors.
           const toolsUsed: string[] = [];
           const addressedPeerIds: string[] = [];
+          const approvalRunId = `chat:${requestChatSession?.id || 'direct'}`;
           let assistantText = '';
           let wroteContent = false;
           try {
@@ -669,7 +670,6 @@ export async function POST(req: NextRequest) {
                 : { kind: 'global' },
             };
             const trustedToolRun = sessionProjectId ? { projectId: sessionProjectId } : {};
-            const approvalRunId = `chat:${requestChatSession?.id || 'direct'}`;
             const approvalAgentId = agent?.id || null;
             const { awaitLiveToolApproval, loadAlwaysApprovedTools, toolNeedsApproval } = await import('@/lib/tool-approval');
             const requestChatToolApproval = async (
