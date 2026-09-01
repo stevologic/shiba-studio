@@ -30,9 +30,16 @@ import {
 } from '@/lib/board-project-filter';
 import { boardTaskMatchesTextFilter } from '@/lib/board-text-filter';
 import type { Agent } from '@/lib/types';
+import { resolveAgentAvatarPath } from '@/lib/agent-avatars';
 
 // Markdown pipeline is heavy — defer it until an agent answer is visible.
 const ChatMarkdown = dynamic(() => import('@/components/chat-markdown-lazy'));
+
+function labelHue(value: string): number {
+  let hash = 0;
+  for (const ch of value) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+  return Math.abs(hash) % 360;
+}
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -129,31 +136,18 @@ function PriorityIcon({ priority, size = 14 }: { priority: number; size?: number
   );
 }
 
-/** Deterministic accent for an agent avatar. */
-function agentHue(name: string): number {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
-  return h;
-}
-
-function AgentAvatar({ agent, size = 18 }: { agent: Agent | undefined; size?: number }) {
+function AgentAvatar({ agent, size = 22 }: { agent: Agent | undefined; size?: number }) {
   if (!agent) return null;
-  const hue = agentHue(agent.name);
   return (
-    <span
+    <img
+      src={resolveAgentAvatarPath(agent)}
+      alt=""
       className="kb-avatar"
-      style={{
-        width: size,
-        height: size,
-        fontSize: size * 0.52,
-        background: `hsl(${hue} 45% 24%)`,
-        color: `hsl(${hue} 70% 78%)`,
-        borderColor: `hsl(${hue} 45% 38%)`,
-      }}
+      width={size}
+      height={size}
+      style={{ width: size, height: size }}
       title={agent.name}
-    >
-      {agent.name.slice(0, 1).toUpperCase()}
-    </span>
+    />
   );
 }
 
@@ -790,7 +784,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                         <div className="kb-card-meta">
                           <PriorityIcon priority={task.priority} />
                           {task.labels.map((l) => (
-                            <span key={l} className="kb-label" style={{ ['--label-hue' as never]: agentHue(l) }}>{l}</span>
+                            <span key={l} className="kb-label" style={{ ['--label-hue' as never]: labelHue(l) }}>{l}</span>
                           ))}
                           <span className="kb-card-spacer" />
                           <AgentAvatar agent={agent} />
@@ -1027,7 +1021,7 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
               )}
               {selected.assigneeAgentId && !isQueued(selected) && (
                 <span className="kb-workrow-hint">
-                  <AgentAvatar agent={agentById.get(selected.assigneeAgentId)} size={16} />
+                  <AgentAvatar agent={agentById.get(selected.assigneeAgentId)} size={20} />
                   {agentById.get(selected.assigneeAgentId)?.autoAcceptBoardAssignments
                     ? `${agentById.get(selected.assigneeAgentId)?.name || 'This agent'} automatically accepts newly assigned cards.`
                     : `${agentById.get(selected.assigneeAgentId)?.name || 'Unknown agent'} runs this card as a traced agent run.`}
@@ -1218,13 +1212,13 @@ export default function KanbanBoard({ agents, onOpenRun, onOpenCountChanged }: K
                         <td className="kbt-col-labels">
                           <span className="kbt-labels">
                             {task.labels.map((l) => (
-                              <span key={l} className="kb-label" style={{ ['--label-hue' as never]: agentHue(l) }}>{l}</span>
+                              <span key={l} className="kb-label" style={{ ['--label-hue' as never]: labelHue(l) }}>{l}</span>
                             ))}
                           </span>
                         </td>
                         <td className="kbt-col-assignee">
                           <span className="kbt-assignee">
-                            <AgentAvatar agent={agent} size={16} />
+                            <AgentAvatar agent={agent} size={20} />
                             <span className="kbt-dim">{agent?.name || '—'}</span>
                           </span>
                         </td>

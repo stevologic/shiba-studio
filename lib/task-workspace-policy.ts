@@ -32,6 +32,13 @@ const INTEGRATION_TOOL_SCOPES: Record<string, string> = {
   reddit_submit: 'reddit',
   drive_list: 'googledrive',
   drive_upload: 'googledrive',
+  gmail_list: 'gmail',
+  gmail_read: 'gmail',
+  gmail_send: 'gmail',
+  youtube_search: 'youtube',
+  youtube_list: 'youtube',
+  youtube_get: 'youtube',
+  youtube_upload: 'youtube',
   obsidian_list: 'obsidian',
   obsidian_read: 'obsidian',
   obsidian_write: 'obsidian',
@@ -161,7 +168,7 @@ export function taskToolDecision(taskId: string | undefined, toolName: string, a
     if (readOnly) return { allowed: false, reason: 'Read-only tasks cannot execute host shell commands.' };
     return { allowed: true, requiresLiveApproval: true };
   }
-  if (readOnly && ['fs_write', 'grok_cli', 'sandbox_write_file', 'generate_image', 'github_create_pr', 'reddit_submit'].includes(toolName)) {
+  if (readOnly && ['fs_write', 'grok_cli', 'sandbox_write_file', 'generate_image', 'edit_image', 'generate_video', 'github_create_pr', 'reddit_submit', 'gmail_send', 'youtube_upload'].includes(toolName)) {
     return { allowed: false, reason: `Read-only tasks cannot use ${toolName}.` };
   }
 

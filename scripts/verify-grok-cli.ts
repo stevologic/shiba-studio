@@ -195,6 +195,27 @@ Commands:
   assert(baseArgs.includes('--check'), 'headless argv enables the verification harness');
   assert(valueAfter(baseArgs, '--best-of-n') === '3', 'headless argv preserves best-of-N');
   assert(valueAfter(baseArgs, '--json-schema') === schema, 'headless argv preserves JSON schema');
+  const sessionArgs = buildGrokCliArgsBase({
+    outputFormat: 'streaming-json',
+    sandboxProfile: 'workspace',
+    sessionId: 'sess-1',
+    resumeSessionId: 'sess-0',
+    worktree: true,
+    worktreeRef: 'HEAD',
+    allowRules: ['Read'],
+    denyRules: ['Bash'],
+  });
+  assert(valueAfter(sessionArgs, '--sandbox') === 'workspace', 'headless argv preserves sandbox profile');
+  assert(valueAfter(sessionArgs, '--session-id') === 'sess-1', 'headless argv preserves session id');
+  assert(valueAfter(sessionArgs, '--resume') === 'sess-0', 'headless argv preserves resume session');
+  assert(sessionArgs.includes('--worktree'), 'headless argv preserves worktree');
+  assert(valueAfter(sessionArgs, '--worktree-ref') === 'HEAD', 'headless argv preserves worktree ref');
+  const materializedShort = await materializeGrokCliArgs({ prompt: 'hello world', outputFormat: 'plain' });
+  assert(materializedShort.args[0] === '-p', 'short prompts use -p');
+  assert(materializedShort.args[1] === 'hello world', 'short prompt is the -p value');
+  assert(materializedShort.args.includes('--output-format'), 'materialized argv includes --output-format');
+  assert(materializedShort.args.includes('--no-auto-update'), 'materialized argv includes --no-auto-update');
+  await materializedShort.cleanup();
   const scopedArgs = buildGrokCliArgsBase({
     scoped: true,
     check: true,

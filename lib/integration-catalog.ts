@@ -4,6 +4,8 @@ export type IntegrationId =
   | 'github'
   | 'slack'
   | 'googledrive'
+  | 'gmail'
+  | 'youtube'
   | 'discord'
   | 'x'
   | 'reddit'
@@ -62,6 +64,26 @@ export const INTEGRATION_CATALOG: IntegrationMeta[] = [
     docsUrl: 'https://developers.google.com/drive/api/guides/about-sdk',
     setupUrl: 'https://developers.google.com/drive/api/guides/enable-drive-api',
     docsLabel: 'Drive API',
+  },
+  {
+    id: 'gmail',
+    label: 'Gmail',
+    shortLabel: 'Gmail',
+    icon: '/integrations/gmail.svg',
+    description: 'Read and send mail from your Google account',
+    docsUrl: 'https://developers.google.com/gmail/api/guides',
+    setupUrl: 'https://developers.google.com/gmail/api/guides/enable-api',
+    docsLabel: 'Gmail API',
+  },
+  {
+    id: 'youtube',
+    label: 'YouTube',
+    shortLabel: 'YouTube',
+    icon: '/integrations/youtube.svg',
+    description: 'Search, list, and upload videos on your channel',
+    docsUrl: 'https://developers.google.com/youtube/v3/getting-started',
+    setupUrl: 'https://developers.google.com/youtube/v3/getting-started#before-you-start',
+    docsLabel: 'YouTube Data API',
   },
   {
     id: 'discord',

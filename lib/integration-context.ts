@@ -12,6 +12,8 @@ import {
   githubListRepos,
   testSlack,
   driveListFiles,
+  testGmail,
+  testYoutube,
   testDiscord,
   testX,
   testReddit,
@@ -113,6 +115,27 @@ async function driveContext(driveFolders?: Array<{ id: string; name: string }>):
   }
 }
 
+async function gmailContext(): Promise<string> {
+  const t = await withTimeout(testGmail());
+  if (!t.ok) return '';
+  return [
+    '### Gmail',
+    `Connected as ${t.email || 'the signed-in Google account'}.`,
+    'Use gmail_list to search (is:unread, from:, subject:). Use gmail_read for a message id.',
+    'Use gmail_send only when the user explicitly asked to send or reply to mail.',
+  ].join('\n');
+}
+
+async function youtubeContext(): Promise<string> {
+  const t = await withTimeout(testYoutube());
+  if (!t.ok) return '';
+  return [
+    '### YouTube',
+    `Connected${t.channelTitle ? ` as ${t.channelTitle}` : ' to the signed-in Google account'}.`,
+    'Use youtube_search for public videos, youtube_list for this channel\'s uploads, youtube_get for one video, youtube_upload for a workspace file (defaults to unlisted).',
+  ].join('\n');
+}
+
 async function discordContext(): Promise<string> {
   const t = await withTimeout(testDiscord());
   if (!t.ok) return '';
@@ -205,6 +228,8 @@ async function buildIntegrationContextScoped(
     github: githubContext,
     slack: slackContext,
     googledrive: () => driveContext(driveFolders),
+    gmail: gmailContext,
+    youtube: youtubeContext,
     discord: discordContext,
     x: xContext,
     reddit: redditContext,

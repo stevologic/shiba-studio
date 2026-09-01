@@ -14,6 +14,8 @@ export const APPROVAL_GATED_TOOLS = new Set([
   'x_post',
   'reddit_submit',
   'drive_upload',
+  'gmail_send',
+  'youtube_upload',
   'obsidian_write',
   'vercel_deploy',
   'vercel_set_env',

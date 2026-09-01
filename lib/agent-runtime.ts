@@ -491,6 +491,110 @@ export function getToolDefinitions(
       function: { name: 'drive_upload', description: 'Upload a text file to Drive.', parameters: { type: 'object', properties: { name: { type: 'string' }, content: { type: 'string' } }, required: ['name', 'content'] } },
     });
   }
+  if (scope.gmail) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'gmail_list',
+        description: 'List recent Gmail messages. query uses Gmail search (is:unread, from:alice@x.com, subject:invoice).',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Gmail search query' },
+            max: { type: 'number', description: 'How many messages (1-25, default 10)' },
+          },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'gmail_read',
+        description: 'Read one Gmail message by id (from gmail_list). Returns headers and a plain-text body.',
+        parameters: {
+          type: 'object',
+          properties: { id: { type: 'string', description: 'Gmail message id' } },
+          required: ['id'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'gmail_send',
+        description: 'Send an email from the connected Gmail account. Only use when the user explicitly asked to send mail. threadId replies in that thread.',
+        parameters: {
+          type: 'object',
+          properties: {
+            to: { type: 'string', description: 'To addresses, comma-separated' },
+            subject: { type: 'string' },
+            body: { type: 'string', description: 'Plain-text body' },
+            cc: { type: 'string' },
+            bcc: { type: 'string' },
+            threadId: { type: 'string', description: 'Optional Gmail thread id to reply in' },
+          },
+          required: ['to', 'subject', 'body'],
+        },
+      },
+    });
+  }
+  if (scope.youtube) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'youtube_search',
+        description: 'Search public YouTube videos. Returns id, title, channel, and watch URL.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query' },
+            max: { type: 'number', description: 'How many results (1-15, default 8)' },
+          },
+          required: ['query'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'youtube_list',
+        description: 'List recent uploads from the connected YouTube channel.',
+        parameters: {
+          type: 'object',
+          properties: { max: { type: 'number', description: 'How many videos (1-15, default 8)' } },
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'youtube_get',
+        description: 'Get one YouTube video by id or watch URL.',
+        parameters: {
+          type: 'object',
+          properties: { id: { type: 'string', description: 'Video id or youtube.com / youtu.be URL' } },
+          required: ['id'],
+        },
+      },
+    });
+    tools.push({
+      type: 'function',
+      function: {
+        name: 'youtube_upload',
+        description: 'Upload a workspace video file to the connected channel. Defaults to unlisted. Only use when the user asked to upload.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Workspace path to the video file' },
+            title: { type: 'string' },
+            description: { type: 'string' },
+            privacy: { type: 'string', description: 'private | unlisted | public (default unlisted)' },
+          },
+          required: ['path', 'title'],
+        },
+      },
+    });
+  }
   if (scope.discord) {
     tools.push({
       type: 'function',
@@ -809,8 +913,16 @@ export function getToolDefinitions(
       type: 'function',
       function: {
         name: 'send_to_peer',
-        description: 'Send a message to another agent (peer) so it can act on it later or in its next run.',
-        parameters: { type: 'object', properties: { agentId: { type: 'string' }, message: { type: 'string' } }, required: ['agentId', 'message'] },
+        description:
+          'Address another Shiba agent by id or name. In chat they reply next in this same room; during a run the note waits in their inbox.',
+        parameters: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: 'Peer agent id or exact name' },
+            message: { type: 'string', description: 'What they should hear or do' },
+          },
+          required: ['agentId', 'message'],
+        },
       },
     });
   }
@@ -942,8 +1054,40 @@ export function getToolDefinitions(
     type: 'function',
     function: {
       name: 'generate_image',
-      description: 'Generate an image from a text prompt with xAI (grok-2-image). Saves the file into the workspace and shows it in the run trace.',
+      description: 'Generate an image from a text prompt with Grok Imagine (prefers grok-imagine-image-1.5). Saves the file into the workspace and shows it in the run trace.',
       parameters: { type: 'object', properties: { prompt: { type: 'string', description: 'Image description' } }, required: ['prompt'] },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'edit_image',
+      description: 'Edit a workspace image with Grok Imagine (POST /v1/images/edits). Provide a source image path and the change to apply.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'How to edit the image' },
+          image: { type: 'string', description: 'Workspace path to the source image' },
+        },
+        required: ['prompt', 'image'],
+      },
+    },
+  });
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'generate_video',
+      description: 'Generate a short video with Grok Imagine (POST /v1/videos/generations, then poll until done). Optional still image becomes the first frame. Saves the mp4 into the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'Motion / scene description' },
+          image: { type: 'string', description: 'Optional workspace image path for image-to-video' },
+          duration: { type: 'number', description: 'Seconds, 1-15 (default 6)' },
+          resolution: { type: 'string', description: '480p or 720p' },
+        },
+        required: ['prompt'],
+      },
     },
   });
   // Shared Kanban board: every agent can read it, work assigned cards, post
@@ -1551,7 +1695,7 @@ async function* agentRunGenerator(
   const { taskToolDecision } = await import('./task-workspace-policy');
   const readOnlyDenied = new Set([
     'fs_write', 'shell_exec', 'terminal_exec', 'browser_navigate', 'browser_click', 'browser_type',
-    'github_create_issue', 'slack_post', 'discord_post', 'x_post', 'reddit_submit', 'drive_upload', 'obsidian_write',
+    'github_create_issue', 'slack_post', 'discord_post', 'x_post', 'reddit_submit', 'drive_upload', 'gmail_send', 'youtube_upload', 'obsidian_write', 'edit_image', 'generate_video',
     'vercel_deploy', 'vercel_set_env', 'netlify_deploy', 'netlify_set_env', 'grok_cli', 'mcp_invoke',
     'memory_forget', 'schedule_task', 'board_update_task',
   ]);

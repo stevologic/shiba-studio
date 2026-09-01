@@ -72,7 +72,7 @@ import { createClientId } from '@/lib/client-id';
 import { registerBrowserEphemeralSession } from '@/lib/ephemeral-chat-lifecycle';
 import { isEditableShortcutTarget } from '@/lib/keyboard-shortcuts';
 import { toast } from '@/lib/toast';
-import { getTerminalOpen, setTerminalOpen, toggleTerminalOpen, subscribeTerminalOpen } from '@/lib/terminal-ui-store';
+import { getTerminalOpen, setTerminalDock, setTerminalOpen, toggleTerminalOpen, subscribeTerminalOpen } from '@/lib/terminal-ui-store';
 import {
   endVoiceIfSessionChanges,
   getVoiceAgentUiState,
@@ -87,7 +87,7 @@ import { Agent, AgentRun, AppConfig, GrokModel, EMPTY_INTEGRATION_SCOPE } from '
 import { isMaskedSecret, maskSecret } from '@/lib/secret-mask';
 import { redditOverridePairError } from '@/lib/integration-validation';
 import { THEME_IDENTITY } from '@/lib/theme';
-import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
+import { ALIEN_AVATARS, MISSING_AGENT_AVATAR_PATH, isImagineAvatarId, resolveAgentAvatar, resolveAgentAvatarPath } from '@/lib/agent-avatars';
 import { AGENT_INTEGRATION_IDS, INTEGRATION_CATALOG, INTEGRATION_IDS, getIntegrationMeta } from '@/lib/integration-catalog';
 import {
   DEFAULT_CLOUD_MODEL_REF,
@@ -414,6 +414,8 @@ const AGENT_OVERRIDE_FIELDS: Record<string, Array<{ key: string; label: string; 
   ],
   obsidian: [{ key: 'restApiUrl', label: 'REST API URL' }, { key: 'restApiKey', label: 'REST API key', secret: true }, { key: 'vaultPath', label: 'Vault path (local mode)' }],
   googledrive: [{ key: 'accessToken', label: 'OAuth access token', secret: true }, { key: 'serviceAccountJson', label: 'Service account JSON', secret: true }],
+  gmail: [{ key: 'accessToken', label: 'OAuth access token', secret: true }],
+  youtube: [{ key: 'accessToken', label: 'OAuth access token', secret: true }],
   vercel: [
     { key: 'token', label: 'Vercel access token', secret: true },
     { key: 'teamId', label: 'Team id (team_…, optional)' },
@@ -585,6 +587,36 @@ export default function ShibaStudio() {
   // message listener on every render.
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const handleGmailConnected = useCallback(async () => {
+    try { gmailPopupRef.current?.close(); } catch { /* gone */ }
+    gmailPopupRef.current = null;
+    setGmailStarting(false);
+    toast.success('Gmail connected');
+    invalidateClientJson('/api/config');
+    invalidateClientJson('/api/integrations');
+    await loadAll(['config']);
+    try {
+      const res = await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'test', which: 'gmail' }) });
+      const data = await res.json();
+      setIntTest((t: any) => ({ ...t, gmail: data }));
+    } catch { /* status refresh is best-effort */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleYoutubeConnected = useCallback(async () => {
+    try { youtubePopupRef.current?.close(); } catch { /* gone */ }
+    youtubePopupRef.current = null;
+    setYoutubeStarting(false);
+    toast.success('YouTube connected');
+    invalidateClientJson('/api/config');
+    invalidateClientJson('/api/integrations');
+    await loadAll(['config']);
+    try {
+      const res = await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'test', which: 'youtube' }) });
+      const data = await res.json();
+      setIntTest((t: any) => ({ ...t, youtube: data }));
+    } catch { /* status refresh is best-effort */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     return () => stopOAuthPolling();
   }, [stopOAuthPolling]);
@@ -599,10 +631,12 @@ export default function ShibaStudio() {
       if (e.origin !== window.location.origin && !loopback) return;
       if (e.data === 'shiba-oauth:connected') void handleOAuthConnected();
       else if (e.data === 'shiba-drive:connected') void handleDriveConnected();
+      else if (e.data === 'shiba-gmail:connected') void handleGmailConnected();
+      else if (e.data === 'shiba-youtube:connected') void handleYoutubeConnected();
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [handleOAuthConnected, handleDriveConnected]);
+  }, [handleOAuthConnected, handleDriveConnected, handleGmailConnected, handleYoutubeConnected]);
 
   useEffect(() => {
     if (tab === 'settings') void refreshOAuthStatus();
@@ -612,7 +646,9 @@ export default function ShibaStudio() {
     if (tab !== 'settings') return;
     const oauth = searchParams.get('oauth');
     const drive = searchParams.get('drive');
-    if (!oauth && !drive) return;
+    const gmail = searchParams.get('gmail');
+    const youtube = searchParams.get('youtube');
+    if (!oauth && !drive && !gmail && !youtube) return;
 
     const message = searchParams.get('message') || undefined;
     if (oauth === 'connected') {
@@ -626,8 +662,18 @@ export default function ShibaStudio() {
     } else if (drive === 'error') {
       toast.error(message || 'Google sign-in failed');
     }
+    if (gmail === 'connected') {
+      void handleGmailConnected();
+    } else if (gmail === 'error') {
+      toast.error(message || 'Gmail sign-in failed');
+    }
+    if (youtube === 'connected') {
+      void handleYoutubeConnected();
+    } else if (youtube === 'error') {
+      toast.error(message || 'YouTube sign-in failed');
+    }
     router.replace('/settings');
-  }, [tab, searchParams, router, handleOAuthConnected, handleDriveConnected]);
+  }, [tab, searchParams, router, handleOAuthConnected, handleDriveConnected, handleGmailConnected, handleYoutubeConnected]);
 
   // Seed from module cache so remounts/tab hops never show a false empty list.
   const [agents, setAgents] = useState<Agent[]>(() => getCachedAgents() ?? []);
@@ -716,6 +762,8 @@ export default function ShibaStudio() {
     peers: [], skills: [], chatSkill: '', voiceId: '', driveFolders: [],
     learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
   });
+  const [avatarPrompt, setAvatarPrompt] = useState('');
+  const [avatarGenerating, setAvatarGenerating] = useState(false);
   // TTS voice catalog for agent editor (live xAI list when signed in).
   type AgentVoiceOpt = { id: string; name: string; description?: string };
   const [agentVoiceOptions, setAgentVoiceOptions] = useState<AgentVoiceOpt[]>(GROK_TTS_VOICES);
@@ -808,6 +856,10 @@ export default function ShibaStudio() {
   );
   const [oauthCallbackInput, setOauthCallbackInput] = useState('');
   const [oauthStarting, setOauthStarting] = useState(false);
+  const [gmailStarting, setGmailStarting] = useState(false);
+  const gmailPopupRef = useRef<Window | null>(null);
+  const [youtubeStarting, setYoutubeStarting] = useState(false);
+  const youtubePopupRef = useRef<Window | null>(null);
   const [defaultModelInput, setDefaultModelInput] = useState('');
   const [defaultTtsVoiceInput, setDefaultTtsVoiceInput] = useState(DEFAULT_TTS_VOICE);
   const [defaultTtsSpeedInput, setDefaultTtsSpeedInput] = useState(DEFAULT_TTS_SPEED);
@@ -1221,7 +1273,7 @@ export default function ShibaStudio() {
       if (rRes && Array.isArray(rRes.runs)) applyRuns(rRes.runs);
       if (!cRes || typeof cRes !== 'object') return;
       if (cRes.integrations) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...cRes.integrations };
+        const merged = { github: {}, slack: {}, googledrive: {}, gmail: {}, youtube: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...cRes.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
@@ -1686,6 +1738,8 @@ export default function ShibaStudio() {
       voiceId: '',
       learning: { mode: 'review', autoRecall: true, maxMemories: 100 },
     });
+    setAvatarPrompt('');
+    setAvatarGenerating(false);
     setShowAgentModal(true);
   }
 
@@ -1712,6 +1766,8 @@ export default function ShibaStudio() {
     navigateToTab('agents');
     setShowAgentModal(true);
     toast.success('Agent draft ready — review and save');
+    setAvatarPrompt('');
+    setAvatarGenerating(false);
   }
 
   function openEditAgent(a: Agent) {
@@ -1731,6 +1787,8 @@ export default function ShibaStudio() {
       peers: [...(norm.peers || [])],
     });
     setDriveFolderOptions(null); // reset the picker; user loads on demand
+    setAvatarPrompt('');
+    setAvatarGenerating(false);
     setShowAgentModal(true);
   }
 
@@ -1763,8 +1821,36 @@ export default function ShibaStudio() {
       skills: [...(norm.skills || [])],
     });
     setDriveFolderOptions(null);
+    setAvatarPrompt('');
+    setAvatarGenerating(false);
     setShowAgentModal(true);
     toast.success('Cloned — tweak what differs and Create.');
+  }
+
+  async function generateImagineAvatar() {
+    if (avatarGenerating) return;
+    setAvatarGenerating(true);
+    try {
+      const response = await fetch('/api/agents/imagine-avatar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: avatarPrompt,
+          name: agentForm.name,
+          description: agentForm.description || agentForm.chatSkill,
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; avatar?: string; error?: string; model?: string };
+      if (!response.ok || !data.ok || !data.avatar) {
+        throw new Error(data.error || 'Imagine could not generate an avatar');
+      }
+      setAgentForm((current: typeof agentForm) => ({ ...current, avatar: data.avatar }));
+      toast.success(data.model ? `Avatar generated with ${data.model}` : 'Avatar generated');
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Imagine avatar generation failed');
+    } finally {
+      setAvatarGenerating(false);
+    }
   }
 
   // Load Grok TTS voices when the agent editor opens (for default voice picker).
@@ -2144,7 +2230,7 @@ export default function ShibaStudio() {
       if (data.error) throw new Error(data.error);
       const draftIsCurrent = integrationDraftVersionsRef.current[which] === draftVersion;
       if (data.integrations && draftIsCurrent) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
+        const merged = { github: {}, slack: {}, googledrive: {}, gmail: {}, youtube: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
         // The module cache represents server state, never unsaved/raw drafts.
         setCachedIntegrationCreds(merged);
         setIntCreds((current: IntegrationCredsMap) => ({ ...current, [which]: merged[which] || {} }));
@@ -2189,7 +2275,7 @@ export default function ShibaStudio() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (data.integrations) {
-        const merged = { github: {}, slack: {}, googledrive: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
+        const merged = { github: {}, slack: {}, googledrive: {}, gmail: {}, youtube: {}, discord: {}, x: {}, reddit: {}, obsidian: { mode: 'local' }, linear: {}, jira: {}, ...data.integrations };
         setCachedIntegrationCreds(merged);
         setIntCreds(merged);
       }
@@ -2469,6 +2555,94 @@ export default function ShibaStudio() {
     await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'disconnect-drive' }) });
     setIntTest((t: any) => ({ ...t, googledrive: undefined }));
     toast.success('Google Drive disconnected');
+    invalidateClientJson('/api/config');
+    invalidateClientJson('/api/integrations');
+    await loadAll(['config']);
+  }
+
+  async function startGoogleGmailLogin() {
+    if (!await saveIntegration('gmail')) return;
+    setGmailStarting(true);
+    const popup = window.open('about:blank', 'shiba-gmail-oauth', 'width=520,height=760,menubar=no,toolbar=no,location=yes');
+    gmailPopupRef.current = popup;
+    try {
+      const res = await fetch('/api/google-oauth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin, service: 'gmail' }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.authorizeUrl) throw new Error(data.error || 'Failed to start Gmail sign-in');
+      if (popup && !popup.closed) {
+        popup.location.href = data.authorizeUrl;
+        popup.focus();
+        toast.success('Approve Gmail access in the Google popup — this window updates by itself');
+      } else {
+        window.location.assign(data.authorizeUrl);
+        return;
+      }
+    } catch (e: unknown) {
+      try { popup?.close(); } catch { /* gone */ }
+      toast.error(e instanceof Error ? e.message : 'Gmail sign-in failed');
+    }
+    setGmailStarting(false);
+  }
+
+  async function disconnectGoogleGmail() {
+    const ok = await confirmDialog({
+      title: 'Disconnect Gmail?',
+      message: 'The captured Gmail tokens are removed. Google Drive stays connected if you signed that in separately.',
+      confirmLabel: 'Disconnect',
+      danger: true,
+    });
+    if (!ok) return;
+    await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'disconnect-gmail' }) });
+    setIntTest((t: any) => ({ ...t, gmail: undefined }));
+    toast.success('Gmail disconnected');
+    invalidateClientJson('/api/config');
+    invalidateClientJson('/api/integrations');
+    await loadAll(['config']);
+  }
+
+  async function startGoogleYoutubeLogin() {
+    if (!await saveIntegration('youtube')) return;
+    setYoutubeStarting(true);
+    const popup = window.open('about:blank', 'shiba-youtube-oauth', 'width=520,height=760,menubar=no,toolbar=no,location=yes');
+    youtubePopupRef.current = popup;
+    try {
+      const res = await fetch('/api/google-oauth/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin, service: 'youtube' }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.authorizeUrl) throw new Error(data.error || 'Failed to start YouTube sign-in');
+      if (popup && !popup.closed) {
+        popup.location.href = data.authorizeUrl;
+        popup.focus();
+        toast.success('Approve YouTube access in the Google popup — this window updates by itself');
+      } else {
+        window.location.assign(data.authorizeUrl);
+        return;
+      }
+    } catch (e: unknown) {
+      try { popup?.close(); } catch { /* gone */ }
+      toast.error(e instanceof Error ? e.message : 'YouTube sign-in failed');
+    }
+    setYoutubeStarting(false);
+  }
+
+  async function disconnectGoogleYoutube() {
+    const ok = await confirmDialog({
+      title: 'Disconnect YouTube?',
+      message: 'The captured YouTube tokens are removed. Drive and Gmail stay connected if you signed those in separately.',
+      confirmLabel: 'Disconnect',
+      danger: true,
+    });
+    if (!ok) return;
+    await fetch('/api/integrations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'disconnect-youtube' }) });
+    setIntTest((t: any) => ({ ...t, youtube: undefined }));
+    toast.success('YouTube disconnected');
     invalidateClientJson('/api/config');
     invalidateClientJson('/api/integrations');
     await loadAll(['config']);
@@ -3169,7 +3343,30 @@ export default function ShibaStudio() {
         hint: 'Real host PTY (Ctrl+`)',
         group: 'Actions',
         keywords: ['terminal', 'shell', 'bash', 'pty', 'console'],
-        run: () => setTerminalOpen(true),
+        run: () => {
+          const onCode = /^\/code(\/|$)/.test(window.location.pathname);
+          if (onCode) {
+            setTerminalDock('ide');
+          } else {
+            setTerminalDock('float');
+          }
+          setTerminalOpen(true);
+        },
+      },
+      {
+        id: 'grok-cli-terminal',
+        label: 'Launch Grok CLI in Terminal',
+        hint: 'Interactive Grok Build TUI (or sign-in) in the host PTY',
+        group: 'Actions',
+        keywords: ['grok', 'cli', 'build', 'login', 'pty', 'terminal'],
+        run: () => {
+          void (async () => {
+            const { openGrokCliInTerminal } = await import('@/lib/grok-cli-terminal-client');
+            const r = await openGrokCliInTerminal();
+            if (!r.ok) toast.error(r.error || 'Could not launch Grok CLI');
+            else toast.success(r.launched === 'login' ? 'Finish Grok sign-in in the Terminal' : 'Grok CLI opened in the Terminal');
+          })();
+        },
       },
       {
         id: 'shortcuts',
@@ -3583,7 +3780,12 @@ export default function ShibaStudio() {
             </button>
             <button
               type="button"
-              onClick={() => toggleTerminalOpen()}
+              onClick={() => {
+                const onCode = /^\/code(\/|$)/.test(window.location.pathname);
+                if (onCode) setTerminalDock('ide');
+                else setTerminalDock('float');
+                toggleTerminalOpen();
+              }}
               className={`grok-btn grok-btn-ghost inline-flex items-center gap-1.5 ${showTerminal ? 'ring-1 ring-border-light' : ''}`}
               title="Host terminal (Ctrl+`)"
             >
@@ -3803,8 +4005,8 @@ export default function ShibaStudio() {
                                     src={runAgent ? resolveAgentAvatarPath(runAgent) : MISSING_AGENT_AVATAR_PATH}
                                     alt=""
                                     className="agent-avatar-xs shrink-0"
-                                    width={18}
-                                    height={18}
+                                    width={26}
+                                    height={26}
                                     title={runAgent ? undefined : 'This agent has since been deleted'}
                                   />
                                   <span className="truncate font-medium">{r.agentName}</span>
@@ -3923,7 +4125,7 @@ export default function ShibaStudio() {
                 {agents.map(agent => (
                   <div key={agent.id} className="grok-card p-5 flex flex-col min-w-0">
                     <div className="flex items-start gap-3 min-w-0">
-                      <img src={resolveAgentAvatarPath(agent)} alt="" className="agent-avatar shrink-0" width={40} height={40} />
+                      <img src={resolveAgentAvatarPath(agent)} alt="" className="agent-avatar shrink-0" width={48} height={48} />
                       <div className="min-w-0 flex-1">
                         <div className="font-semibold text-base flex items-center gap-2 min-w-0">
                           <span className="truncate">{agent.name}</span>
@@ -4295,6 +4497,89 @@ export default function ShibaStudio() {
                             <textarea className="grok-input h-24 font-mono text-xs" placeholder="Paste full Service Account JSON for server-side auth" value={gd.serviceAccountJson || ''} onChange={e => setIntCreds((c:any)=>({...c, googledrive: {...(c.googledrive||{}), serviceAccountJson: e.target.value}}))} />
                           </div>
                         </details>
+                      </>
+                      );
+                    })()}
+                    {integration.id === 'gmail' && (() => {
+                      const bundled = !!(config as any)?.driveBundledClient;
+                      const gd = intCreds.googledrive || {};
+                      const clientReady = bundled || (!!gd.clientId?.trim() && !!gd.clientSecret?.trim());
+                      return (
+                      <>
+                        <div className="text-xs text-dim mb-3">
+                          Sign in with Google to let agents list, read, and send mail from this Gmail account.
+                          Uses the same OAuth client as Google Drive. Enable the Gmail API on that Google Cloud project.
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          {intTest.gmail?.ok ? (
+                            <span className="status-pill text-success">Connected{intTest.gmail.email ? ` · ${intTest.gmail.email}` : ''}</span>
+                          ) : (
+                            <span className="status-pill text-dim">Not signed in</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!clientReady) {
+                                toast('Add a Google OAuth client on the Google Drive card (Advanced), Save, then sign in here.');
+                                return;
+                              }
+                              void startGoogleGmailLogin();
+                            }}
+                            disabled={gmailStarting}
+                            className="grok-btn grok-btn-primary text-xs"
+                            title="Open the Google consent popup for Gmail"
+                          >
+                            {gmailStarting ? 'Opening Google…' : '🔑 Sign in with Google'}
+                          </button>
+                          {intTest.gmail?.ok && (
+                            <button type="button" onClick={() => void disconnectGoogleGmail()} className="grok-btn grok-btn-ghost text-xs text-error">Disconnect</button>
+                          )}
+                        </div>
+                        {bundled && !intTest.gmail?.ok && (
+                          <div className="text-[11px] text-dim mb-1">Ready — click Sign in with Google, no extra setup needed.</div>
+                        )}
+                      </>
+                      );
+                    })()}
+                    {integration.id === 'youtube' && (() => {
+                      const bundled = !!(config as any)?.driveBundledClient;
+                      const gd = intCreds.googledrive || {};
+                      const clientReady = bundled || (!!gd.clientId?.trim() && !!gd.clientSecret?.trim());
+                      return (
+                      <>
+                        <div className="text-xs text-dim mb-3">
+                          Sign in with Google to let agents search, list this channel&apos;s uploads, and upload workspace videos.
+                          Uses the same OAuth client as Google Drive. Enable the YouTube Data API v3 on that Google Cloud project.
+                          Uploads default to unlisted.
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          {intTest.youtube?.ok ? (
+                            <span className="status-pill text-success">Connected{intTest.youtube.channelTitle ? ` · ${intTest.youtube.channelTitle}` : ''}</span>
+                          ) : (
+                            <span className="status-pill text-dim">Not signed in</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!clientReady) {
+                                toast('Add a Google OAuth client on the Google Drive card (Advanced), Save, then sign in here.');
+                                return;
+                              }
+                              void startGoogleYoutubeLogin();
+                            }}
+                            disabled={youtubeStarting}
+                            className="grok-btn grok-btn-primary text-xs"
+                            title="Open the Google consent popup for YouTube"
+                          >
+                            {youtubeStarting ? 'Opening Google…' : '🔑 Sign in with Google'}
+                          </button>
+                          {intTest.youtube?.ok && (
+                            <button type="button" onClick={() => void disconnectGoogleYoutube()} className="grok-btn grok-btn-ghost text-xs text-error">Disconnect</button>
+                          )}
+                        </div>
+                        {bundled && !intTest.youtube?.ok && (
+                          <div className="text-[11px] text-dim mb-1">Ready — click Sign in with Google, no extra setup needed.</div>
+                        )}
                       </>
                       );
                     })()}
@@ -5235,6 +5520,7 @@ export default function ShibaStudio() {
                   </div>
                   <div className="text-xs text-dim mt-1">
                     When ready, Grok Chat can route through the CLI and agents gain a <span className="font-mono">grok_cli</span> tool.
+                    Interactive Grok (including <span className="font-mono">grok login</span>) runs in the Studio Terminal — the official TUI needs a real PTY.
                     Shiba only advertises harnesses and transports confirmed by the detected CLI.
                   </div>
                   {grokCliStatus?.installed && (
@@ -5270,6 +5556,23 @@ export default function ShibaStudio() {
                   )}
                   {grokCliStatus?.installed && (
                     <div className="mt-3 flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void (async () => {
+                            const { openGrokCliInTerminal } = await import('@/lib/grok-cli-terminal-client');
+                            const r = await openGrokCliInTerminal({
+                              intent: grokCliStatus.ready ? 'agent' : 'login',
+                            });
+                            if (!r.ok) toast.error(r.error || 'Could not launch Grok CLI');
+                            else toast.success(r.launched === 'login' ? 'Finish Grok sign-in in the Terminal' : 'Grok CLI opened in the Terminal');
+                          })();
+                        }}
+                        className="grok-btn grok-btn-primary text-xs"
+                      >
+                        <Terminal size={12} />
+                        {grokCliStatus.ready ? 'Open in Terminal' : 'Sign in in Terminal'}
+                      </button>
                       <button
                         type="button"
                         onClick={() => void checkCliUpdate()}
@@ -5801,7 +6104,7 @@ export default function ShibaStudio() {
             tabIndex={-1}
           >
             <div className="flex items-center gap-3 mb-1">
-              <img src={resolveAgentAvatarPath(historyAgent)} alt="" className="agent-avatar-sm" width={28} height={28} />
+              <img src={resolveAgentAvatarPath(historyAgent)} alt="" className="agent-avatar-sm" width={36} height={36} />
               <div className="text-lg font-semibold truncate">Run log — {historyAgent.name}</div>
               <button
                 type="button"
@@ -6080,8 +6383,8 @@ export default function ShibaStudio() {
                         src={detailAgent ? resolveAgentAvatarPath(detailAgent) : MISSING_AGENT_AVATAR_PATH}
                         alt=""
                         className="agent-avatar-sm shrink-0"
-                        width={28}
-                        height={28}
+                        width={36}
+                        height={36}
                         title={detailAgent ? undefined : 'This agent has since been deleted'}
                       />
                       <div className="text-lg font-semibold truncate">{runDetail.agentName}</div>
@@ -6244,19 +6547,48 @@ export default function ShibaStudio() {
                   <input className="grok-input" value={agentForm.name} onChange={e => setAgentForm({ ...agentForm, name: e.target.value })} />
                 </div>
                 <div>
-                  <div className="grok-label">Alien Avatar</div>
+                  <div className="grok-label">Avatar</div>
                   <div className="flex items-center gap-3 mb-2">
                     <img
-                      src={ALIEN_AVATARS.find(a => a.id === agentForm.avatar)?.path || ALIEN_AVATARS[0].path}
+                      src={resolveAgentAvatarPath({ id: editingAgent?.id || 'preview', avatar: agentForm.avatar })}
                       alt="Selected avatar"
                       className="agent-avatar"
-                      width={40}
-                      height={40}
+                      width={48}
+                      height={48}
                     />
-                    <span className="text-xs text-dim">{ALIEN_AVATARS.find(a => a.id === agentForm.avatar)?.label || 'Alien 1'} — pick from 50 aliens below</span>
+                    <span className="text-xs text-dim">
+                      {isImagineAvatarId(agentForm.avatar)
+                        ? 'Grok Imagine portrait — generate another or pick an alien below'
+                        : `${ALIEN_AVATARS.find((av) => av.id === agentForm.avatar)?.label || 'Alien 1'} — pick an alien, or generate a portrait with Grok Imagine 1.5`}
+                    </span>
                   </div>
-                  <div className="avatar-picker">
-                    {ALIEN_AVATARS.map(av => (
+                  <div className="avatar-imagine-row">
+                    <input
+                      className="grok-input text-xs flex-1 min-w-0"
+                      value={avatarPrompt}
+                      onChange={(e) => setAvatarPrompt(e.target.value)}
+                      placeholder="Optional: a silver fox in a flight jacket, cockpit lighting…"
+                      disabled={avatarGenerating}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void generateImagineAvatar();
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="grok-btn grok-btn-secondary text-xs shrink-0"
+                      onClick={() => void generateImagineAvatar()}
+                      disabled={avatarGenerating}
+                      title="Generate a square portrait with Grok Imagine 1.5"
+                    >
+                      <Sparkles size={13} className={avatarGenerating ? 'animate-spin' : ''} />
+                      {avatarGenerating ? 'Imagining…' : 'Imagine'}
+                    </button>
+                  </div>
+                  <div className="avatar-picker mt-2">
+                    {ALIEN_AVATARS.map((av) => (
                       <button
                         key={av.id}
                         type="button"
@@ -6264,7 +6596,7 @@ export default function ShibaStudio() {
                         onClick={() => setAgentForm({ ...agentForm, avatar: av.id })}
                         title={av.label}
                       >
-                        <img src={av.path} alt={av.label} width={32} height={32} />
+                        <img src={av.path} alt={av.label} width={36} height={36} />
                       </button>
                     ))}
                   </div>
@@ -6508,7 +6840,7 @@ export default function ShibaStudio() {
                   }}>
                     {agents.filter(a => !editingAgent || a.id !== editingAgent.id).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
-                  <div className="text-[10px] text-dim">Selected agents can receive messages from this one via the send_to_peer tool.</div>
+                  <div className="text-[10px] text-dim">Selected agents can be addressed with send_to_peer or @Name in chat; they reply in the same room, or pick up the note on their next run.</div>
                 </div>
 
                 <div className="agent-form-section">

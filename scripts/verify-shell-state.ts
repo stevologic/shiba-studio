@@ -53,7 +53,7 @@ async function main() {
         description: 'temp',
         workspace: { path: '.', useWorktree: false },
         integrations: {
-          github: false, slack: false, googledrive: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false,
+          github: false, slack: false, googledrive: false, gmail: false, youtube: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false,
         },
         peers: [],
         skills: [],

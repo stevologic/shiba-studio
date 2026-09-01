@@ -1259,6 +1259,10 @@
   border-top: 1px solid var(--ide-border);
 }
 
+.bottomPanelTerminal {
+  height: clamp(220px, 38vh, 420px);
+}
+
 .bottomTabs {
   display: flex;
   align-items: center;
@@ -1309,6 +1313,59 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
+}
+
+.bottomContentTerminal {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ideTerminalPane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: #0a0a0a;
+}
+
+.ideTerminalChrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--ide-border);
+  color: var(--ide-dim);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.ideTerminalGrok {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  color: var(--ide-text);
+  background: transparent;
+  border: 1px solid var(--ide-border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ideTerminalGrok:hover {
+  border-color: var(--ide-muted);
+}
+
+.ideTerminalViewport {
+  flex: 1;
+  min-height: 0;
 }
 
 .bottomEmpty {

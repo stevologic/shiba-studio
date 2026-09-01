@@ -118,6 +118,8 @@ export interface ContextModelMessage {
   thinking?: string;
   attachments?: ChatAttachment[];
   createdAt?: string;
+  agentId?: string;
+  agentName?: string;
 }
 
 export interface PreparedSessionContext {

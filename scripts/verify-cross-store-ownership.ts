@@ -17,7 +17,7 @@ function agent(id: string, workspace: string): Agent {
     integrations: {
       github: false,
       slack: false,
-      googledrive: false,
+      googledrive: false, gmail: false, youtube: false,
       discord: false,
       x: false,
       reddit: false,

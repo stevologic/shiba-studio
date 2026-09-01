@@ -43,9 +43,12 @@ const ENDPOINTS: Endpoint[] = [
   { group: 'Config', method: 'GET', path: '/api/config', summary: 'Settings (secrets masked), auth flags, secret-key location.' },
   { group: 'Config', method: 'POST', path: '/api/config', summary: 'Update settings. This example sets the daily spend budget.', mutating: true, body: JSON.stringify({ dailyBudgetUsd: 0 }, null, 2) },
   { group: 'Config', method: 'GET', path: '/api/integrations', summary: 'Configured integration credentials (secret fields masked) + channel-listener status.' },
+  { group: 'Config', method: 'POST', path: '/api/integrations', summary: 'Save, test, or disconnect an integration (including Gmail and YouTube).', mutating: true, body: JSON.stringify({ action: 'test', which: 'gmail' }, null, 2) },
 
   // --- Agents & runs ---
   { group: 'Agents', method: 'GET', path: '/api/agents', summary: 'All execution owners with models, workspaces, scopes, skills, and peers.' },
+  { group: 'Agents', method: 'POST', path: '/api/agents/imagine-avatar', summary: 'Generate a square Grok Imagine portrait for an agent avatar.', mutating: true, body: JSON.stringify({ prompt: 'a silver fox in a flight jacket' }, null, 2) },
+  { group: 'Agents', method: 'GET', path: '/api/agent-avatars/<uuid>', summary: 'Raw bytes for a stored Grok Imagine agent portrait.' },
   { group: 'Agents', method: 'GET', path: '/api/runs', summary: 'Recent run summaries (no trace payloads).', query: [{ name: 'agentId', desc: 'Filter to one execution owner' }, { name: 'limit', desc: 'Max rows (default 50)', example: '20' }, { name: 'scheduledOnly', desc: '1 = only Automation-owned runs' }] },
   { group: 'Agents', method: 'GET', path: '/api/runs', summary: 'A single run WITH its full execution trace.', query: [{ name: 'id', desc: 'Run id', example: '' }] },
 
@@ -78,6 +81,7 @@ const ENDPOINTS: Endpoint[] = [
 
   // --- CLI & backup ---
   { group: 'CLI & Backup', method: 'GET', path: '/api/grok-cli/status', summary: 'Official Grok Build path/version, authenticated readiness, models, detected headless/ACP capabilities, and audited open-source provenance.', query: [{ name: 'checkUpdate', desc: '1 = also check for a newer released binary' }] },
+  { group: 'CLI & Backup', method: 'POST', path: '/api/terminal', summary: 'Run a command, write the PTY, restart the session, or launch interactive Grok Build.', mutating: true, body: JSON.stringify({ action: 'grok', intent: 'auto' }, null, 2) },
   { group: 'CLI & Backup', method: 'GET', path: '/api/backup', summary: 'Download a full studio backup. Sensitive: the encryption key is included unless omitted.', sensitive: true, query: [{ name: 'key', desc: 'Use "omit" unless you explicitly need a portable secret-bearing backup', example: 'omit' }] },
 
   { group: 'Phone', method: 'GET', path: '/api/phone/admin', summary: 'Localhost-only phone-assistant status, public MCP URL, and Voice Agent setup.', sensitive: true },

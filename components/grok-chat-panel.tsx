@@ -62,6 +62,7 @@ import {
   type ChatCommandDefinition,
 } from '@/lib/chat-commands';
 import { parseChatToolsSetting } from '@/lib/chat-tool-mode';
+import { openGrokCliInTerminal } from '@/lib/grok-cli-terminal-client';
 import { v4 as uuidv4 } from 'uuid';
 import { createPortal } from 'react-dom';
 import { invalidateClientJson, loadClientJson } from '@/lib/client-json';
@@ -232,7 +233,7 @@ function welcomeForTarget(target: ChatTarget, agents: Agent[]): UiMessage {
     return {
       id: 'welcome',
       role: 'assistant',
-      content: `Multi-agent mode: I'll consult ${names}, then synthesize one unified answer for you.`,
+      content: `Agent room: ${names} share this chat. @Name someone to address them; they can talk to each other here too.`,
     };
   }
   if (target !== 'grok') {
@@ -253,7 +254,7 @@ function welcomeForTarget(target: ChatTarget, agents: Agent[]): UiMessage {
   return {
     id: 'welcome',
     role: 'assistant',
-    content: 'Hello! I am Grok. Workspace global uploads are included in every reply. Pick an agent above to chat in their voice, or use All agents for a synthesized panel discussion.',
+    content: 'Hello! I am Grok. Workspace global uploads are included in every reply. Pick an agent above to chat in their voice, @Name them from any chat, or use All agents for a shared room.',
   };
 }
 
@@ -429,6 +430,26 @@ export default function GrokChatPanel({
 
   function acceptSlash(c: Pick<ChatCommandDefinition, 'insert'>) {
     setInput(c.insert);
+    setSlashIdx(0);
+    textareaRef.current?.focus();
+  }
+
+  const mentionMatch = input.match(/(^|[\s])@([^\s@]*)$/);
+  const mentionPrefix = mentionMatch ? mentionMatch[2] : '';
+  const mentionCandidates = mentionMatch
+    ? agents.filter((agent) => {
+      if (chatTarget !== 'grok' && chatTarget !== 'all' && agent.id === chatTarget) return false;
+      const q = mentionPrefix.toLowerCase();
+      return !q || agent.name.toLowerCase().includes(q) || agent.id.toLowerCase().startsWith(q);
+    })
+    : [];
+  const mentionMenuOpen = !streaming && !slashMenuOpen && !slashDismissed && mentionCandidates.length > 0;
+  const mentionSelected = Math.min(slashIdx, Math.max(0, mentionCandidates.length - 1));
+
+  function acceptMention(agent: Agent, fromValue = input) {
+    const next = fromValue.replace(/@([^\s@]*)$/, `@${agent.name} `);
+    setInput(next);
+    inputRef.current = next;
     setSlashIdx(0);
     textareaRef.current?.focus();
   }
@@ -2527,6 +2548,8 @@ export default function GrokChatPanel({
     let buffer = '';
     let sawContent = false;
     let sawDone = false;
+    let targetId = assistantId;
+    const streamIds = new Set<string>([assistantId]);
 
     while (true) {
       const { done, value } = await reader.read();
@@ -2551,8 +2574,12 @@ export default function GrokChatPanel({
             agentId?: string;
             name?: string;
             content?: string;
+            messageId?: string;
             usage?: Record<string, unknown>;
             file?: ChatFileRef;
+            url?: string;
+            title?: string;
+            detail?: string;
           };
           try {
             event = JSON.parse(payload);
@@ -2561,10 +2588,58 @@ export default function GrokChatPanel({
             continue;
           }
 
+          if (event.type === 'agent-turn-start' && event.agentId && event.name && event.messageId) {
+            const nextId = event.messageId;
+            const nextAgentId = event.agentId;
+            const nextName = event.name;
+            const nextModel = event.model;
+            mapMessages((msgs) => {
+              const current = msgs.find((m) => m.id === targetId);
+              const canRetarget = !!current
+                && streamIds.has(current.id)
+                && !current.content?.trim()
+                && !(current.perspectives && current.perspectives.length);
+              if (canRetarget) {
+                targetId = nextId;
+                streamIds.delete(current.id);
+                streamIds.add(nextId);
+                return msgs.map((m) =>
+                  m.id === current.id
+                    ? {
+                        ...m,
+                        id: nextId,
+                        agentId: nextAgentId,
+                        agentName: nextName,
+                        model: nextModel || m.model,
+                        streaming: true,
+                      }
+                    : m,
+                );
+              }
+              const settled = msgs.map((m) => (m.id === targetId ? { ...m, streaming: false } : m));
+              targetId = nextId;
+              streamIds.add(nextId);
+              return [
+                ...settled,
+                {
+                  id: nextId,
+                  role: 'assistant' as const,
+                  content: '',
+                  thinking: '',
+                  streaming: true,
+                  agentId: nextAgentId,
+                  agentName: nextName,
+                  model: nextModel,
+                },
+              ];
+            }, { streaming: true });
+            continue;
+          }
+
           if (event.type === 'thinking' && event.delta) {
             mapMessages((msgs) =>
               msgs.map((m) =>
-                m.id === assistantId ? { ...m, thinking: (m.thinking || '') + event.delta } : m,
+                m.id === targetId ? { ...m, thinking: (m.thinking || '') + event.delta } : m,
               ),
               { streaming: true },
             );
@@ -2572,18 +2647,18 @@ export default function GrokChatPanel({
             const perspective = { agentId: event.agentId, name: event.name, content: event.content };
             onPerspective?.(perspective);
             mapMessages((msgs) =>
-              msgs.map((m) =>
-                m.id === assistantId
-                  ? { ...m, perspectives: [...(m.perspectives || []), perspective] }
-                  : m,
-              ),
+              msgs.map((m) => {
+                if (m.id !== targetId) return m;
+                if (m.agentId === event.agentId && m.content?.trim()) return m;
+                return { ...m, perspectives: [...(m.perspectives || []), perspective] };
+              }),
               { streaming: true },
             );
           } else if (event.type === 'file-created' && event.file?.path) {
             const file = event.file;
             mapMessages((msgs) =>
               msgs.map((m) =>
-                m.id === assistantId
+                m.id === targetId
                   ? {
                       ...m,
                       files: (m.files || []).some((f) => f.path === file.path)
@@ -2594,16 +2669,41 @@ export default function GrokChatPanel({
               ),
               { streaming: true },
             );
-          } else if (event.type === 'content' && event.delta) {
-            sawContent = true;
+          } else if (event.type === 'tool-trace' && event.name) {
+            const label = event.name === 'x_search' ? 'xAI X search'
+              : event.name === 'web_search' ? 'xAI web search'
+                : event.name === 'code_interpreter' ? 'xAI code interpreter'
+                  : event.name;
+            const line = `${label}${event.detail ? `: ${event.detail}` : ''}\n`;
             mapMessages((msgs) =>
               msgs.map((m) =>
-                m.id === assistantId ? { ...m, content: m.content + event.delta } : m,
+                m.id === targetId ? { ...m, thinking: (m.thinking || '') + line } : m,
+              ),
+              { streaming: true },
+            );
+          } else if (event.type === 'citation' && event.url) {
+            const citationUrl = event.url;
+            const line = `\n- ${event.title ? `${event.title} — ` : ''}${citationUrl}`;
+            mapMessages((msgs) =>
+              msgs.map((m) => {
+                if (m.id !== targetId) return m;
+                if ((m.content || '').includes(citationUrl)) return m;
+                const prefix = m.content.includes('Sources:') ? '' : '\n\nSources:';
+                return { ...m, content: `${m.content}${prefix}${line}` };
+              }),
+              { streaming: true },
+            );
+          } else if (event.type === 'content' && event.delta) {
+            sawContent = true;
+            const applyTo = targetId;
+            mapMessages((msgs) =>
+              msgs.map((m) =>
+                m.id === applyTo ? { ...m, content: m.content + event.delta } : m,
               ),
               { streaming: true },
             );
             // Voice agent: start TTS on the first complete sentence while still streaming.
-            if (autoSpeakRef.current) onVoiceStreamDelta(assistantId, event.delta);
+            if (autoSpeakRef.current) onVoiceStreamDelta(applyTo, event.delta);
           } else if (event.type === 'usage' && event.usage) {
             const u = event.usage;
             const promptTokens = Number(u.prompt_tokens ?? u.input_tokens ?? 0) || 0;
@@ -2612,7 +2712,7 @@ export default function GrokChatPanel({
             if (totalTokens > 0) {
               mapMessages((msgs) =>
                 msgs.map((m) =>
-                  m.id === assistantId ? { ...m, usage: { promptTokens, completionTokens, totalTokens } } : m,
+                  m.id === targetId ? { ...m, usage: { promptTokens, completionTokens, totalTokens } } : m,
                 ),
                 { streaming: true, persist: false },
               );
@@ -2622,14 +2722,14 @@ export default function GrokChatPanel({
             throw new Error(formatUserFacingStreamError(event.message || 'Stream error') || 'Stream error');
           } else if (event.type === 'done') {
             sawDone = true;
-            if (event.model) {
-              mapMessages((msgs) =>
-                msgs.map((m) =>
-                  m.id === assistantId ? { ...m, model: event.model, streaming: false } : m,
-                ),
-                { streaming: true },
-              );
-            }
+            mapMessages((msgs) =>
+              msgs.map((m) =>
+                streamIds.has(m.id)
+                  ? { ...m, model: event.model || m.model, streaming: false }
+                  : m,
+              ),
+              { streaming: true },
+            );
           }
         }
       }
@@ -2637,7 +2737,8 @@ export default function GrokChatPanel({
 
     // Stream closed without a final bubble (proxy kill / idle timeout) — recover cleanly.
     if (!sawContent) {
-      const current = messagesRef.current.find((m) => m.id === assistantId);
+      const current = messagesRef.current.find((m) => m.id === targetId)
+        || messagesRef.current.find((m) => m.id === assistantId);
       if (!current?.content?.trim()) {
         const note = sawDone
           ? 'I finished without a text reply. Try again or rephrase.'
@@ -2645,7 +2746,7 @@ export default function GrokChatPanel({
         mapMessages(
           (msgs) =>
             msgs.map((m) =>
-              m.id === assistantId ? { ...m, content: note, streaming: false } : m,
+              m.id === (current?.id || assistantId) ? { ...m, content: note, streaming: false } : m,
             ),
           { streaming: false },
         );
@@ -2654,7 +2755,7 @@ export default function GrokChatPanel({
     }
 
     mapMessages(
-      (msgs) => msgs.map((m) => (m.id === assistantId ? { ...m, streaming: false } : m)),
+      (msgs) => msgs.map((m) => (streamIds.has(m.id) ? { ...m, streaming: false } : m)),
       { streaming: false },
     );
   }
@@ -2942,7 +3043,10 @@ export default function GrokChatPanel({
         toolsEnabled,
       };
       if (!isMulti && selectedAgent) {
-        body.system = buildAgentChatSystem(selectedAgent);
+        body.system = buildAgentChatSystem(
+          selectedAgent,
+          agents.filter((peer) => peer.id !== selectedAgent.id).map((peer) => ({ id: peer.id, name: peer.name })),
+        );
         // Server injects live integration context (Obsidian vault, GitHub repos…)
         body.agentId = selectedAgent.id;
       }
@@ -3075,6 +3179,32 @@ export default function GrokChatPanel({
           ? 'Automatic model tools are now **on** for this chat. Grok may use available web, terminal, workspace, integration, and background-task tools when needed.'
           : 'Automatic model tools are now **off** for this chat. Grok will answer from the conversation and supplied context without calling tools. Explicit slash commands still work.',
         { toolsEnabled: next },
+      );
+      return true;
+    }
+
+    if (parsed.name === 'grok') {
+      const arg = parsed.args.trim().toLowerCase();
+      setInput('');
+      if (arg && arg !== 'login') {
+        appendExchange('Usage: `/grok` opens interactive Grok Build in the Studio Terminal. `/grok login` starts sign-in there.');
+        return true;
+      }
+      const r = await openGrokCliInTerminal({
+        intent: arg === 'login' ? 'login' : 'auto',
+        cwd: workspaceDir || undefined,
+      });
+      if (!r.ok) {
+        appendExchange(
+          `Could not launch Grok Build in the Terminal: ${r.error || 'unknown error'}`
+          + (r.installHint ? `\n\nInstall with:\n\`\`\`\n${r.installHint}\n\`\`\`` : ''),
+        );
+        return true;
+      }
+      appendExchange(
+        r.launched === 'login'
+          ? 'Opened the Studio Terminal and started **Grok Build sign-in**. Finish the login flow there, then chat can route through the CLI.'
+          : `Opened the Studio Terminal and launched **interactive Grok Build**${workspaceDir ? ` in \`${workspaceDir}\`` : ''}.`,
       );
       return true;
     }
@@ -3657,7 +3787,7 @@ export default function GrokChatPanel({
           title={
             autoSpeak && agents.length >= 2
               ? 'With Grok Voice on, “All agents” is a live multi-agent voice circle — they keep talking if you go quiet'
-              : 'Chat as Grok, a specific agent, or all agents'
+              : 'Chat as Grok, a specific agent, or a shared agent room'
           }
         >
           <option value="grok">Grok (default)</option>
@@ -3671,7 +3801,7 @@ export default function GrokChatPanel({
           <option value="all" disabled={agents.length === 0}>
             {autoSpeak && agents.length >= 2
               ? 'All agents — voice group chat'
-              : 'All agents — summarize'}
+              : 'All agents — room'}
           </option>
         </select>
         <button
@@ -3726,15 +3856,15 @@ export default function GrokChatPanel({
             >
               <div className="grok-chat-bubble-header">
                 {!isUser && m.agentId && (
-                  // Always render the agent's alien for agent responses — fall
-                  // back to the id-derived avatar so it survives the agents
+                  // Always render the agent's avatar for agent responses — fall
+                  // back to the id-derived alien so it survives the agents
                   // list loading late or the agent being deleted since.
                   <img
                     src={resolveAgentAvatarPath(agents.find((a) => a.id === m.agentId) || { id: m.agentId })}
                     alt={m.agentName ? `${m.agentName} avatar` : 'Agent avatar'}
                     className="agent-avatar-xs"
-                    width={20}
-                    height={20}
+                    width={26}
+                    height={26}
                   />
                 )}
                 <span className="grok-chat-role">
@@ -4065,6 +4195,33 @@ export default function GrokChatPanel({
         </div>
       )}
 
+      {mentionMenuOpen && (
+        <div className="chat-slash-menu" role="listbox" aria-label="Mention an agent">
+          {mentionCandidates.map((agent, i) => (
+            <button
+              key={agent.id}
+              type="button"
+              role="option"
+              aria-selected={i === mentionSelected}
+              className={`chat-slash-item ${i === mentionSelected ? 'chat-slash-item-active' : ''}`}
+              onMouseDown={(e) => { e.preventDefault(); acceptMention(agent); }}
+              onMouseEnter={() => setSlashIdx(i)}
+            >
+              <img
+                src={resolveAgentAvatarPath(agent)}
+                alt=""
+                className="agent-avatar-xs"
+                width={22}
+                height={22}
+              />
+              <code className="chat-slash-cmd">@{agent.name}</code>
+              <span className="chat-slash-desc">{agent.description?.trim() || 'Invite this agent into the room'}</span>
+            </button>
+          ))}
+          <div className="chat-slash-footer">↑↓ navigate · Tab or Enter to mention · Esc to dismiss</div>
+        </div>
+      )}
+
       {slashMenuOpen && (
         <div className="chat-slash-menu" role="listbox" aria-label="Slash commands">
           {slashMatches.map((c, i) => (
@@ -4129,6 +4286,27 @@ export default function GrokChatPanel({
               .filter((command) => !session?.ephemeral || command.category !== 'Memory');
             const liveSlashMenuOpen = !streaming && !slashDismissed && liveSlashMatches.length > 0;
             const liveSlashSelected = Math.min(slashIdx, Math.max(0, liveSlashMatches.length - 1));
+            const liveMention = e.currentTarget.value.match(/(^|[\s])@([^\s@]*)$/);
+            const liveMentionPrefix = liveMention ? liveMention[2] : '';
+            const liveMentionCandidates = liveMention
+              ? agents.filter((agent) => {
+                if (chatTarget !== 'grok' && chatTarget !== 'all' && agent.id === chatTarget) return false;
+                const q = liveMentionPrefix.toLowerCase();
+                return !q || agent.name.toLowerCase().includes(q) || agent.id.toLowerCase().startsWith(q);
+              })
+              : [];
+            const liveMentionMenuOpen = !streaming && !liveSlashMenuOpen && !slashDismissed && liveMentionCandidates.length > 0;
+            if (liveMentionMenuOpen) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => (i + 1) % liveMentionCandidates.length); return; }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => (i - 1 + liveMentionCandidates.length) % liveMentionCandidates.length); return; }
+              if (e.key === 'Escape') { setSlashDismissed(true); return; }
+              const sel = liveMentionCandidates[Math.min(slashIdx, Math.max(0, liveMentionCandidates.length - 1))];
+              if ((e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) && sel) {
+                e.preventDefault();
+                acceptMention(sel, e.currentTarget.value);
+                return;
+              }
+            }
             if (liveSlashMenuOpen) {
               if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((i) => (i + 1) % liveSlashMatches.length); return; }
               if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => (i - 1 + liveSlashMatches.length) % liveSlashMatches.length); return; }
@@ -4164,7 +4342,9 @@ export default function GrokChatPanel({
                 ? 'Grok voice on — waiting for reply / speaking…'
                 : project
                   ? 'Ask about this project — uploads are carried into context…'
-                  : 'Ask Grok anything — Shift+Enter for a new line, drop or paste files…'
+                  : chatTarget === 'all'
+                    ? 'Talk in the agent room — @Name to address someone, Shift+Enter for a new line…'
+                    : 'Ask Grok anything — @Name an agent, Shift+Enter for a new line, drop or paste files…'
           }
         />
         <button
@@ -4394,9 +4574,9 @@ export default function GrokChatPanel({
           : project
           ? `Global workspace uploads + ${project.files.length} project file(s) included in every reply · chat history saved to this project`
           : chatTarget === 'all'
-            ? 'All agents answer in parallel, then Grok synthesizes a unified summary · global workspace uploads included'
+            ? 'Shared agent room — they take turns in this chat. @Name someone to address them · global workspace uploads included'
             : selectedAgent
-              ? `Chatting as ${selectedAgent.name}${selectedAgent.chatSkill ? ' · Skill active' : ' · add a Skill in agent settings'} · global uploads included`
+              ? `Chatting as ${selectedAgent.name}${selectedAgent.chatSkill ? ' · Skill active' : ' · add a Skill in agent settings'} · @Name another agent to pull them in · global uploads included`
               : parseModelRef(chatModel).provider === 'local'
                 ? 'Local model — served from this machine · global workspace uploads included'
                 : parseModelRef(chatModel).provider === 'cli'

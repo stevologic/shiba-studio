@@ -322,6 +322,73 @@ export function writeTerminal(data: string): { ok: boolean; error?: string } {
  * Run a command in the shared interactive terminal and capture output until a
  * completion marker (or timeout). Output is also shown in the Terminal UI.
  */
+export function isTerminalBusy(): boolean {
+  return state().commandWaiters.length > 0;
+}
+
+export async function launchGrokCliInPty(opts?: {
+  intent?: 'auto' | 'agent' | 'login';
+  cwd?: string;
+  force?: boolean;
+}): Promise<{
+  ok: boolean;
+  launched?: 'agent' | 'login';
+  command?: string;
+  path?: string;
+  error?: string;
+  busy?: boolean;
+  installHint?: string;
+}> {
+  const {
+    resolveGrokCliTerminalIntent,
+    buildInteractiveGrokCliCommand,
+    grokCliInstallHint,
+  } = await import('./grok-cli-terminal');
+  const { detectGrokCli } = await import('./grok-cli');
+  const path = await import('path');
+  const fs = await import('fs/promises');
+
+  startTerminalServer();
+  if (isTerminalBusy() && !opts?.force) {
+    return { ok: false, busy: true, error: 'The Studio Terminal is busy with another command. Wait, or restart the session.' };
+  }
+
+  const status = await detectGrokCli();
+  const launch = resolveGrokCliTerminalIntent(status, opts?.intent || 'auto');
+  if (launch === 'missing' || !status.path) {
+    return {
+      ok: false,
+      error: status.error || 'Grok Build CLI is not installed on this machine.',
+      installHint: grokCliInstallHint(),
+    };
+  }
+
+  let cwd: string | undefined;
+  const requested = String(opts?.cwd || '').trim();
+  if (requested) {
+    if (requested.includes('\0')) return { ok: false, error: 'Invalid workspace path' };
+    const abs = path.resolve(requested);
+    const stat = await fs.stat(abs).catch(() => null);
+    if (!stat?.isDirectory()) return { ok: false, error: `Workspace is not a directory: ${requested}` };
+    cwd = abs;
+  }
+
+  const session = ensureMainSession();
+  if (!session.alive) return { ok: false, error: 'Terminal session is not alive' };
+  const command = buildInteractiveGrokCliCommand({
+    cliPath: status.path,
+    launch,
+    kind: session.shell.kind,
+    cwd,
+  });
+  const note = launch === 'login'
+    ? '[shiba · grok] Signing in with Grok Build in this terminal…'
+    : '[shiba · grok] Opening the interactive Grok Build CLI…';
+  injectUiNote(session, note);
+  session.proc.write(`${command}\r`);
+  return { ok: true, launched: launch, command, path: status.path };
+}
+
 export async function runTerminalCommand(
   command: string,
   opts?: { timeoutMs?: number; signal?: AbortSignal },
@@ -337,6 +404,21 @@ export async function runTerminalCommand(
   const cmd = String(command || '').trim();
   if (!cmd) {
     return { ok: false, output: '', code: null, timedOut: false, error: 'Empty command' };
+  }
+  const { parseInteractiveGrokCliInvocation } = await import('./grok-cli-terminal');
+  const interactive = parseInteractiveGrokCliInvocation(cmd);
+  if (interactive) {
+    const launched = await launchGrokCliInPty({ intent: interactive, force: true });
+    const note = launched.ok
+      ? `Launched interactive Grok Build (${launched.launched}) in the Studio Terminal. Watch that panel — this tool does not wait on the TUI.`
+      : (launched.error || 'Could not launch Grok Build in the terminal');
+    return {
+      ok: launched.ok,
+      output: note,
+      code: launched.ok ? 0 : 1,
+      timedOut: false,
+      error: launched.ok ? undefined : launched.error,
+    };
   }
   if (opts?.signal?.aborted) {
     return { ok: false, output: '', code: null, timedOut: false, error: 'Aborted' };

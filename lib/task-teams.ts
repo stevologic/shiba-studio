@@ -13,7 +13,7 @@ import {
   transitionTaskInOpenTransaction,
 } from './task-ledger';
 import type { CreateTaskInput, TaskRecord, TaskWorkspaceRoot } from './task-types';
-import type { Agent } from './types';
+import { EMPTY_INTEGRATION_SCOPE, type Agent } from './types';
 import { isAutomationMaintenanceActive } from './automation-maintenance';
 
 export interface TeamWorkerSpec {
@@ -406,17 +406,10 @@ async function runWorker(parentId: string, task: TaskRecord): Promise<void> {
       (Array.isArray(task.metadata.integrationScopes) ? task.metadata.integrationScopes : [])
         .map(String).map((scope) => scope.toLowerCase()),
     );
-    const scopedIntegrations: Agent['integrations'] = {
-      github: baseAgent.integrations.github && grantedIntegrationScopes.has('github'),
-      slack: baseAgent.integrations.slack && grantedIntegrationScopes.has('slack'),
-      googledrive: baseAgent.integrations.googledrive && grantedIntegrationScopes.has('googledrive'),
-      discord: baseAgent.integrations.discord && grantedIntegrationScopes.has('discord'),
-      x: baseAgent.integrations.x && grantedIntegrationScopes.has('x'),
-      reddit: baseAgent.integrations.reddit && grantedIntegrationScopes.has('reddit'),
-      obsidian: baseAgent.integrations.obsidian && grantedIntegrationScopes.has('obsidian'),
-      vercel: baseAgent.integrations.vercel && grantedIntegrationScopes.has('vercel'),
-      netlify: baseAgent.integrations.netlify && grantedIntegrationScopes.has('netlify'),
-    };
+    const scopedIntegrations: Agent['integrations'] = { ...EMPTY_INTEGRATION_SCOPE };
+    for (const key of Object.keys(EMPTY_INTEGRATION_SCOPE) as Array<keyof Agent['integrations']>) {
+      scopedIntegrations[key] = !!(baseAgent.integrations[key] && grantedIntegrationScopes.has(key));
+    }
     const runId = randomUUID();
     const workerAgent: Agent = readOnly
       ? { ...baseAgent, integrations: scopedIntegrations, workspace: { ...baseAgent.workspace, path: task.workspaceRoots[0]?.path || baseAgent.workspace.path, useWorktree: false } }

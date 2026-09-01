@@ -47,7 +47,7 @@ Connect a GitHub personal access token under **Capabilities → GitHub**. The to
 
 ## Terminal and commands
 
-The terminal button opens Shiba Studio’s existing persistent host terminal. It is a real `xterm.js` and `node-pty` session that survives page navigation and can also be opened with **Ctrl/Cmd+`**.
+The **Terminal** tab in the editor bottom panel is the same persistent host PTY used everywhere else (`xterm.js` + `node-pty`). It is not a second shell: Code, Chat, and the studio overlay share one session that survives navigation. **Ctrl/Cmd+`** on Code docks that PTY here instead of covering the editor. The **Grok** control launches interactive Grok Build (or sign-in) in this terminal.
 
 Use **Ctrl/Cmd+Shift+P** for Code commands such as saving, refreshing the tree and repository state, changing activities, and opening the terminal. The app-wide **Ctrl/Cmd+K** palette stays out of Monaco’s keyboard-chord handling while the editor has focus. Press **?** (or **Ctrl/Cmd+/** outside Monaco) for the studio shortcut overlay.
 

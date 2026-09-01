@@ -15,6 +15,8 @@ function countConfiguredIntegrations(creds: IntegrationCreds): number {
   if (creds.github?.token?.trim()) n++;
   if (creds.slack?.token?.trim()) n++;
   if (creds.googledrive?.accessToken?.trim() || creds.googledrive?.serviceAccountJson?.trim()) n++;
+  if (creds.gmail?.accessToken?.trim() || creds.gmail?.refreshToken?.trim()) n++;
+  if (creds.youtube?.accessToken?.trim() || creds.youtube?.refreshToken?.trim()) n++;
   if (creds.discord?.token?.trim()) n++;
   if (creds.x?.accessToken?.trim() && creds.x?.apiKey?.trim()) n++;
   if (creds.reddit?.devvitEndpoint?.trim() && creds.reddit?.devvitAppToken?.trim()) n++;

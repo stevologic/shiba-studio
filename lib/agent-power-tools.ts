@@ -151,37 +151,135 @@ export function memoryRecall(agentId: string, query?: string): AgentMemoryEntry[
   return recallMemories(agentId, query);
 }
 
-/* ── xAI image generation ─────────────────────────────────────────────── */
+/* ── xAI image generation (Grok Imagine) ──────────────────────────────── */
 
-const XAI_IMAGE_MODEL = 'grok-2-image';
+/** Preferred Imagine image models, then the legacy grok-2-image fallback. */
+export const XAI_IMAGINE_IMAGE_MODELS = [
+  'grok-imagine-image-1.5',
+  'grok-imagine-image',
+  'grok-imagine-image-2.0',
+  'grok-2-image',
+] as const;
+
+export const XAI_IMAGINE_IMAGE_MODEL = XAI_IMAGINE_IMAGE_MODELS[0];
+
+export interface XaiImageGenerateOptions {
+  aspectRatio?: string;
+  n?: number;
+  models?: string[];
+  signal?: AbortSignal;
+}
+
+export interface XaiGeneratedImage {
+  b64: string;
+  mimeType: string;
+  revisedPrompt?: string;
+  model: string;
+}
+
+function clipApiError(text: string): string {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+}
+
+/**
+ * Call xAI `/v1/images/generations`. Tries Imagine 1.5 first, then other
+ * Imagine image ids, then grok-2-image if the account has not rolled forward.
+ */
+export async function generateXaiImage(
+  prompt: string,
+  bearer: string,
+  options?: XaiImageGenerateOptions,
+): Promise<XaiGeneratedImage> {
+  const text = String(prompt || '').trim();
+  if (!text) throw new Error('Image prompt is required');
+  const models = (options?.models?.length ? options.models : [...XAI_IMAGINE_IMAGE_MODELS])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  if (!models.length) throw new Error('No image models to try');
+
+  let lastError: Error | null = null;
+  for (const model of models) {
+    const body: Record<string, unknown> = {
+      model,
+      prompt: text,
+      n: options?.n ?? 1,
+      response_format: 'b64_json',
+    };
+    if (options?.aspectRatio && !model.startsWith('grok-2-image')) {
+      body.aspect_ratio = options.aspectRatio;
+    }
+    const res = await fetch('https://api.x.ai/v1/images/generations', {
+      method: 'POST',
+      signal: options?.signal || AbortSignal.timeout(120_000),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      const data = await res.json() as {
+        data?: Array<{ b64_json?: string; url?: string; mime_type?: string; revised_prompt?: string }>;
+      };
+      const first = data?.data?.[0];
+      const b64 = first?.b64_json;
+      if (!b64) {
+        lastError = new Error('xAI returned no image data');
+        continue;
+      }
+      return {
+        b64,
+        mimeType: first?.mime_type || 'image/jpeg',
+        revisedPrompt: first?.revised_prompt,
+        model,
+      };
+    }
+    const detail = clipApiError(await res.text().catch(() => ''));
+    lastError = new Error(`xAI image generation failed (${res.status}${detail ? `: ${detail}` : ''})`);
+    if (res.status === 401 || res.status === 403) throw lastError;
+    const unknownModel = res.status === 404
+      || res.status === 422
+      || /unknown model|model_not_found|does not exist|not found/i.test(detail);
+    if (!unknownModel && res.status !== 400) throw lastError;
+  }
+  throw lastError || new Error('xAI image generation failed');
+}
 
 export async function generateImage(
   prompt: string,
   bearer: string,
   workDir: string,
-): Promise<{ path: string; revisedPrompt?: string; dataUrl: string }> {
-  const res = await fetch('https://api.x.ai/v1/images/generations', {
-    method: 'POST',
-    signal: AbortSignal.timeout(120_000),
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
-    body: JSON.stringify({ model: XAI_IMAGE_MODEL, prompt: String(prompt || ''), n: 1, response_format: 'b64_json' }),
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`xAI image generation failed (${res.status}): ${detail.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const first = data?.data?.[0];
-  const b64: string | undefined = first?.b64_json;
-  if (!b64) throw new Error('xAI returned no image data');
-
+  options?: XaiImageGenerateOptions,
+): Promise<{ path: string; revisedPrompt?: string; dataUrl: string; model: string }> {
+  const generated = await generateXaiImage(prompt, bearer, options);
   const dir = path.join(workDir, 'generated-images');
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, `img-${Date.now()}.jpg`);
-  await fs.writeFile(file, Buffer.from(b64, 'base64'));
+  await fs.writeFile(file, Buffer.from(generated.b64, 'base64'));
   return {
     path: file,
-    revisedPrompt: first?.revised_prompt,
-    dataUrl: `data:image/jpeg;base64,${b64}`,
+    revisedPrompt: generated.revisedPrompt,
+    dataUrl: `data:${generated.mimeType};base64,${generated.b64}`,
+    model: generated.model,
   };
+}
+
+/** Portrait framing for agent avatars. The caller's description stays intact. */
+export function buildAvatarImaginePrompt(input: {
+  prompt?: string;
+  name?: string;
+  description?: string;
+}): string {
+  const user = String(input.prompt || '').trim();
+  if (user) {
+    return [
+      'Square head-and-shoulders portrait for a software-agent avatar.',
+      user,
+      'Facing the camera, centered, no text, no watermark, no UI chrome.',
+    ].join(' ');
+  }
+  const who = String(input.name || '').trim() || 'a studio agent';
+  const focus = String(input.description || '').trim();
+  return [
+    `Square head-and-shoulders portrait of ${who}, a Grok-powered studio agent.`,
+    focus ? `Personality: ${focus}.` : 'Helpful, focused, and slightly futuristic.',
+    'Facing the camera, centered, cinematic lighting, no text, no watermark.',
+  ].join(' ');
 }

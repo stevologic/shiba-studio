@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getTerminalServerInfo,
+  launchGrokCliInPty,
   restartMainSession,
   runTerminalCommand,
   startTerminalServer,
@@ -62,6 +63,7 @@ export async function GET(req: NextRequest) {
  *   - "exec" | omitted → run command in shared Studio terminal (chat/agent tools)
  *   - "write" → raw PTY write
  *   - "restart" → kill + respawn main session
+ *   - "grok" → launch interactive Grok Build (TUI or login) in the PTY
  */
 export async function POST(req: NextRequest) {
   try {
@@ -78,6 +80,14 @@ export async function POST(req: NextRequest) {
         pid: r.pid ?? info.pid,
         error: r.error,
       });
+    }
+
+    if (action === 'grok') {
+      const intentRaw = String(body.intent || 'auto').toLowerCase();
+      const intent = intentRaw === 'login' || intentRaw === 'agent' ? intentRaw : 'auto';
+      const cwd = typeof body.cwd === 'string' ? body.cwd : undefined;
+      const r = await launchGrokCliInPty({ intent, cwd, force: !!body.force });
+      return NextResponse.json(r, { status: r.ok ? 200 : (r.busy ? 409 : 400) });
     }
 
     if (action === 'write') {

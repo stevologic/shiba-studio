@@ -5,12 +5,18 @@
  * WebSocket session. Session + open state survive page navigations.
  */
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Terminal as TermIcon, X, Maximize2, Minimize2, RefreshCw, ChevronDown } from 'lucide-react';
+import { Terminal as TermIcon, X, Maximize2, Minimize2, RefreshCw, ChevronDown, Sparkles } from 'lucide-react';
+import { toast } from '@/lib/toast';
+import { openGrokCliInTerminal } from '@/lib/grok-cli-terminal-client';
 import {
+  getTerminalDock,
+  getTerminalDockServerSnapshot,
   getTerminalOpen,
   getTerminalOpenServerSnapshot,
   hydrateTerminalOpen,
+  setTerminalDock,
   setTerminalOpen,
+  subscribeTerminalDock,
   subscribeTerminalOpen,
   toggleTerminalOpen,
 } from '@/lib/terminal-ui-store';
@@ -294,21 +300,25 @@ async function ensureXterm(host: HTMLDivElement) {
       red: '#ef4444',
       green: '#22c55e',
       yellow: '#eab308',
-      blue: '#a3a3a3',
-      magenta: '#d4d4d4',
-      cyan: '#a3a3a3',
+      blue: '#60a5fa',
+      magenta: '#c084fc',
+      cyan: '#22d3ee',
       white: '#f5f5f5',
       brightBlack: '#737373',
       brightRed: '#f87171',
       brightGreen: '#4ade80',
       brightYellow: '#facc15',
-      brightBlue: '#e5e5e5',
-      brightMagenta: '#f5f5f5',
-      brightCyan: '#e5e5e5',
+      brightBlue: '#93c5fd',
+      brightMagenta: '#e9d5ff',
+      brightCyan: '#67e8f9',
       brightWhite: '#ffffff',
     },
     allowProposedApi: true,
     scrollback: 5000,
+    macOptionIsMeta: true,
+    ...(typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
+      ? { windowsPty: { backend: 'conpty' as const } }
+      : {}),
   });
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
@@ -323,8 +333,55 @@ async function ensureXterm(host: HTMLDivElement) {
       ws.send(JSON.stringify({ type: 'input', data }));
     }
   });
-  term.writeln('\x1b[90m[shiba] shared host PTY — survives navigation · chat tools can drive this shell\x1b[0m');
+  term.writeln('\x1b[90m[shiba] shared host PTY — survives navigation · Grok CLI and chat tools use this shell\x1b[0m');
   fitAddon.fit();
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== 'keydown') return true;
+    const meta = ev.ctrlKey || ev.metaKey;
+    if (meta && ev.shiftKey && ev.key.toLowerCase() === 'v') {
+      void navigator.clipboard.readText().then((text) => {
+        if (!text) return;
+        const ws = runtime.ws;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data: text }));
+        }
+      }).catch(() => {});
+      return false;
+    }
+    if (meta && ev.shiftKey && ev.key.toLowerCase() === 'c') {
+      const sel = term.getSelection();
+      if (sel) void navigator.clipboard.writeText(sel).catch(() => {});
+      return false;
+    }
+    return true;
+  });
+}
+
+/** Shared xterm host — overlay and the Code bottom panel take turns mounting this. */
+export function StudioTerminalViewport({ className }: { className?: string }) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    let cancelled = false;
+    (async () => {
+      await ensureXterm(host);
+      if (cancelled) return;
+      await connectWs();
+      fitTerminal();
+      runtime.term?.focus();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return (
+    <div
+      ref={hostRef}
+      className={className || 'studio-terminal-xterm'}
+      onMouseDown={() => runtime.term?.focus()}
+    />
+  );
 }
 
 /**
@@ -336,7 +393,11 @@ export default function StudioTerminal() {
     getTerminalOpen,
     getTerminalOpenServerSnapshot,
   );
-  const hostRef = useRef<HTMLDivElement | null>(null);
+  const dock = useSyncExternalStore(
+    subscribeTerminalDock,
+    getTerminalDock,
+    getTerminalDockServerSnapshot,
+  );
   const [, bump] = useState(0);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [maximized, setMaximized] = useState(false);
@@ -377,11 +438,14 @@ export default function StudioTerminal() {
     }
   }, []);
 
-  // Keyboard shortcut (global)
+  // Keyboard shortcut (global). On Code, dock into the editor bottom panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === '`' || e.key === '~')) {
         e.preventDefault();
+        const onCode = /^\/code(\/|$)/.test(window.location.pathname);
+        if (onCode) setTerminalDock('ide');
+        else setTerminalDock('float');
         toggleTerminalOpen();
       }
     };
@@ -389,54 +453,17 @@ export default function StudioTerminal() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Keep xterm + WS alive while panel is open OR was previously connected.
-  // When closed we keep the WS so tools still stream output into the buffer;
-  // user reopening shows history without a new shell.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      // Always ensure connection once in the browser so chat tools' session is warm.
-      if (!runtime.ws || runtime.ws.readyState !== WebSocket.OPEN) {
-        // Defer connect until first open or first ensure — still connect early for tools UX
-      }
-      if (open && hostRef.current) {
-        await ensureXterm(hostRef.current);
-        if (cancelled) return;
-        await connectWs();
+    const onPrep = () => {
+      if (getTerminalDock() === 'float') setMaximized(true);
+      window.setTimeout(() => {
         fitTerminal();
-      } else if (!runtime.ws || runtime.ws.readyState !== WebSocket.OPEN) {
-        // Warm shared session without UI (tools can still write; UI attaches later).
-        // Skip auto-connect when never opened — tools call ensure on server side.
-      }
-    })();
-    return () => {
-      cancelled = true;
-      // Intentionally do NOT dispose term/ws on unmount — survives navigation.
+        runtime.term?.focus();
+      }, 40);
     };
-  }, [open]);
-
-  // When opening, re-attach host and fit.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    const timers: number[] = [];
-    (async () => {
-      if (!hostRef.current) return;
-      await ensureXterm(hostRef.current);
-      if (cancelled) return;
-      if (!runtime.ws || runtime.ws.readyState !== WebSocket.OPEN) {
-        await connectWs();
-      } else {
-        fitTerminal();
-      }
-      timers.push(window.setTimeout(fitTerminal, 50));
-      timers.push(window.setTimeout(fitTerminal, 200));
-    })();
-    return () => {
-      cancelled = true;
-      for (const timer of timers) window.clearTimeout(timer);
-    };
-  }, [open, maximized]);
+    window.addEventListener('shiba-prepare-terminal', onPrep);
+    return () => window.removeEventListener('shiba-prepare-terminal', onPrep);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -494,6 +521,9 @@ export default function StudioTerminal() {
           ? 'text-warning'
           : 'text-dim';
 
+  // Overlay is hidden while Code owns the same PTY in its bottom panel.
+  if (!open || dock === 'ide') return null;
+
   // Launcher lives in the top nav only (no bottom-right FAB overlay).
   return (
     <>
@@ -526,6 +556,26 @@ export default function StudioTerminal() {
               </span>
             </div>
             <div className="studio-terminal-bar-right">
+              <button
+                type="button"
+                className="grok-btn grok-btn-ghost text-[11px] px-2 py-1 inline-flex items-center gap-1"
+                title="Launch the interactive Grok Build CLI in this terminal (signs in here if needed)"
+                onClick={() => {
+                  void (async () => {
+                    const r = await openGrokCliInTerminal();
+                    if (!r.ok) {
+                      const hint = r.installHint ? ` Install: ${r.installHint}` : '';
+                      toast.error((r.error || 'Could not launch Grok CLI') + hint);
+                      runtime.term?.writeln(
+                        `\r\n\x1b[31m[shiba] grok: ${r.error || 'launch failed'}${hint}\x1b[0m`,
+                      );
+                    }
+                  })();
+                }}
+              >
+                <Sparkles size={12} />
+                Grok
+              </button>
               <button
                 type="button"
                 className="grok-btn grok-btn-ghost p-1.5"
@@ -587,7 +637,7 @@ export default function StudioTerminal() {
               </button>
             </div>
           </div>
-          <div ref={hostRef} className="studio-terminal-xterm" />
+          <StudioTerminalViewport />
         </div>
       )}
     </>

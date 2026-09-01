@@ -12,10 +12,42 @@
 
 import { loadConfig, saveConfig } from './persistence';
 
+export type GoogleOAuthService = 'drive' | 'gmail' | 'youtube';
+
 const DRIVE_SCOPES = [
   'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/userinfo.email',
 ];
+
+/** Read, send, label, archive, and trash — the agent Gmail toolkit. */
+export const GMAIL_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/userinfo.email',
+];
+
+/** Search, list channel videos, and upload. */
+export const YOUTUBE_SCOPES = [
+  'https://www.googleapis.com/auth/youtube',
+  'https://www.googleapis.com/auth/youtube.upload',
+  'https://www.googleapis.com/auth/userinfo.email',
+];
+
+const SERVICE_SCOPES: Record<GoogleOAuthService, string[]> = {
+  drive: DRIVE_SCOPES,
+  gmail: GMAIL_SCOPES,
+  youtube: YOUTUBE_SCOPES,
+};
+
+const SERVICE_CRED_KEY: Record<GoogleOAuthService, 'googledrive' | 'gmail' | 'youtube'> = {
+  drive: 'googledrive',
+  gmail: 'gmail',
+  youtube: 'youtube',
+};
+
+export function parseGoogleOAuthService(raw?: string | null): GoogleOAuthService {
+  if (raw === 'gmail' || raw === 'youtube') return raw;
+  return 'drive';
+}
 
 /** The redirect URI Google must send the user back to. Fixed per app origin. */
 export function googleRedirectUri(appOrigin: string): string {
@@ -55,19 +87,43 @@ export async function isGoogleClientReady(): Promise<boolean> {
   return (await resolveGoogleClient()) !== null;
 }
 
-/** Persist a patch onto integrations.googledrive without disturbing the rest. */
-async function patchDriveCreds(patch: Record<string, string | undefined>): Promise<void> {
+/** Persist a patch onto Drive, Gmail, or YouTube tokens without disturbing the rest. */
+async function patchGoogleServiceCreds(
+  service: GoogleOAuthService,
+  patch: Record<string, string | undefined>,
+): Promise<void> {
   const cfg = await loadConfig();
   const integrations = { ...(cfg.integrations || {}) };
-  integrations.googledrive = { ...(integrations.googledrive || {}), ...patch };
+  const key = SERVICE_CRED_KEY[service];
+  integrations[key] = { ...(integrations[key] || {}), ...patch };
   await saveConfig({ integrations });
 }
 
+async function serviceCreds(service: GoogleOAuthService) {
+  const cfg = await loadConfig();
+  const key = SERVICE_CRED_KEY[service];
+  return (cfg.integrations?.[key] || {}) as {
+    accessToken?: string;
+    refreshToken?: string;
+    tokenExpiry?: string;
+    email?: string;
+    clientId?: string;
+    clientSecret?: string;
+  };
+}
+
+async function patchDriveCreds(patch: Record<string, string | undefined>): Promise<void> {
+  await patchGoogleServiceCreds('drive', patch);
+}
+
 /** Begin sign-in: build Google's consent URL for the app-origin redirect. */
-export async function startGoogleDriveOAuth(appOrigin: string): Promise<{ authorizeUrl: string; redirectUri: string }> {
+export async function startGoogleOAuth(
+  appOrigin: string,
+  service: GoogleOAuthService = 'drive',
+): Promise<{ authorizeUrl: string; redirectUri: string }> {
   const client = await resolveGoogleClient();
   if (!client) {
-    throw new Error('No Google OAuth client configured — set GOOGLE_OAUTH_CLIENT_ID/SECRET, or add a client under Advanced.');
+    throw new Error('No Google OAuth client configured — set GOOGLE_OAUTH_CLIENT_ID/SECRET, or add a client under Advanced on the Google Drive card.');
   }
   const { clientId, clientSecret } = client;
 
@@ -77,10 +133,23 @@ export async function startGoogleDriveOAuth(appOrigin: string): Promise<{ author
   const authorizeUrl = oauth2.generateAuthUrl({
     access_type: 'offline',      // request a refresh token
     prompt: 'consent',           // force refresh_token even on repeat sign-ins
-    scope: DRIVE_SCOPES,
+    scope: SERVICE_SCOPES[service],
     include_granted_scopes: true,
+    state: service,
   });
   return { authorizeUrl, redirectUri };
+}
+
+export async function startGoogleDriveOAuth(appOrigin: string): Promise<{ authorizeUrl: string; redirectUri: string }> {
+  return startGoogleOAuth(appOrigin, 'drive');
+}
+
+export async function startGoogleGmailOAuth(appOrigin: string): Promise<{ authorizeUrl: string; redirectUri: string }> {
+  return startGoogleOAuth(appOrigin, 'gmail');
+}
+
+export async function startGoogleYoutubeOAuth(appOrigin: string): Promise<{ authorizeUrl: string; redirectUri: string }> {
+  return startGoogleOAuth(appOrigin, 'youtube');
 }
 
 /**
@@ -88,11 +157,15 @@ export async function startGoogleDriveOAuth(appOrigin: string): Promise<{ author
  * URI must byte-match the one used to start, so it is rebuilt from the same
  * origin. Returns the connected email on success.
  */
-export async function exchangeGoogleDriveCode(code: string, appOrigin: string): Promise<{ email?: string }> {
+export async function exchangeGoogleCode(
+  code: string,
+  appOrigin: string,
+  service: GoogleOAuthService = 'drive',
+): Promise<{ email?: string }> {
   const client = await resolveGoogleClient();
   if (!client) throw new Error('Google OAuth client is not configured');
   const { clientId, clientSecret } = client;
-  const creds = await driveCreds();
+  const creds = await serviceCreds(service);
 
   const { google } = await import('googleapis');
   const redirectUri = googleRedirectUri(appOrigin);
@@ -108,7 +181,7 @@ export async function exchangeGoogleDriveCode(code: string, appOrigin: string): 
     email = info.data.email || undefined;
   } catch { /* email is best-effort */ }
 
-  await patchDriveCreds({
+  await patchGoogleServiceCreds(service, {
     accessToken: tokens.access_token,
     // Google only returns refresh_token on the first consent (prompt=consent
     // forces it); keep any existing one if this response omits it.
@@ -119,9 +192,12 @@ export async function exchangeGoogleDriveCode(code: string, appOrigin: string): 
   return { email };
 }
 
-/** A valid Drive access token, refreshing via the refresh token if expired. */
-export async function getValidDriveToken(): Promise<string | null> {
-  const creds = await driveCreds();
+export async function exchangeGoogleDriveCode(code: string, appOrigin: string): Promise<{ email?: string }> {
+  return exchangeGoogleCode(code, appOrigin, 'drive');
+}
+
+async function getValidGoogleToken(service: GoogleOAuthService): Promise<string | null> {
+  const creds = await serviceCreds(service);
   if (!creds.accessToken && !creds.refreshToken) return null;
 
   const notExpired = creds.tokenExpiry ? new Date(creds.tokenExpiry).getTime() - 60_000 > Date.now() : false;
@@ -135,7 +211,7 @@ export async function getValidDriveToken(): Promise<string | null> {
       oauth2.setCredentials({ refresh_token: creds.refreshToken });
       const { credentials } = await oauth2.refreshAccessToken();
       if (credentials.access_token) {
-        await patchDriveCreds({
+        await patchGoogleServiceCreds(service, {
           accessToken: credentials.access_token,
           tokenExpiry: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : undefined,
         });
@@ -148,7 +224,43 @@ export async function getValidDriveToken(): Promise<string | null> {
   return creds.accessToken || null;
 }
 
+/** A valid Drive access token, refreshing via the refresh token if expired. */
+export async function getValidDriveToken(): Promise<string | null> {
+  return getValidGoogleToken('drive');
+}
+
+export async function getValidGmailToken(): Promise<string | null> {
+  return getValidGoogleToken('gmail');
+}
+
+export async function getValidYoutubeToken(): Promise<string | null> {
+  return getValidGoogleToken('youtube');
+}
+
 /** Disconnect: drop the captured tokens (client id/secret are kept for re-auth). */
 export async function disconnectGoogleDrive(): Promise<void> {
-  await patchDriveCreds({ accessToken: undefined, refreshToken: undefined, tokenExpiry: undefined, email: undefined });
+  await patchGoogleServiceCreds('drive', {
+    accessToken: undefined,
+    refreshToken: undefined,
+    tokenExpiry: undefined,
+    email: undefined,
+  });
+}
+
+export async function disconnectGoogleGmail(): Promise<void> {
+  await patchGoogleServiceCreds('gmail', {
+    accessToken: undefined,
+    refreshToken: undefined,
+    tokenExpiry: undefined,
+    email: undefined,
+  });
+}
+
+export async function disconnectGoogleYoutube(): Promise<void> {
+  await patchGoogleServiceCreds('youtube', {
+    accessToken: undefined,
+    refreshToken: undefined,
+    tokenExpiry: undefined,
+    email: undefined,
+  });
 }

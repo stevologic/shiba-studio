@@ -196,8 +196,8 @@ async function main() {
     automationCard.includes('agent: Agent | undefined')
       && automationCard.includes('src={agent ? resolveAgentAvatarPath(agent) : MISSING_AGENT_AVATAR_PATH}')
       && automationCard.includes('className="agent-avatar-xs shrink-0"')
-      && automationCard.includes('width={20}')
-      && automationCard.includes('height={20}')
+      && automationCard.includes('width={26}')
+      && automationCard.includes('height={26}')
       && automationCard.includes('Assigned to')
       && automationCard.includes('const agentName = agent?.name || routine.agentId;')
       && automationCard.includes('{agentName}'),

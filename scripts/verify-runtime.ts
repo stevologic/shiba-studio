@@ -182,7 +182,7 @@ async function main() {
     description: 'Verification agent exercising full paths',
     autoAcceptBoardAssignments: false,
     workspace: { path: process.cwd(), useWorktree: false },
-    integrations: { github: true, slack: true, googledrive: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false },
+    integrations: { github: true, slack: true, googledrive: false, gmail: false, youtube: false, discord: false, x: false, reddit: false, obsidian: false, vercel: false, netlify: false },
     peers: [],
     skills: ['research', 'coder', 'browser-automation'],
     createdAt: new Date().toISOString(),

@@ -98,6 +98,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, integrations: maskIntegrationCreds(next.integrations || {}) });
   }
 
+  if (body.action === 'disconnect-gmail') {
+    const { disconnectGoogleGmail } = await import('@/lib/google-oauth');
+    await disconnectGoogleGmail();
+    const next = await loadConfig();
+    Ints.setIntegrationCreds(next.integrations || {});
+    audit('integration', 'Gmail disconnected', '');
+    return NextResponse.json({ ok: true, integrations: maskIntegrationCreds(next.integrations || {}) });
+  }
+
+  if (body.action === 'disconnect-youtube') {
+    const { disconnectGoogleYoutube } = await import('@/lib/google-oauth');
+    await disconnectGoogleYoutube();
+    const next = await loadConfig();
+    Ints.setIntegrationCreds(next.integrations || {});
+    audit('integration', 'YouTube disconnected', '');
+    return NextResponse.json({ ok: true, integrations: maskIntegrationCreds(next.integrations || {}) });
+  }
+
   if (body.action === 'test') {
     // Client-held creds are masked — swap placeholders for stored secrets so
     // tests exercise the real credentials.
@@ -116,6 +134,14 @@ export async function POST(req: NextRequest) {
     }
     if (which === 'googledrive') {
       const r = await Ints.testGoogleDrive();
+      return NextResponse.json(r);
+    }
+    if (which === 'gmail') {
+      const r = await Ints.testGmail();
+      return NextResponse.json(r);
+    }
+    if (which === 'youtube') {
+      const r = await Ints.testYoutube();
       return NextResponse.json(r);
     }
     if (which === 'discord') {

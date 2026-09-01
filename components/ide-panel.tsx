@@ -44,6 +44,7 @@ import {
   RotateCcw,
   Save,
   Search,
+  Sparkles,
   Terminal,
   Trash2,
   X,
@@ -53,7 +54,16 @@ import type {
   IdeWorkspaceOption,
   IdeWorkspaceOptionsResponse,
 } from '@/lib/ide-workspace-options-types';
-import { setTerminalOpen } from '@/lib/terminal-ui-store';
+import {
+  getTerminalDock,
+  getTerminalOpen,
+  openIdeTerminal,
+  setTerminalDock,
+  subscribeTerminalDock,
+  subscribeTerminalOpen,
+} from '@/lib/terminal-ui-store';
+import { openGrokCliInTerminal } from '@/lib/grok-cli-terminal-client';
+import { StudioTerminalViewport } from '@/components/studio-terminal';
 import { FileTree, type IdeFileNode } from '@/components/ide/file-tree';
 import { WorkspacePicker } from '@/components/ide/workspace-picker';
 import styles from './ide-panel.module.css';
@@ -68,7 +78,7 @@ if (typeof window !== 'undefined') {
 const IDE_THEME = 'shiba-studio-ide';
 
 type ActivityId = 'explorer' | 'search' | 'source-control' | 'github';
-type BottomPanelId = 'problems' | 'output';
+type BottomPanelId = 'problems' | 'output' | 'terminal';
 type GitDiffArea = 'working' | 'staged';
 
 interface ApiEnvelope {
@@ -627,6 +637,23 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
 
   const [bottomOpen, setBottomOpen] = useState(true);
   const [bottomPanel, setBottomPanel] = useState<BottomPanelId>('problems');
+
+  useEffect(() => {
+    const sync = () => {
+      if (!getTerminalOpen()) return;
+      setTerminalDock('ide');
+      setBottomOpen(true);
+      setBottomPanel('terminal');
+    };
+    const offOpen = subscribeTerminalOpen(sync);
+    const offDock = subscribeTerminalDock(sync);
+    sync();
+    return () => {
+      offOpen();
+      offDock();
+      if (getTerminalDock() === 'ide') setTerminalDock('float');
+    };
+  }, []);
   const [output, setOutput] = useState<OutputEntry[]>([]);
   const [fatalError, setFatalError] = useState<string | null>(null);
 
@@ -1572,7 +1599,9 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
         setBottomOpen((value) => !value);
         break;
       case 'terminal':
-        setTerminalOpen(true);
+        openIdeTerminal();
+        setBottomOpen(true);
+        setBottomPanel('terminal');
         break;
       case 'refresh':
         requestWorkspaceRefresh();
@@ -1816,7 +1845,11 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
           <button
             type="button"
             className={styles.activityButton}
-            onClick={() => setTerminalOpen(true)}
+            onClick={() => {
+              openIdeTerminal();
+              setBottomOpen(true);
+              setBottomPanel('terminal');
+            }}
             title="Open host terminal (Ctrl+`)"
             aria-label="Open host terminal"
           >
@@ -2537,7 +2570,11 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
                 <button type="button" onClick={() => setActivity('source-control')}>
                   <span>Open source control</span><kbd>Ctrl Shift G</kbd>
                 </button>
-                <button type="button" onClick={() => setTerminalOpen(true)}>
+                <button type="button" onClick={() => {
+                  openIdeTerminal();
+                  setBottomOpen(true);
+                  setBottomPanel('terminal');
+                }}>
                   <span>Open terminal</span><kbd>Ctrl `</kbd>
                 </button>
               </div>
@@ -2650,7 +2687,10 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
         </div>
 
         {bottomOpen && (
-          <section className={styles.bottomPanel} aria-label="Editor bottom panel">
+          <section
+            className={`${styles.bottomPanel} ${bottomPanel === 'terminal' ? styles.bottomPanelTerminal : ''}`}
+            aria-label="Editor bottom panel"
+          >
             <div className={styles.bottomTabs} role="tablist" aria-label="Bottom panel views">
               <button
                 type="button"
@@ -2672,8 +2712,13 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
               </button>
               <button
                 type="button"
-                className={styles.bottomTerminalButton}
-                onClick={() => setTerminalOpen(true)}
+                role="tab"
+                aria-selected={bottomPanel === 'terminal'}
+                className={bottomPanel === 'terminal' ? styles.bottomTabActive : ''}
+                onClick={() => {
+                  openIdeTerminal();
+                  setBottomPanel('terminal');
+                }}
               >
                 <Terminal size={12} /> Terminal
               </button>
@@ -2687,8 +2732,25 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
                 <X size={13} />
               </button>
             </div>
-            <div className={styles.bottomContent}>
-              {bottomPanel === 'problems' ? (
+            <div className={`${styles.bottomContent} ${bottomPanel === 'terminal' ? styles.bottomContentTerminal : ''}`}>
+              {bottomPanel === 'terminal' ? (
+                <div className={styles.ideTerminalPane}>
+                  <div className={styles.ideTerminalChrome}>
+                    <span>Host PTY</span>
+                    <button
+                      type="button"
+                      className={styles.ideTerminalGrok}
+                      onClick={() => {
+                        void openGrokCliInTerminal();
+                      }}
+                      title="Launch interactive Grok Build in this terminal"
+                    >
+                      <Sparkles size={11} /> Grok
+                    </button>
+                  </div>
+                  <StudioTerminalViewport className={`studio-terminal-xterm ${styles.ideTerminalViewport}`} />
+                </div>
+              ) : bottomPanel === 'problems' ? (
                 problems.length === 0 ? (
                   <div className={styles.bottomEmpty}><Check size={15} /> No problems detected in open files.</div>
                 ) : (
@@ -2822,7 +2884,15 @@ export default function IdePanel({ defaultWorkspace, className }: IdePanelProps)
               <span>{titleForLanguage(activeFileTab.language)}</span>
             </>
           )}
-          <button type="button" onClick={() => setTerminalOpen(true)} title="Open host terminal">
+          <button
+            type="button"
+            onClick={() => {
+              openIdeTerminal();
+              setBottomOpen(true);
+              setBottomPanel('terminal');
+            }}
+            title="Open host terminal"
+          >
             <Terminal size={11} /> Terminal
           </button>
         </div>

@@ -3552,10 +3552,10 @@ body::before {
   color: #0b0d12;
 }
 
-/* Agent alien avatars */
+/* Agent avatars (alien catalog or Grok Imagine portraits) */
 .agent-avatar {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-light);
   flex-shrink: 0;
@@ -3564,20 +3564,27 @@ body::before {
 }
 
 .agent-avatar-sm {
-  width: 28px;
-  height: 28px;
-  border-radius: 4px;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
   border: 1px solid var(--border);
   flex-shrink: 0;
+  object-fit: cover;
+}
+
+.avatar-imagine-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .avatar-picker {
   display: grid;
-  grid-template-columns: repeat(10, 1fr);
-  gap: 6px;
-  max-height: 160px;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 8px;
+  max-height: 220px;
   overflow-y: auto;
-  padding: 4px;
+  padding: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
@@ -3609,6 +3616,7 @@ body::before {
   height: 100%;
   border-radius: 4px;
   display: block;
+  object-fit: cover;
 }
 
 /* Dashboard hero aerospace styling */
@@ -3903,11 +3911,12 @@ body::before {
 }
 
 .agent-avatar-xs {
-  width: 20px;
-  height: 20px;
-  border-radius: 3px;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
   border: 1px solid var(--border);
   flex-shrink: 0;
+  object-fit: cover;
 }
 
 .grok-chat-perspectives {
@@ -6959,9 +6968,11 @@ input.kb-text-filter-input::-webkit-search-cancel-button {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  border: 1px solid;
+  border: 1px solid var(--border);
   font-weight: 600;
   flex-shrink: 0;
+  object-fit: cover;
+  background: var(--bg-elev);
 }
 
 .kb-status-glyph { flex-shrink: 0; }

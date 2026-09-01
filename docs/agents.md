@@ -8,11 +8,12 @@ Every local agent runs on this machine with files and shell in its workspace, br
 
 ## Anatomy of an agent
 
+- **Avatar** — pick one of 50 alien SVGs, or generate a square portrait with **Grok Imagine 1.5**. Generated portraits persist with the agent and show on Agents, Chat, Board, Automations, and logs.
 - **Model** — any Cloud (xAI) or Local model; a provider badge shows which.
 - **Workspace** — the directory the agent works in. Enable **worktree** to give every run an isolated git worktree of the repo instead of the live checkout.
-- **Integration scopes** — per-agent switches for GitHub, Slack, Google Drive, Discord, X, Reddit Devvit, Obsidian, Vercel, and Netlify. A scope both unlocks the matching tools *and* injects live context (an Obsidian-scoped agent gets its vault's contents in every run and chat; Vercel/Netlify-scoped agents see projects/sites and can deploy).
+- **Integration scopes** — per-agent switches for GitHub, Slack, Google Drive, Gmail, YouTube, Discord, X, Reddit Devvit, Obsidian, Vercel, and Netlify. A scope both unlocks the matching tools *and* injects live context (an Obsidian-scoped agent gets its vault's contents in every run and chat; Vercel/Netlify-scoped agents see projects/sites and can deploy; Gmail-scoped agents can list/read/send mail; YouTube-scoped agents can search, list, and upload).
 - **Skills** — reusable prompt capabilities from the Capabilities page, plus a free-form *chat Skill* that defines the agent's voice when you chat as it.
-- **Peers** — other agents it may message via `send_to_peer`; inboxes drain at the start of the next run.
+- **Peers** — other agents it may message via `send_to_peer`. In a chat room they reply in the same transcript; during an autonomous run the note waits in their inbox and drains at the start of the next run. Any chat can also `@Name` an agent to pull them in.
 - **Automation ownership** — Automations select an agent to execute their steps; agents themselves do not store or manage triggers.
 
 Shiba tracks each worktree as an app-owned resource. A configured agent, a direct or project-backed chat, or an active task keeps it alive. After the final agent/chat mapping is removed and active work finishes, cleanup is automatic on the mutation, startup recovery, and periodic integrity passes. Cleanup is two-phase and removes only registered, clean worktrees whose commits are present on a remote; dirty, unpushed, unregistered, or path-identity-unsafe directories are preserved.

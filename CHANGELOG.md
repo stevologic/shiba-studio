@@ -10,6 +10,22 @@ are carried over automatically.
 
 ### Added
 
+- **Interactive Grok CLI in the Studio Terminal.** Settings, the terminal bar, the command palette, chat `/grok`, and `terminal_exec grok` launch the official TUI (or `grok login`) in the shared host PTY — sign-in no longer requires leaving the app.
+
+- **Code IDE hosts the real terminal.** The editor bottom panel’s Terminal tab is the shared host PTY (not a decoy that only opened the overlay). On Code, Ctrl+` docks there; elsewhere it still floats. ANSI colors, Windows PTY mode, and Ctrl+Shift+C/V work so Grok’s TUI is usable.
+
+- **Gmail integration.** Sign in with Google on Capabilities to let scoped agents list, read, and send mail (`gmail_list`, `gmail_read`, `gmail_send`). Uses the same OAuth client as Drive; tokens stay separate so you can disconnect Gmail without dropping Drive.
+
+- **YouTube integration.** Sign in with Google on Capabilities to search, list this channel's uploads, read a video, and upload a workspace file (`youtube_search`, `youtube_list`, `youtube_get`, `youtube_upload`). Uploads default to unlisted. Same OAuth client as Drive; separate tokens.
+
+- **Grok Imagine edit and video.** Cloud-authenticated turns can `edit_image` (`/v1/images/edits`) and `generate_video` (`/v1/videos/generations`, poll `/v1/videos/{id}`) the same way they already `generate_image`. Missing credentials fail closed.
+
+- **Native xAI server tools on Responses.** Cloud grok-4+ chat streams attach `x_search`, `web_search`, and `code_interpreter` on `/v1/responses`. Citations and tool traces show on the turn. ACP stdio, Collections, and Batches stay deferred.
+
+- **Grok Imagine agent avatars.** The agent editor can generate a square portrait with Grok Imagine 1.5 instead of picking an alien. The same Imagine path powers `generate_image` (with fallbacks if an account has not rolled to 1.5 yet). Avatars are a little larger on Agents, Chat, Board, Automations, and logs.
+
+- **Agent chat room.** “All agents” is a shared room: each agent takes a labeled turn in the same transcript. `@Name` (composer autocomplete) addresses someone; agents can `@Name` each other or use `talk_to_agent` / `send_to_peer` so the peer replies next in this chat instead of only leaving an inbox note.
+
 - **xAI Files TTL for chat attachments.** Chat uploads now send `expires_after=2592000` (30 days, the Files API maximum) so abandoned Grok document objects auto-delete if local tombstone cleanup never runs. Durable cloud-sync files and entity snapshots stay permanent.
 
 - **Ephemeral chat from anywhere.** `Ctrl`/`⌘`+`N` starts a durable session; `Ctrl`/`⌘`+`Shift`+`N`, the top-bar eye-off control, and the command palette start an incognito chat (no memories, deleted when the page closes) — the same pattern as ChatGPT temporary chat and Claude incognito.
@@ -50,9 +66,6 @@ are carried over automatically.
 - **Grok prompt-cache routing.** Durable chat, agent, meeting, and voice
   turns send `x-grok-conv-id` / `prompt_cache_key` so consecutive turns can
   reuse xAI's published cached-prompt discount.
-
-### Changed
-
 - **Weekly maintain can read ChatGPT/Codex docs.** `fetch_url` now allows
   `learn.chatgpt.com`, prefers Markdown/`text/plain`, extracts prose from
   JS app shells, and rejects redirects off the host allowlist. Workflow

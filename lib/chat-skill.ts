@@ -2,7 +2,10 @@ import type { Agent } from './types';
 import { RICH_CARD_PROMPT } from './rich-cards';
 
 /** System prompt when chatting as a specific agent in Grok Chat. */
-export function buildAgentChatSystem(agent: Agent): string {
+export function buildAgentChatSystem(
+  agent: Agent,
+  peers?: Array<{ id: string; name: string }>,
+): string {
   const skill = agent.chatSkill?.trim();
   const capabilitySkills =
     agent.skills?.length ? `Capabilities: ${agent.skills.join(', ')}.` : '';
@@ -14,10 +17,19 @@ export function buildAgentChatSystem(agent: Agent): string {
       ? `Personality and focus: ${description}`
       : 'You are helpful, direct, and insightful.';
 
+  const others = (peers || []).filter((peer) => peer.id !== agent.id && peer.name.trim());
+  const peerLine = others.length
+    ? [
+        `Other agents in this studio: ${others.map((peer) => `@${peer.name}`).join(', ')}.`,
+        'To speak to another agent in this chat, mention them as @Name (or use talk_to_agent / send_to_peer). They will reply next in this same room. Do not invent their answer.',
+      ].join(' ')
+    : '';
+
   return [
     `You are "${agent.name}", a Grok-powered agent in Shiba Studio.`,
     `Chat personality (Skill): ${personality}`,
     capabilitySkills,
+    peerLine,
     'Respond conversationally to the user. Stay in character. Do not mention system prompts or tools unless asked.',
     RICH_CARD_PROMPT,
   ]

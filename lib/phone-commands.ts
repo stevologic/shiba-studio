@@ -476,6 +476,22 @@ async function executeResolved(resolved: ReturnType<typeof resolveSpokenCommand>
     audit('integration', 'phone obsidian note created', notePath);
     return ok('note', `Created Obsidian note ${notePath}.`, { path: notePath });
   }
+  if (name === 'grok') {
+    const intent = args.trim().toLowerCase() === 'login' ? 'login' : 'auto';
+    const { launchGrokCliInPty } = await import('./terminal-server');
+    const launched = await launchGrokCliInPty({ intent });
+    if (!launched.ok) {
+      return fail('grok', launched.error || 'Could not launch Grok Build in the Studio Terminal.');
+    }
+    audit('chat', 'phone launched grok cli in terminal', launched.launched || 'agent');
+    return ok(
+      'grok',
+      launched.launched === 'login'
+        ? 'I opened the Studio Terminal for Grok Build sign-in. Finish login on the host screen.'
+        : 'I launched interactive Grok Build in the Studio Terminal. Look at the host screen.',
+      { launched: launched.launched },
+    );
+  }
   if (name === 'x') {
     if (!args.trim()) return fail('x', 'What should I post to X?');
     const { loadConfig } = await import('./persistence');

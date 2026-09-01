@@ -37,6 +37,7 @@ async function main() {
   assert(desk.includes("e.key === '/'"), 'shiba-studio Ctrl+/ handler');
   assert(desk.includes("e.key.toLowerCase() === 'n'"), 'shiba-studio Ctrl+N new-chat handler');
   assert(desk.includes("id: 'new-ephemeral-chat'"), 'command palette offers ephemeral chat');
+  assert(desk.includes("id: 'grok-cli-terminal'"), 'command palette launches Grok CLI in the terminal');
   assert(desk.includes("aria-label=\"New ephemeral chat\""), 'top bar exposes ephemeral chat');
   assert(desk.includes('/api/execute/stream'), 'shiba-studio uses streaming execute');
   assert(desk.includes('WorkspaceDiffPanel'), 'shiba-studio diff panel');
