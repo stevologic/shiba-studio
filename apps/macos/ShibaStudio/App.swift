@@ -48,6 +48,7 @@ struct ShibaStudioApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static weak var shared: AppDelegate?
     private var statusItem: NSStatusItem?
