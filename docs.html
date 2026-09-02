@@ -193,21 +193,22 @@ cd shiba-studio &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
         <tr><td><strong>Grok CLI</strong></td><td>Install the <code>grok</code> CLI — detected automatically from PATH, with an in-app update checker</td></tr>
         <tr><td><strong>Local models</strong></td><td>Enable local models and point at any OpenAI-compatible server (LM Studio, Ollama, llama.cpp); a per-model allowlist filters every picker</td></tr>
       </table></div>
-      <p>Set a <strong>default model</strong> and a <strong>default workspace</strong> in Settings, then press <em>New Chat</em>.</p>
+      <p>Set a <strong>default model</strong> and a <strong>default workspace</strong> in Settings, then press <em>Grok Chat</em>.</p>
     </section>
 
     <section id="chat">
       <h2>Grok Chat</h2>
       <p>Chat is a working surface, not just a conversation: it streams reasoning, renders markdown with syntax highlighting and <strong>rich cards</strong>, shows images inline (click for a lightbox), accepts drag-and-drop / pasted attachments, and can act on your repo, your vault, and the web.</p>
       <ul>
-        <li><strong>Sessions</strong> live in a collapsible, searchable rail on the left; each keeps its own model, target, reasoning effort, workspace, and history. New chats are <strong>auto-titled</strong> by a low-cost model after the first exchange. <code>Ctrl/⌘+N</code> starts a durable chat; <code>Ctrl/⌘+Shift+N</code> (or the eye-off control) starts an <strong>ephemeral chat</strong> that skips memories and deletes itself when the page closes.</li>
-        <li><strong>Chat targets</strong> — talk to plain Grok, to a specific agent (with its personality and live integration context), or to <em>all agents</em> as a shared room: labeled turns in one transcript, <code>@Name</code> autocomplete, and peer replies via <code>talk_to_agent</code> / <code>send_to_peer</code>.</li>
+        <li><strong>Sessions</strong> — one durable thread per agent (and Grok) plus an All-agents group room. The rail groups those rooms, then <strong>ephemeral</strong> chats and forks. Ephemeral chats are <strong>auto-titled</strong> after the first exchange; durable rooms keep the persona name. <code>Ctrl/⌘+N</code> opens the Grok thread; <code>Ctrl/⌘+Shift+N</code> (or the eye-off control) starts an <strong>ephemeral chat</strong> that skips memories and deletes itself when the page closes.</li>
+        <li><strong>Chat targets</strong> — the picker opens that thread: plain Grok, a specific agent (with its personality and live integration context), or <em>all agents</em> as a shared room: labeled turns in one transcript, <code>@Name</code> autocomplete, and peer replies via <code>talk_to_agent</code> / <code>send_to_peer</code>.</li>
+        <li><strong>Inline approvals</strong> — Ask-before-act pauses gated tools on the agent bubble with <em>Approve</em>, <em>Always approve</em>, and <em>Deny</em>. Always approve remembers that tool for the agent (or Grok Chat). Native desktop actions still need an exact click.</li>
         <li><strong>Models &amp; reasoning</strong> — fresh installs default to <strong>Grok 4.6</strong> (500k context). Switch cloud/local models per session from the composer pill; reasoning-capable models get an effort selector (off/low/med/high). A terminal toggle routes the session through the local Grok CLI instead of the API.</li>
         <li><strong>Message queue</strong> — keep typing while a reply streams; up to 20 messages queue and fire in order when the turn settles. Stick-to-bottom tracks growing reasoning.</li>
         <li><strong>Rich cards</strong> — a fenced <code>shiba-card</code> JSON block becomes live stats, progress, checklists, timelines, callouts, media, sparklines, bars, or multi-series timecharts. Malformed payloads fall back to code, never losing content.</li>
         <li><strong>Stream resilience</strong> — long tool-using turns get extended timeouts; HTML/proxy dumps and aborts normalize to short user-facing recovery text.</li>
         <li><strong>Quota</strong> — the QUOTA pill reports live spend against your monthly budget from Settings.</li>
-        <li><strong>Keyboard shortcuts</strong> — press <code>?</code> or Ctrl/⌘+/ for the studio cheatsheet (palette, terminal, slash commands, Code IDE). <code>Ctrl+K</code> stays the command palette; <code>Ctrl/⌘+N</code> and <code>Ctrl/⌘+Shift+N</code> create durable or ephemeral chats.</li>
+        <li><strong>Keyboard shortcuts</strong> — press <code>?</code> or Ctrl/⌘+/ for the studio cheatsheet (palette, terminal, slash commands, Code IDE). <code>Ctrl+K</code> stays the command palette; <code>Ctrl/⌘+N</code> opens the Grok thread and <code>Ctrl/⌘+Shift+N</code> starts an ephemeral chat.</li>
         <li><strong>Housekeeping</strong> — export any conversation as Markdown (with reasoning and token counts), edit-and-resend your messages, regenerate the last answer.</li>
       </ul>
     </section>
