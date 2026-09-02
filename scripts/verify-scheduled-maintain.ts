@@ -154,8 +154,10 @@ async function main() {
   assert.notEqual(keyedValidateDaily.stdout, keyedValidateWeekly.stdout);
 
   const workflow = readFileSync(path.join(ROOT, '.github/workflows/grok-maintain.yml'), 'utf8');
-  assert.match(workflow, /cron:\s*"17 6 \* \* \*"/);
+  assert.doesNotMatch(workflow, /cron:\s*"17 6 \* \* \*"/);
   assert.match(workflow, /cron:\s*"17 7 \* \* 1"/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /options: \[daily, weekly\]/);
   assert.match(workflow, /secrets\.GROK_API_KEY/);
   assert.match(workflow, /ref: development/);
   assert.match(workflow, /git push origin HEAD:development/);

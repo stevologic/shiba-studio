@@ -72,12 +72,12 @@ whole healing half off without touching the workflow.
 `.github/workflows/grok-maintain.yml` keeps the tree current without a human
 in the loop. It never writes `main`.
 
-| Cadence | Cron (UTC) | Job |
+| Cadence | When (UTC) | Job |
 | --- | --- | --- |
-| Daily | `17 6 * * *` | Remediate high/critical `npm audit` findings |
-| Weekly (Monday) | `17 7 * * 1` | Assess Claude / ChatGPT-Codex / Grok / Cursor, ship at most one bounded increment, and optionally improve this automation |
+| Daily | `workflow_dispatch` (`mode=daily`) | Remediate high/critical `npm audit` findings |
+| Weekly (Monday) | cron `17 7 * * 1` | Assess Claude / ChatGPT-Codex / Grok / Cursor, ship at most one bounded increment, and optionally improve this automation |
 
-Both jobs:
+Both modes:
 
 1. Check out `development`.
 2. Skip with a warning (exit 0) when `GROK_API_KEY` is unset.
@@ -113,7 +113,6 @@ Renovate, or any `[bot]` account). Random public issues are ignored.
 | Trigger | When |
 | --- | --- |
 | `issues` opened / reopened | Immediately, if the author is eligible |
-| Daily cron `23 6 * * *` | Oldest eligible open issue |
 | `workflow_dispatch` | Optional issue number, else oldest eligible |
 
 The job:
