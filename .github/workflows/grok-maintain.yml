@@ -1,16 +1,16 @@
 name: Grok maintain
 
-# Hands-off Grok 4.6+ maintenance. Daily remediates high/critical vulns.
-# Weekly assesses Claude / ChatGPT-Codex / Grok / Cursor and may improve
-# this automation. Both write only to `development`. Green development
-# still promotes to main through ci.yml (CI OK + auto-merge).
+# Hands-off Grok 4.6+ maintenance. Weekly (Monday) assesses Claude /
+# ChatGPT-Codex / Grok / Cursor and may improve this automation. Daily
+# vuln remediations remain available via workflow_dispatch. Writes only
+# to `development`. Green development still promotes to main through
+# ci.yml (CI OK + auto-merge).
 #
 # A GITHUB_TOKEN push does not retrigger ci.yml, so this workflow
 # re-dispatches CI after a successful commit (same pattern as self-heal).
 
 on:
   schedule:
-    - cron: "17 6 * * *"   # daily
     - cron: "17 7 * * 1"   # weekly (Monday)
   workflow_dispatch:
     inputs:

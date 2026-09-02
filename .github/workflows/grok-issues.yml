@@ -8,8 +8,6 @@ name: Grok issues
 on:
   issues:
     types: [opened, reopened]
-  schedule:
-    - cron: "23 6 * * *"   # daily
   workflow_dispatch:
     inputs:
       issue:
