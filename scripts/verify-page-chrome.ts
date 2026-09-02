@@ -44,6 +44,7 @@ const SURFACE_SOURCES: Record<(typeof PRIMARY_PAGE_SURFACES)[number], string[]> 
 const FEATURE_GUARDS: Array<{ file: string; mustInclude: string; label: string }> = [
   { file: 'components/chat-sessions-panel.tsx', mustInclude: 'chat-session-rail', label: 'chat session rail' },
   { file: 'components/chat-sessions-panel.tsx', mustInclude: 'GrokChatPanel', label: 'Grok chat panel mount' },
+  { file: 'components/grok-chat-panel.tsx', mustInclude: 'aria-label="Chat target"', label: 'chat target picker' },
   { file: 'components/chat-sessions-panel.tsx', mustInclude: "action: 'openCanonical'", label: 'canonical chat open' },
   { file: 'components/chat-sessions-panel.tsx', mustInclude: 'New ephemeral chat', label: 'ephemeral chat control' },
   { file: 'components/workspace-page.tsx', mustInclude: 'ws-panel-scroll', label: 'workspace list-level scroll' },

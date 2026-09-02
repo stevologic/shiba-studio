@@ -21,7 +21,7 @@ As reasoning traces and tool activity grow, the transcript **sticks to the botto
 
 ## Chat targets
 
-The target select opens *which thread* you are in:
+The **Chat target** select opens *which thread* you are in:
 
 - **Grok** — the standalone Grok thread, with your global uploads as context.
 - **A specific agent** — that agent's 1:1 thread (voice, Skill, integrations). Local agents keep their real toolbelt — files, shell, and the browser — so *"open example.com and read the headline"* actually drives headless Chrome.

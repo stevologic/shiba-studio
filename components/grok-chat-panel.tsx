@@ -3861,6 +3861,7 @@ export default function GrokChatPanel({
           value={chatTarget}
           onChange={(e) => updateChatTarget(e.target.value as ChatTarget)}
           className="grok-select min-w-[160px] text-xs"
+          aria-label="Chat target"
           title={
             autoSpeak && agents.length >= 2
               ? 'With Grok Voice on, “All agents” is a live multi-agent voice circle — they keep talking if you go quiet'
