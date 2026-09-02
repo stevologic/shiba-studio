@@ -36,6 +36,9 @@ static class NativeWindowChrome
 
 sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
 {
+    static readonly Color Ink = Color.FromArgb(245, 245, 245);
+    static readonly Color Disabled = Color.FromArgb(115, 115, 115);
+
     public DarkMenuRenderer() : base(new DarkMenuColors())
     {
         RoundedEdges = false;
@@ -44,6 +47,20 @@ sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
     {
         // No 3D edge — keep the menu flush with the title bar and web view.
+    }
+
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+    {
+        // ProfessionalColorTable has no text color; dropdowns otherwise keep
+        // the system default (black) on our dark background.
+        e.TextColor = e.Item.Enabled ? Ink : Disabled;
+        base.OnRenderItemText(e);
+    }
+
+    protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+    {
+        e.ArrowColor = e.Item?.Enabled != false ? Ink : Disabled;
+        base.OnRenderArrow(e);
     }
 }
 

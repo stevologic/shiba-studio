@@ -8,6 +8,7 @@ sealed class PreferencesForm : Form
     readonly RadioButton _main;
     readonly RadioButton _development;
     readonly CheckBox _autoUpdate;
+    readonly CheckBox _minimizeToTray;
 
     public PreferencesForm()
     {
@@ -17,7 +18,7 @@ sealed class PreferencesForm : Form
         MinimizeBox = false;
         MaximizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(440, 248);
+        ClientSize = new Size(440, 292);
         BackColor = Color.FromArgb(10, 10, 10);
         ForeColor = Color.FromArgb(245, 245, 245);
         Font = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point);
@@ -55,12 +56,19 @@ sealed class PreferencesForm : Form
             AutoSize = true,
             Checked = prefs.AutoUpdate,
         };
+        _minimizeToTray = new CheckBox
+        {
+            Text = "Minimize and close to the system tray",
+            Location = new Point(20, 168),
+            AutoSize = true,
+            Checked = prefs.MinimizeToTray,
+        };
 
         var ok = new Button
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(248, 196),
+            Location = new Point(248, 240),
             Size = new Size(80, 28),
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.White,
@@ -70,7 +78,7 @@ sealed class PreferencesForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(336, 196),
+            Location = new Point(336, 240),
             Size = new Size(80, 28),
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.FromArgb(38, 38, 38),
@@ -81,6 +89,7 @@ sealed class PreferencesForm : Form
         Controls.Add(_main);
         Controls.Add(_development);
         Controls.Add(_autoUpdate);
+        Controls.Add(_minimizeToTray);
         Controls.Add(ok);
         Controls.Add(cancel);
         AcceptButton = ok;
@@ -92,6 +101,7 @@ sealed class PreferencesForm : Form
             {
                 Channel = _main.Checked ? "main" : "development",
                 AutoUpdate = _autoUpdate.Checked,
+                MinimizeToTray = _minimizeToTray.Checked,
             });
         };
     }

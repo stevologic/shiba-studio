@@ -36,6 +36,7 @@ async function main() {
   assert(desk.includes('showShortcuts'), 'shiba-studio shortcuts state');
   assert(desk.includes("e.key === '/'"), 'shiba-studio Ctrl+/ handler');
   assert(desk.includes("e.key.toLowerCase() === 'n'"), 'shiba-studio Ctrl+N new-chat handler');
+  assert(desk.includes("action: 'openCanonical'"), 'Ctrl+N opens the durable Grok thread');
   assert(desk.includes("id: 'new-ephemeral-chat'"), 'command palette offers ephemeral chat');
   assert(desk.includes("id: 'grok-cli-terminal'"), 'command palette launches Grok CLI in the terminal');
   assert(desk.includes("aria-label=\"New ephemeral chat\""), 'top bar exposes ephemeral chat');
@@ -82,6 +83,8 @@ async function main() {
   assert(chatDocs.includes('/annotate'), 'docs cover annotation');
   assert(chatDocs.includes('/workspace'), 'docs cover chat workspaces');
   assert(chatDocs.includes('keyboard-shortcut overlay'), 'docs cover shortcut overlay');
+  assert(chatDocs.includes('One chat per agent'), 'docs cover one durable thread per agent');
+  assert(chatDocs.includes('ephemeral'), 'docs still cover ephemeral chats');
 
   const site = await read('site/index.html');
   assert(site.includes('Grok phone assistant'), 'marketing site covers phone assistant');

@@ -5,7 +5,8 @@ import { ChevronsLeft, ChevronsRight, EyeOff, GitBranch, Plus, Search } from 'lu
 import { toast } from '@/lib/toast';
 import { confirmDialog, promptDialog } from '@/components/confirm-dialog';
 import GrokChatPanel from '@/components/grok-chat-panel';
-import { groupChatSessionsByProject, type ChatSession } from '@/lib/chat-session-types';
+import { canonicalTitleForTarget, groupChatSessionsForRail, type ChatSession } from '@/lib/chat-session-types';
+import type { ChatTarget } from '@/components/grok-chat-panel';
 import type { Project } from '@/lib/project-types';
 import type { Agent } from '@/lib/types';
 import { writeLastChatSessionId } from '@/lib/app-navigation';
@@ -100,19 +101,7 @@ export default function ChatSessionsPanel({
   const [linkedProject, setLinkedProject] = useState<Project | null>(null);
   const linkedProjectRequestRef = useRef(0);
   const [projects, setProjects] = useState<Project[]>([]);
-  const sessionGroups = useMemo(() => {
-    const names = new Map(projects.map((project) => [project.id, project.name]));
-    return groupChatSessionsByProject(sessions)
-      .map((group) => ({
-        ...group,
-        label: group.projectId ? (names.get(group.projectId) || 'Missing project') : 'Standalone chats',
-      }))
-      .sort((left, right) => {
-        if (left.projectId === null) return 1;
-        if (right.projectId === null) return -1;
-        return left.label.localeCompare(right.label);
-      });
-  }, [projects, sessions]);
+  const sessionGroups = useMemo(() => groupChatSessionsForRail(sessions), [sessions]);
   const [bootstrapping, setBootstrapping] = useState(() => {
     // Warm start from module cache after a `/chat` → `/chat/:id` remount.
     if (sessionId && sessionCache.loadedId === sessionId && sessionCache.active?.id === sessionId) {
@@ -499,8 +488,9 @@ export default function ChatSessionsPanel({
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                action: 'create',
-                defaults: { chatModel: defaultChatModelRef.current },
+                action: 'openCanonical',
+                chatTarget: 'grok',
+                chatModel: defaultChatModelRef.current,
               }),
             });
             const data = await res.json();
@@ -577,21 +567,57 @@ export default function ChatSessionsPanel({
     return () => { cancelled = true; };
   }, [sessionId, showArchived, loadSessions, loadSession, loadLinkedProject]);
 
+  async function openCanonical(chatTarget: ChatTarget = 'grok') {
+    try {
+      const agentName = chatTarget !== 'grok' && chatTarget !== 'all'
+        ? agentsByIdRef.current.get(chatTarget)
+        : undefined;
+      const res = await fetch('/api/chat-sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'openCanonical',
+          chatTarget,
+          chatModel: defaultChatModelRef.current,
+          title: canonicalTitleForTarget(chatTarget, agentName || undefined),
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.session) throw new Error(data.error || 'Could not open chat');
+      const opened = data.session as ChatSession;
+      invalidateChatSessionReads(opened.id);
+      commitSessions([opened, ...sessionsRef.current.filter((s) => s.id !== opened.id)]);
+      preferredSessionIdRef.current = opened.id;
+      endVoiceIfSessionChanges(opened.id);
+      commitActive(opened);
+      await loadLinkedProject(opened.projectId, opened.id);
+      onStatsChange?.();
+      onSessionChange(opened.id);
+      if (data.created) toast.success(`Opened ${opened.title}`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to open chat');
+    }
+  }
+
   async function createSession(ephemeral = false) {
+    if (!ephemeral) {
+      await openCanonical('grok');
+      return;
+    }
     try {
       const res = await fetch('/api/chat-sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'create',
-          defaults: { chatModel: defaultChatModel, ephemeral },
+          defaults: { chatModel: defaultChatModel, ephemeral: true },
         }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       const created = data.session as ChatSession;
       invalidateChatSessionReads(created.id);
-      if (created.ephemeral) registerBrowserEphemeralSession(created.id);
+      registerBrowserEphemeralSession(created.id);
       commitSessions([created, ...sessionsRef.current.filter((s) => s.id !== created.id)]);
       preferredSessionIdRef.current = created.id;
       endVoiceIfSessionChanges(created.id);
@@ -599,7 +625,7 @@ export default function ChatSessionsPanel({
       await loadLinkedProject(null, created.id);
       onStatsChange?.();
       onSessionChange(created.id);
-      toast.success(ephemeral ? 'New ephemeral chat' : 'New chat session');
+      toast.success('New ephemeral chat');
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to create session');
     }
@@ -614,12 +640,11 @@ export default function ChatSessionsPanel({
         body: JSON.stringify({ action: 'archive', id, archived: true }),
       });
       invalidateChatSessionReads(id);
-      await loadSessions(searchQuery, { force: true });
+      const list = await loadSessions(searchQuery, { force: true });
       onStatsChange?.();
       if (sessionId === id) {
-        const remaining = sessions.filter((s) => s.id !== id);
+        const remaining = (list || sessions).filter((s) => s.id !== id && !s.archived);
         if (remaining.length > 0) onSessionChange(remaining[0].id);
-        else await createSession();
       }
       toast.success('Session archived');
     } catch (e: unknown) {
@@ -758,10 +783,10 @@ export default function ChatSessionsPanel({
         <div className="chat-sessions-page-head">
           <div className="page-title">
             Grok Chat
-            <InfoHint text="Talk to Grok, route to agents, or run a multi-agent group chat. Sessions, tools, voice, and project context all live here." />
+            <InfoHint text="One durable chat per agent (and Grok) keeps that thread’s context. All agents is the group room. Ephemeral chats stay throwaway." />
           </div>
           <div className="page-subtitle">
-            Sessions with tools, voice, and project context — Grok, a single agent, or the whole team.
+            One chat per agent, a group room for the team, and ephemeral chats that vanish when this page closes.
           </div>
         </div>
         <div className="flex items-center justify-center gap-3 flex-1 min-h-0 text-dim text-sm">
@@ -777,10 +802,10 @@ export default function ChatSessionsPanel({
       <div className="chat-sessions-page-head">
         <div className="page-title">
           Grok Chat
-          <InfoHint text="Talk to Grok, route to agents, or run a multi-agent group chat. Sessions, tools, voice, and project context all live here." />
+          <InfoHint text="One durable chat per agent (and Grok) keeps that thread’s context. All agents is the group room. Ephemeral chats stay throwaway." />
         </div>
         <div className="page-subtitle">
-          Sessions with tools, voice, and project context — Grok, a single agent, or the whole team.
+          One chat per agent, a group room for the team, and ephemeral chats that vanish when this page closes.
         </div>
       </div>
 
@@ -795,8 +820,8 @@ export default function ChatSessionsPanel({
               type="button"
               onClick={() => void createSession(false)}
               className="chat-session-rail-btn"
-              title="New chat session"
-              aria-label="New chat session"
+              title="Open Grok chat"
+              aria-label="Open Grok chat"
             >
               <Plus size={14} />
             </button>
@@ -838,7 +863,7 @@ export default function ChatSessionsPanel({
           <div className="chat-session-rail-list">
             {/* railLabelTick: re-paint when a frozen label is filled or chatTarget changes */}
             {sessionGroups.map((group) => (
-              <section key={group.projectId || 'standalone'} aria-label={group.label} className="mb-2">
+              <section key={group.id} aria-label={group.label} className="mb-2">
                 <div className="flex items-center gap-2 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-dim">
                   <span className="truncate">{group.label}</span>
                   <span className="ml-auto font-mono">{group.sessions.length}</span>
@@ -888,8 +913,8 @@ export default function ChatSessionsPanel({
             type="button"
             onClick={() => void createSession(false)}
             className="chat-session-rail-btn"
-            title="New chat session"
-            aria-label="New chat session"
+            title="Open Grok chat"
+            aria-label="Open Grok chat"
           >
             <Plus size={15} />
           </button>
@@ -978,6 +1003,7 @@ export default function ChatSessionsPanel({
           agents={agents}
           agentsReady={agentsReady}
           defaultWorkspace={defaultWorkspace}
+          onOpenTarget={(target) => void openCanonical(target)}
         />
       )}
       </div>

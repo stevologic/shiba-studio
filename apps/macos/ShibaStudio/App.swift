@@ -28,6 +28,9 @@ struct ShibaStudioApp: App {
                 Button("Companion") {
                     desktop.openCompanion()
                 }
+                Button("Hide to menu bar") {
+                    desktop.hideToMenuBar()
+                }
             }
             CommandGroup(replacing: .help) {
                 Button("Packages page") {
@@ -45,13 +48,26 @@ struct ShibaStudioApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static weak var shared: AppDelegate?
+    private var statusItem: NSStatusItem?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.shared = self
         NSApp.appearance = NSAppearance(named: .darkAqua)
+        refreshStatusItem()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         Task { await DesktopApp.shared.checkForUpdates(manual: false) }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            DesktopApp.shared.showMainWindow()
+        }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -59,7 +75,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        !AppIdentity.readPrefs().keepInMenuBar
+    }
+
+    func refreshStatusItem() {
+        if !AppIdentity.readPrefs().keepInMenuBar {
+            if let item = statusItem {
+                NSStatusBar.system.removeStatusItem(item)
+                statusItem = nil
+            }
+            return
+        }
+        if statusItem != nil { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let image = NSApp.applicationIconImage?.copy() as? NSImage {
+            image.size = NSSize(width: 18, height: 18)
+            item.button?.image = image
+        } else {
+            item.button?.title = "S"
+        }
+        item.button?.toolTip = AppIdentity.productName
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Open Shiba Studio", action: #selector(openFromStatusItem), keyEquivalent: "")
+        menu.addItem(withTitle: "Hide to menu bar", action: #selector(hideFromStatusItem), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit Shiba Studio", action: #selector(quitFromStatusItem), keyEquivalent: "q")
+        for entry in menu.items {
+            entry.target = self
+        }
+        item.menu = menu
+        statusItem = item
+    }
+
+    @objc private func openFromStatusItem() {
+        DesktopApp.shared.showMainWindow()
+    }
+
+    @objc private func hideFromStatusItem() {
+        DesktopApp.shared.hideToMenuBar()
+    }
+
+    @objc private func quitFromStatusItem() {
+        NSApp.terminate(nil)
     }
 }
 
@@ -113,6 +170,27 @@ final class DesktopApp: ObservableObject {
         updateTimer?.invalidate()
         updateTimer = nil
         host.stop()
+    }
+
+    func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        NSApp.windows.first?.makeKeyAndOrderFront(nil)
+    }
+
+    func hideToMenuBar() {
+        guard AppIdentity.readPrefs().keepInMenuBar else { return }
+        refreshStatusItem()
+        for window in NSApp.windows where window.isVisible {
+            window.orderOut(nil)
+        }
+    }
+
+    func refreshStatusItem() {
+        AppDelegate.shared?.refreshStatusItem()
     }
 
     func reload() {

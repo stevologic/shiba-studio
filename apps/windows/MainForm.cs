@@ -19,10 +19,13 @@ sealed class MainForm : Form
     readonly Label _splashTitle;
     readonly Label _splashDetail;
     readonly MenuStrip _menu;
+    readonly NotifyIcon _tray;
     readonly System.Windows.Forms.Timer _updateTimer;
     bool _webReady;
     Uri? _origin;
     bool _updateInFlight;
+    bool _exitRequested;
+    bool _hidingToTray;
     DateTime _lastUpdateCheck = DateTime.MinValue;
 
     public MainForm()
@@ -37,6 +40,7 @@ sealed class MainForm : Form
         Icon = LoadIcon();
 
         _menu = BuildMenu();
+        _tray = BuildTray();
         _web = new WebView2
         {
             Dock = DockStyle.Fill,
@@ -60,11 +64,22 @@ sealed class MainForm : Form
             if (DateTime.UtcNow - _lastUpdateCheck < TimeSpan.FromMinutes(5)) return;
             await CheckForUpdatesAsync(manual: false);
         };
+        FormClosing += OnMainFormClosing;
         FormClosed += (_, _) =>
         {
             _updateTimer.Stop();
             _updateTimer.Dispose();
+            _tray.Visible = false;
+            _tray.Dispose();
             _host.Dispose();
+        };
+        Resize += (_, _) =>
+        {
+            if (_hidingToTray || _exitRequested) return;
+            if (WindowState == FormWindowState.Minimized && AppIdentity.ReadPrefs().MinimizeToTray)
+            {
+                BeginInvoke(HideToTray);
+            }
         };
         KeyPreview = true;
         KeyDown += async (_, e) =>
@@ -98,19 +113,20 @@ sealed class MainForm : Form
             Padding = new Padding(6, 2, 6, 2),
             GripStyle = ToolStripGripStyle.Hidden,
         };
-        var studio = new ToolStripMenuItem("&Studio");
+        var studio = MenuHeading("&Studio");
         studio.DropDownItems.Add(Item("&Reload", async () => await ReloadAsync(), Keys.F5));
         studio.DropDownItems.Add(Item("&Companion", async () => await OpenCompanionAsync()));
         studio.DropDownItems.Add(new ToolStripSeparator());
         studio.DropDownItems.Add(Item("Check for &Updates…", async () => await CheckForUpdatesAsync(manual: true)));
         studio.DropDownItems.Add(Item("&Preferences…", ShowPreferences));
         studio.DropDownItems.Add(new ToolStripSeparator());
-        studio.DropDownItems.Add(Item("E&xit", Close));
+        studio.DropDownItems.Add(Item("&Minimize to tray", HideToTray));
+        studio.DropDownItems.Add(Item("E&xit", ExitApp));
 
-        var view = new ToolStripMenuItem("&View");
+        var view = MenuHeading("&View");
         view.DropDownItems.Add(Item("&Developer Tools", () => _web.CoreWebView2?.OpenDevToolsWindow(), Keys.F12));
 
-        var help = new ToolStripMenuItem("&Help");
+        var help = MenuHeading("&Help");
         help.DropDownItems.Add(Item("&Packages page", OpenPackagesPage));
         help.DropDownItems.Add(Item("&About Shiba Studio", ShowAbout));
 
@@ -120,17 +136,112 @@ sealed class MainForm : Form
         return menu;
     }
 
+    static ToolStripMenuItem MenuHeading(string text)
+    {
+        var item = new ToolStripMenuItem(text)
+        {
+            ForeColor = Ink,
+            BackColor = Bg,
+        };
+        item.DropDown.ForeColor = Ink;
+        item.DropDown.BackColor = Bg;
+        item.DropDown.Renderer = new DarkMenuRenderer();
+        return item;
+    }
+
     static ToolStripMenuItem Item(string text, Action action, Keys shortcut = Keys.None)
     {
-        var item = new ToolStripMenuItem(text);
+        var item = new ToolStripMenuItem(text)
+        {
+            ForeColor = Ink,
+            BackColor = Bg,
+        };
         if (shortcut != Keys.None) item.ShortcutKeys = shortcut;
         item.Click += (_, _) => action();
         return item;
     }
 
+    NotifyIcon BuildTray()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Open Shiba Studio", null, (_, _) => RestoreFromTray());
+        menu.Items.Add("Minimize to tray", null, (_, _) => HideToTray());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) => ExitApp());
+        var tray = new NotifyIcon
+        {
+            Text = AppIdentity.ProductName,
+            Icon = Icon ?? SystemIcons.Application,
+            Visible = AppIdentity.ReadPrefs().MinimizeToTray,
+            ContextMenuStrip = menu,
+        };
+        tray.MouseClick += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Left) RestoreFromTray();
+        };
+        return tray;
+    }
+
+    bool TrayEnabled => AppIdentity.ReadPrefs().MinimizeToTray;
+
+    void HideToTray()
+    {
+        if (!TrayEnabled) return;
+        if (_hidingToTray) return;
+        _hidingToTray = true;
+        try
+        {
+            _tray.Visible = true;
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Hide();
+        }
+        finally
+        {
+            _hidingToTray = false;
+        }
+    }
+
+    internal void RestoreFromTray()
+    {
+        Show();
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        Activate();
+        BringToFront();
+        NativeWindowChrome.Apply(this);
+    }
+
+    void ExitApp()
+    {
+        _exitRequested = true;
+        Close();
+    }
+
+    void OnMainFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (_exitRequested) return;
+        if (e.CloseReason != CloseReason.UserClosing) return;
+        if (!TrayEnabled) return;
+        e.Cancel = true;
+        HideToTray();
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == Program.RestoreMessage)
+        {
+            RestoreFromTray();
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
     static ToolStripMenuItem Item(string text, Func<Task> action, Keys shortcut = Keys.None)
     {
-        var item = new ToolStripMenuItem(text);
+        var item = new ToolStripMenuItem(text)
+        {
+            ForeColor = Ink,
+            BackColor = Bg,
+        };
         if (shortcut != Keys.None) item.ShortcutKeys = shortcut;
         item.Click += async (_, _) => await action();
         return item;
@@ -267,7 +378,9 @@ sealed class MainForm : Form
     void ShowPreferences()
     {
         using var dialog = new PreferencesForm();
-        if (dialog.ShowDialog(this) == DialogResult.OK && AppIdentity.ReadPrefs().AutoUpdate)
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        _tray.Visible = TrayEnabled;
+        if (AppIdentity.ReadPrefs().AutoUpdate)
         {
             _ = CheckForUpdatesAsync(manual: true);
         }
@@ -338,7 +451,7 @@ sealed class MainForm : Form
         SetSplash("Updating Shiba Studio…");
         var progress = new Progress<string>(SetSplash);
         await _updater.DownloadAndApplyAsync(offer, progress);
-        Close();
+        ExitApp();
     }
 
     void OpenUrl(string uri)

@@ -2068,10 +2068,11 @@ async function* agentRunGenerator(
       const preExecuted = new Map<string, { result: unknown; sideEffect?: string; screenshot?: string }>();
       {
         const calls = effectiveToolCalls || [];
-        const { toolNeedsApproval: needsApproval } = await import('./tool-approval');
+        const { loadAlwaysApprovedTools, toolNeedsApproval: needsApproval } = await import('./tool-approval');
+        const allowlist = await loadAlwaysApprovedTools(agent.id);
         const canParallel = calls.length > 1 && calls.every((tc) => {
           const name = tc.function?.name || '';
-          return name && !SEQUENTIAL_ONLY_TOOLS.has(name) && !needsApproval(name, cfg.toolApprovalMode);
+          return name && !SEQUENTIAL_ONLY_TOOLS.has(name) && !needsApproval(name, cfg.toolApprovalMode, allowlist);
         });
         if (canParallel) {
           await Promise.all(calls.map(async (tc) => {
@@ -2117,7 +2118,7 @@ async function* agentRunGenerator(
           tool: { name: fn.name, args },
         });
 
-        const { toolNeedsApproval, beginToolApproval } = await import('./tool-approval');
+        const { loadAlwaysApprovedTools, toolNeedsApproval, beginToolApproval } = await import('./tool-approval');
         const taskDispatchPolicy = taskToolDecision(taskId, fn.name, args);
         if (!taskDispatchPolicy.allowed) {
           const denied = { denied: true, reason: taskDispatchPolicy.reason || 'Tool is outside this task grant.' };
@@ -2154,8 +2155,11 @@ async function* agentRunGenerator(
         // native access always pauses regardless of the global approval mode.
         let liveTaskShellApproval = false;
         let liveToolApprovalGranted = false;
-        if (!opts.autonomous && (taskDispatchPolicy.requiresLiveApproval || toolNeedsApproval(fn.name, cfg.toolApprovalMode))) {
-          const { approvalId, wait } = beginToolApproval(runId, fn.name, args);
+        const allowlist = await loadAlwaysApprovedTools(agent.id);
+        if (!opts.autonomous && (taskDispatchPolicy.requiresLiveApproval || toolNeedsApproval(fn.name, cfg.toolApprovalMode, allowlist))) {
+          const { approvalId, wait } = beginToolApproval(runId, fn.name, args, undefined, {
+            agentId: agent.id,
+          });
           let taskAttentionId: string | undefined;
           try {
             const ledger = await import('./task-ledger');

@@ -19,6 +19,8 @@ sealed class UserPrefs
 {
     public string? Channel { get; set; }
     public bool AutoUpdate { get; set; } = true;
+    /// <summary>Minimize and close hide the window to the notification area instead of exiting.</summary>
+    public bool MinimizeToTray { get; set; } = true;
 }
 
 static class AppIdentity

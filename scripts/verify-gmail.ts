@@ -29,7 +29,7 @@ function main() {
   const persistence = readFileSync(new URL('../lib/persistence.ts', import.meta.url), 'utf8');
   assert.match(persistence, /integrations\.gmail\.accessToken/);
   assert.match(persistence, /integrations\.gmail\.refreshToken/);
-  const approval = readFileSync(new URL('../lib/tool-approval.ts', import.meta.url), 'utf8');
+  const approval = readFileSync(new URL('../lib/tool-approval-policy.ts', import.meta.url), 'utf8');
   assert.match(approval, /gmail_send/);
   const toolsRoute = readFileSync(new URL('../app/api/tools/route.ts', import.meta.url), 'utf8');
   assert.match(toolsRoute, /gmail: true/);

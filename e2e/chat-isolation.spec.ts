@@ -140,7 +140,7 @@ test('finishing chat A while project chat B is active cannot replace or contamin
 
   await page.goto(`/chat/${sessionA.id}`, { waitUntil: 'domcontentloaded' });
   const composer = page.locator('textarea.grok-chat-textarea');
-  const targetPicker = page.locator('select[title*="Chat as Grok"]');
+  const targetPicker = page.getByLabel('Chat target');
   await expect(composer).toBeVisible();
   await expect(targetPicker).toHaveValue(agent.id);
   await composer.fill(`A_REQUEST_${suffix}`);
@@ -298,7 +298,7 @@ test('voice-group turns stay attached to their durable session across chat switc
   });
 
   const composer = page.locator('textarea.grok-chat-textarea');
-  const targetPicker = page.locator('select[title*="Chat as Grok"], select[title*="All agents"]');
+  const targetPicker = page.getByLabel('Chat target');
   await page.goto(`/chat/${sessionA.id}`, { waitUntil: 'domcontentloaded' });
   await expect(composer).toBeVisible();
   await expect(targetPicker).toHaveValue('all');
@@ -367,7 +367,7 @@ test('a stale durable agent target falls back to a valid Grok picker option', as
   const session = (await response.json() as CreatedSession).session;
 
   await page.goto(`/chat/${session.id}`, { waitUntil: 'domcontentloaded' });
-  const targetPicker = page.locator('select[title*="Chat as Grok"]');
+  const targetPicker = page.getByLabel('Chat target');
   await expect(targetPicker).toBeVisible();
   await expect(targetPicker).toHaveValue('grok');
 });

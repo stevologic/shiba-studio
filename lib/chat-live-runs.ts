@@ -11,7 +11,7 @@
 'use client';
 
 import { deriveSessionTitle } from './chat-session-types';
-import type { ChatAttachment, ChatFileRef } from './chat-types';
+import type { ChatAttachment, ChatFileRef, ChatPendingApproval } from './chat-types';
 import type { ProjectChatMessage } from './project-types';
 
 export type LiveChatUiMessage = {
@@ -27,6 +27,7 @@ export type LiveChatUiMessage = {
   files?: ChatFileRef[];
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   streaming?: boolean;
+  pendingApproval?: ChatPendingApproval;
 };
 
 export type LiveChatRun = {

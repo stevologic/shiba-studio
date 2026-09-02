@@ -34,6 +34,13 @@ export interface ChatFileRef {
   path: string;
 }
 
+export type ChatPendingApproval = {
+  approvalId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  status: 'pending' | 'approved' | 'denied';
+};
+
 export type ChatStreamEvent =
   | { type: 'thinking'; delta: string }
   | { type: 'content'; delta: string }
@@ -42,6 +49,8 @@ export type ChatStreamEvent =
   | { type: 'file-created'; file: ChatFileRef }
   | { type: 'citation'; url: string; title?: string; tool?: string }
   | { type: 'tool-trace'; name: string; detail?: string }
+  | { type: 'approval_required'; approvalId: string; toolName: string; args: Record<string, unknown> }
+  | { type: 'approval_resolved'; approvalId: string; approved: boolean }
   | { type: 'usage'; usage: Record<string, unknown> }
   | { type: 'done'; model: string }
   | { type: 'error'; message: string };
