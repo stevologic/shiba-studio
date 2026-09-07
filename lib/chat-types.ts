@@ -55,4 +55,31 @@ export type ChatStreamEvent =
   | { type: 'done'; model: string }
   | { type: 'error'; message: string };
 
-export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high';
+/**
+ * Studio's reasoning-effort control. `none` means "do not send a parameter"
+ * (xAI grok-4.6+ then defaults to `high` and cannot disable reasoning).
+ * `xhigh` is grok-4.6+ maximum depth; older models treat it as `high`.
+ */
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+
+export const REASONING_EFFORT_VALUES = ['none', 'low', 'medium', 'high', 'xhigh'] as const;
+
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'low';
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === 'string' && (REASONING_EFFORT_VALUES as readonly string[]).includes(value);
+}
+
+export function normalizeReasoningEffort(value?: string | null): ReasoningEffort {
+  return isReasoningEffort(value) ? value : DEFAULT_REASONING_EFFORT;
+}
+
+/**
+ * Value to send on xAI Chat Completions (`reasoning_effort`) or Responses
+ * (`reasoning.effort`). Missing values and `none` omit the field so the
+ * provider default applies (high on Grok 4.6).
+ */
+export function xaiReasoningEffortParam(value?: string | null): Exclude<ReasoningEffort, 'none'> | undefined {
+  if (!isReasoningEffort(value) || value === 'none') return undefined;
+  return value;
+}

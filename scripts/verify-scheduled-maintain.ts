@@ -104,6 +104,16 @@ async function main() {
   assert.match(jsShell, /Grok 4.6 is the current flagship model/);
   assert.doesNotMatch(jsShell, /self\.__next_f\.push/);
 
+  const escapedMarkup = lib.formatFetchedDocument({
+    url: 'https://docs.x.ai/developers/model-capabilities/text/reasoning',
+    status: 200,
+    finalUrl: 'https://docs.x.ai/developers/model-capabilities/text/reasoning',
+    body: 'self.__next_f.push([1,"<p>Grok 4.6 supports reasoning.effort low medium high and xhigh for maximum depth.</p>"])',
+  });
+  assert.match(escapedMarkup, /Grok 4.6 supports reasoning\.effort/);
+  assert.match(escapedMarkup, /xhigh for maximum depth/);
+  assert.doesNotMatch(escapedMarkup, /<p>/);
+
   const bounced = lib.formatFetchedDocument({
     url: 'https://docs.x.ai/docs/overview',
     status: 302,

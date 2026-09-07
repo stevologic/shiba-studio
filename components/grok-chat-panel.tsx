@@ -23,9 +23,10 @@ import ChatMarkdown from '@/components/chat-markdown-lazy';
 import { confirmDialog } from '@/components/confirm-dialog';
 import type { SubBrowserAnnotation } from '@/components/sub-browser';
 import type { ChatAttachment, ChatFileRef, ChatMessagePayload, ChatPendingApproval, ReasoningEffort } from '@/lib/chat-types';
+import { normalizeReasoningEffort } from '@/lib/chat-types';
 import ToolApprovalCard from '@/components/tool-approval-card';
 import { buildAgentChatSystem } from '@/lib/chat-skill';
-import { encodeModelRef, modelDisplayName, parseModelRef, providerLabel, providerTitle, supportsReasoning } from '@/lib/model-providers';
+import { encodeModelRef, modelDisplayName, parseModelRef, providerLabel, providerTitle, supportsReasoning, supportsXhighReasoning } from '@/lib/model-providers';
 import type { Agent } from '@/lib/types';
 import type { Project, ProjectChatMessage } from '@/lib/project-types';
 import type { ChatSession } from '@/lib/chat-session-types';
@@ -313,7 +314,7 @@ function sessionToInitialState(
       useGrokCli,
       toolsEnabled: session?.toolsEnabled !== false,
       cliModel: session.cliModel || '',
-      reasoningEffort: session.reasoningEffort || 'low' as ReasoningEffort,
+      reasoningEffort: normalizeReasoningEffort(session.reasoningEffort),
       workspaceDir: session.workspaceDir || null,
     };
   }
@@ -323,7 +324,7 @@ function sessionToInitialState(
     useGrokCli,
     toolsEnabled: session?.toolsEnabled !== false,
     cliModel: session?.cliModel || '',
-    reasoningEffort: (session?.reasoningEffort || 'low') as ReasoningEffort,
+    reasoningEffort: normalizeReasoningEffort(session?.reasoningEffort),
     workspaceDir: session?.workspaceDir || null,
   };
 }
@@ -4598,12 +4599,15 @@ export default function GrokChatPanel({
             onChange={(e) => updateReasoningEffort(e.target.value as ReasoningEffort)}
             className="grok-select grok-chat-composer-reasoning"
             disabled={streaming}
-            title="Reasoning effort for this chat"
+            title="Reasoning effort for this chat. Grok 4.6+ cannot disable reasoning; Default omits the parameter (provider high). Extra high is grok-4.6+ maximum depth."
           >
-            <option value="none">Reasoning off</option>
+            <option value="none">Reasoning default</option>
             <option value="low">Reasoning low</option>
             <option value="medium">Reasoning med</option>
             <option value="high">Reasoning high</option>
+            {(supportsXhighReasoning(chatModel) || reasoningEffort === 'xhigh') && (
+              <option value="xhigh">Reasoning extra high</option>
+            )}
           </select>
         )}
         {grokCliInstalled && chatTarget !== 'all' && (

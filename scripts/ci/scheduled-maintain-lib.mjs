@@ -182,6 +182,19 @@ function looksLikeRenderedShell(text) {
 }
 
 /**
+ * xAI / Anthropic / ChatGPT docs often wrap the real article in a JS
+ * flight payload whose HTML tags survive as escaped `\"` / `<\/p>` inside
+ * quoted strings. Strip those so weekly research is prose, not markup.
+ */
+function stripEscapedMarkup(text) {
+  return String(text || "")
+    .replace(/\\u003c/gi, "<")
+    .replace(/\\u003e/gi, ">")
+    .replace(/\\u0026/gi, "&")
+    .replace(/<[^>]+>/g, " ");
+}
+
+/**
  * Pull human-readable prose out of Next.js RSC / JS app shells so weekly
  * research is not just minified flight data.
  * @param {string} raw
@@ -193,13 +206,14 @@ export function extractQuotedProse(raw) {
   const lines = [];
   for (const match of matches) {
     const value = collapseWhitespace(
-      match
-        .slice(1, -1)
-        .replace(/\\n/g, "\n")
-        .replace(/\\t/g, " ")
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, "\\")
-        .replace(/<[^>]+>/g, " "),
+      stripEscapedMarkup(
+        match
+          .slice(1, -1)
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, " ")
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, "\\"),
+      ).replace(/<[^>]+>/g, " "),
     );
     if (value.length < 40) continue;
     if (!/[A-Za-z]{4,}\s+[A-Za-z]/.test(value)) continue;

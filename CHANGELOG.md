@@ -51,6 +51,8 @@ are carried over automatically.
 
 ### Changed
 
+- **Grok reasoning effort matches xAI 4.6.** Chat now sends `low` on Responses (it was dropped, so Grok silently used `high`), exposes **extra high** (`xhigh`), and relabels **off** to **default** because Grok 4.6 cannot disable reasoning.
+
 - **Windows menu text is light on the dark bar.** Studio / View / Help dropdowns paint item labels (and arrows) in the same near-white ink as the rest of the host instead of default black on black-adjacent chrome.
 
 - **Inline chat approvals.** Ask-before-act now pauses gated tools in agent chats (not only the Automations modal). The transcript shows Approve, Always approve, and Deny. Always approve remembers that tool for the agent (or Grok Chat); native desktop actions still need an exact click.

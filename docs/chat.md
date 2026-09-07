@@ -33,7 +33,7 @@ The **Chat target** select opens *which thread* you are in:
 ## Models, reasoning, attachments
 
 - The **composer model pill** switches between Cloud (xAI) and Local models per session; the terminal toggle routes through the **Grok CLI** instead of the API. Unset sessions and fresh installs default to **Grok 4.6**.
-- For reasoning-capable models a **reasoning effort** pill appears (off/low/med/high). Non-reasoning models hide it and never send the parameter.
+- For reasoning-capable models a **reasoning effort** pill appears (default/low/med/high/extra high). **Default** omits the parameter so xAI uses its own default (`high` on Grok 4.6; reasoning cannot be disabled). **Low** is sent as `reasoning.effort` / `reasoning_effort` for latency-sensitive turns. **Extra high** (`xhigh`) is Grok 4.6+ maximum depth; older reasoning models treat it as `high`. Non-reasoning models hide the pill and never send the parameter.
 - **Images & files:** drop, paste, or attach. Images render inline in the conversation — click for a full-screen lightbox.
 - The **QUOTA pill** in the top bar shows spend as a share of your monthly budget (Settings → Monthly Usage Quota).
 
