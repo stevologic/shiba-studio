@@ -11,7 +11,13 @@ import {
   pickPreferredCloudModel,
   replayBudgetForModel,
   resolveDefaultCloudModel,
+  supportsXhighReasoning,
 } from '../lib/model-providers';
+import {
+  DEFAULT_REASONING_EFFORT,
+  normalizeReasoningEffort,
+  xaiReasoningEffortParam,
+} from '../lib/chat-types';
 import {
   estimateTokenCost,
   getModelPricing,
@@ -36,6 +42,20 @@ function main() {
   const expanded = expandModelSelectableIds(parsed);
   assert(expanded.some((m) => m.id === 'grok-latest'), 'alias should be selectable');
   assert(expanded.some((m) => m.id === 'grok-3'), 'primary id should remain');
+
+  assert.equal(DEFAULT_REASONING_EFFORT, 'low');
+  assert.equal(normalizeReasoningEffort(undefined), 'low');
+  assert.equal(normalizeReasoningEffort('xhigh'), 'xhigh');
+  assert.equal(xaiReasoningEffortParam('none'), undefined);
+  assert.equal(xaiReasoningEffortParam(undefined), undefined);
+  assert.equal(xaiReasoningEffortParam('low'), 'low');
+  assert.equal(xaiReasoningEffortParam('xhigh'), 'xhigh');
+  assert.equal(supportsXhighReasoning('cloud:grok-4.6'), true);
+  assert.equal(supportsXhighReasoning('cloud:grok-4.6-latest'), true);
+  assert.equal(supportsXhighReasoning('cloud:grok-latest'), true);
+  assert.equal(supportsXhighReasoning('cloud:grok-4.5'), false);
+  assert.equal(supportsXhighReasoning('cloud:grok-4'), false);
+  assert.equal(supportsXhighReasoning('cloud:grok-code-fast-1'), false);
 
   assert.equal(DEFAULT_CLOUD_MODEL_ID, 'grok-4.6');
   assert.equal(DEFAULT_CLOUD_MODEL_REF, 'cloud:grok-4.6');

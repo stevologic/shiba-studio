@@ -24,6 +24,7 @@ async function main() {
   const built = buildGrokChatStreamRequest({
     model: 'cloud:grok-4.6',
     messages: [{ role: 'user', content: 'What did xAI ship this week?' }],
+    reasoningEffort: 'low',
   });
   assert.equal(built.useResponses, true);
   assert.match(built.url, /\/responses$/);
@@ -35,7 +36,23 @@ async function main() {
   for (const expected of XAI_BUILTIN_SERVER_TOOLS) {
     assert.ok(types.has(expected.type), `builtin ${expected.type}`);
   }
-  log('OK Responses body includes x_search, web_search, code_interpreter');
+  const reasoning = built.body.reasoning as { effort?: string } | undefined;
+  assert.equal(reasoning?.effort, 'low', 'low effort must be sent on Responses (xAI default is high)');
+  log('OK Responses body includes x_search, web_search, code_interpreter and low reasoning effort');
+
+  const xhigh = buildGrokChatStreamRequest({
+    model: 'cloud:grok-4.6',
+    messages: [{ role: 'user', content: 'Prove it.' }],
+    reasoningEffort: 'xhigh',
+  });
+  assert.equal((xhigh.body.reasoning as { effort?: string } | undefined)?.effort, 'xhigh');
+  const omitted = buildGrokChatStreamRequest({
+    model: 'cloud:grok-4.6',
+    messages: [{ role: 'user', content: 'hi' }],
+    reasoningEffort: 'none',
+  });
+  assert.equal(omitted.body.reasoning, undefined, 'none omits reasoning so the provider default applies');
+  log('OK xhigh is sent and none omits the reasoning field');
 
   const local = buildGrokChatStreamRequest({
     model: 'local:llama',
@@ -43,7 +60,17 @@ async function main() {
   });
   assert.equal(local.useResponses, false);
   assert.match(local.url, /\/chat\/completions$/);
+  assert.equal(local.body.reasoning_effort, undefined);
   log('OK local models stay on chat completions');
+
+  const completions = buildGrokChatStreamRequest({
+    model: 'cloud:grok-3-mini',
+    messages: [{ role: 'user', content: 'hi' }],
+    reasoningEffort: 'low',
+  });
+  assert.equal(completions.useResponses, false);
+  assert.equal(completions.body.reasoning_effort, 'low');
+  log('OK chat-completions path sends reasoning_effort=low');
 
   const events = [...mapXaiResponsesEvent({
     type: 'response.output_item.done',

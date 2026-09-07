@@ -675,8 +675,11 @@ export function buildGrokCliArgsBase(opts: Omit<GrokCliRunOptions, 'prompt'>): s
   if (opts.agent?.trim()) args.push('--agent', opts.agent.trim());
   const model = grokCliModelId(opts.model);
   if (model) args.push('-m', model);
-  if (opts.reasoningEffort) args.push('--reasoning-effort', opts.reasoningEffort);
-  if (!opts.reasoningEffort && opts.effort?.trim()) args.push('--effort', opts.effort.trim());
+  const reasoningEffort = opts.reasoningEffort && opts.reasoningEffort !== 'none'
+    ? opts.reasoningEffort
+    : undefined;
+  if (reasoningEffort) args.push('--reasoning-effort', reasoningEffort);
+  if (!reasoningEffort && opts.effort?.trim()) args.push('--effort', opts.effort.trim());
   if (opts.maxTurns != null && Number.isFinite(opts.maxTurns)) {
     args.push('--max-turns', String(Math.max(1, Math.min(10_000, Math.floor(opts.maxTurns)))));
   }

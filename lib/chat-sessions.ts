@@ -12,6 +12,7 @@ import {
 } from './chat-session-types';
 import { compactContextScope, deleteContextScope, indexSessionContext } from './context-engine';
 import { ownershipStoreFencePath, withStoreFileLock } from './store-file-lock';
+import { DEFAULT_REASONING_EFFORT } from './chat-types';
 import { resolveDefaultCloudModel } from './model-providers';
 import { loadConfig } from './persistence';
 
@@ -211,7 +212,7 @@ export async function openCanonicalChatSession(input: {
       projectId: null,
       useGrokCli: false,
       toolsEnabled: true,
-      reasoningEffort: 'low',
+      reasoningEffort: DEFAULT_REASONING_EFFORT,
       ephemeral: false,
       unreadCount: 0,
       messages: [],
@@ -252,7 +253,7 @@ export async function createChatSession(
       projectId,
       useGrokCli: !!defaults.useGrokCli,
       toolsEnabled: defaults.toolsEnabled !== false,
-      reasoningEffort: defaults.reasoningEffort || 'low',
+      reasoningEffort: defaults.reasoningEffort || DEFAULT_REASONING_EFFORT,
       ephemeral: !!defaults.ephemeral,
       unreadCount: 0,
       messages: [],

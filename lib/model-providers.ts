@@ -46,6 +46,22 @@ export function supportsReasoning(modelIdOrRef: string): boolean {
   return false;
 }
 
+/**
+ * `xhigh` is documented for grok-4.6 and later. Older reasoning models
+ * (grok-4.5, grok-4, grok-3-mini, grok-code) treat unknown effort as `high`.
+ */
+export function supportsXhighReasoning(modelIdOrRef: string): boolean {
+  if (!supportsReasoning(modelIdOrRef)) return false;
+  const id = parseModelRef(modelIdOrRef).id.toLowerCase();
+  if (id === 'grok-latest') return true;
+  const generation = id.match(/grok-(\d+)(?:\.(\d+))?/);
+  if (!generation) return false;
+  const major = Number(generation[1]);
+  const minor = Number(generation[2] || 0);
+  if (major > 4) return true;
+  return major === 4 && minor >= 6;
+}
+
 /** Canonical xAI flagship id and encoded cloud ref. */
 export const DEFAULT_CLOUD_MODEL_ID = 'grok-4.6';
 export const DEFAULT_CLOUD_MODEL_REF = `cloud:${DEFAULT_CLOUD_MODEL_ID}`;

@@ -3,6 +3,7 @@
  * citation / tool-trace parsing. Used by the cloud chat stream.
  */
 import type { ChatMessagePayload, ChatStreamEvent } from './chat-types';
+import { xaiReasoningEffortParam } from './chat-types';
 import type { GrokTool } from './grok-client';
 
 export const XAI_BUILTIN_SERVER_TOOLS = [
@@ -79,9 +80,8 @@ export function buildXaiResponsesRequestBody(input: {
     tools,
   };
   if (input.conversationId) body.prompt_cache_key = input.conversationId;
-  if (input.reasoningEffort && input.reasoningEffort !== 'low') {
-    body.reasoning = { effort: input.reasoningEffort };
-  }
+  const effort = xaiReasoningEffortParam(input.reasoningEffort);
+  if (effort) body.reasoning = { effort };
   return body;
 }
 

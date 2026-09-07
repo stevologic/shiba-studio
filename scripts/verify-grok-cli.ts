@@ -192,6 +192,11 @@ Commands:
   assert(valueAfter(baseArgs, '-m') === 'grok-build', 'headless argv normalizes the CLI model id');
   assert(valueAfter(baseArgs, '--max-turns') === '17', 'headless argv caps agent turns');
   assert(valueAfter(baseArgs, '--effort') === 'high', 'headless argv preserves agentic effort');
+  const xhighArgs = buildGrokCliArgsBase({ reasoningEffort: 'xhigh' });
+  assert(valueAfter(xhighArgs, '--reasoning-effort') === 'xhigh', 'chat reasoning extra-high maps to --reasoning-effort');
+  const noneArgs = buildGrokCliArgsBase({ reasoningEffort: 'none', effort: 'medium' });
+  assert(!noneArgs.includes('--reasoning-effort'), 'reasoning default/none is omitted');
+  assert(valueAfter(noneArgs, '--effort') === 'medium', 'none falls through to agentic --effort');
   assert(baseArgs.includes('--check'), 'headless argv enables the verification harness');
   assert(valueAfter(baseArgs, '--best-of-n') === '3', 'headless argv preserves best-of-N');
   assert(valueAfter(baseArgs, '--json-schema') === schema, 'headless argv preserves JSON schema');

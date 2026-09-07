@@ -1,5 +1,6 @@
 import { grokConversationId, XAI_BASE, XAI_CONV_ID_HEADER } from './grok-client';
 import type { ChatMessagePayload, ChatStreamEvent, ReasoningEffort } from './chat-types';
+import { xaiReasoningEffortParam } from './chat-types';
 import { parseModelRef, supportsReasoning } from './model-providers';
 import {
   buildXaiResponsesRequestBody,
@@ -123,6 +124,10 @@ export function buildGrokChatStreamRequest(params: {
     stream: true,
     ...(ref.provider === 'cloud' ? { stream_options: { include_usage: true } } : {}),
   };
+  if (supportsReasoning(ref.id)) {
+    const effort = xaiReasoningEffortParam(params.reasoningEffort);
+    if (effort) body.reasoning_effort = effort;
+  }
   return { url: `${base}/chat/completions`, body, useResponses: false };
 }
 
@@ -173,9 +178,6 @@ export async function* grokChatStream(params: GrokChatStreamParams): AsyncGenera
   if (!useResponses) {
     body.temperature = params.temperature ?? 0.7;
     body.max_tokens = params.max_tokens ?? 4096;
-    if (params.reasoningEffort && supportsReasoning(ref.id)) {
-      body.reasoning_effort = params.reasoningEffort;
-    }
   }
 
   const doFetch = async (): Promise<Response> => {
