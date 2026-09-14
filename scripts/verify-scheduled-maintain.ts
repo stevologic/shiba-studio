@@ -196,6 +196,11 @@ async function main() {
   const runner = readFileSync(path.join(ROOT, 'scripts/ci/scheduled-maintain.mjs'), 'utf8');
   assert.match(runner, /finalizeMaintainRun\(\{ fixed: doneState\.fixed, cwd: REPO_ROOT \}\)/);
   assert.match(runner, /dropped workflow-only edits/);
+  assert.match(
+    runner,
+    /reasoning_effort:\s*"low"/,
+    'weekly/daily Grok chat must send low effort (omitting it silently uses high)',
+  );
 
   const sandbox = mkdtempSync(path.join(os.tmpdir(), 'shiba-maintain-'));
   const git = (args: string[]) => {
