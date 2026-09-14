@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseXaiModelList, expandModelSelectableIds, grokConversationId } from '../lib/grok-client';
+import { parseXaiModelList, expandModelSelectableIds, grokConversationId, buildGrokChatCompletionsBody } from '../lib/grok-client';
 import {
   CHEAP_CLOUD_MODEL_REF,
   DEFAULT_CLOUD_MODEL_ID,
@@ -50,6 +50,39 @@ function main() {
   assert.equal(xaiReasoningEffortParam(undefined), undefined);
   assert.equal(xaiReasoningEffortParam('low'), 'low');
   assert.equal(xaiReasoningEffortParam('xhigh'), 'xhigh');
+
+  const agenticDefault = buildGrokChatCompletionsBody({
+    model: 'cloud:grok-4.6',
+    messages: [{ role: 'user', content: 'use tools' }],
+  });
+  assert.equal(
+    agenticDefault.reasoning_effort,
+    'low',
+    'agent/tool-loop completions must send low — omitting the field silently uses xAI high',
+  );
+  const explicitXhigh = buildGrokChatCompletionsBody({
+    model: 'cloud:grok-4.6',
+    messages: [{ role: 'user', content: 'prove it' }],
+    reasoningEffort: 'xhigh',
+  });
+  assert.equal(explicitXhigh.reasoning_effort, 'xhigh');
+  const omitted = buildGrokChatCompletionsBody({
+    model: 'cloud:grok-4.6',
+    messages: [{ role: 'user', content: 'hi' }],
+    reasoningEffort: 'none',
+  });
+  assert.equal(omitted.reasoning_effort, undefined, 'none omits the field so the provider default applies');
+  const nonReasoning = buildGrokChatCompletionsBody({
+    model: 'cloud:grok-imagine-image',
+    messages: [{ role: 'user', content: 'hi' }],
+  });
+  assert.equal(nonReasoning.reasoning_effort, undefined);
+  const localLlama = buildGrokChatCompletionsBody({
+    model: 'local:llama',
+    messages: [{ role: 'user', content: 'hi' }],
+  });
+  assert.equal(localLlama.reasoning_effort, undefined);
+
   assert.equal(supportsXhighReasoning('cloud:grok-4.6'), true);
   assert.equal(supportsXhighReasoning('cloud:grok-4.6-latest'), true);
   assert.equal(supportsXhighReasoning('cloud:grok-latest'), true);
