@@ -134,7 +134,9 @@ async function main() {
     spawnSync(process.execPath, [script, ...extraArgs], {
       cwd: ROOT,
       encoding: 'utf8',
-      env: { ...process.env, GROK_API_KEY: '', ...extraEnv },
+      // Clear inherited GROK_MODEL so --validate asserts the unattended default,
+      // not whatever the parent CI job exported (self-heal still pins grok-4.6).
+      env: { ...process.env, GROK_API_KEY: '', GROK_MODEL: '', ...extraEnv },
     });
 
   const first = run({ GROK_API_KEY: '' });
@@ -160,8 +162,8 @@ async function main() {
   const keyedValidateWeekly = run({ GROK_API_KEY: 'xai-verify-only' }, ['--validate', '--mode=weekly']);
   assert.equal(keyedValidateDaily.status, 0);
   assert.equal(keyedValidateWeekly.status, 0);
-  assert.match(keyedValidateDaily.stdout, /validate mode=daily model=grok-4\.6 target=development/);
-  assert.match(keyedValidateWeekly.stdout, /validate mode=weekly model=grok-4\.6 target=development/);
+  assert.match(keyedValidateDaily.stdout, /validate mode=daily model=grok-4\.7 target=development/);
+  assert.match(keyedValidateWeekly.stdout, /validate mode=weekly model=grok-4\.7 target=development/);
   assert.notEqual(keyedValidateDaily.stdout, keyedValidateWeekly.stdout);
 
   const workflow = readFileSync(path.join(ROOT, '.github/workflows/grok-maintain.yml'), 'utf8');

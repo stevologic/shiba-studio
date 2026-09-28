@@ -133,7 +133,9 @@ async function main() {
     spawnSync(process.execPath, [script, ...extraArgs], {
       cwd: ROOT,
       encoding: 'utf8',
-      env: { ...process.env, GROK_API_KEY: '', ...extraEnv },
+      // Clear inherited GROK_MODEL so --validate asserts the unattended default,
+      // not whatever the parent CI job exported (self-heal still pins grok-4.6).
+      env: { ...process.env, GROK_API_KEY: '', GROK_MODEL: '', ...extraEnv },
     });
 
   const skipped = run({ GROK_API_KEY: '' }, ['--validate']);
@@ -142,7 +144,7 @@ async function main() {
 
   const keyed = run({ GROK_API_KEY: 'xai-verify-only' }, ['--validate']);
   assert.equal(keyed.status, 0, keyed.stderr || keyed.stdout);
-  assert.match(keyed.stdout, /validate model=grok-4\.6 target=development/);
+  assert.match(keyed.stdout, /validate model=grok-4\.7 target=development/);
 
   const fixtureDir = mkdtempSync(path.join(os.tmpdir(), 'shiba-issues-'));
   const fixture = path.join(fixtureDir, 'issues.json');
