@@ -9,7 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 async function main() {
   const lib = await import('../scripts/ci/scheduled-maintain-lib.mjs');
 
-  assert.equal(lib.DEFAULT_SCHEDULED_GROK_MODEL, 'grok-4.6');
+  assert.equal(lib.DEFAULT_SCHEDULED_GROK_MODEL, 'grok-4.7');
   assert.equal(lib.TARGET_BRANCH, 'development');
   assert.notEqual(lib.DEFAULT_SCHEDULED_GROK_MODEL, 'grok-4.5');
   assert.notEqual(lib.DEFAULT_SCHEDULED_GROK_MODEL, 'grok-code-fast-1');
@@ -23,14 +23,15 @@ async function main() {
   assert.equal(lib.isGrok46OrLater('grok-code-fast-1'), false);
   assert.equal(lib.isGrok46OrLater('grok-4'), false);
 
-  assert.equal(lib.resolveScheduledModel({}), 'grok-4.6');
+  assert.equal(lib.resolveScheduledModel({}), 'grok-4.7');
+  assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-4.7' }), 'grok-4.7');
   assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-4.6' }), 'grok-4.6');
   assert.equal(
     lib.resolveScheduledModel({ GROK_MODEL: 'grok-code-fast-1' }),
-    'grok-4.6',
+    'grok-4.7',
     'stale healer ids must not become the unattended default',
   );
-  assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-4.5' }), 'grok-4.6');
+  assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-4.5' }), 'grok-4.7');
   assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-5' }), 'grok-5');
 
   assert.equal(lib.resolveMaintainMode({ env: { MAINTAIN_MODE: 'weekly' }, argv: [] }), 'weekly');
@@ -133,7 +134,9 @@ async function main() {
     spawnSync(process.execPath, [script, ...extraArgs], {
       cwd: ROOT,
       encoding: 'utf8',
-      env: { ...process.env, GROK_API_KEY: '', ...extraEnv },
+      // Clear inherited GROK_MODEL so --validate asserts the unattended default,
+      // not whatever the parent CI job exported (self-heal still pins grok-4.6).
+      env: { ...process.env, GROK_API_KEY: '', GROK_MODEL: '', ...extraEnv },
     });
 
   const first = run({ GROK_API_KEY: '' });
@@ -159,8 +162,8 @@ async function main() {
   const keyedValidateWeekly = run({ GROK_API_KEY: 'xai-verify-only' }, ['--validate', '--mode=weekly']);
   assert.equal(keyedValidateDaily.status, 0);
   assert.equal(keyedValidateWeekly.status, 0);
-  assert.match(keyedValidateDaily.stdout, /validate mode=daily model=grok-4\.6 target=development/);
-  assert.match(keyedValidateWeekly.stdout, /validate mode=weekly model=grok-4\.6 target=development/);
+  assert.match(keyedValidateDaily.stdout, /validate mode=daily model=grok-4\.7 target=development/);
+  assert.match(keyedValidateWeekly.stdout, /validate mode=weekly model=grok-4\.7 target=development/);
   assert.notEqual(keyedValidateDaily.stdout, keyedValidateWeekly.stdout);
 
   const workflow = readFileSync(path.join(ROOT, '.github/workflows/grok-maintain.yml'), 'utf8');
@@ -196,6 +199,11 @@ async function main() {
   const runner = readFileSync(path.join(ROOT, 'scripts/ci/scheduled-maintain.mjs'), 'utf8');
   assert.match(runner, /finalizeMaintainRun\(\{ fixed: doneState\.fixed, cwd: REPO_ROOT \}\)/);
   assert.match(runner, /dropped workflow-only edits/);
+  assert.match(
+    runner,
+    /reasoning_effort:\s*"low"/,
+    'weekly/daily Grok chat must send low effort (omitting it silently uses high)',
+  );
 
   const sandbox = mkdtempSync(path.join(os.tmpdir(), 'shiba-maintain-'));
   const git = (args: string[]) => {

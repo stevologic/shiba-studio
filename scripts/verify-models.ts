@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseXaiModelList, expandModelSelectableIds, grokConversationId } from '../lib/grok-client';
+import { parseXaiModelList, expandModelSelectableIds, grokConversationId, buildGrokChatCompletionsBody } from '../lib/grok-client';
 import {
   CHEAP_CLOUD_MODEL_REF,
   DEFAULT_CLOUD_MODEL_ID,
@@ -50,6 +50,40 @@ function main() {
   assert.equal(xaiReasoningEffortParam(undefined), undefined);
   assert.equal(xaiReasoningEffortParam('low'), 'low');
   assert.equal(xaiReasoningEffortParam('xhigh'), 'xhigh');
+
+  const agenticDefault = buildGrokChatCompletionsBody({
+    model: 'cloud:grok-4.7',
+    messages: [{ role: 'user', content: 'use tools' }],
+  });
+  assert.equal(
+    agenticDefault.reasoning_effort,
+    'low',
+    'agent/tool-loop completions must send low — omitting the field silently uses xAI high',
+  );
+  const explicitXhigh = buildGrokChatCompletionsBody({
+    model: 'cloud:grok-4.7',
+    messages: [{ role: 'user', content: 'prove it' }],
+    reasoningEffort: 'xhigh',
+  });
+  assert.equal(explicitXhigh.reasoning_effort, 'xhigh');
+  const omitted = buildGrokChatCompletionsBody({
+    model: 'cloud:grok-4.7',
+    messages: [{ role: 'user', content: 'hi' }],
+    reasoningEffort: 'none',
+  });
+  assert.equal(omitted.reasoning_effort, undefined, 'none omits the field so the provider default applies');
+  const nonReasoning = buildGrokChatCompletionsBody({
+    model: 'cloud:grok-imagine-image',
+    messages: [{ role: 'user', content: 'hi' }],
+  });
+  assert.equal(nonReasoning.reasoning_effort, undefined);
+  const localLlama = buildGrokChatCompletionsBody({
+    model: 'local:llama',
+    messages: [{ role: 'user', content: 'hi' }],
+  });
+  assert.equal(localLlama.reasoning_effort, undefined);
+
+  assert.equal(supportsXhighReasoning('cloud:grok-4.7'), true);
   assert.equal(supportsXhighReasoning('cloud:grok-4.6'), true);
   assert.equal(supportsXhighReasoning('cloud:grok-4.6-latest'), true);
   assert.equal(supportsXhighReasoning('cloud:grok-latest'), true);
@@ -57,11 +91,12 @@ function main() {
   assert.equal(supportsXhighReasoning('cloud:grok-4'), false);
   assert.equal(supportsXhighReasoning('cloud:grok-code-fast-1'), false);
 
-  assert.equal(DEFAULT_CLOUD_MODEL_ID, 'grok-4.6');
-  assert.equal(DEFAULT_CLOUD_MODEL_REF, 'cloud:grok-4.6');
+  assert.equal(DEFAULT_CLOUD_MODEL_ID, 'grok-4.7');
+  assert.equal(DEFAULT_CLOUD_MODEL_REF, 'cloud:grok-4.7');
   assert.equal(resolveDefaultCloudModel(''), DEFAULT_CLOUD_MODEL_REF);
   assert.equal(resolveDefaultCloudModel('cloud:grok-4.3-latest'), 'cloud:grok-4.3-latest');
   assert.equal(isLegacyPlaceholderModel('cloud:grok-4'), true);
+  assert.equal(isLegacyPlaceholderModel('cloud:grok-4.7'), false);
   assert.equal(isLegacyPlaceholderModel('cloud:grok-4.6'), false);
   assert.equal(isLegacyPlaceholderModel('cloud:grok-4.3-latest'), false);
 
@@ -69,11 +104,12 @@ function main() {
     { id: 'cloud:grok-4' },
     { id: 'cloud:grok-4.3-latest' },
     { id: 'cloud:grok-4.6' },
+    { id: 'cloud:grok-4.7' },
     { id: CHEAP_CLOUD_MODEL_REF },
   ];
   assert.equal(
     pickPreferredCloudModel(catalog, 'cloud:grok-4'),
-    'cloud:grok-4.6',
+    'cloud:grok-4.7',
     'legacy grok-4 placeholder must not beat the flagship',
   );
   assert.equal(
@@ -81,25 +117,34 @@ function main() {
     'cloud:grok-4.3-latest',
     'an explicit saved non-legacy model is kept',
   );
-  assert.equal(pickPreferredCloudModel(catalog), 'cloud:grok-4.6');
+  assert.equal(pickPreferredCloudModel(catalog), 'cloud:grok-4.7');
+  assert(
+    modelPreferenceScore('cloud:grok-4.7') > modelPreferenceScore('cloud:grok-4.6'),
+    '4.7 outranks 4.6',
+  );
   assert(
     modelPreferenceScore('cloud:grok-4.6') > modelPreferenceScore('cloud:grok-4.3-latest'),
     '4.6 outranks 4.3',
   );
   assert(
-    modelPreferenceScore('cloud:grok-4.6') > modelPreferenceScore(CHEAP_CLOUD_MODEL_REF),
+    modelPreferenceScore('cloud:grok-4.7') > modelPreferenceScore(CHEAP_CLOUD_MODEL_REF),
     'flagship outranks the cheap coding model',
   );
 
   assert.equal(FALLBACK_CLOUD_GROK_MODELS[0].id, DEFAULT_CLOUD_MODEL_REF);
   assert(FALLBACK_CLOUD_GROK_MODELS.some((model) => model.id === 'cloud:grok-4'));
 
+  assert.equal(contextWindowTokensForModel('cloud:grok-4.7'), 500_000);
   assert.equal(contextWindowTokensForModel('cloud:grok-4.6'), 500_000);
   assert.equal(contextWindowTokensForModel('cloud:grok-4.3-latest'), 1_000_000);
   assert.equal(replayBudgetForModel('cloud:grok-4.6'), 40_000);
   assert.equal(replayBudgetForModel('cloud:grok-4'), 20_480);
   assert(replayBudgetForModel('cloud:grok-4.6') > replayBudgetForModel('cloud:grok-4'));
 
+  const pricing47 = getModelPricing('cloud:grok-4.7');
+  assert.equal(pricing47.inputPer1M, 2);
+  assert.equal(pricing47.outputPer1M, 6);
+  assert.equal(pricing47.cachedInputPer1M, 0.5);
   const pricing46 = getModelPricing('cloud:grok-4.6');
   assert.equal(pricing46.inputPer1M, 2);
   assert.equal(pricing46.outputPer1M, 6);

@@ -50,6 +50,7 @@ const PRICING_RULES: Array<{
   /** Prompt-token threshold at which the published long-context rate applies to the whole request. */
   longContextFrom?: number;
 }> = [
+  { match: /^grok-4\.7/i, inputPer1M: 2.0, outputPer1M: 6.0, cachedInputPer1M: 0.5, longContextFrom: 200_000 },
   { match: /^grok-4\.6/i, inputPer1M: 2.0, outputPer1M: 6.0, cachedInputPer1M: 0.5, longContextFrom: 200_000 },
   { match: /^grok-4\.5/i, inputPer1M: 2.0, outputPer1M: 6.0, cachedInputPer1M: 0.3, longContextFrom: 200_000 },
   { match: /^grok-4\.3/i, inputPer1M: 1.25, outputPer1M: 2.5, cachedInputPer1M: 0.2, longContextFrom: 200_000 },

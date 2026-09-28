@@ -347,7 +347,15 @@ function runTool(name, args) {
 }
 
 async function chat(messages) {
-  const body = JSON.stringify({ model: MODEL, messages, tools: TOOL_SPECS, tool_choice: "auto" });
+  const body = JSON.stringify({
+    model: MODEL,
+    messages,
+    tools: TOOL_SPECS,
+    tool_choice: "auto",
+    // grok-4.6 defaults to high when this is omitted; weekly tool loops are
+    // latency-sensitive agentic work, which xAI documents as `low`.
+    reasoning_effort: "low",
+  });
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       const res = await fetch(`${BASE_URL}/chat/completions`, {

@@ -6,6 +6,7 @@ import { Agent, AgentRun, TraceStep, IntegrationScope } from './types';
 import { clipForModel, environmentFacts } from './prompt-hygiene';
 import type { AgentStreamEvent } from './agent-stream-types';
 import { grokChat, GrokMessage, GrokTool, type GrokUsageContext } from './grok-client';
+import { DEFAULT_REASONING_EFFORT, type ReasoningEffort } from './chat-types';
 import { resolveWorkspace, ensureWorktree, getGlobalUploadsDir, GLOBAL_UPLOADS_SUBDIR } from './workspace';
 import * as Browser from './browser';
 import {
@@ -1305,6 +1306,7 @@ export type AgentRunOpts = {
     tools?: GrokTool[];
     tool_choice?: 'auto';
     max_tokens?: number;
+    reasoningEffort?: ReasoningEffort;
     usageContext?: GrokUsageContext;
     conversationId?: string;
   }) => Promise<{ choices: Array<{ message?: { role?: string; content?: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }; finish_reason?: string }>; usage?: unknown }>;
@@ -1779,6 +1781,7 @@ async function* agentRunGenerator(
           sandboxProfile: process.platform === 'linux' || process.platform === 'darwin'
             ? (opts.readOnly ? 'read-only' : 'workspace')
             : undefined,
+          reasoningEffort: DEFAULT_REASONING_EFFORT,
           signal: runSignal,
         })) {
           if (event.type === 'content') answer += event.delta;
@@ -1995,6 +1998,7 @@ async function* agentRunGenerator(
         messages,
         tools,
         tool_choice: 'auto',
+        reasoningEffort: DEFAULT_REASONING_EFFORT,
         usageContext: { source: 'agent', sourceId: runId },
         conversationId: runId,
       });
@@ -2310,6 +2314,7 @@ async function* agentRunGenerator(
               content: 'The run is over. In 2-5 sentences, summarize for the user what you actually did and the outcome — concrete facts from this conversation only (files, cards, results). No preamble, no offers of further help.',
             },
           ],
+          reasoningEffort: DEFAULT_REASONING_EFFORT,
           usageContext: { source: 'agent', sourceId: runId },
           conversationId: runId,
         });

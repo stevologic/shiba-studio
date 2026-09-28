@@ -81,10 +81,10 @@ Both modes:
 
 1. Check out `development`.
 2. Skip with a warning (exit 0) when `GROK_API_KEY` is unset.
-3. Run `node scripts/ci/scheduled-maintain.mjs` at **Grok 4.6 or later**
-   (`scripts/ci/scheduled-maintain-lib.mjs` refuses `grok-4.5` /
-   `grok-code-fast-1` as the unattended default even if `GROK_MODEL` is set
-   to those ids).
+3. Run `node scripts/ci/scheduled-maintain.mjs` at **Grok 4.7** by default
+   (4.6 or later is accepted; `scripts/ci/scheduled-maintain-lib.mjs`
+   refuses `grok-4.5` / `grok-code-fast-1` as the unattended default even
+   if `GROK_MODEL` is set to those ids).
 4. Commit and `git push origin HEAD:development` only when the tree changed.
    `.github/workflows/*` edits are dropped; `GITHUB_TOKEN` cannot push them.
 5. Re-dispatch `ci.yml` on `development` so **CI OK** + the existing

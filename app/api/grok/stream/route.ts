@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { encodeSseEvent, grokChatStream } from '@/lib/grok-chat-stream';
 import { parseModelRef, resolveDefaultCloudModel } from '@/lib/model-providers';
 import type { ChatMessagePayload } from '@/lib/chat-types';
+import { normalizeReasoningEffort } from '@/lib/chat-types';
 import { loadConfig } from '@/lib/persistence';
 import { buildGlobalUploadsChatContext } from '@/lib/workspace';
 import { buildGlobalInstructionsContext } from '@/lib/global-instructions';
@@ -57,6 +58,9 @@ export async function POST(req: NextRequest) {
   );
   const parsedModel = parseModelRef(rawModel);
   const model = parsedModel.encoded;
+  const reasoningEffort = normalizeReasoningEffort(
+    requestChatSession?.reasoningEffort || body.reasoningEffort,
+  );
   // Honor the model's pinned credential source (OAuth-tagged vs Token-tagged).
   const auth = await resolveCloudBearer(cfg, parsedModel.authSource);
 
@@ -459,7 +463,7 @@ export async function POST(req: NextRequest) {
       history,
       sessionId: requestChatSession?.id || null,
       addressedBy: chatAgent?.name || 'Grok',
-      reasoningEffort: requestChatSession?.reasoningEffort || body.reasoningEffort,
+      reasoningEffort,
     })) {
       opts.send(event);
     }
@@ -732,6 +736,7 @@ export async function POST(req: NextRequest) {
                   tool_choice: allowTools ? 'auto' : undefined,
                   temperature: body.temperature,
                   max_tokens: body.max_tokens ?? 4096,
+                  reasoningEffort,
                   usageContext: { source: 'chat', sourceId: requestChatSession?.id },
                   conversationId: requestChatSession?.id,
                 });
@@ -753,6 +758,7 @@ export async function POST(req: NextRequest) {
                   messages: msgs,
                   temperature: body.temperature,
                   max_tokens: body.max_tokens ?? 4096,
+                  reasoningEffort,
                   usageContext: { source: 'chat', sourceId: requestChatSession?.id },
                   conversationId: requestChatSession?.id,
                 });
@@ -1074,6 +1080,7 @@ export async function POST(req: NextRequest) {
                   messages: msgs,
                   temperature: body.temperature,
                   max_tokens: body.max_tokens ?? 4096,
+                  reasoningEffort,
                   usageContext: { source: 'chat', sourceId: requestChatSession?.id },
                   conversationId: requestChatSession?.id,
                 });
@@ -1142,7 +1149,7 @@ export async function POST(req: NextRequest) {
           messages,
           temperature: body.temperature,
           max_tokens: body.max_tokens,
-          reasoningEffort: body.reasoningEffort,
+          reasoningEffort,
           usageContext: { source: 'chat', sourceId: requestChatSession?.id },
           conversationId: requestChatSession?.id,
         })) {

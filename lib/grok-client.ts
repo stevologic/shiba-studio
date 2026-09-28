@@ -10,6 +10,8 @@ import {
   SelectableModel,
   supportsReasoning,
 } from './model-providers';
+import type { ReasoningEffort } from './chat-types';
+import { DEFAULT_REASONING_EFFORT, xaiReasoningEffortParam } from './chat-types';
 import type { AppConfig } from './types';
 
 export const XAI_BASE = 'https://api.x.ai/v1';
@@ -54,6 +56,13 @@ export interface GrokChatParams {
   tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   temperature?: number;
   max_tokens?: number;
+  /**
+   * Reasoning depth for grok-4.6+ / other reasoning models.
+   * Unspecified defaults to `low` (xAI's recommendation for latency-sensitive
+   * agentic tool calling). `none` omits the field so the provider default
+   * (`high` on Grok 4.6) applies.
+   */
+  reasoningEffort?: ReasoningEffort;
   usageContext?: GrokUsageContext;
   /**
    * Sticky conversation id for xAI prompt-cache routing (`x-grok-conv-id`).
@@ -343,9 +352,10 @@ export async function listAllSelectableModels(
   };
 }
 
-export async function grokChat(params: GrokChatParams, keyOverride?: string): Promise<GrokChatResponse> {
+/** Chat Completions JSON body. Reasoning models send `low` unless overridden. */
+export function buildGrokChatCompletionsBody(params: GrokChatParams): Record<string, unknown> {
   const ref = parseModelRef(params.model);
-  const body = {
+  const body: Record<string, unknown> = {
     model: ref.id,
     messages: params.messages,
     tools: params.tools,
@@ -353,6 +363,16 @@ export async function grokChat(params: GrokChatParams, keyOverride?: string): Pr
     temperature: params.temperature ?? 0.7,
     max_tokens: params.max_tokens ?? 4096,
   };
+  if (supportsReasoning(ref.id)) {
+    const effort = xaiReasoningEffortParam(params.reasoningEffort ?? DEFAULT_REASONING_EFFORT);
+    if (effort) body.reasoning_effort = effort;
+  }
+  return body;
+}
+
+export async function grokChat(params: GrokChatParams, keyOverride?: string): Promise<GrokChatResponse> {
+  const ref = parseModelRef(params.model);
+  const body = buildGrokChatCompletionsBody(params);
 
   let base = XAI_BASE;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
