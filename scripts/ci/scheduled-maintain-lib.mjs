@@ -6,7 +6,7 @@
 
 import { spawnSync } from "node:child_process";
 
-export const DEFAULT_SCHEDULED_GROK_MODEL = "grok-4.6";
+export const DEFAULT_SCHEDULED_GROK_MODEL = "grok-4.7";
 export const TARGET_BRANCH = "development";
 export const CRON_DAILY = "17 6 * * *";
 export const CRON_WEEKLY = "17 7 * * 1";

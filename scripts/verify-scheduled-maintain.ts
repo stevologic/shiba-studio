@@ -9,7 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 async function main() {
   const lib = await import('../scripts/ci/scheduled-maintain-lib.mjs');
 
-  assert.equal(lib.DEFAULT_SCHEDULED_GROK_MODEL, 'grok-4.6');
+  assert.equal(lib.DEFAULT_SCHEDULED_GROK_MODEL, 'grok-4.7');
   assert.equal(lib.TARGET_BRANCH, 'development');
   assert.notEqual(lib.DEFAULT_SCHEDULED_GROK_MODEL, 'grok-4.5');
   assert.notEqual(lib.DEFAULT_SCHEDULED_GROK_MODEL, 'grok-code-fast-1');
@@ -23,14 +23,15 @@ async function main() {
   assert.equal(lib.isGrok46OrLater('grok-code-fast-1'), false);
   assert.equal(lib.isGrok46OrLater('grok-4'), false);
 
-  assert.equal(lib.resolveScheduledModel({}), 'grok-4.6');
+  assert.equal(lib.resolveScheduledModel({}), 'grok-4.7');
+  assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-4.7' }), 'grok-4.7');
   assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-4.6' }), 'grok-4.6');
   assert.equal(
     lib.resolveScheduledModel({ GROK_MODEL: 'grok-code-fast-1' }),
-    'grok-4.6',
+    'grok-4.7',
     'stale healer ids must not become the unattended default',
   );
-  assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-4.5' }), 'grok-4.6');
+  assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-4.5' }), 'grok-4.7');
   assert.equal(lib.resolveScheduledModel({ GROK_MODEL: 'grok-5' }), 'grok-5');
 
   assert.equal(lib.resolveMaintainMode({ env: { MAINTAIN_MODE: 'weekly' }, argv: [] }), 'weekly');

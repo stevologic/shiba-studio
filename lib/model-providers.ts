@@ -47,7 +47,7 @@ export function supportsReasoning(modelIdOrRef: string): boolean {
 }
 
 /**
- * `xhigh` is documented for grok-4.6 and later. Older reasoning models
+ * `xhigh` is documented for grok-4.6 and later (including grok-4.7). Older reasoning models
  * (grok-4.5, grok-4, grok-3-mini, grok-code) treat unknown effort as `high`.
  */
 export function supportsXhighReasoning(modelIdOrRef: string): boolean {
@@ -63,7 +63,7 @@ export function supportsXhighReasoning(modelIdOrRef: string): boolean {
 }
 
 /** Canonical xAI flagship id and encoded cloud ref. */
-export const DEFAULT_CLOUD_MODEL_ID = 'grok-4.6';
+export const DEFAULT_CLOUD_MODEL_ID = 'grok-4.7';
 export const DEFAULT_CLOUD_MODEL_REF = `cloud:${DEFAULT_CLOUD_MODEL_ID}`;
 /** Cheap/fast cloud model for titles and other background summaries. */
 export const CHEAP_CLOUD_MODEL_ID = 'grok-code-fast-1';
@@ -98,8 +98,8 @@ export function modelPreferenceScore(modelIdOrRef: string): number {
   if (generation) {
     score = Number(generation[1]) * 10_000 + Number(generation[2] || 0) * 100;
   } else if (id === 'grok-latest') {
-    // Alias to "whatever is current" — slightly below an explicit 4.6 pin.
-    score = 40_550;
+    // Alias to "whatever is current" — slightly below an explicit 4.7 pin.
+    score = 40_650;
   } else if (id.includes('grok-code')) {
     score = 3_500;
   } else if (id.includes('grok')) {
@@ -140,7 +140,7 @@ export function pickPreferredCloudModel(
 export function contextWindowTokensForModel(modelIdOrRef: string): number {
   const id = parseModelRef(modelIdOrRef).id.toLowerCase();
   if (/grok-4\.(?:3|20)/.test(id)) return 1_000_000;
-  if (/grok-4\.(?:6|5)/.test(id) || id === 'grok-latest') return 500_000;
+  if (/grok-4\.(?:7|6|5)/.test(id) || id === 'grok-latest') return 500_000;
   if (/grok-4/.test(id) || id.includes('grok-code')) return 256_000;
   if (/grok-3/.test(id)) return 131_072;
   return 128_000;
@@ -249,6 +249,8 @@ export function modelOptionLabel(m: SelectableModel): string {
  */
 export const FALLBACK_CLOUD_GROK_MODELS: SelectableModel[] = [
   { id: DEFAULT_CLOUD_MODEL_REF, label: DEFAULT_CLOUD_MODEL_ID, provider: 'cloud', reasoning: true },
+  { id: 'cloud:grok-4.7-latest', label: 'grok-4.7-latest', provider: 'cloud', reasoning: true },
+  { id: 'cloud:grok-4.6', label: 'grok-4.6', provider: 'cloud', reasoning: true },
   { id: 'cloud:grok-4.6-latest', label: 'grok-4.6-latest', provider: 'cloud', reasoning: true },
   { id: 'cloud:grok-latest', label: 'grok-latest', provider: 'cloud', reasoning: true },
   { id: 'cloud:grok-4.3-latest', label: 'grok-4.3-latest', provider: 'cloud', reasoning: true },
