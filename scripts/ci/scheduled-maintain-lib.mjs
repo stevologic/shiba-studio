@@ -259,7 +259,8 @@ export function formatFetchedDocument({ url, status, finalUrl, body }) {
   if (!fetchHostAllowed(requested) || !fetchHostAllowed(landed)) {
     return `ERROR: redirect left the weekly research allowlist: ${landed || requested}`;
   }
-  return `HTTP ${status} ${requested}\n${extractFetchedDocText(body)}`;
+  const redirectNote = landed && landed !== requested ? `\nfinal ${landed}` : "";
+  return `HTTP ${status} ${requested}${redirectNote}\n${extractFetchedDocText(body)}`;
 }
 
 export function buildMaintainPrompt(mode, extras = {}) {
