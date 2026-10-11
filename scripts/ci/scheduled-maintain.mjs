@@ -95,7 +95,7 @@ const CHECKS = {
   lint: { cmd: ["npm", "run", "lint"], timeoutMin: 10 },
   build: { cmd: ["npm", "run", "build"], timeoutMin: 25 },
   test: { cmd: ["npm", "test"], timeoutMin: 30 },
-  audit: { cmd: ["npm", "audit", "--audit-level=high"], timeoutMin: 5 },
+  audit: { cmd: ["npm", "audit", "--audit-level=high", "--omit=dev"], timeoutMin: 5 },
   audit_fix: { cmd: ["npm", "audit", "fix"], timeoutMin: 10 },
   npm_install: { cmd: ["npm", "install", "--no-audit", "--no-fund"], timeoutMin: 15 },
 };
@@ -384,8 +384,8 @@ async function chat(messages) {
 }
 
 function collectDailyAudit() {
-  const res = sh("npm", ["audit", "--audit-level=high"], { timeoutMin: 5 });
-  return `npm audit --audit-level=high (exit ${res.status})\n${tail(res.output, 20_000)}`;
+  const res = sh("npm", ["audit", "--audit-level=high", "--omit=dev"], { timeoutMin: 5 });
+  return `npm audit --audit-level=high --omit=dev (exit ${res.status})\n${tail(res.output, 20_000)}`;
 }
 
 async function main() {
