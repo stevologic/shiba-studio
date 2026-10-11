@@ -85,7 +85,10 @@ jobs:
           node-version: '24'
       # Production dependencies are currently clean; retain a high/critical
       # gate so newly disclosed severe issues fail CI immediately.
-      - run: npm audit --audit-level=high
+      # Production tree only. braces@3.0.3 (eslint/micromatch, dev) has no
+      # patched release for GHSA-vfj7-8cjw-p6xm; SECURITY.md already requires
+      # `npm audit --omit=dev` to stay at zero advisories.
+      - run: npm audit --audit-level=high --omit=dev
 
   e2e:
     name: Playwright · Chromium · Node 24
