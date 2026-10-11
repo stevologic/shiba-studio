@@ -154,9 +154,23 @@ if (!existsSync(siteRoot)) {
 }
 
 mkdirSync(path.join(siteRoot, 'packages'), { recursive: true });
-for (const name of ['index.html', 'docs.html', 'packages.html']) {
+const publishedSiteFiles = [
+  'index.html',
+  'docs.html',
+  'packages.html',
+  'robots.txt',
+  'sitemap.xml',
+  'CNAME',
+  'traffic/index.html',
+];
+for (const name of publishedSiteFiles) {
   const from = path.join(sourceRoot, 'site', name);
-  if (existsSync(from)) cpSync(from, path.join(siteRoot, name));
+  if (!existsSync(from)) {
+    throw new Error(`Missing publish source ${from}`);
+  }
+  const to = path.join(siteRoot, name);
+  mkdirSync(path.dirname(to), { recursive: true });
+  cpSync(from, to);
 }
 
 const manifest = {
@@ -173,7 +187,7 @@ writeFileSync(siteManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 const git = (args) => sh('git', args, { cwd: siteRoot, env: { ...process.env, GH_TOKEN: token } });
 git(['config', 'user.name', 'github-actions[bot]']);
 git(['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com']);
-git(['add', 'index.html', 'docs.html', 'packages.html', 'packages/manifest.json']);
+git(['add', ...publishedSiteFiles, 'packages/manifest.json']);
 const dirty = spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: siteRoot });
 if (dirty.status === 0) {
   console.log('Packages page is already current.');
