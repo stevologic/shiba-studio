@@ -67,7 +67,9 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Build
-        run: npm run build
+        run: |
+          node scripts/verify-css-processing.mjs
+          npm run build
 
       - name: Functional verification suite
         run: npm test

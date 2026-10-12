@@ -5,7 +5,7 @@ only commits. Both histories are preserved; main/development are untouched by th
 draft. No branch rename/force push occurs. PR50 remains held at action_required;
 PR51's proposed --omit=dev audit narrowing remains a separate review decision.
 
-The shared [contract 1.1.0](https://github.com/stevologic/oss-deps-explorer/blob/01b814e47b08d3949dd8288f0c426b7ee12630ca/actions/maintenance/README.md)
+The shared [contract 1.1.0](https://github.com/stevologic/oss-deps-explorer/blob/1edddeab11f2fe4598ed45cefda42ab7a2179fa8/actions/maintenance/README.md)
 uses a full immutable SHA and local JSON policy. It is GET-only/dry-run, with all
 write/deploy/cleanup and optional AI disabled. Shiba retains its current xAI
 provider/model policy and custom strategy/self-heal/content/release jobs.
@@ -52,6 +52,8 @@ The scheduled common action stays read-only; protected/active/unmerged topics re
 Production schedule/config activation waits for reviewed integration and main PR.
 
 Standard Ubuntu CI also exposed global Tailwind preflight emitted into the IDE CSS
-module. The documented @reference directive supplies global tokens without duplicating
-global CSS; standalone module processing retains local declarations and excludes
-preflight. This keeps the current design and standard compiler gate intact.
+module when the full root+Devvit verification job runs. Tailwind now processes only
+entry sheets with Tailwind directives; ordinary CSS modules stay local. A reused-
+processor test proves global preflight/tokens remain and the original module CSS
+survives byte-for-byte across repeated calls. The standard compiler gate and current
+design remain intact; no webpack-only substitution is made in CI.

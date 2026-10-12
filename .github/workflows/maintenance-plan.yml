@@ -30,7 +30,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Inventory and propose bounded work
-        uses: stevologic/oss-deps-explorer/actions/maintenance@01b814e47b08d3949dd8288f0c426b7ee12630ca # contract v1.1.0, immutable pilot source
+        uses: stevologic/oss-deps-explorer/actions/maintenance@1edddeab11f2fe4598ed45cefda42ab7a2179fa8 # contract v1.1.0, immutable pilot source
         with:
           config: .github/maintenance.json
           token: ${{ github.token }}

@@ -6,6 +6,7 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   {
+    files: ["**/*.{js,mjs,jsx,ts,tsx}"],
     // This app is not compiled with React Compiler yet. Keep the newer
     // compiler-readiness checks visible without making existing imperative UI
     // state patterns or third-party data shapes fail the production lint gate.
@@ -14,6 +15,18 @@ const eslintConfig = defineConfig([
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/immutability": "warn",
       "react-hooks/refs": "warn",
+    },
+  },
+  {
+    files: ["scripts/tailwind-entry-postcss.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: { require: "readonly", module: "readonly" },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+      "no-undef": "error",
+      "no-unused-vars": "error",
     },
   },
   // Override default ignores of eslint-config-next.
