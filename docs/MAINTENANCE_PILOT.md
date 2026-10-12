@@ -5,7 +5,7 @@ only commits. Both histories are preserved; main/development are untouched by th
 draft. No branch rename/force push occurs. PR50 remains held at action_required;
 PR51's proposed --omit=dev audit narrowing remains a separate review decision.
 
-The shared [contract 1.1.0](https://github.com/stevologic/oss-deps-explorer/blob/915512bbb4952bd7b50ef871bce74f8756efa239/actions/maintenance/README.md)
+The shared [contract 1.1.0](https://github.com/stevologic/oss-deps-explorer/blob/01b814e47b08d3949dd8288f0c426b7ee12630ca/actions/maintenance/README.md)
 uses a full immutable SHA and local JSON policy. It is GET-only/dry-run, with all
 write/deploy/cleanup and optional AI disabled. Shiba retains its current xAI
 provider/model policy and custom strategy/self-heal/content/release jobs.
@@ -42,6 +42,16 @@ Shared local browsers, native
 packagers, UI/game/test resources and Docker daemon were not used.
 
 Offline inventory produced three merged-topic cleanup candidates whose exact tips
-are contained in both main and development. All remain preserved until fresh owner/
-open-PR/protection/SHA readback; the common action has no deletion capability.
+were contained in both main and development. Separately approved execution repeated
+fresh owner/open-PR/protection/ancestry reads and used the tested advertised-SHA
+atomic deletion guard without force push. All three are verified absent:
+chore/consolidate-into-development (merged PR42),
+cursor/shiba-studio-project-stewardship-5b54 (merged PR39), and
+cursor/windows-ios-packages-894d (merged PR29). Their commits remain in both histories.
+The scheduled common action stays read-only; protected/active/unmerged topics remain.
 Production schedule/config activation waits for reviewed integration and main PR.
+
+Standard Ubuntu CI also exposed global Tailwind preflight emitted into the IDE CSS
+module. The documented @reference directive supplies global tokens without duplicating
+global CSS; standalone module processing retains local declarations and excludes
+preflight. This keeps the current design and standard compiler gate intact.
