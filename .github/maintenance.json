@@ -27,7 +27,8 @@
     "fix/"
   ],
   "active_branches": [
-    "codex/shared-maintenance-pilot"
+    "codex/shared-maintenance-pilot",
+    "codex/maintenance-contract-111"
   ],
   "locked_prs": [
     50,
@@ -39,11 +40,12 @@
   ],
   "validation_commands": [
     "npm ci",
-    "npm ci --prefix devvit/reddit-bridge",
     "npx eslint lib app/api scripts types",
     "npx tsc --noEmit",
+    "node scripts/verify-css-processing.mjs",
     "npm run build",
     "npm test",
+    "npm ci --prefix devvit/reddit-bridge",
     "npm --prefix devvit/reddit-bridge run verify",
     "npm audit --audit-level=high",
     "npm run test:e2e",
