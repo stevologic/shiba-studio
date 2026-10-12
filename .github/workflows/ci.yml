@@ -451,19 +451,7 @@ jobs:
           if ! gh pr merge "$pr" --repo "$REPO" --merge --auto; then
             echo "Auto-merge could not be enabled; leaving the PR open until CI OK is green on this head."
           fi
-          # github-actions auto-merge uses GITHUB_TOKEN, so the merge push to
-          # main does not start workflows. Wait until main has the promotion,
-          # then dispatch CI so the packages page on main still publishes.
-          for attempt in $(seq 1 40); do
-            ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
-            if [ "$ahead" = "0" ]; then
-              echo "Promotion is on main — dispatching CI so packages-main publishes."
-              # Use the API: `gh workflow run` shells out to git and this job
-              # has no checkout.
-              gh api --method POST "repos/$REPO/actions/workflows/ci.yml/dispatches" -f ref=main
-              exit 0
-            fi
-            echo "Waiting for promotion merge (ahead_by=$ahead) attempt=$attempt"
-            sleep 15
-          done
-          echo "::warning::Promotion still open after waiting; main CI was not dispatched."
+          # Do not burn runner time polling a held PR. The separate trusted
+          # promotion-deploy workflow wakes on CI completion/approval/actual merge.
+          state="$(gh pr view "$pr" --repo "$REPO" --json state,mergeStateStatus --jq '.state + " / " + .mergeStateStatus')"
+          echo "Promotion PR #$pr: $state; awaiting repository gates." >> "$GITHUB_STEP_SUMMARY"

@@ -720,9 +720,10 @@ async function main() {
     // A pre-announced exact id can be cancelled before the generator has
     // registered its controller/task, and the durable task remains cancelled
     // after the final error-shaped AgentRun projection lands.
-    const [cancelModule, { NextRequest }] = await Promise.all([
+    const [cancelModule, { NextRequest }, { projectRunCancellation }] = await Promise.all([
       import('../app/api/execute/cancel/route'),
       import('next/server'),
+      import('../lib/run-cancellation'),
     ]);
     const cancelRun = cancelModule.POST;
     const racedCancellationTask = ledger.createTask({
@@ -733,7 +734,7 @@ async function main() {
       status: 'running',
     });
     ledger.heartbeatTask(racedCancellationTask.id, { currentStep: 'Concurrent heartbeat won first' });
-    const racedProjection = cancelModule.projectRunCancellation(
+    const racedProjection = projectRunCancellation(
       'cancel-version-race-run',
       racedCancellationTask,
     );
@@ -752,7 +753,7 @@ async function main() {
       expectedVersion: racedCompletionTask.version,
       result: 'Completed before cancellation committed.',
     });
-    const completedProjection = cancelModule.projectRunCancellation(
+    const completedProjection = projectRunCancellation(
       'cancel-completion-race-run',
       racedCompletionTask,
     );

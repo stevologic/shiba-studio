@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "repository": "stevologic/shiba-studio",
+  "mode": "dry-run",
+  "default_branch": "main",
+  "integration_branch": "development",
+  "automation": {
+    "merge": false,
+    "close": false,
+    "delete": false,
+    "deploy": false
+  },
+  "protected_patterns": [
+    "main",
+    "master",
+    "develop*",
+    "release*",
+    "gh-pages"
+  ],
+  "topic_prefixes": [
+    "codex/",
+    "dependabot/",
+    "chore/",
+    "cursor/",
+    "agent/",
+    "feature/",
+    "fix/"
+  ],
+  "active_branches": [
+    "codex/shared-maintenance-pilot"
+  ],
+  "locked_prs": [
+    50,
+    51
+  ],
+  "required_checks": [
+    "CI OK",
+    "npm audit (high+)"
+  ],
+  "validation_commands": [
+    "npm ci",
+    "npm ci --prefix devvit/reddit-bridge",
+    "npx eslint lib app/api scripts types",
+    "npx tsc --noEmit",
+    "npm run build",
+    "npm test",
+    "npm --prefix devvit/reddit-bridge run verify",
+    "npm audit --audit-level=high",
+    "npm run test:e2e",
+    "Docker provenance + smoke (existing CI)"
+  ],
+  "cadences": {
+    "runtime": "weekly",
+    "container_images": "weekly",
+    "tooling": "monthly",
+    "major_review": "quarterly",
+    "security": "advisory-driven; preserve PR/push checks"
+  },
+  "supported_image_tracks": [
+    "node:24-bookworm-slim"
+  ],
+  "custom_jobs": [
+    "Grok strategy/self-heal",
+    "repository traffic",
+    "release/native package gates"
+  ],
+  "ai": {
+    "provider": "xai",
+    "enabled": false,
+    "max_output_tokens": 1000
+  }
+}
