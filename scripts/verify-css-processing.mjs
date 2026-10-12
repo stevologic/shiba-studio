@@ -3,6 +3,10 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import postcss from 'postcss';
 import entryPlugin from './tailwind-entry-postcss.cjs';
+import config from '../postcss.config.mjs';
+
+assert.deepEqual(Object.keys(config.plugins), [path.resolve('scripts/tailwind-entry-postcss.cjs')],
+  'Compiler workers must receive an absolute plugin path');
 
 const processor = postcss([entryPlugin()]);
 const globalFile = path.resolve('app/globals.css');

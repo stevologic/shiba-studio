@@ -1,6 +1,8 @@
+import path from "node:path";
+
 const config = {
   plugins: {
-    "./scripts/tailwind-entry-postcss.cjs": {},
+    [path.resolve("scripts/tailwind-entry-postcss.cjs")]: {},
   },
 };
 
