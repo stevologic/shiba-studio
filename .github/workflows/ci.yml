@@ -436,6 +436,11 @@ jobs:
       - name: Open or reuse the promotion PR and enable auto-merge
         run: |
           set -euo pipefail
+          current="$(gh api "repos/$REPO/git/ref/heads/development" --jq '.object.sha')"
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            echo "Development advanced after this tested run; awaiting its exact CI." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
           if [ "$ahead" = "0" ]; then
             echo "development is not ahead of main — nothing to promote."
@@ -450,6 +455,15 @@ jobs:
             pr="$(gh pr list --repo "$REPO" --head development --base main --state open --json number --jq '.[0].number')"
           fi
           echo "Promotion PR: #$pr"
+          # Honor repository-owned review holds before touching auto-merge. Read
+          # the policy from this exact tested integration commit, never a PR head.
+          policy="$(gh api "repos/$REPO/contents/.github/maintenance.json?ref=$GITHUB_SHA" --jq '.content' | base64 --decode)"
+          locked="$(printf '%s' "$policy" | jq -r --argjson pr "$pr" '.locked_prs | index($pr) != null')"
+          held="$(gh pr view "$pr" --repo "$REPO" --json labels --jq '.labels | any(.name == "hold" or .name == "do-not-merge" or .name == "security-review")')"
+          if [ "$locked" = "true" ] || [ "$held" = "true" ]; then
+            echo "Promotion PR #$pr retains explicit owner review/security hold; no merge request or workflow approval." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if ! gh pr merge "$pr" --repo "$REPO" --merge --auto; then
             echo "Auto-merge could not be enabled; leaving the PR open until CI OK is green on this head."
           fi

@@ -260,6 +260,10 @@ async function main() {
   assert.doesNotMatch(promotionDeploy, /actions\/checkout|gh pr merge/);
   assert.doesNotMatch(ci, /seq 1 40|\/approve/,
     'held PR workflows must retain maintainer approval without idle promotion polling');
+  assert.match(ci, /\.locked_prs \| index\(\$pr\) != null/,
+    'promotion must honor repository-owned explicit review holds');
+  assert.match(ci, /\[ "\$current" != "\$GITHUB_SHA" \]/,
+    'promotion must stop when the integration head moves after its tested run');
 
   const release = read('.github/workflows/release.yml');
   assert.doesNotMatch(release, /native-windows:/);

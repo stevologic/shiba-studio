@@ -18,6 +18,9 @@ the ten-minute idle wait and reports the actual PR state. A trusted completion/
 approval/merge workflow checks an actual same-repo development merge at current
 main, avoids duplicate main CI dispatch, and never merges or checks out PR code.
 workflow_run also handles GitHub-token activity whose ordinary events are suppressed.
+Promotion reads explicit locked PRs from the exact tested integration commit and
+stops for PR50's owner hold or any security/review hold label. A moved development
+head also stops; neither a green dispatch nor auto-merge can bypass these holds.
 
 Native Dependabot version proposals target development: weekly root/Devvit npm and
 Docker, monthly Actions. Security proposals remain default-main targeted, timely
