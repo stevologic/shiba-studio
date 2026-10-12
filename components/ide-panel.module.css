@@ -1,3 +1,6 @@
+/* Reference global tokens without emitting Tailwind preflight into a CSS module. */
+@reference "../app/globals.css";
+
 .ide {
   --ide-bg: #000;
   --ide-elev: #0a0a0a;
