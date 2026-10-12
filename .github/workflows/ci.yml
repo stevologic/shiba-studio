@@ -332,9 +332,7 @@ jobs:
 
       - name: Install (lockfile-exact)
         if: steps.sanity.outputs.proceed == 'true'
-        run: |
-          npm ci
-          npm ci --prefix devvit/reddit-bridge
+        run: npm ci
 
       - name: Collect logs of the failed jobs
         if: steps.sanity.outputs.proceed == 'true'
@@ -370,6 +368,13 @@ jobs:
         if: steps.sanity.outputs.proceed == 'true'
         run: npm test
 
+      - name: Gate - Devvit bridge and root security before pushing
+        if: steps.sanity.outputs.proceed == 'true'
+        run: |
+          npm audit --audit-level=high
+          npm ci --prefix devvit/reddit-bridge
+          npm --prefix devvit/reddit-bridge run verify
+
       - name: Commit and push the fix
         if: steps.sanity.outputs.proceed == 'true'
         run: |
@@ -391,24 +396,16 @@ jobs:
         if: steps.sanity.outputs.proceed == 'true'
         run: gh workflow run ci.yml --ref development
 
-      # GitHub holds pull_request workflows for github-actions[bot] pushes at
-      # "action_required"; the held run's pending CI OK check would shadow the
-      # green one from the dispatch above and block auto-merge. Approve it.
-      - name: Approve the held PR-side run for the bot commit
+      # PR-event workflow approval remains a maintainer security gate. A green
+      # dispatch cannot replace an eligible PR check or authorize its approval.
+      - name: Report PR-side workflow approval requirement
         if: steps.sanity.outputs.proceed == 'true'
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
-          for attempt in $(seq 1 6); do
-            sleep 10
-            run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$sha" \
-              --jq '.workflow_runs[] | select(.conclusion == "action_required") | .id' | head -n 1)"
-            if [ -n "$run_id" ]; then
-              gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/approve" || true
-              echo "Approved held PR run $run_id"
-              break
-            fi
-          done
+          held="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$sha" \
+            --jq '[.workflow_runs[] | select(.conclusion == "action_required") | .id] | join(", ")')"
+          echo "Healed head $sha needs eligible PR-event checks and any maintainer workflow approval before promotion. Held runs: ${held:-none currently listed}." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open an issue if healing failed
         if: failure() && steps.guard.outputs.enabled == 'true'
