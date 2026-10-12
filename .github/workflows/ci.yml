@@ -50,9 +50,7 @@ jobs:
       # package-lock.json disagree. Puppeteer's Chromium is needed by
       # verify-theme (headless launch check).
       - name: Install (lockfile-exact)
-        run: |
-          npm ci
-          npm ci --prefix devvit/reddit-bridge
+        run: npm ci
 
       # lib/, app/api/, scripts/, and types/ stay lint-clean. The remaining
       # debt is in components/*.tsx — keep that tree visible but non-blocking.
@@ -75,7 +73,12 @@ jobs:
         run: npm test
 
       - name: Devvit Reddit bridge verification
-        run: npm --prefix devvit/reddit-bridge run verify
+        # The bridge links its root package back to this checkout. Install it
+        # after the Next build so Turbopack does not see that second source tree.
+        # Both lockfiles and all bridge gates are still validated here.
+        run: |
+          npm ci --prefix devvit/reddit-bridge
+          npm --prefix devvit/reddit-bridge run verify
 
   audit:
     name: npm audit (high+)

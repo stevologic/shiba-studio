@@ -2,13 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import postcss from 'postcss';
-import entryPlugin from './tailwind-entry-postcss.cjs';
+import tailwind from '@tailwindcss/postcss';
 import config from '../postcss.config.mjs';
 
-assert.deepEqual(Object.keys(config.plugins), [path.resolve('scripts/tailwind-entry-postcss.cjs')],
-  'Compiler workers must receive an absolute plugin path');
+assert.deepEqual(Object.keys(config.plugins), ['@tailwindcss/postcss']);
 
-const processor = postcss([entryPlugin()]);
+const processor = postcss([tailwind()]);
 const globalFile = path.resolve('app/globals.css');
 const globalResult = await processor.process(await readFile(globalFile, 'utf8'), { from: globalFile });
 assert.match(globalResult.css, /box-sizing:\s*border-box/);

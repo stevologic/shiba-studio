@@ -5,7 +5,7 @@ only commits. Both histories are preserved; main/development are untouched by th
 draft. No branch rename/force push occurs. PR50 remains held at action_required;
 PR51's proposed --omit=dev audit narrowing remains a separate review decision.
 
-The shared [contract 1.1.0](https://github.com/stevologic/oss-deps-explorer/blob/1edddeab11f2fe4598ed45cefda42ab7a2179fa8/actions/maintenance/README.md)
+The shared [contract 1.1.0](https://github.com/stevologic/oss-deps-explorer/blob/1e6e9a9c4dc9f766c49a421ea268f247d1113287/actions/maintenance/README.md)
 uses a full immutable SHA and local JSON policy. It is GET-only/dry-run, with all
 write/deploy/cleanup and optional AI disabled. Shiba retains its current xAI
 provider/model policy and custom strategy/self-heal/content/release jobs.
@@ -51,9 +51,10 @@ cursor/windows-ios-packages-894d (merged PR29). Their commits remain in both his
 The scheduled common action stays read-only; protected/active/unmerged topics remain.
 Production schedule/config activation waits for reviewed integration and main PR.
 
-Standard Ubuntu CI also exposed global Tailwind preflight emitted into the IDE CSS
-module when the full root+Devvit verification job runs. Tailwind now processes only
-entry sheets with Tailwind directives; ordinary CSS modules stay local. A reused-
-processor test proves global preflight/tokens remain and the original module CSS
-survives byte-for-byte across repeated calls. The standard compiler gate and current
-design remain intact; no webpack-only substitution is made in CI.
+Standard Ubuntu CI exposed global Tailwind preflight emitted into the IDE CSS module
+after the Devvit package linked this root checkout into its nested node_modules.
+The root-only Docker/browser builds pass. CI now installs that bridge at its own
+verification stage, after the root build and functional suite. Both lockfiles and
+every root/bridge gate remain required. A native Tailwind reused-processor test
+verifies global preflight/tokens and unchanged module declarations. The standard
+compiler, native PostCSS configuration and current design remain intact.
