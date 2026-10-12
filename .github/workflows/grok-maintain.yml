@@ -1,7 +1,7 @@
 name: Grok maintain
 
-# Hands-off Grok 4.6+ maintenance. Weekly (Monday) assesses Claude /
-# ChatGPT-Codex / Grok / Cursor and may improve this automation. Daily
+# Hands-off Grok 4.6+ maintenance. Monthly strategy assesses Claude /
+# ChatGPT-Codex / Grok / Cursor and may improve this automation. Weekly
 # vuln remediations remain available via workflow_dispatch. Writes only
 # to `development`. Green development still promotes to main through
 # ci.yml (CI OK + auto-merge).
@@ -11,7 +11,8 @@ name: Grok maintain
 
 on:
   schedule:
-    - cron: "17 7 * * 1"   # weekly (Monday)
+    - cron: "17 7 1 * *"   # monthly strategy (legacy weekly mode)
+    - cron: "17 6 * * 1"   # weekly vulnerability audit (legacy daily mode)
   workflow_dispatch:
     inputs:
       mode:
@@ -51,7 +52,7 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             mode="${INPUT_MODE:-daily}"
-          elif [ "$SCHEDULE" = "17 7 * * 1" ]; then
+          elif [ "$SCHEDULE" = "17 7 1 * *" ]; then
             mode="weekly"
           else
             mode="daily"

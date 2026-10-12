@@ -1,0 +1,26 @@
+# Version-update routing only. Security PRs always target default main.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories: ['/', '/devvit/reddit-bridge']
+    target-branch: development
+    schedule:
+      interval: weekly
+    groups:
+      compatible:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: development
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3

@@ -135,6 +135,7 @@ const REQUIRED_IDS = [
   'models',
   'collections',
   'batches',
+  'x-search',
   'headless-one-shot',
   'acp-stdio',
 ] as const;
