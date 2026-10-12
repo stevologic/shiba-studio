@@ -5,7 +5,7 @@ only commits. Both histories are preserved; main/development are untouched by th
 draft. No branch rename/force push occurs. PR50 remains held at action_required;
 PR51's proposed --omit=dev audit narrowing remains a separate review decision.
 
-The shared [contract 1.1.0](https://github.com/stevologic/oss-deps-explorer/blob/1e6e9a9c4dc9f766c49a421ea268f247d1113287/actions/maintenance/README.md)
+The shared [contract 1.1.1](https://github.com/stevologic/oss-deps-explorer/blob/bf9289390aa6304c4ed81596fb0d7dfba712608b/actions/maintenance/README.md)
 uses a full immutable SHA and local JSON policy. It is GET-only/dry-run, with all
 write/deploy/cleanup and optional AI disabled. Shiba retains its current xAI
 provider/model policy and custom strategy/self-heal/content/release jobs.
