@@ -50,9 +50,7 @@ jobs:
       # package-lock.json disagree. Puppeteer's Chromium is needed by
       # verify-theme (headless launch check).
       - name: Install (lockfile-exact)
-        run: |
-          npm ci
-          npm ci --prefix devvit/reddit-bridge
+        run: npm ci
 
       # lib/, app/api/, scripts/, and types/ stay lint-clean. The remaining
       # debt is in components/*.tsx — keep that tree visible but non-blocking.
@@ -67,13 +65,20 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Build
-        run: npm run build
+        run: |
+          node scripts/verify-css-processing.mjs
+          npm run build
 
       - name: Functional verification suite
         run: npm test
 
       - name: Devvit Reddit bridge verification
-        run: npm --prefix devvit/reddit-bridge run verify
+        # The bridge links its root package back to this checkout. Install it
+        # after the Next build so Turbopack does not see that second source tree.
+        # Both lockfiles and all bridge gates are still validated here.
+        run: |
+          npm ci --prefix devvit/reddit-bridge
+          npm --prefix devvit/reddit-bridge run verify
 
   audit:
     name: npm audit (high+)
@@ -327,9 +332,7 @@ jobs:
 
       - name: Install (lockfile-exact)
         if: steps.sanity.outputs.proceed == 'true'
-        run: |
-          npm ci
-          npm ci --prefix devvit/reddit-bridge
+        run: npm ci
 
       - name: Collect logs of the failed jobs
         if: steps.sanity.outputs.proceed == 'true'
@@ -365,6 +368,13 @@ jobs:
         if: steps.sanity.outputs.proceed == 'true'
         run: npm test
 
+      - name: Gate - Devvit bridge and root security before pushing
+        if: steps.sanity.outputs.proceed == 'true'
+        run: |
+          npm audit --audit-level=high
+          npm ci --prefix devvit/reddit-bridge
+          npm --prefix devvit/reddit-bridge run verify
+
       - name: Commit and push the fix
         if: steps.sanity.outputs.proceed == 'true'
         run: |
@@ -386,24 +396,16 @@ jobs:
         if: steps.sanity.outputs.proceed == 'true'
         run: gh workflow run ci.yml --ref development
 
-      # GitHub holds pull_request workflows for github-actions[bot] pushes at
-      # "action_required"; the held run's pending CI OK check would shadow the
-      # green one from the dispatch above and block auto-merge. Approve it.
-      - name: Approve the held PR-side run for the bot commit
+      # PR-event workflow approval remains a maintainer security gate. A green
+      # dispatch cannot replace an eligible PR check or authorize its approval.
+      - name: Report PR-side workflow approval requirement
         if: steps.sanity.outputs.proceed == 'true'
         run: |
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
-          for attempt in $(seq 1 6); do
-            sleep 10
-            run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$sha" \
-              --jq '.workflow_runs[] | select(.conclusion == "action_required") | .id' | head -n 1)"
-            if [ -n "$run_id" ]; then
-              gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/approve" || true
-              echo "Approved held PR run $run_id"
-              break
-            fi
-          done
+          held="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$sha" \
+            --jq '[.workflow_runs[] | select(.conclusion == "action_required") | .id] | join(", ")')"
+          echo "Healed head $sha needs eligible PR-event checks and any maintainer workflow approval before promotion. Held runs: ${held:-none currently listed}." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open an issue if healing failed
         if: failure() && steps.guard.outputs.enabled == 'true'
@@ -434,6 +436,11 @@ jobs:
       - name: Open or reuse the promotion PR and enable auto-merge
         run: |
           set -euo pipefail
+          current="$(gh api "repos/$REPO/git/ref/heads/development" --jq '.object.sha')"
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            echo "Development advanced after this tested run; awaiting its exact CI." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
           if [ "$ahead" = "0" ]; then
             echo "development is not ahead of main — nothing to promote."
@@ -448,22 +455,19 @@ jobs:
             pr="$(gh pr list --repo "$REPO" --head development --base main --state open --json number --jq '.[0].number')"
           fi
           echo "Promotion PR: #$pr"
+          # Honor repository-owned review holds before touching auto-merge. Read
+          # the policy from this exact tested integration commit, never a PR head.
+          policy="$(gh api "repos/$REPO/contents/.github/maintenance.json?ref=$GITHUB_SHA" --jq '.content' | base64 --decode)"
+          locked="$(printf '%s' "$policy" | jq -r --argjson pr "$pr" '.locked_prs | index($pr) != null')"
+          held="$(gh pr view "$pr" --repo "$REPO" --json labels --jq '.labels | any(.name == "hold" or .name == "do-not-merge" or .name == "security-review")')"
+          if [ "$locked" = "true" ] || [ "$held" = "true" ]; then
+            echo "Promotion PR #$pr retains explicit owner review/security hold; no merge request or workflow approval." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if ! gh pr merge "$pr" --repo "$REPO" --merge --auto; then
             echo "Auto-merge could not be enabled; leaving the PR open until CI OK is green on this head."
           fi
-          # github-actions auto-merge uses GITHUB_TOKEN, so the merge push to
-          # main does not start workflows. Wait until main has the promotion,
-          # then dispatch CI so the packages page on main still publishes.
-          for attempt in $(seq 1 40); do
-            ahead="$(gh api "repos/$REPO/compare/main...development" --jq '.ahead_by')"
-            if [ "$ahead" = "0" ]; then
-              echo "Promotion is on main — dispatching CI so packages-main publishes."
-              # Use the API: `gh workflow run` shells out to git and this job
-              # has no checkout.
-              gh api --method POST "repos/$REPO/actions/workflows/ci.yml/dispatches" -f ref=main
-              exit 0
-            fi
-            echo "Waiting for promotion merge (ahead_by=$ahead) attempt=$attempt"
-            sleep 15
-          done
-          echo "::warning::Promotion still open after waiting; main CI was not dispatched."
+          # Do not burn runner time polling a held PR. The separate trusted
+          # promotion-deploy workflow wakes on CI completion/approval/actual merge.
+          state="$(gh pr view "$pr" --repo "$REPO" --json state,mergeStateStatus --jq '.state + " / " + .mergeStateStatus')"
+          echo "Promotion PR #$pr: $state; awaiting repository gates." >> "$GITHUB_STEP_SUMMARY"

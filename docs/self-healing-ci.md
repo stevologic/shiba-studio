@@ -22,6 +22,9 @@ The `self-heal` job runs when any CI job fails on `development`:
    `verify-theme` launches `next start` and fails fast when `.next` is missing.
 4. Re-dispatches CI via `workflow_dispatch` so the healed commit gets a
    fresh full run (a plain `GITHUB_TOKEN` push does not retrigger CI).
+   A held PR-event run still requires maintainer workflow approval; the healer
+   reports its actual state and cannot approve it. Root audit and Devvit bridge
+   verification also pass before a repair is pushed.
 
 Guardrails:
 
@@ -48,11 +51,12 @@ The `promote` job runs after the aggregate `CI OK` job succeeds on
    `CI OK` as a required status check, so the merge only lands once that
    check is green on the PR's head commit — which the just-finished green
    run already provides.
-3. Waits for that merge, then dispatches `ci.yml` on `main` through the
-   Actions API (this job has no checkout, so `gh workflow run` cannot be
-   used). A `github-actions` auto-merge uses `GITHUB_TOKEN` and does not
-   start the main push pipeline; the dispatch is what refreshes the
-   packages page on `main`.
+3. Reports the actual PR state and ends. `promotion-deploy.yml` wakes on CI
+   completion, approved review or actual merge, verifies that current main is
+   the same-repository development promotion commit, and dispatches existing
+   main CI only when it has no queued/successful run. It never checks out PR
+   code or merges. A `GITHUB_TOKEN` merge can suppress the main push event;
+   this dispatch refreshes the packages page after that verified merge.
 
 `CI OK` exists so branch protection tracks a single stable context instead
 of every matrix leg name; keep it in sync with the job list in `ci.yml`.
@@ -75,7 +79,8 @@ in the loop. It never writes `main`.
 | Cadence | When (UTC) | Job |
 | --- | --- | --- |
 | Daily | `workflow_dispatch` (`mode=daily`) | Remediate high/critical `npm audit` findings |
-| Weekly (Monday) | cron `17 7 * * 1` | Assess Claude / ChatGPT-Codex / Grok / Cursor, ship at most one bounded increment, and optionally improve this automation |
+| Weekly (Monday) | cron `17 6 * * 1` (`mode=daily`) | Audit and remediate high/critical vulnerabilities |
+| Monthly (first day) | cron `17 7 1 * *` (`mode=weekly`) | Assess Claude / ChatGPT-Codex / Grok / Cursor and ship at most one bounded increment |
 
 Both modes:
 
