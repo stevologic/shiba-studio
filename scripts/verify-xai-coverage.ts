@@ -1,6 +1,7 @@
 /**
  * Fail if a public xAI REST family or Grok CLI harness is omitted from the
- * imported coverage list, or if image-edit / video / x_search are not wired.
+ * imported coverage list, or if image-edit / video / x_search / web_search /
+ * code_interpreter are not wired.
  */
 import './verify-isolate';
 import assert from 'node:assert/strict';
@@ -22,6 +23,8 @@ async function main() {
   assert.equal(xaiCoverageById('image-edit')?.status, 'wired');
   assert.equal(xaiCoverageById('video-generation')?.status, 'wired');
   assert.equal(xaiCoverageById('x-search')?.status, 'wired');
+  assert.equal(xaiCoverageById('web-search')?.status, 'wired');
+  assert.equal(xaiCoverageById('code-interpreter')?.status, 'wired');
   assert.equal(xaiCoverageById('acp-stdio')?.status, 'deferred');
   assert.equal(xaiCoverageById('collections')?.status, 'deferred');
   assert.equal(xaiCoverageById('batches')?.status, 'deferred');

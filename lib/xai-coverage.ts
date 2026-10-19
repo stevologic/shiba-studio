@@ -107,6 +107,20 @@ export const XAI_SURFACE_COVERAGE = [
     note: 'Built-in x_search on cloud Responses turns (not the X OAuth timeline tool).',
   },
   {
+    id: 'web-search',
+    family: 'rest',
+    status: 'wired',
+    path: 'lib/xai-responses.ts',
+    note: 'Built-in web_search on cloud Responses (server-side browse, not a local browser tool).',
+  },
+  {
+    id: 'code-interpreter',
+    family: 'rest',
+    status: 'wired',
+    path: 'lib/xai-responses.ts',
+    note: 'Built-in code_interpreter on cloud Responses (xAI sandbox; local agents still use workspace shell).',
+  },
+  {
     id: 'headless-one-shot',
     family: 'cli',
     status: 'wired',
@@ -135,6 +149,9 @@ const REQUIRED_IDS = [
   'models',
   'collections',
   'batches',
+  'x-search',
+  'web-search',
+  'code-interpreter',
   'headless-one-shot',
   'acp-stdio',
 ] as const;
@@ -146,7 +163,7 @@ export function xaiCoverageById(id: string): XaiCoverageEntry | undefined {
 export function assertXaiCoverageComplete(): string[] {
   const ids = new Set(XAI_SURFACE_COVERAGE.map((entry) => entry.id));
   const missing = REQUIRED_IDS.filter((id) => !ids.has(id));
-  const wiredRequired = ['image-edit', 'video-generation', 'x-search'] as const;
+  const wiredRequired = ['image-edit', 'video-generation', 'x-search', 'web-search', 'code-interpreter'] as const;
   const notWired = wiredRequired.filter((id) => xaiCoverageById(id)?.status !== 'wired');
   return [...missing.map((id) => `missing family ${id}`), ...notWired.map((id) => `${id} must be wired`)];
 }

@@ -77,6 +77,9 @@ export function buildXaiResponsesRequestBody(input: {
     input: buildResponsesInput(input.messages),
     stream: input.stream !== false,
     store: false,
+    // Explicit include: grok-4.7 always returns encrypted reasoning, but 4.6
+    // and store:false clients still need this to rehydrate thinking across turns.
+    include: ['reasoning.encrypted_content'],
     tools,
   };
   if (input.conversationId) body.prompt_cache_key = input.conversationId;

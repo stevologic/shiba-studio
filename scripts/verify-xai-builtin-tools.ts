@@ -38,7 +38,9 @@ async function main() {
   }
   const reasoning = built.body.reasoning as { effort?: string } | undefined;
   assert.equal(reasoning?.effort, 'low', 'low effort must be sent on Responses (xAI default is high)');
-  log('OK Responses body includes x_search, web_search, code_interpreter and low reasoning effort');
+  const include = built.body.include as string[] | undefined;
+  assert.ok(include?.includes('reasoning.encrypted_content'), 'Responses requests ask for encrypted reasoning');
+  log('OK Responses body includes x_search, web_search, code_interpreter, low reasoning, and encrypted reasoning include');
 
   const xhigh = buildGrokChatStreamRequest({
     model: 'cloud:grok-4.6',

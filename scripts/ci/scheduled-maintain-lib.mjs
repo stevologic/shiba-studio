@@ -8,8 +8,8 @@ import { spawnSync } from "node:child_process";
 
 export const DEFAULT_SCHEDULED_GROK_MODEL = "grok-4.7";
 export const TARGET_BRANCH = "development";
-export const CRON_DAILY = "17 6 * * *";
-export const CRON_WEEKLY = "17 7 * * 1";
+export const CRON_DAILY = "17 6 * * 1"; // weekly vulnerability audit; legacy daily mode
+export const CRON_WEEKLY = "17 7 1 * *"; // monthly strategy; legacy weekly mode
 export const SKIP_NO_KEY_MESSAGE = "scheduled-maintain: skipped (GROK_API_KEY is not set)";
 
 const STALE_UNATTENDED_MODELS = new Set([
@@ -259,7 +259,8 @@ export function formatFetchedDocument({ url, status, finalUrl, body }) {
   if (!fetchHostAllowed(requested) || !fetchHostAllowed(landed)) {
     return `ERROR: redirect left the weekly research allowlist: ${landed || requested}`;
   }
-  return `HTTP ${status} ${requested}\n${extractFetchedDocText(body)}`;
+  const redirectNote = landed && landed !== requested ? `\nfinal ${landed}` : "";
+  return `HTTP ${status} ${requested}${redirectNote}\n${extractFetchedDocText(body)}`;
 }
 
 export function buildMaintainPrompt(mode, extras = {}) {
