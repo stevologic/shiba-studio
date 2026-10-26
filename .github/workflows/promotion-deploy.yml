@@ -1,0 +1,62 @@
+name: Deploy after validated promotion
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  pull_request:
+    types: [closed]
+    branches: [main]
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+concurrency:
+  group: promotion-deploy
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'development') ||
+      (github.event.pull_request.head.ref == 'development' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.base.repo.full_name == github.repository &&
+       (github.event.pull_request.merged == true || github.event.review.state == 'approved'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Dispatch existing main CI after actual merge
+        run: |
+          set -euo pipefail
+          # workflow_run can wake after GITHUB_TOKEN activity; closed PR events
+          # alone are suppressed for token merges. An approval may precede the
+          # merge by seconds, so give only that event a bounded 15-second settle.
+          for attempt in 1 2 3 4; do
+            main_sha="$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
+            merged_sha="$(gh api "repos/$REPO/pulls?state=closed&base=main&per_page=100" \
+              --jq '[.[] | select(.merged_at != null and .head.ref == "development" and .head.repo.full_name == .base.repo.full_name)] | sort_by(.merged_at) | last | .merge_commit_sha // empty')"
+            if [ -n "$merged_sha" ] && [ "$merged_sha" = "$main_sha" ]; then
+              covered="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&per_page=100" \
+                --jq '[.workflow_runs[] | select(.head_branch == "main" and (.status != "completed" or .conclusion == "success"))] | length')"
+              if [ "$covered" != "0" ]; then
+                echo "Main $main_sha already has a queued/successful CI; no duplicate dispatch."
+                exit 0
+              fi
+              gh api --method POST "repos/$REPO/actions/workflows/ci.yml/dispatches" -f ref=main
+              echo "Dispatched existing CI for actual merged promotion $main_sha." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if [ "$GITHUB_EVENT_NAME" != "pull_request_review" ] || [ "$attempt" = "4" ]; then
+              echo "Promotion is awaiting gates or main has advanced; no deployment dispatched." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done

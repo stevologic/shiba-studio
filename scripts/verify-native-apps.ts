@@ -250,11 +250,20 @@ async function main() {
     /publish-packages:[\s\S]*?github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'/,
     'packages must republish after self-heal and weekly maintain re-dispatch CI',
   );
-  assert.match(
-    ci,
-    /Promote development[\s\S]*?actions\/workflows\/ci\.yml\/dispatches/,
-    'promote must dispatch main CI after a github-actions merge so packages-main still compiles',
-  );
+  const promotionDeploy = read('.github/workflows/promotion-deploy.yml');
+  assert.match(promotionDeploy, /workflow_run:/);
+  assert.match(promotionDeploy, /actions\/workflows\/ci\.yml\/dispatches/,
+    'actual promotion must dispatch main CI so packages-main still compiles');
+  assert.match(promotionDeploy, /\[ "\$merged_sha" = "\$main_sha" \]/,
+    'dispatch must be bound to the current main promotion commit');
+  assert.match(promotionDeploy, /head\.repo\.full_name == \.base\.repo\.full_name/);
+  assert.doesNotMatch(promotionDeploy, /actions\/checkout|gh pr merge/);
+  assert.doesNotMatch(ci, /seq 1 40|\/approve/,
+    'held PR workflows must retain maintainer approval without idle promotion polling');
+  assert.match(ci, /\.locked_prs \| index\(\$pr\) != null/,
+    'promotion must honor repository-owned explicit review holds');
+  assert.match(ci, /\[ "\$current" != "\$GITHUB_SHA" \]/,
+    'promotion must stop when the integration head moves after its tested run');
 
   const release = read('.github/workflows/release.yml');
   assert.doesNotMatch(release, /native-windows:/);

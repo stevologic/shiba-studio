@@ -33,12 +33,18 @@ async function main() {
   assert.ok(types.has('x_search'), 'request includes x_search');
   assert.ok(types.has('web_search'), 'request includes web_search');
   assert.ok(types.has('code_interpreter'), 'request includes code_interpreter');
+  const webSearch = (tools || []).find((t) => t.type === 'web_search') as
+    | { enable_image_understanding?: boolean }
+    | undefined;
+  assert.equal(webSearch?.enable_image_understanding, true, 'web_search enables image understanding');
   for (const expected of XAI_BUILTIN_SERVER_TOOLS) {
     assert.ok(types.has(expected.type), `builtin ${expected.type}`);
   }
   const reasoning = built.body.reasoning as { effort?: string } | undefined;
   assert.equal(reasoning?.effort, 'low', 'low effort must be sent on Responses (xAI default is high)');
-  log('OK Responses body includes x_search, web_search, code_interpreter and low reasoning effort');
+  const include = built.body.include as string[] | undefined;
+  assert.ok(include?.includes('reasoning.encrypted_content'), 'Responses requests ask for encrypted reasoning');
+  log('OK Responses body includes x_search, web_search, code_interpreter, low reasoning, and encrypted reasoning include');
 
   const xhigh = buildGrokChatStreamRequest({
     model: 'cloud:grok-4.6',

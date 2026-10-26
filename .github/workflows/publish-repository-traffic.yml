@@ -3,14 +3,19 @@ name: Publish repository traffic
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 6 * * *'
+    - cron: '17 6 * * 1'
 
 permissions:
   contents: read
 
+concurrency:
+  group: repository-traffic
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
       TRAFFIC_TOKEN: ${{ secrets.REPOSITORY_TRAFFIC_TOKEN }}
     steps:

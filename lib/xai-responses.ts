@@ -8,14 +8,15 @@ import type { GrokTool } from './grok-client';
 
 export const XAI_BUILTIN_SERVER_TOOLS = [
   { type: 'x_search' },
-  { type: 'web_search' },
+  // Image understanding lets Grok view_image pages found while browsing.
+  { type: 'web_search', enable_image_understanding: true },
   { type: 'code_interpreter' },
 ] as const;
 
 export type XaiBuiltinServerTool = (typeof XAI_BUILTIN_SERVER_TOOLS)[number];
 
-export function xaiBuiltinServerTools(): Array<{ type: string }> {
-  return XAI_BUILTIN_SERVER_TOOLS.map((tool) => ({ type: tool.type }));
+export function xaiBuiltinServerTools(): Array<Record<string, unknown>> {
+  return XAI_BUILTIN_SERVER_TOOLS.map((tool) => ({ ...tool }));
 }
 
 export function shouldUseXaiResponsesApi(provider: string, modelId: string, hasMultimodal = false): boolean {
@@ -77,6 +78,9 @@ export function buildXaiResponsesRequestBody(input: {
     input: buildResponsesInput(input.messages),
     stream: input.stream !== false,
     store: false,
+    // Explicit include: grok-4.7 always returns encrypted reasoning, but 4.6
+    // and store:false clients still need this to rehydrate thinking across turns.
+    include: ['reasoning.encrypted_content'],
     tools,
   };
   if (input.conversationId) body.prompt_cache_key = input.conversationId;
