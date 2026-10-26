@@ -33,6 +33,10 @@ async function main() {
   assert.ok(types.has('x_search'), 'request includes x_search');
   assert.ok(types.has('web_search'), 'request includes web_search');
   assert.ok(types.has('code_interpreter'), 'request includes code_interpreter');
+  const webSearch = (tools || []).find((t) => t.type === 'web_search') as
+    | { enable_image_understanding?: boolean }
+    | undefined;
+  assert.equal(webSearch?.enable_image_understanding, true, 'web_search enables image understanding');
   for (const expected of XAI_BUILTIN_SERVER_TOOLS) {
     assert.ok(types.has(expected.type), `builtin ${expected.type}`);
   }

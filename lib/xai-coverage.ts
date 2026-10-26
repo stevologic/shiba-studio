@@ -111,7 +111,7 @@ export const XAI_SURFACE_COVERAGE = [
     family: 'rest',
     status: 'wired',
     path: 'lib/xai-responses.ts',
-    note: 'Built-in web_search on cloud Responses (server-side browse, not a local browser tool).',
+    note: 'Built-in web_search on cloud Responses with enable_image_understanding (server-side browse, not a local browser tool).',
   },
   {
     id: 'code-interpreter',

@@ -8,14 +8,15 @@ import type { GrokTool } from './grok-client';
 
 export const XAI_BUILTIN_SERVER_TOOLS = [
   { type: 'x_search' },
-  { type: 'web_search' },
+  // Image understanding lets Grok view_image pages found while browsing.
+  { type: 'web_search', enable_image_understanding: true },
   { type: 'code_interpreter' },
 ] as const;
 
 export type XaiBuiltinServerTool = (typeof XAI_BUILTIN_SERVER_TOOLS)[number];
 
-export function xaiBuiltinServerTools(): Array<{ type: string }> {
-  return XAI_BUILTIN_SERVER_TOOLS.map((tool) => ({ type: tool.type }));
+export function xaiBuiltinServerTools(): Array<Record<string, unknown>> {
+  return XAI_BUILTIN_SERVER_TOOLS.map((tool) => ({ ...tool }));
 }
 
 export function shouldUseXaiResponsesApi(provider: string, modelId: string, hasMultimodal = false): boolean {
