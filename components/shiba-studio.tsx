@@ -5384,7 +5384,7 @@ export default function ShibaStudio() {
                     <Cpu size={16} className="opacity-70 shrink-0" />
                     <div>
                       <div className="font-medium text-sm">Default Model</div>
-                      <div className="text-[11px] text-dim">Used by Grok Chat and every new agent. Fresh installs default to Grok 4.6.</div>
+                      <div className="text-[11px] text-dim">Used by Grok Chat and every new agent. Fresh installs default to Grok 4.7.</div>
                     </div>
                     <button type="button" onClick={() => void loadModels({ forceProviderProbe: true })} disabled={modelsLoading} className="grok-btn grok-btn-ghost text-xs py-0.5 ml-auto">
                       <RefreshCw size={12} className={modelsLoading ? 'animate-spin' : ''} /> Refresh
