@@ -9,7 +9,7 @@ import type { GrokTool } from './grok-client';
 export const XAI_BUILTIN_SERVER_TOOLS = [
   { type: 'x_search' },
   // Image understanding lets Grok view_image pages found while browsing.
-  { type: 'web_search', enable_image_understanding: true },
+  { type: 'web_search', enable_image_understanding: true, enable_image_search: true },
   { type: 'code_interpreter' },
 ] as const;
 
