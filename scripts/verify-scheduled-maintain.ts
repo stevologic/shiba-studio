@@ -75,6 +75,18 @@ async function main() {
   assert.equal(lib.isGithubWorkflowPath('.github/workflows/ci.yml'), true);
   assert.equal(lib.isGithubWorkflowPath('.github/ISSUE_TEMPLATE/bug_report.md'), false);
 
+  assert.equal(
+    lib.preferMarkdownDocUrl('https://docs.x.ai/developers/guides/tools/web-search'),
+    'https://docs.x.ai/developers/guides/tools/web-search.md',
+  );
+  assert.equal(
+    lib.preferMarkdownDocUrl('https://docs.x.ai/developers/models.md'),
+    'https://docs.x.ai/developers/models.md',
+  );
+  assert.equal(
+    lib.preferMarkdownDocUrl('https://docs.anthropic.com/en/docs/agents'),
+    'https://docs.anthropic.com/en/docs/agents',
+  );
   assert.equal(lib.fetchHostAllowed('https://docs.x.ai/developers/models'), true);
   assert.equal(lib.fetchHostAllowed('https://code.claude.com/docs/en/overview'), true);
   assert.equal(lib.fetchHostAllowed('https://platform.claude.com/docs/en/agents-and-tools/overview'), true);
@@ -197,6 +209,7 @@ async function main() {
   assert.match(theme, /http:\/\/127\.0\.0\.1:\$\{PORT\}/);
 
   const runner = readFileSync(path.join(ROOT, 'scripts/ci/scheduled-maintain.mjs'), 'utf8');
+  assert.match(runner, /preferMarkdownDocUrl/);
   assert.match(runner, /finalizeMaintainRun\(\{ fixed: doneState\.fixed, cwd: REPO_ROOT \}\)/);
   assert.match(runner, /dropped workflow-only edits/);
   assert.match(

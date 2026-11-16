@@ -20,6 +20,7 @@ import {
   fetchHostAllowed,
   finalizeMaintainRun,
   formatFetchedDocument,
+  preferMarkdownDocUrl,
   formatValidateMessage,
   isValidateOnly,
   resolveMaintainMode,
@@ -315,7 +316,7 @@ function runTool(name, args) {
     }
     case "fetch_url": {
       if (!budget.fetchEnabled) return "ERROR: fetch_url is weekly-only.";
-      const url = String(args.url || "");
+      const url = preferMarkdownDocUrl(String(args.url || ""));
       if (!fetchHostAllowed(url)) {
         return `ERROR: host is not on the weekly research allowlist: ${url}`;
       }

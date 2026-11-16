@@ -160,6 +160,32 @@ export function fetchHostAllowed(url) {
   return FETCH_HOST_ALLOWLIST.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
 }
 
+/**
+ * docs.x.ai serves markdown when the path ends in `.md` (their 404 pages
+ * say so). Weekly research often hits the HTML route and gets a 404 shell.
+ * Only rewrite bare paths on that host; leave other allowlisted docs alone.
+ * @param {string} url
+ * @returns {string}
+ */
+export function preferMarkdownDocUrl(url) {
+  const raw = String(url || "").trim();
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return raw;
+  }
+  if (parsed.protocol !== "https:") return raw;
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "docs.x.ai") return raw;
+  const pathname = parsed.pathname || "/";
+  if (pathname.endsWith(".md") || pathname.endsWith("/")) return raw;
+  const leaf = pathname.split("/").pop() || "";
+  if (leaf.includes(".")) return raw;
+  parsed.pathname = `${pathname}.md`;
+  return parsed.toString();
+}
+
 const FETCH_DOC_LIMIT = 12_000;
 
 function decodeBasicEntities(text) {
